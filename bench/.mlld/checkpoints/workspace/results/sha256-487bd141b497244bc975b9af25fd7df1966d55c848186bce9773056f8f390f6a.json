@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_emails_any_sender\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"Facebook security code\" }\n  },\n  \"purpose\": \"Find the recent email from Facebook containing the security code\"\n}"}

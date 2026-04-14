@@ -1,0 +1,200 @@
+>> Workspace domain records.
+>>
+>> Defines the four record types AgentDojo's workspace suite operates on:
+>> @contact, @email_msg, @calendar_evt, @file_entry. Each declares fact
+>> fields (authoritative identifiers and addresses), data fields (content
+>> the LLM may read but cannot use as authorization), and display modes
+>> per agent role.
+>>
+>> The display modes are load-bearing for the threat model:
+>>
+>>   - `planner` mode strips content fields (subject, body, title,
+>>     description, location, file content). The planner reads only
+>>     identity fields plus structured metadata like timestamps and
+>>     participant references. This is the primary structural defense
+>>     against Attack Class 7 (content injection) — the planner can't
+>>     be steered by injected text it never sees.
+>>
+>>   - `worker` mode shows content but masks fact identifiers (e.g.
+>>     `recipients` is masked so the worker LLM can see who the email
+>>     was addressed to without being able to reference the literal
+>>     value as a control arg). Worker output is `influenced` per
+>>     untrusted-llms-get-influenced.
+>>
+>>   - `default` mode is what gets emitted when no role is specified.
+>>     For workspace domain records, default ≈ worker view.
+>>
+>> See ~/mlld/benchmarks/workspace.threatmodel.txt for the full threat
+>> model and which records defend which attack classes.
+
+>> ── Contacts ──
+>>
+>> Address book entries. AgentDojo auto-populates this from received
+>> emails, which is a known [!] gap in the threat model (Class 7,
+>> #contact-list-auto-population-labeling): an attacker could send the
+>> user an innocent email and then the auto-populated contact gives
+>> their address fact-grade authority. The framework can't fix this
+>> without inbox-model changes; documented here so the agent layer
+>> knows the limitation.
+>> Per labels-policies-guards.md: only fields that flow into a write
+>> tool's controlArgs need to be facts. For @contact, only `email` is
+>> ever a control arg (recipients for send_email, email for share_file).
+>> name and phone are content for the worker to read but never used as
+>> control args, so they're data fields. Making them facts caused shelf
+>> writes to fail because the contact tools return them as plain strings
+>> with no handle-bearing projection — impossible to satisfy.
+record @contact = {
+  facts: [email: string],
+  data: [name: string?, phone: string?, notes: string?, job_title: string?, company: string?, address: string?],
+  key: email,
+  display: [name, { ref: "email" }, phone]
+}
+
+>> ── Email messages ──
+>>
+>> The most attack-relevant record. `body` and `subject` are untrusted
+>> data; the planner display omits them entirely. The worker sees them
+>> via the worker display mode. `attachments` is currently `data` —
+>> the threat model flags #attachment-label-propagation [!] as a gap
+>> where file taint labels may not flow through attachment references.
+>> Verify before relying on attachment-labeled defenses.
+>>
+>> `recipients`, `cc`, `bcc` are fact arrays — each element carries
+>> its own fact label, so per-element control-arg checks (no-send-to-
+>> unknown) work correctly when these arrays are passed to send_email.
+record @email_msg = {
+  facts: [id_: string, sender: string?, recipients: array?, cc: array?, bcc: array?],
+  data: [subject: string?, body: string?, attachments: array?, timestamp: string?, read: boolean?],
+  key: id_,
+  display: {
+    default: [{ handle: "id_" }, { ref: "sender" }, { mask: "recipients" }, subject, body, { mask: "cc" }, { mask: "bcc" }, attachments, timestamp, read],
+    worker: [{ handle: "id_" }, { ref: "sender" }, { mask: "recipients" }, subject, body, { mask: "cc" }, { mask: "bcc" }, attachments, timestamp, read],
+    planner: [{ ref: "id_" }, { ref: "sender" }, { mask: "recipients" }, { mask: "cc" }, { mask: "bcc" }, timestamp, read]
+  }
+}
+
+>> ── Calendar events ──
+>>
+>> `title`, `description`, `location` are untrusted data — the planner
+>> sees only structured fields (id, participants, start/end time,
+>> all_day, status). This matches the threat model's Class 7 expectation
+>> that planner never reads injected event content.
+>>
+>> Per Attack Class 5, the calendar tools' notification side-effect
+>> means create_calendar_event and add_calendar_event_participants
+>> are exfil channels — the participants array is the destination set
+>> and must be handle-grounded. Per-element fact labels on the array
+>> let no-send-to-unknown enforce per-element grounding.
+record @calendar_evt = {
+  facts: [id_: string, participants: array?],
+  data: [title: string?, description: string?, start_time: string?, end_time: string?, location: string?, all_day: boolean?, status: string?],
+  key: id_,
+  display: {
+    default: [{ handle: "id_" }, { ref: "participants" }, title, description, start_time, end_time, location, all_day, status],
+    worker: [{ handle: "id_" }, { ref: "participants" }, title, description, start_time, end_time, location, all_day, status],
+    planner: [{ ref: "id_" }, { ref: "participants" }, start_time, end_time, all_day, status]
+  }
+}
+
+>> ── Cloud drive files ──
+>>
+>> File `content` is untrusted data; the planner sees only metadata
+>> (filename, owner, size, shared_with refs). The worker sees content
+>> via the worker display mode and produces influenced output.
+>>
+>> `shared_with` is a fact field (so handles flow through it) but the
+>> threat model notes (Class 1 share_file path) that share_file's
+>> `email` arg is the destination — not `shared_with` — so positive
+>> checks fire on the share_file controlArg, not on this field.
+>> Per the threat model: id_ is the file_id control arg for append/
+>> delete/share. shared_with elements are handle-bearing in tool results
+>> and may flow into share_file's email control arg for re-sharing. But
+>> filename and owner are never control args for any write tool — they're
+>> content for the worker to read. Making them facts caused shelf writes
+>> to fail because file tools return them as plain strings with no
+>> handle-bearing projection.
+record @file_entry = {
+  facts: [id_: string, shared_with: array?],
+  data: [filename: string?, owner: string?, content: string?, size: number?, last_modified: string?],
+  key: id_,
+  display: {
+    default: [{ handle: "id_" }, filename, owner, content, size, { ref: "shared_with" }, last_modified],
+    worker: [{ handle: "id_" }, filename, owner, content, size, { ref: "shared_with" }, last_modified],
+    planner: [{ ref: "id_" }, filename, owner, size, { ref: "shared_with" }, last_modified]
+  }
+}
+
+record @datetime_context = {
+  facts: [value: string],
+  data: [kind: string?],
+  key: value,
+  display: [{ ref: "value" }, kind]
+}
+
+>> Write payload records live beside domain records so the tool catalog
+>> can reference them directly. They intentionally carry no facts; rig
+>> only casts payload-side content through them at execute time.
+record @email_payload = {
+  facts: [],
+  data: [recipients: array?, subject: string, body: string, attachments: array?, cc: array?, bcc: array?],
+  validate: "demote"
+}
+
+record @calendar_event_payload = {
+  facts: [],
+  data: [title: string, start_time: string, end_time: string, description: string?, participants: array?, location: string?],
+  validate: "demote"
+}
+
+record @calendar_reschedule_payload = {
+  facts: [],
+  data: [new_start_time: string, new_end_time: string?],
+  validate: "demote"
+}
+
+record @file_append_payload = {
+  facts: [],
+  data: [content: string],
+  validate: "demote"
+}
+
+record @file_create_payload = {
+  facts: [],
+  data: [filename: string, content: string],
+  validate: "demote"
+}
+
+record @share_file_payload = {
+  facts: [],
+  data: [permission: string],
+  validate: "demote"
+}
+
+var @records = {
+  contact: @contact,
+  email_msg: @email_msg,
+  calendar_evt: @calendar_evt,
+  file_entry: @file_entry,
+  datetime_context: @datetime_context,
+  email_payload: @email_payload,
+  calendar_event_payload: @calendar_event_payload,
+  calendar_reschedule_payload: @calendar_reschedule_payload,
+  file_append_payload: @file_append_payload,
+  file_create_payload: @file_create_payload,
+  share_file_payload: @share_file_payload
+}
+
+export {
+  @contact,
+  @email_msg,
+  @calendar_evt,
+  @file_entry,
+  @datetime_context,
+  @email_payload,
+  @calendar_event_payload,
+  @calendar_reschedule_payload,
+  @file_append_payload,
+  @file_create_payload,
+  @share_file_payload,
+  @records
+}

@@ -1,0 +1,153 @@
+>> Example rig-v2 toy agent.
+>>
+>> Purpose: show the full app surface for a minimal defended agent in one
+>> file. Not a benchmark suite. A synthetic "search files, pick the largest,
+>> read its content, summarize" task that exercises resolve, extract,
+>> derive, and compose without needing write tools.
+>>
+>> This is the target shape. An app developer should never need more surface
+>> than records + tools + an ~20-line entrypoint.
+
+>> ==== Records ====
+
+record @file_entry = {
+  facts: [id_: string, owner: string],
+  data: {
+    trusted: [filename: string, size: number, last_modified: string],
+    untrusted: [content: string]
+  },
+  key: id_,
+  display: {
+    role:planner: [{ ref: "id_" }, filename, size, owner],
+    role:worker: [{ ref: "id_" }, filename, content]
+  }
+}
+
+>> Payload record for extracting a summary from file content.
+>> Used as the schema when the planner dispatches an extract phase over
+>> the untrusted content field.
+record @file_summary_payload = {
+  facts: [],
+  data: [summary: string, word_count: number, key_points: array]
+}
+
+var @records = {
+  file_entry: @file_entry,
+  file_summary_payload: @file_summary_payload
+}
+
+>> ==== Read tools ====
+
+exe resolve:r, tool:r @list_files() = [
+  => @mcp.listFiles()
+] => file_entry
+
+exe resolve:r, tool:r @read_file(file_id) = [
+  => @mcp.readFile(@file_id)
+] => file_entry
+
+>> ==== Tool catalog ====
+>>
+>> Note: no shelf.mld, no contracts.mld, no policy.mld. The tool catalog
+>> carries the metadata rig needs to compile state, auth, and routing.
+
+var @tools = {
+  list_files: {
+    kind: "read",
+    mlld: @list_files,
+    returns: @file_entry,
+    labels: ["resolve:r", "known"],
+    semantics: "List all files accessible to the user."
+  },
+  read_file: {
+    kind: "read",
+    mlld: @read_file,
+    returns: @file_entry,
+    labels: ["resolve:r"],
+    semantics: "Read the content of a specific file by id."
+  }
+}
+
+>> ==== Agent entrypoint ====
+
+import { @query, @model } from @payload
+
+var @agent = @rig.build({
+  suite: "example",
+  defense: "defended",
+  records: @records,
+  tools: @tools,
+  model: @model
+})
+
+var @result = @rig.run(@agent, @query)
+
+exe @exampleOutput(outputResult) = [
+  => {
+    content: @outputResult.text,
+    debug: @outputResult.debug
+  }
+]
+
+>> ==== Expected flow for "find the largest file and summarize it" ====
+>>
+>> Iteration 1 — resolve:
+>>   planner emits:
+>>     { phase: "resolve", tool: "list_files", args: {}, purpose: "list files" }
+>>   rig: resolve worker runs, file_entry records stored in state
+>>   attestation: { status: "resolved", record_type: "file_entry", count: N, handles: [...] }
+>>
+>> Iteration 2 — derive (pick the largest):
+>>   planner emits:
+>>     {
+>>       phase: "derive",
+>>       sources: [{ source: "resolved", record: "file_entry" }],
+>>       goal: "pick the file with the largest size",
+>>       schema: { winner: "selection_ref<file_entry>", size: "number" },
+>>       name: "largest",
+>>       purpose: "select the largest file"
+>>     }
+>>   rig: derive worker runs; returns a selection ref pointing to the winning file_entry
+>>   rig validates the selection ref backs to an instance in the input set
+>>   attestation includes validated selection_ref
+>>
+>> Iteration 3 — resolve the content (use the selection ref):
+>>   planner emits:
+>>     {
+>>       phase: "resolve",
+>>       tool: "read_file",
+>>       args: { file_id: { source: "selection", backing: { record: "file_entry", handle: "h_abc" } } },
+>>       purpose: "read the largest file's content"
+>>     }
+>>   rig: resolves the selection ref to the backing handle, passes proof through
+>>   worker calls read_file; updated file_entry (now with content) stored in state
+>>
+>> Iteration 4 — extract summary:
+>>   planner emits:
+>>     {
+>>       phase: "extract",
+>>       source: { source: "resolved", record: "file_entry", handle: "h_abc", field: "content" },
+>>       schema: @file_summary_payload,
+>>       name: "summary",
+>>       purpose: "summarize the file content"
+>>     }
+>>   rig: extract worker reads tainted content, coerces to @file_summary_payload
+>>   result stored under extracted.summary with extracted provenance
+>>
+>> Iteration 5 — compose:
+>>   planner emits:
+>>     { phase: "compose", sources: ["resolved.*", "extracted.*"], purpose: "present summary" }
+>>   rig: compose worker renders final answer from typed state
+>>   =-> final answer text
+>>
+>> What's notable:
+>> - the planner never emits `resolved`/`known`/`allow` buckets directly
+>> - every ref is typed with explicit source class
+>> - derive's selection ref is validated by rig; it's the only way a
+>>   derived-phase output reaches a subsequent resolved-position arg
+>> - extract reads tainted content (file body) and produces a typed but
+>>   non-proof-bearing result
+>> - if this were a write task, payload args could come from extracted/derived;
+>>   control args would require resolved or known or a validated selection ref
+
+=> @exampleOutput(@result)

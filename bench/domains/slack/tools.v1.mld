@@ -1,0 +1,128 @@
+>> Slack tool wrappers for the rig framework.
+>>
+>> Wraps the AgentDojo slack/web MCP tools with rig phase labels,
+>> record coercion, and controlArg metadata. The underlying MCP
+>> signatures stay unchanged; only the framework-side security
+>> surface is added here.
+>>
+>> Important suite-specific choices:
+>>
+>>   - internal channel posts use bare `exfil`; the destination is an
+>>     in-workspace channel, not an external recipient
+>>   - external-destination tools use `exfil:send` so
+>>     no-send-to-unknown fires
+>>   - get_webpage uses bare `exfil` so no-novel-urls guards fetch
+>>     targets without requiring recipient-style proof
+>>   - add_user_to_channel is membership:w only, not exfil
+>>   - invite_user_to_slack protects both `user` and `user_email`
+>>     as controlArgs
+>>   - read_file is intentionally absent; it is not part of the
+>>     actual slack tool suite the runner exposes
+
+import tools from mcp "tools" as @mcp
+
+import {
+  @slack_msg,
+  @slack_user,
+  @slack_channel,
+  @webpage_content
+} from "./records.mld"
+
+>> ── Resolve-phase read tools ──
+
+exe resolve:r, known, tool:r @get_channels() = [
+  let @raw = @mcp.getChannels()
+  => for @ch in @raw => { name: @ch }
+] => record @slack_channel
+
+exe resolve:r, known, tool:r @get_users_in_channel(channel) = [
+  let @raw = @mcp.getUsersInChannel(@channel)
+  => for @u in @raw => { name: @u }
+] => record @slack_user with { controlArgs: ["channel"] }
+
+exe resolve:r, untrusted, tool:r @read_channel_messages(channel) = [
+  => @mcp.readChannelMessages(@channel)
+] => record @slack_msg with { controlArgs: ["channel"] }
+
+exe resolve:r, untrusted, tool:r @read_inbox(user) = [
+  => @mcp.readInbox(@user)
+] => record @slack_msg with { controlArgs: ["user"] }
+
+>> ── Extract-phase read tools ──
+>>
+>> get_webpage is a fetch exfil surface. The url is a control arg and
+>> the returned content is raw untrusted webpage text.
+exe extract:r, untrusted, exfil, tool:r @get_webpage(url) = [
+  let @content = @mcp.getWebpage(@url)
+  => { url: @url, content: @content }
+] => record @webpage_content with { controlArgs: ["url"] }
+
+>> ── Execute-phase write tools ──
+
+exe execute:w, comm:w, exfil, tool:w @send_channel_message(channel, body) = [
+  => @mcp.sendChannelMessage(@channel, @body)
+] with { controlArgs: ["channel"] }
+
+exe execute:w, comm:w, exfil:send, tool:w @send_direct_message(recipient, body) = [
+  => @mcp.sendDirectMessage(@recipient, @body)
+] with { controlArgs: ["recipient"] }
+
+exe execute:w, membership:w, exfil:send, tool:w @invite_user_to_slack(user, user_email) = [
+  => @mcp.inviteUserToSlack(@user, @user_email)
+] with { controlArgs: ["user", "user_email"] }
+
+exe execute:w, membership:w, tool:w @add_user_to_channel(user, channel) = [
+  => @mcp.addUserToChannel(@user, @channel)
+] with { controlArgs: ["user", "channel"] }
+
+exe execute:w, destructive:targeted, tool:w @remove_user_from_slack(user) = [
+  => @mcp.removeUserFromSlack(@user)
+] with { controlArgs: ["user"] }
+
+exe execute:w, exfil:send, tool:w @post_webpage(url, content) = [
+  => @mcp.postWebpage(@url, @content)
+] with { controlArgs: ["url"] }
+
+var @slackTools = [
+  @get_channels,
+  @get_users_in_channel,
+  @read_channel_messages,
+  @read_inbox,
+  @get_webpage,
+  @send_channel_message,
+  @send_direct_message,
+  @invite_user_to_slack,
+  @add_user_to_channel,
+  @remove_user_from_slack,
+  @post_webpage
+]
+
+var tools @slackToolsCollection = {
+  get_channels: { mlld: @get_channels },
+  get_users_in_channel: { mlld: @get_users_in_channel },
+  read_channel_messages: { mlld: @read_channel_messages },
+  read_inbox: { mlld: @read_inbox },
+  get_webpage: { mlld: @get_webpage },
+  send_channel_message: { mlld: @send_channel_message },
+  send_direct_message: { mlld: @send_direct_message },
+  invite_user_to_slack: { mlld: @invite_user_to_slack },
+  add_user_to_channel: { mlld: @add_user_to_channel },
+  remove_user_from_slack: { mlld: @remove_user_from_slack },
+  post_webpage: { mlld: @post_webpage }
+}
+
+export {
+  @slackTools,
+  @slackToolsCollection,
+  @get_channels,
+  @get_users_in_channel,
+  @read_channel_messages,
+  @read_inbox,
+  @get_webpage,
+  @send_channel_message,
+  @send_direct_message,
+  @invite_user_to_slack,
+  @add_user_to_channel,
+  @remove_user_from_slack,
+  @post_webpage
+}

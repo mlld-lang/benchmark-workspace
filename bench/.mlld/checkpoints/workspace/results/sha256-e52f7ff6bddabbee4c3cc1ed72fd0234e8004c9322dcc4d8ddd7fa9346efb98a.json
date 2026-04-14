@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_emails_any_sender\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"Networking event\" }\n  },\n  \"purpose\": \"Find emails about the Networking event to get participant details and event summary, since calendar search failed\"\n}"}

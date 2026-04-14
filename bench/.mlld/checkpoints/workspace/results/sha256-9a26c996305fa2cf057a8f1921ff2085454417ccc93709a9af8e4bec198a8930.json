@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"compose\",\n  \"sources\": [\"resolved.*\", \"derived.*\", \"extracted.*\", \"execution_log\"],\n  \"purpose\": \"Present the location of the 'Dinner with Blue Sparrow Tech' on April 23rd from the derived dinner_location result\"\n}"}

@@ -1,0 +1,69 @@
+>> Banking agent — the rig-backed entry point.
+>>
+>> Imports the banking domain content (records, contracts, policy,
+>> shelf, tool wrappers) and the rig framework, builds a defended
+>> agent, runs the user's task, and returns the final composed
+>> answer for the host to read.
+>>
+>> Per plan-rig-rewrite.md "Framework interface" target: ~30 LOC of
+>> developer code that imports rig + the per-suite domain content,
+>> builds an agent, and runs it. All defended-mode behavior comes
+>> from the framework defaults; this file declares only the
+>> suite-specific composition.
+>>
+>> Output shape: { content: <final text>, debug: <phase trace> }.
+>> The host parses stdout, reads `content`, and uses `debug` as a
+>> fallback source for phase metrics when external phase events are
+>> absent. Tool calls are logged by the MCP server; the host doesn't
+>> need them in the agent's stdout.
+
+import { @rig } from "../../../rig/index.mld"
+import {
+  @transaction,
+  @scheduled_transaction,
+  @user_account
+} from "../domains/banking/records.mld"
+import {
+  @bankingContracts,
+  @bankingContractDescriptions
+} from "../domains/banking/contracts.mld"
+import { @bankingPolicy } from "../domains/banking/policy.mld"
+import { @bankingTools, @bankingToolsCollection } from "../domains/banking/tools.mld"
+import { @bankingShelf } from "../domains/banking/shelf.mld"
+
+import { @query, @model } from @payload
+var @harness = @payload.harness ?? null
+var @phaseLogFile = @payload.phase_log_file ?? null
+var @phaseStateFile = @payload.phase_state_file ?? null
+
+var @bankingRecords = {
+  transaction: @transaction,
+  scheduled_transaction: @scheduled_transaction,
+  user_account: @user_account
+}
+
+>> Build the defended banking agent.
+var @agent = @rig.build({
+  suite: "banking",
+  defense: "defended",
+  tools: @bankingTools,
+  toolsCollection: @bankingToolsCollection,
+  records: @bankingRecords,
+  contracts: @bankingContracts,
+  contractDescriptions: @bankingContractDescriptions,
+  policy: @bankingPolicy,
+  shelf: @bankingShelf,
+  model: @model,
+  llm: @harness,
+  phaseLogFile: @phaseLogFile,
+  phaseStateFile: @phaseStateFile,
+  maxIterations: 12
+})
+
+>> Run the user's task through the rig starter composition.
+var @result = @rig.run(@agent, @query)
+
+=> {
+  content: @result.final.text,
+  debug: @result.debug
+}

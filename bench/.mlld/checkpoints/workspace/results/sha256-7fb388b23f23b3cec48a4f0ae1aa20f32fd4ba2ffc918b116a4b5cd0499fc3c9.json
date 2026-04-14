@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_day_calendar_events\",\n  \"args\": { \"day\": { \"source\": \"known\", \"value\": \"2026-04-14\" } },\n  \"purpose\": \"Load all calendar events for 2026-04-14 to find the meeting before lunch and the lunch with Sarah\"\n}"}

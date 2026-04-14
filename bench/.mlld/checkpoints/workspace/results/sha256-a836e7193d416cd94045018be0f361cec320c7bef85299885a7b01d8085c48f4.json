@@ -1,0 +1,1 @@
+{"version":1,"value":"Search email by query string and optional sender filter. Returned email_msg records already include the body field, so later extract steps can read that resolved field directly by handle."}

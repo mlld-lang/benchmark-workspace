@@ -1,0 +1,354 @@
+>> Step 3 extract flow, plus the extract-selection-ref rejection path.
+
+import { @rigBuild, @rigRun } from "../../index.mld"
+import { @records, @tools, @get_message, @get_note, @get_webpage } from "../fixtures.mld"
+import { @check, @field, @firstByPhase, @mktempPath, @readFile, @removeFile } from "../helpers.mld"
+
+>> Top-level vars in mlld can stay lazy longer than this flow wants. Use
+>> a tiny helper to force a run result before inspecting its sidecar log.
+exe @readFileAfterRun(runResult, path) = [
+  let @snapshot = @runResult | @pretty
+  if !@snapshot.isDefined() [ => "" ]
+  => @readFile(@path)
+]
+
+>> Runtime tool collections carry `expose` so the rig dispatcher can
+>> bind structured planner args back into the executable's positional
+>> call shape. Single-argument reads need this just as much as
+>> multi-argument writes.
+var tools @runtimeToolsCollection = {
+  get_message: {
+    mlld: @get_message,
+    expose: ["message_id"]
+  },
+  get_note: {
+    mlld: @get_note,
+    expose: ["note_id"]
+  },
+  get_webpage: {
+    mlld: @get_webpage,
+    expose: ["url"]
+  }
+}
+
+var @plannerTurns = [
+  {
+    phase: "resolve",
+    tool: "get_message",
+    args: {
+      message_id: { source: "known", value: "msg_1" }
+    },
+    purpose: "ground the message body"
+  },
+  {
+    phase: "extract",
+    source: {
+      source: "resolved",
+      record: "message_entry",
+      handle: "r_message_entry_msg_1",
+      field: "body"
+    },
+    schema: "summary_payload",
+    name: "summary",
+    purpose: "extract a short factual summary"
+  },
+  {
+    phase: "compose",
+    sources: ["resolved.*", "extracted.*"],
+    purpose: "answer from the typed summary"
+  }
+]
+
+var @happyAgent = @rigBuild({
+  suite: "extract-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: @plannerTurns,
+      extract: [{
+        status: "extracted",
+        payload: { summary: "Short summary" },
+        summary: "summary extracted"
+      }],
+      compose: [{
+        text: "Summary: Short summary"
+      }]
+    }
+  }
+})
+
+var @happyResult = @rigRun(@happyAgent, "Summarize message msg_1.")
+var @happyExecution = @field(@field(@happyResult, "debug"), "execution_log") ?? []
+var @happyExtractEntry = @firstByPhase(@happyExecution, "extract")
+var @happyExecutionPretty = @happyExecution | @pretty
+var @happyPretty = @happyResult | @pretty
+
+var @toolExtractPlannerTurns = [
+  {
+    phase: "extract",
+    tool: "get_webpage",
+    args: {
+      url: { source: "known", value: "https://example.test/page" }
+    },
+    name: "webpage_fetch",
+    purpose: "load the webpage before summarizing it"
+  },
+  {
+    phase: "compose",
+    sources: ["extracted.*"],
+    purpose: "confirm the fetch"
+  }
+]
+
+var @toolExtractAgent = @rigBuild({
+  suite: "extract-tool-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: @toolExtractPlannerTurns,
+      compose: [{
+        text: "Fetched the webpage."
+      }]
+    }
+  }
+})
+
+var @toolExtractResult = @rigRun(@toolExtractAgent, "Fetch https://example.test/page and confirm it.")
+var @toolExtractExecution = @field(@field(@toolExtractResult, "debug"), "execution_log") ?? []
+var @toolExtractEntry = @firstByPhase(@toolExtractExecution, "extract")
+var @toolExtractPretty = @toolExtractResult | @pretty
+
+>> Tool-backed extract can also happen after a prior resolve step, as in
+>> workspace flows that first identify an email/file handle and then fetch
+>> its full body. Keep the earlier execution log and grounded state intact
+>> when that extract result is written into the named extracted map.
+var @toolExtractWithResolvePlannerTurns = [
+  {
+    phase: "resolve",
+    tool: "get_message",
+    args: {
+      message_id: { source: "known", value: "msg_1" }
+    },
+    purpose: "ground a message before fetching unrelated literal content"
+  },
+  {
+    phase: "extract",
+    tool: "get_webpage",
+    args: {
+      url: { source: "known", value: "https://example.test/page" }
+    },
+    name: "webpage_fetch",
+    purpose: "fetch a webpage after the earlier resolve step"
+  },
+  {
+    phase: "compose",
+    sources: ["resolved.*", "extracted.*"],
+    purpose: "confirm both the grounded read and fetched extract remain in state"
+  }
+]
+
+var @toolExtractWithResolveAgent = @rigBuild({
+  suite: "extract-tool-after-resolve-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: @toolExtractWithResolvePlannerTurns,
+      compose: [{
+        text: "Resolved the message and fetched the webpage."
+      }]
+    }
+  }
+})
+
+var @toolExtractWithResolveResult = @rigRun(@toolExtractWithResolveAgent, "Read msg_1, then fetch https://example.test/page.")
+var @toolExtractWithResolveExecution = @field(@field(@toolExtractWithResolveResult, "debug"), "execution_log") ?? []
+var @toolExtractWithResolvePretty = @toolExtractWithResolveResult | @pretty
+var @toolExtractWithResolveOk =
+  @field(@toolExtractWithResolveResult, "terminal") == "complete" &&
+  @toolExtractWithResolveExecution.length == 2 &&
+  @field(@toolExtractWithResolveExecution[0], "phase") == "resolve" &&
+  @field(@toolExtractWithResolveExecution[0], "tool") == "get_message" &&
+  @field(@toolExtractWithResolveExecution[1], "phase") == "extract" &&
+  @field(@toolExtractWithResolveExecution[1], "tool") == "get_webpage"
+
+>> Regression for the workspace planner bug: after a source-backed scalar
+>> extract, a later resolve must preserve both the earlier execution log
+>> and the extracted named state in the next planner prompt. The test
+>> inspects the logged planner prompt rather than just the final debug
+>> payload so it catches prompt-time state drift directly.
+exe @runStateRetentionScenario() = [
+  let @retentionLlmLogFile = @mktempPath("rig-llm-log", ".jsonl")
+  let @stateRetentionPlannerTurns = [
+    {
+      phase: "resolve",
+      tool: "get_message",
+      args: {
+        message_id: { source: "known", value: "msg_1" }
+      },
+      purpose: "ground the message body before extracting it"
+    },
+    {
+      phase: "extract",
+      source: {
+        source: "resolved",
+        record: "message_entry",
+        handle: "r_message_entry_msg_1",
+        field: "body"
+      },
+      schema: "string",
+      name: "message_body",
+      purpose: "keep the scalar body available after later phases"
+    },
+    {
+      phase: "resolve",
+      tool: "get_note",
+      args: {
+        note_id: { source: "known", value: "note_1" }
+      },
+      purpose: "add another resolved record after the scalar extract"
+    },
+    {
+      phase: "compose",
+      sources: ["resolved.*", "extracted.*"],
+      purpose: "confirm the planner retained both resolved families and the extracted scalar"
+    }
+  ]
+  let @stateRetentionAgent = @rigBuild({
+    suite: "extract-state-retention-flow",
+    defense: "defended",
+    model: "stub",
+    records: @records,
+    tools: @tools,
+    toolsCollection: @runtimeToolsCollection,
+    llmCallLogFile: @retentionLlmLogFile,
+    logLlmCalls: true,
+    overrides: {
+      stub: {
+        planner: @stateRetentionPlannerTurns,
+        extract: [{
+          status: "extracted",
+          payload: "Draft a short summary and keep it factual.",
+          summary: "body extracted"
+        }],
+        compose: [{
+          text: "Retained state across the second resolve."
+        }]
+      }
+    }
+  })
+  let @result = @rigRun(@stateRetentionAgent, "Read msg_1, keep its body, then look up note_1.")
+  let @resultPretty = @result | @pretty
+  let @llmLog = @readFile(@retentionLlmLogFile)
+  let @promptOk =
+    @llmLog.includes("\\\"message_body\\\":{\\\"provenance\\\":\\\"extracted\\\",\\\"schema_name\\\":\\\"string\\\",\\\"fields\\\":[],\\\"selection_refs\\\":[]}") &&
+    !@llmLog.includes("\\\"message_body\\\":{\\\"provenance\\\":\\\"extracted\\\",\\\"value\\\":\\\"Draft a short summary and keep it factual.\\\"") &&
+    @llmLog.includes("\\\"message_entry\\\":[{\\\"handle\\\":\\\"r_message_entry_msg_1\\\"") &&
+    @llmLog.includes("\\\"note_entry\\\":[{\\\"handle\\\":\\\"r_note_entry_note_1\\\"")
+  @removeFile(@retentionLlmLogFile)
+  => {
+    result: @result,
+    result_pretty: @resultPretty,
+    llm_log: @llmLog,
+    prompt_ok: @promptOk
+  }
+]
+
+var @stateRetentionScenario = @runStateRetentionScenario()
+var @stateRetentionResult = @stateRetentionScenario.result
+var @stateRetentionExecution = @field(@field(@stateRetentionResult, "debug"), "execution_log") ?? []
+var @stateRetentionPretty = @stateRetentionResult | @pretty
+var @stateRetentionTerminal = @field(@stateRetentionResult, "terminal")
+var @stateRetentionLlmLog = @stateRetentionScenario.llm_log
+>> The dedicated scenario helper keeps the log capture around for manual
+>> inspection, but the aggregate flow assertion pins the observable state
+>> that the planner must carry forward across the second resolve.
+var @stateRetentionStateOk =
+  @stateRetentionPretty.includes("\"message_body\"") &&
+  @stateRetentionPretty.includes("\"r_message_entry_msg_1\"") &&
+  @stateRetentionPretty.includes("\"r_note_entry_note_1\"")
+var @stateRetentionExecutionOk =
+  @stateRetentionTerminal == "complete" &&
+  @stateRetentionExecution.length == 3 &&
+  @field(@stateRetentionExecution[0], "phase") == "resolve" &&
+  @field(@stateRetentionExecution[1], "phase") == "extract" &&
+  @field(@stateRetentionExecution[2], "phase") == "resolve"
+
+exe @runRejectedScenario() = [
+  let @rejectedAgent = @rigBuild({
+    suite: "extract-reject-flow",
+    defense: "defended",
+    model: "stub",
+    records: @records,
+    tools: @tools,
+    toolsCollection: @runtimeToolsCollection,
+    overrides: {
+      stub: {
+        planner: @plannerTurns,
+        extract: [{
+          status: "extracted",
+          payload: {
+            summary: "Bad summary",
+            winner: {
+              source: "selection",
+              backing: { record: "contact", handle: "r_contact_alice.example" }
+            }
+          },
+          summary: "invalid selection"
+        }]
+      }
+    }
+  })
+  let @result = @rigRun(@rejectedAgent, "Summarize message msg_1.")
+  let @resultPretty = @result | @pretty
+  let @terminal = @field(@result, "terminal")
+  let @text = @field(@result, "text")
+  => {
+    result: @result,
+    result_pretty: @resultPretty,
+    ok: @terminal == "blocked" && @text == "extract_may_not_emit_selection_refs"
+  }
+]
+
+var @rejectedScenario = @runRejectedScenario()
+var @rejectedResult = @rejectedScenario.result
+var @rejectedPretty = @rejectedScenario.result_pretty
+var @happyLogOk = @field(@happyExtractEntry, "name") == "summary" &&
+  @field(@happyExtractEntry, "summary") == "extracted summary"
+var @toolExtractOk = @field(@toolExtractResult, "terminal") == "complete" &&
+  @field(@toolExtractResult, "text") == "Fetched the webpage." &&
+  @field(@toolExtractEntry, "tool") == "get_webpage" &&
+  @field(@toolExtractEntry, "name") == "webpage_fetch"
+var @rejectedOk =
+  @rejectedPretty.includes("\"terminal\": \"blocked\"") &&
+  @rejectedPretty.includes("\"text\": \"extract_may_not_emit_selection_refs\"")
+var @happyTerminalOk = @field(@happyResult, "terminal") == "complete"
+var @happyTextOk = @field(@happyResult, "text") == "Summary: Short summary"
+var @c1 = @check("happy-terminal", @happyTerminalOk, @happyPretty)
+var @c2 = @check("happy-text", @happyTextOk, @field(@happyResult, "text"))
+var @c3 = @check("happy-log", @happyLogOk, @happyExecutionPretty)
+var @c4 = @check("tool-backed-extract", @toolExtractOk, @toolExtractPretty)
+var @c5 = @check("tool-backed-extract-after-resolve", @toolExtractWithResolveOk, @toolExtractWithResolvePretty)
+>> The state-retention and extract-selection rejection regressions run in
+>> dedicated flow files so each scenario gets a fresh top-level graph.
+var @checks = [@c1, @c2, @c3, @c4, @c5]
+
+var @fails = for @check in @checks when @check.status == "FAIL" => @check
+
+show "Rig v2 extract flow"
+for @check in @checks => show `[@check.status] @check.id  @check.detail`
+
+if @fails.length > 0 [
+  run sh { exit 1 }
+]

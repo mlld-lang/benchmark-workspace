@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_files_by_filename\",\n  \"args\": {\n    \"filename\": { \"source\": \"known\", \"value\": \"Networking event\" }\n  },\n  \"purpose\": \"Search for a file named after the Networking event, as this data source has not been tried yet\"\n}"}

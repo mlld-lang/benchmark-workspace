@@ -1,0 +1,1 @@
+{"version":1,"value":"```json\n{\n  \"status\": \"extracted\",\n  \"schema_name\": \"string\",\n  \"name\": \"david_email_6_body\",\n  \"provenance\": \"extracted\",\n  \"preview_fields\": [\"value\"],\n  \"payload\": \"Hi Emma,\\n\\nThe edits look good to me. Ready to send.\\n\\nBest,\\nDavid\"\n}\n```"}

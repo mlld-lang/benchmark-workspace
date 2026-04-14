@@ -1,0 +1,100 @@
+>> Regression flow for state retention across a later resolve step.
+
+import { @rigBuild, @rigRun } from "../../index.mld"
+import { @records, @tools, @get_message, @get_note, @get_webpage } from "../fixtures.mld"
+import { @check, @field, @mktempPath, @readFile, @removeFile } from "../helpers.mld"
+
+var tools @runtimeToolsCollection = {
+  get_message: { mlld: @get_message, expose: ["message_id"] },
+  get_note: { mlld: @get_note, expose: ["note_id"] },
+  get_webpage: { mlld: @get_webpage, expose: ["url"] }
+}
+
+var @llmLogFile = @mktempPath("rig-llm-log", ".jsonl")
+
+var @plannerTurns = [
+  {
+    phase: "resolve",
+    tool: "get_message",
+    args: {
+      message_id: { source: "known", value: "msg_1" }
+    },
+    purpose: "ground the message body before extracting it"
+  },
+  {
+    phase: "extract",
+    source: {
+      source: "resolved",
+      record: "message_entry",
+      handle: "r_message_entry_msg_1",
+      field: "body"
+    },
+    schema: "string",
+    name: "message_body",
+    purpose: "keep the scalar body available after later phases"
+  },
+  {
+    phase: "resolve",
+    tool: "get_note",
+    args: {
+      note_id: { source: "known", value: "note_1" }
+    },
+    purpose: "add another resolved record after the scalar extract"
+  },
+  {
+    phase: "compose",
+    sources: ["resolved.*", "extracted.*"],
+    purpose: "confirm the planner retained both resolved families and the extracted scalar"
+  }
+]
+
+var @agent = @rigBuild({
+  suite: "extract-state-retention-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  llmCallLogFile: @llmLogFile,
+  logLlmCalls: true,
+  overrides: {
+    stub: {
+      planner: @plannerTurns,
+      extract: [{
+        status: "extracted",
+        payload: "Draft a short summary and keep it factual.",
+        summary: "body extracted"
+      }],
+      compose: [{
+        text: "Retained state across the second resolve."
+      }]
+    }
+  }
+})
+
+var @result = @rigRun(@agent, "Read msg_1, keep its body, then look up note_1.")
+var @prettyResult = @result | @pretty
+var @execution = @field(@field(@result, "debug"), "execution_log") ?? []
+var @llmLog = @readFile(@llmLogFile)
+
+var @ok =
+  @field(@result, "terminal") == "complete" &&
+  @execution.length == 3 &&
+  @field(@execution[0], "phase") == "resolve" &&
+  @field(@execution[1], "phase") == "extract" &&
+  @field(@execution[2], "phase") == "resolve" &&
+  @llmLog.includes("\\\"message_body\\\":{\\\"provenance\\\":\\\"extracted\\\",\\\"schema_name\\\":\\\"string\\\",\\\"fields\\\":[],\\\"selection_refs\\\":[]}") &&
+  !@llmLog.includes("\\\"message_body\\\":{\\\"provenance\\\":\\\"extracted\\\",\\\"value\\\":\\\"Draft a short summary and keep it factual.\\\"") &&
+  @llmLog.includes("\\\"message_entry\\\":[{\\\"handle\\\":\\\"r_message_entry_msg_1\\\"") &&
+  @llmLog.includes("\\\"note_entry\\\":[{\\\"handle\\\":\\\"r_note_entry_note_1\\\"")
+
+var @checkResult = @check("state-retention-after-second-resolve", @ok, @prettyResult)
+
+show "Rig v2 extract state retention flow"
+show `[@checkResult.status] @checkResult.id  @checkResult.detail`
+
+@removeFile(@llmLogFile)
+
+if @checkResult.status == "FAIL" [
+  run sh { exit 1 }
+]

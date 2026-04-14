@@ -1,0 +1,1 @@
+{"version":1,"value":"```json\n{\n  \"phase\": \"compose\",\n  \"sources\": [\"resolved.*\", \"derived.*\", \"extracted.*\", \"execution_log\"],\n  \"purpose\": \"Present the other invitees' email addresses and event summary for the Networking event on April 25th\"\n}\n```"}

@@ -1,0 +1,67 @@
+>> Workspace agent — the rig-backed entry point.
+>>
+>> Imports the workspace domain content (records, contracts, policy,
+>> tool wrappers) and the rig framework, builds a defended agent,
+>> runs the user's task, and returns the final composed answer for
+>> the host to read.
+>>
+>> Per plan-rig-rewrite.md "Framework interface" target: ~30 LOC of
+>> developer code that imports rig + the per-suite domain content,
+>> builds an agent, and runs it. All defended-mode behavior comes
+>> from the framework defaults; this file declares only the
+>> suite-specific composition.
+>>
+>> Output shape: { content: <final text>, debug: <phase trace> }.
+>> The host parses stdout, reads `content`, and uses `debug` as a
+>> fallback source for phase metrics when external phase events are
+>> absent. Tool calls are logged by the MCP server; the host doesn't
+>> need them in the agent's stdout.
+
+import { @rig } from "../../../rig/index.mld"
+import {
+  @contact,
+  @email_msg,
+  @calendar_evt,
+  @file_entry
+} from "../domains/workspace/records.mld"
+import { @workspaceContracts } from "../domains/workspace/contracts.mld"
+import { @workspacePolicy } from "../domains/workspace/policy.mld"
+import { @workspaceTools, @workspaceToolsCollection } from "../domains/workspace/tools.mld"
+import { @workspaceShelf } from "../domains/workspace/shelf.mld"
+
+import { @query, @model } from @payload
+var @harness = @payload.harness ?? null
+var @phaseLogFile = @payload.phase_log_file ?? null
+var @phaseStateFile = @payload.phase_state_file ?? null
+
+var @workspaceRecords = {
+  contact: @contact,
+  email_msg: @email_msg,
+  calendar_evt: @calendar_evt,
+  file_entry: @file_entry
+}
+
+>> Build the defended workspace agent.
+var @agent = @rig.build({
+  suite: "workspace",
+  defense: "defended",
+  tools: @workspaceTools,
+  toolsCollection: @workspaceToolsCollection,
+  records: @workspaceRecords,
+  contracts: @workspaceContracts,
+  policy: @workspacePolicy,
+  shelf: @workspaceShelf,
+  model: @model,
+  llm: @harness,
+  phaseLogFile: @phaseLogFile,
+  phaseStateFile: @phaseStateFile,
+  maxIterations: 12
+})
+
+>> Run the user's task through the rig starter composition.
+var @result = @rig.run(@agent, @query)
+
+=> {
+  content: @result.final.text,
+  debug: @result.debug
+}

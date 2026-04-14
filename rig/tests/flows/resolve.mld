@@ -1,0 +1,147 @@
+>> Step 2 resolve flow: resolve -> compose over a synthetic contact list.
+
+import { @rigBuild, @rigRun } from "../../index.mld"
+import { @records, @tools, @get_contacts, @get_note } from "../fixtures.mld"
+import { @check, @field, @firstByPhase, @mktempPath, @readFile, @removeFile } from "../helpers.mld"
+
+>> The runtime tool bridge for imported read tools is keyed off the
+>> explicit dispatch surface. Keep the control arg spelled out here so
+>> this flow stays focused on repeated resolve-state retention.
+var tools @runtimeToolsCollection = {
+  get_contacts: {
+    mlld: @get_contacts,
+    labels: ["resolve:r"],
+    expose: []
+  },
+  get_note: {
+    mlld: @get_note,
+    labels: ["resolve:r"],
+    expose: ["note_id"],
+    controlArgs: ["note_id"]
+  }
+}
+
+var @agent = @rigBuild({
+  suite: "resolve-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: [
+        {
+          phase: "resolve",
+          tool: "get_contacts",
+          args: {},
+          purpose: "ground the contact list"
+        },
+        {
+          phase: "compose",
+          sources: ["resolved.*"],
+          purpose: "answer from grounded contacts"
+        }
+      ],
+      compose: [{
+        text: "Alice is in the contact list."
+      }]
+    }
+  }
+})
+
+var @result = @rigRun(@agent, "Find Alice in my contacts.")
+var @debugInfo = @field(@result, "debug")
+var @executionLog = @field(@debugInfo, "execution_log") ?? []
+var @resolveEntry = @firstByPhase(@executionLog, "resolve")
+var @executionPretty = @executionLog | @pretty
+var @plannerIterations = @field(@debugInfo, "planner_iterations") ?? []
+var @resultPretty = @result | @pretty
+var @plannerIterationsPretty = @plannerIterations | @pretty
+var @resolveLogOk = @executionLog.length == 1 &&
+  @field(@resolveEntry, "tool") == "get_contacts" &&
+  @field(@resolveEntry, "summary") == "resolved 2 contact record(s)"
+var @terminalOk = @field(@result, "terminal") == "complete"
+var @textOk = @field(@result, "text") == "Alice is in the contact list."
+var @plannerStepsOk = @plannerIterations.length == 2
+
+>> Regression for repeated resolves in the same record family. A later
+>> `note_entry` resolve must merge into the existing family instead of
+>> replacing it, and the next planner prompt should still show both
+>> handles. Logging the prompt catches the state bug before compose can
+>> hide it.
+var @repeatResolveLlmLogFile = @mktempPath("rig-repeat-resolve", ".jsonl")
+
+var @repeatResolveAgent = @rigBuild({
+  suite: "resolve-repeat-family-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  llmCallLogFile: @repeatResolveLlmLogFile,
+  logLlmCalls: true,
+  overrides: {
+    stub: {
+      planner: [
+        {
+          phase: "resolve",
+          tool: "get_note",
+          args: {
+            note_id: { source: "known", value: "note_1" }
+          },
+          purpose: "ground the first note"
+        },
+        {
+          phase: "resolve",
+          tool: "get_note",
+          args: {
+            note_id: { source: "known", value: "note_2" }
+          },
+          purpose: "add a second note in the same record family"
+        },
+        {
+          phase: "compose",
+          sources: ["resolved.*"],
+          purpose: "confirm both note handles remain in planner state"
+        }
+      ],
+      compose: [{
+        text: "Both notes remained available."
+      }]
+    }
+  }
+})
+
+var @repeatResolveResult = @rigRun(@repeatResolveAgent, "Load note_1 and note_2 before composing.")
+var @repeatResolveDebug = @field(@repeatResolveResult, "debug")
+var @repeatResolveExecution = @field(@repeatResolveDebug, "execution_log") ?? []
+var @repeatResolvePretty = @repeatResolveResult | @pretty
+var @repeatResolveLlmLog = @readFile(@repeatResolveLlmLogFile)
+var @repeatResolveExecutionOk =
+  @field(@repeatResolveResult, "terminal") == "complete" &&
+  @repeatResolveExecution.length == 2 &&
+  @field(@repeatResolveExecution[0], "phase") == "resolve" &&
+  @field(@repeatResolveExecution[1], "phase") == "resolve"
+var @repeatResolvePromptOk =
+  @repeatResolveLlmLog.includes("\\\"note_entry\\\":[{\\\"handle\\\":\\\"r_note_entry_note_1\\\"") &&
+  @repeatResolveLlmLog.includes("\\\"handle\\\":\\\"r_note_entry_note_2\\\"")
+
+var @c1 = @check("terminal", @terminalOk, @resultPretty)
+var @c2 = @check("text", @textOk, @field(@result, "text"))
+var @c3 = @check("resolve-log", @resolveLogOk, @executionPretty)
+var @c4 = @check("planner-steps", @plannerStepsOk, @plannerIterationsPretty)
+var @c5 = @check("repeat-resolve-same-family", @repeatResolveExecutionOk && @repeatResolvePromptOk, @repeatResolveLlmLog)
+
+var @checks = [@c1, @c2, @c3, @c4, @c5]
+
+var @fails = for @check in @checks when @check.status == "FAIL" => @check
+
+show "Rig v2 resolve flow"
+for @check in @checks => show `[@check.status] @check.id  @check.detail`
+
+@removeFile(@repeatResolveLlmLogFile)
+
+if @fails.length > 0 [
+  run sh { exit 1 }
+]

@@ -1,0 +1,75 @@
+>> Regression flow for extract-produced selection refs.
+
+import { @rigBuild, @rigRun } from "../../index.mld"
+import { @records, @tools, @get_message, @get_note, @get_webpage } from "../fixtures.mld"
+import { @check, @field } from "../helpers.mld"
+
+var tools @runtimeToolsCollection = {
+  get_message: { mlld: @get_message, expose: ["message_id"] },
+  get_note: { mlld: @get_note, expose: ["note_id"] },
+  get_webpage: { mlld: @get_webpage, expose: ["url"] }
+}
+
+var @plannerTurns = [
+  {
+    phase: "resolve",
+    tool: "get_message",
+    args: {
+      message_id: { source: "known", value: "msg_1" }
+    },
+    purpose: "ground the message body"
+  },
+  {
+    phase: "extract",
+    source: {
+      source: "resolved",
+      record: "message_entry",
+      handle: "r_message_entry_msg_1",
+      field: "body"
+    },
+    schema: "summary_payload",
+    name: "summary",
+    purpose: "extract a short factual summary"
+  }
+]
+
+var @agent = @rigBuild({
+  suite: "extract-reject-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: @plannerTurns,
+      extract: [{
+        status: "extracted",
+        payload: {
+          summary: "Bad summary",
+          winner: {
+            source: "selection",
+            backing: { record: "contact", handle: "r_contact_alice.example" }
+          }
+        },
+        summary: "invalid selection"
+      }]
+    }
+  }
+})
+
+var @result = @rigRun(@agent, "Summarize message msg_1.")
+var @prettyResult = @result | @pretty
+
+var @ok =
+  @field(@result, "terminal") == "blocked" &&
+  @field(@result, "text") == "extract_may_not_emit_selection_refs"
+
+var @checkResult = @check("reject-selection-ref", @ok, @prettyResult)
+
+show "Rig v2 extract reject flow"
+show `[@checkResult.status] @checkResult.id  @checkResult.detail`
+
+if @checkResult.status == "FAIL" [
+  run sh { exit 1 }
+]

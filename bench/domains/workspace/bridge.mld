@@ -1,0 +1,48 @@
+>> Pure workspace adapter helpers.
+>>
+>> Keep the bridge-only coercions outside `tools.mld` so they can be
+>> reused and regression-tested without starting the live MCP server.
+
+>> AgentDojo surfaces some ids as numbers even though the MCP tool
+>> signatures expect strings. Normalize those bridge-facing ids at the
+>> adapter boundary so rig can keep the planner/control contract typed
+>> while the runtime still receives the concrete shape it validates.
+exe @asString(inputValue) = js {
+  if (inputValue == null) return "";
+  return String(inputValue);
+}
+
+>> Calendar read tools take user-facing date phrases, while AgentDojo's
+>> backend expects strict ISO dates. Normalize that formatting at the
+>> adapter boundary so the planner can keep citing the task literal.
+exe @isoDate(inputValue) = js {
+  if (inputValue == null) return null;
+  const raw = String(inputValue).trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const match = raw.match(/^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,\s*(\d{4}))?$/);
+  if (!match) return raw;
+
+  const months = {
+    january: "01",
+    february: "02",
+    march: "03",
+    april: "04",
+    may: "05",
+    june: "06",
+    july: "07",
+    august: "08",
+    september: "09",
+    october: "10",
+    november: "11",
+    december: "12"
+  };
+
+  const month = months[match[1].toLowerCase()];
+  if (!month) return raw;
+
+  const day = String(parseInt(match[2], 10)).padStart(2, "0");
+  const year = match[3] || String(new Date().getFullYear());
+  return `${year}-${month}-${day}`;
+}

@@ -1,0 +1,111 @@
+>> rig v2 public surface.
+>>
+>> Apps build an opaque agent handle from records + tools, then run one
+>> task through the phase loop. The returned debug payload mirrors what
+>> the benchmark host expects: execution log, planner iterations via the
+>> phase events, and the last planner decision.
+
+import {
+  @plannerDecision,
+  @resolveAttestation,
+  @extractAttestation,
+  @deriveAttestation,
+  @executeAttestation,
+  @composeAttestation
+} from "./records.mld"
+import {
+  @validateConfig,
+  @synthesizedPolicy,
+  @runPhaseLoop
+} from "./orchestration.mld"
+import {
+  @pairsToObject,
+  @toolExecutable,
+  @toolParamNames,
+  @toolControlArgs,
+  @toolPayloadArgs
+} from "./tooling.mld"
+import { @compileExecuteIntent, @lowerSelectionRef } from "./intent.mld"
+
+exe @rigBuild(config) = [
+  let @validated = @validateConfig(@config)
+  if !@validated.ok [ => @validated ]
+  >> Keep the validated object intact. Re-copying the `var tools`
+  >> collection through a fresh object literal strips the runtime's
+  >> special callability metadata off imported tool entries.
+  => @validated
+]
+
+>> Imported exe return values can shed derived handle members such as the
+>> routed tool catalog even when the raw config fields survive. Rebuild
+>> the validated handle at run time from whatever config-like object we
+>> received so planning and dispatch always use a local catalog.
+exe @prepareAgent(agentOrConfig) = when [
+  @agentOrConfig.data.tools.isDefined() && @agentOrConfig.data.records.isDefined() && @agentOrConfig.data.model.isDefined() => @validateConfig(@agentOrConfig.data)
+  @agentOrConfig.tools.isDefined() && @agentOrConfig.records.isDefined() && @agentOrConfig.model.isDefined() => @validateConfig(@agentOrConfig)
+  * => @validateConfig(@agentOrConfig)
+]
+
+exe @rigRun(agent, query) = [
+  let @prepared = @prepareAgent(@agent)
+  if !@prepared.ok && @prepared.error.isDefined() [
+    => {
+      text: @prepared.error,
+      terminal: "blocked",
+      debug: {
+        execution_log: [],
+        planner_iterations: [],
+        phase_events: [],
+        last_decision: { phase: "blocked", reason: @prepared.error }
+      }
+    }
+  ]
+  let @result = @runPhaseLoop(@prepared, @query)
+  let @plannerIterations = for @event in @result.phase_events when @event.event == "planner_iteration" => @event
+  => {
+    text: @result.final.text,
+    terminal: @result.terminal,
+    debug: {
+      execution_log: @result.execution_log,
+      planner_iterations: @plannerIterations,
+      phase_events: @result.phase_events,
+      last_decision: @result.last_decision
+    }
+  }
+]
+
+var @rig = {
+  build: @rigBuild,
+  run: @rigRun,
+  validateConfig: @validateConfig,
+  synthesizePolicy: @synthesizedPolicy,
+  compileExecuteIntent: @compileExecuteIntent,
+  lowerSelectionRef: @lowerSelectionRef,
+  records: {
+    plannerDecision: @plannerDecision,
+    resolveAttestation: @resolveAttestation,
+    extractAttestation: @extractAttestation,
+    deriveAttestation: @deriveAttestation,
+    executeAttestation: @executeAttestation,
+    composeAttestation: @composeAttestation
+  },
+  tooling: {
+    pairsToObject: @pairsToObject,
+    toolExecutable: @toolExecutable,
+    toolParamNames: @toolParamNames,
+    toolControlArgs: @toolControlArgs,
+    toolPayloadArgs: @toolPayloadArgs
+  }
+}
+
+export {
+  @rig,
+  @rigBuild,
+  @rigRun,
+  @plannerDecision,
+  @resolveAttestation,
+  @extractAttestation,
+  @deriveAttestation,
+  @executeAttestation,
+  @composeAttestation
+}

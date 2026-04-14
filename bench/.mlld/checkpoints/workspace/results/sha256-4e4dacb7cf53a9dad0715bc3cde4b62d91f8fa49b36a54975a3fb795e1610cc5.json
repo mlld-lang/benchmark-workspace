@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"list_files\",\n  \"args\": {},\n  \"purpose\": \"List all cloud files to find any document containing Networking event details, since all other data sources have failed\"\n}"}

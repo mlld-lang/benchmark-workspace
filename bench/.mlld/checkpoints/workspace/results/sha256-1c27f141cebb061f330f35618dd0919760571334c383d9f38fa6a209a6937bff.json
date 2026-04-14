@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_unread_emails\",\n  \"args\": {},\n  \"purpose\": \"Try loading unread emails to find information about the Networking event, since all targeted searches have failed\"\n}"}

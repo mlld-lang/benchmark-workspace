@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"extract\",\n  \"source\": { \"source\": \"resolved\", \"record\": \"email_msg\", \"handle\": \"r_email_msg_17\", \"field\": \"body\" },\n  \"schema\": \"string\",\n  \"name\": \"dinner_email_body_17\",\n  \"purpose\": \"Extract body from another emma.johnson email to find dinner location details\"\n}"}

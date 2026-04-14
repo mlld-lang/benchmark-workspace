@@ -1,0 +1,315 @@
+>> rig guard helpers.
+>>
+>> mlld guards are tied to specific exe names via `for op:named:X`, so
+>> the actual `guard` declarations live next to each worker in
+>> workers/<name>.mld. This file ships shared helpers those guards call
+>> in their `when` bodies — schema-invalid predicates, error hint
+>> formatters, retry-attempt counters — so the per-worker guards stay
+>> tiny and consistent.
+>>
+>> Phase 2 worker guards follow this shape:
+>>
+>>   guard after @rigPlannerGuard for op:named:rigPlannerLLMCall = when [
+>>     @schemaInvalid(@output) && @canRetry(@mx) => retry @schemaHint(@output)
+>>     @schemaInvalid(@output) => deny @schemaFinalMessage("planner")
+>>     * => allow
+>>   ]
+>>
+>> Read workers (planner/resolve/extract/compose/advice) use `retry`.
+>> Write workers (execute) use `resume` so prior tool calls aren't
+>> re-executed.
+
+>> ── Predicates ──
+
+exe @decisionPhase(decision) = when [
+  !@decision.isDefined() => null
+  @decision.phase.isDefined() => @decision.phase
+  * => @decision.worker
+]
+
+exe @logPhase(entry) = when [
+  !@entry.isDefined() => null
+  @entry.phase.isDefined() => @entry.phase
+  * => @entry.worker
+]
+
+>> True if the LLM output failed schema validation OR is unrecoverably
+>> empty. Operates on a value already coerced through `=> record
+>> @schema` — checks the `mx.schema.valid` namespace metadata. Treats
+>> missing schema metadata as invalid because empty/totally-malformed
+>> output collapses through coercion without attaching schema metadata
+>> at all (verified — empty data-only records show no `.mx.schema`).
+exe @schemaInvalid(candidateOutput) = [
+  if @candidateOutput == null [ => true ]
+  if !@candidateOutput.mx.schema.isDefined() [ => true ]
+  => @candidateOutput.mx.schema.valid == false
+]
+
+>> True if there are retry attempts remaining. Default cap is 2 — first
+>> try plus one retry. Override with the `max` param.
+exe @canRetry(mxGuard) = [
+  let @max = 2
+  => @mxGuard.try < @max
+]
+
+>> ── Message formatters ──
+
+>> Format a retry hint that includes the schema errors so the LLM has
+>> concrete guidance. Workers use this in their `retry`/`resume` actions.
+var @schemaHintBase = `Return ONLY a valid JSON object matching the documented worker schema. Include a top-level "worker" field. For execute, prefer "operation" plus explicit "args" source specs; legacy "write_tool"/"authorizations" is still accepted during transition. For extract, use the planner-facing contract heading name, not an internal record identifier like *_payload.`
+
+exe @schemaHint(candidateOutput) = [
+  if @candidateOutput == null [
+    => @schemaHintBase
+  ]
+  let @errors = @candidateOutput.mx.schema.errors
+  if !@errors.isDefined() [
+    => @schemaHintBase
+  ]
+  let @errorList = for @e in @errors => `@e.path: @e.code (@e.message)`
+  let @joined = @errorList.join("; ")
+  => `@schemaHintBase Schema errors: @joined`
+]
+
+>> Final-attempt deny message after all retries exhausted. Distinct
+>> message so traces / logs can identify which worker burned out.
+exe @schemaFinalMessage(workerName) = `@workerName worker output failed schema validation after retries.`
+
+>> ── Premature-blocked predicate ──
+>>
+>> True if the planner returned `worker: "blocked"` without having tried
+>> any tool calls yet. Catches the over-cautious-planner pattern (b-d394)
+>> where smaller models read the active rule names in the planner prompt
+>> ("no-send-to-unknown", "no-untrusted-destructive", etc.) and pre-block
+>> the task BEFORE attempting any resolve calls — they treat the rule
+>> names as preconditions to fail rather than as constraints on the final
+>> dispatch.
+>>
+>> The check fires only when:
+>>   1. decision.worker is "blocked", AND
+>>   2. the execution log is empty (no prior phase has run), AND
+>>   3. the rationale does NOT explicitly say the task is ambiguous,
+>>      has multiple candidates, or lacks enough information to identify
+>>      a unique target
+>>
+>> Both conditions are required so that:
+>>   - tasks where the planner legitimately decides "blocked" AFTER
+>>     trying resolve (e.g. workspace user_task_25's principled defended
+>>     boundary) still go through unimpeded
+>>   - non-blocked decisions (resolve/extract/execute/compose/done) are
+>>     never gated by this check
+>>
+>> The orchestration loop's retry path re-prompts the planner with a
+>> specific hint asking it to attempt at least one resolve before
+>> returning blocked. If the planner returns blocked again on the retry
+>> (with a meaningful rationale), the framework accepts it.
+exe @plannerPrematureBlocked(decision, executionLog) = [
+  if @decision == null [ => false ]
+  if @decisionPhase(@decision) != "blocked" [ => false ]
+  let @rationale = when [
+    @decision.rationale => @decision.rationale.toLowerCase()
+    * => ""
+  ]
+  let @explicitAmbiguity = @rationale.includes("ambig") || @rationale.includes("clarif") || @rationale.includes("multiple candidate") || @rationale.includes("multiple match") || @rationale.includes("more than one") || @rationale.includes("insufficient information") || @rationale.includes("not enough information") || @rationale.includes("unique target") || @rationale.includes("identify a unique") || @rationale.includes("uniquely identify")
+  if @explicitAmbiguity [ => false ]
+  if !@executionLog.isDefined() [ => true ]
+  => @executionLog.length == 0
+]
+
+>> Retry hint for the premature-blocked case. Tells the planner to try a
+>> resolve step before declaring the task impossible, and what to do if
+>> the task IS genuinely impossible.
+exe @prematureBlockedHint() = `You returned worker: "blocked" on the first iteration without trying any resolve tools. The defended-rule names you saw in the prompt (no-send-to-unknown, no-untrusted-destructive, etc.) describe constraints on the final write dispatch — they do NOT mean you should refuse to attempt the task. Most write tasks need to ground their targets via resolve tools FIRST, and the defended rules then check the grounded values at execute time. Pick a resolve tool from the list above and try again. Only return blocked if you have already attempted a resolve and confirmed the task is genuinely impossible (e.g. no relevant tool exists for what the user asked).`
+
+>> ── Premature-compose predicate ──
+>>
+>> True if the planner returned `worker: "compose"` before any prior phase
+>> ran. Catches the empty-shelf pattern where the planner skips resolve and
+>> goes straight to compose on iteration 0, even though the answer depends
+>> on external data that has not been grounded yet.
+>>
+>> The check fires only when:
+>>   1. decision.worker is "compose", AND
+>>   2. the execution log is empty (no prior phase has run)
+>>
+>> This preserves legitimate compose decisions after earlier resolve /
+>> extract / execute work has populated the shelf.
+exe @plannerPrematureCompose(decision, executionLog) = [
+  if @decision == null [ => false ]
+  if @decisionPhase(@decision) != "compose" [ => false ]
+  if !@executionLog.isDefined() [ => true ]
+  => @executionLog.length == 0
+]
+
+>> Retry hint for the premature-compose case. Tells the planner to ground
+>> external data before composing, while still allowing direct compose for
+>> tasks that truly require no tools.
+exe @prematureComposeHint() = `You chose compose with no prior resolve or extract steps, so the shelf is empty and compose has no tools to fetch data. If the user task requires information (calendar, email, files, etc.), pick resolve first to ground that data into the shelf. Only compose directly if the answer requires no external data.`
+
+>> ── Extract-before-resolve predicate ──
+>>
+>> True if the planner returned `worker: "extract"` before any prior
+>> resolve phase ran. This applies to source-backed extraction from
+>> existing state, not to extract-phase read tools that fetch literal
+>> untrusted content as the first phase.
+>>
+>> The check fires only when:
+>>   1. decision.worker is "extract", AND
+>>   1a. the decision does NOT choose an extract-phase read tool, AND
+>>   2. the execution log contains no prior entry with worker "resolve"
+>>
+>> This preserves extract decisions after any resolve has already
+>> happened, regardless of what other phases also ran earlier.
+exe @plannerExtractBeforeResolve(decision, executionLog) = [
+  if @decision == null [ => false ]
+  if @decisionPhase(@decision) != "extract" [ => false ]
+  if @decision.tool.isDefined() [ => false ]
+  if !@executionLog.isDefined() [ => true ]
+  if @executionLog.length == 0 [ => true ]
+  for @e in @executionLog [
+    if @logPhase(@e) == "resolve" [ => false ]
+  ]
+  => true
+]
+
+>> Retry hint for the extract-before-resolve case. Tells the planner to
+>> ground existing resources before extracting a write payload so it can
+>> choose the correct create-vs-update contract. Tool-backed extract
+>> reads like webpage fetches are the one allowed extract-first path.
+exe @extractBeforeResolveHint() = `Before extracting a write payload from existing state, resolve existing items of the target resource type. This ensures you choose the correct contract (create new vs modify existing). Tool-backed extract reads like webpage fetches are the exception; those may run first. Otherwise dispatch a resolve step first, then re-decide.`
+
+>> ── Done-after-execute predicate ──
+>>
+>> True if the planner returned `worker: "done"` after at least one
+>> earlier execute step already ran. Catches the ungrounded-terminal
+>> pattern where the planner skips compose after a write and tries to
+>> finish with rationale text instead of a shelf-grounded summary.
+>>
+>> The check fires only when:
+>>   1. decision.worker is "done", AND
+>>   2. the execution log contains any prior entry with worker "execute"
+>>
+>> This preserves legitimate done decisions before any write work has
+>> happened, while forcing write flows through compose.
+exe @plannerDoneAfterExecute(decision, executionLog) = [
+  if @decision == null [ => false ]
+  if @decisionPhase(@decision) != "done" [ => false ]
+  if !@executionLog.isDefined() [ => false ]
+  if @executionLog.length == 0 [ => false ]
+  for @e in @executionLog [
+    if @logPhase(@e) == "execute" [ => true ]
+  ]
+  => false
+]
+
+>> Retry hint for the done-after-execute case. Tells the planner to use
+>> compose so the terminal answer is grounded from shelf state rather
+>> than improvised in planner rationale text.
+exe @doneAfterExecuteHint() = `You returned worker: "done" after an execute step completed. After executing write operations, ALWAYS route to compose to summarize what was done from shelf state. The user expects a grounded confirmation, not a fabricated rationale. Change worker to "compose" in your response.`
+
+>> ── Blocked-after-extract predicate ──
+>>
+>> True if the planner returned `worker: "blocked"` after at least one
+>> earlier extract step already ran, and this is the FIRST retry hint
+>> for the current unchanged grounding state. Catches the post-extract
+>> over-cautious pattern where typed state may already support a legal
+>> next step, but accepts a second identical block as a valid terminal
+>> outcome.
+>>
+>> The check fires only when:
+>>   1. decision.worker is "blocked", AND
+>>   2. the execution log contains any prior entry with worker "extract"
+>>   3. this is attempt 1 for the current planner state
+>>
+>> This preserves legitimate blocked decisions before any extract work
+>> has happened, gives one retry to clearly-reachable flows, and avoids
+>> looping on tasks that simply have no legal path forward.
+exe @plannerBlockedAfterExtract(decision, executionLog, attempt) = [
+  if @attempt.isDefined() && `@attempt` != "" && `@attempt` != "1" [ => false ]
+  if @decision == null [ => false ]
+  if @decisionPhase(@decision) != "blocked" [ => false ]
+  if !@executionLog.isDefined() [ => false ]
+  if @executionLog.length == 0 [ => false ]
+  for @e in @executionLog [
+    if @logPhase(@e) == "extract" [ => true ]
+  ]
+  => false
+]
+
+>> Retry hint for the blocked-after-extract case. Nudges the planner to
+>> re-check whether the current typed state now supports a legal execute
+>> or compose step, without assuming that every extracted payload should
+>> become a write.
+exe @blockedAfterExtractHint() = `You returned worker: "blocked" after an extract step completed. Re-check the current typed state before stopping. If the grounded control values and typed payload data now support a legal execute step, route to execute with canonical structured refs. If the task can already be answered from state, route to compose. If the task still has no legal path forward, return blocked with a clear reason.`
+
+>> ── Blocked-after-resolve predicate ──
+>>
+>> True if the planner returned `worker: "blocked"` after at least one
+>> earlier resolve step already ran, and this is the FIRST retry hint
+>> for the current unchanged grounding state. Catches the post-resolve
+>> over-cautious pattern where grounded data may already support the
+>> next step, but accepts a second identical block as a valid terminal
+>> outcome.
+>>
+>> The check fires only when:
+>>   1. decision.worker is "blocked", AND
+>>   2. the execution log contains any prior entry with worker "resolve"
+>>   3. this is attempt 1 for the current planner state
+>>
+>> This preserves legitimate blocked decisions before any resolve work
+>> has happened, gives one retry to clearly-reachable flows, and avoids
+>> looping on tasks that simply have no legal path forward.
+exe @plannerBlockedAfterResolve(decision, executionLog, attempt) = [
+  if @attempt.isDefined() && `@attempt` != "" && `@attempt` != "1" [ => false ]
+  if @decision == null [ => false ]
+  if @decisionPhase(@decision) != "blocked" [ => false ]
+  if !@executionLog.isDefined() [ => false ]
+  if @executionLog.length == 0 [ => false ]
+  for @e in @executionLog [
+    if @logPhase(@e) == "resolve" [ => true ]
+  ]
+  => false
+]
+
+>> Retry hint for the blocked-after-resolve case. Tells the planner to
+>> re-check whether grounded state already supports the next legal step,
+>> while keeping the guidance in current v2 source-class vocabulary.
+exe @blockedAfterResolveHint() = `You returned worker: "blocked" after a prior resolve step completed successfully. Re-check what is already grounded in state before stopping. If the task can proceed, use canonical structured refs: resolved for grounded values, selection when choosing among grounded candidates, known for exact user-task literals, and extracted or derived only for payload values. If the task can now be answered from state, route to compose. If more grounded detail is needed and a resolve tool can fetch it, continue resolving. If the task still has no legal path forward after checking the grounded state and available resolve tools, return blocked with a clear reason.`
+
+>> ── Worker-name predicate ──
+
+>> True if the planner-emitted decision targets the expected worker
+>> name. Workers use this to retry when the LLM picks a different
+>> phase than the framework dispatched it for.
+exe @wrongWorker(decision, expected) = [
+  if @decision == null [ => true ]
+  => @decisionPhase(@decision) != @expected
+]
+
+>> Retry hint when the worker name is wrong. Includes the expected
+>> name so the LLM corrects its output rather than re-running the
+>> wrong phase.
+exe @wrongWorkerHint(expected) = `Return a JSON object whose 'worker' field is exactly '@expected'. Do not change the phase.`
+
+export {
+  @decisionPhase,
+  @logPhase,
+  @schemaInvalid,
+  @canRetry,
+  @schemaHint,
+  @schemaFinalMessage,
+  @plannerPrematureBlocked,
+  @prematureBlockedHint,
+  @plannerPrematureCompose,
+  @prematureComposeHint,
+  @plannerExtractBeforeResolve,
+  @extractBeforeResolveHint,
+  @plannerDoneAfterExecute,
+  @doneAfterExecuteHint,
+  @plannerBlockedAfterExtract,
+  @blockedAfterExtractHint,
+  @plannerBlockedAfterResolve,
+  @blockedAfterResolveHint,
+  @wrongWorker,
+  @wrongWorkerHint
+}

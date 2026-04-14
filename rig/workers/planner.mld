@@ -1,0 +1,208 @@
+import { @phaseToolDocs } from "../tooling.mld"
+import {
+  @llmCall,
+  @llmCallEntry,
+  @llmSessionId,
+  @normalizeSessionId,
+  @arrayItems,
+  @plannerStateSummary,
+  @nonComposeDecisionArgIssues
+} from "../runtime.mld"
+import {
+  @plannerPrematureBlocked,
+  @prematureBlockedHint,
+  @plannerPrematureCompose,
+  @prematureComposeHint,
+  @plannerExtractBeforeResolve,
+  @extractBeforeResolveHint,
+  @plannerBlockedAfterExtract,
+  @blockedAfterExtractHint,
+  @plannerBlockedAfterResolve,
+  @blockedAfterResolveHint
+} from "../guards.mld"
+
+exe @plannerDebug(agent, label) = [
+  if !(@agent.logLlmCalls ?? false) [ => null ]
+  run sh {
+    printf '[planner-worker] %s\n' "$label" >> /tmp/planner-dispatch-debug.log
+  }
+  => null
+]
+
+exe @plannerPrompt(
+  query,
+  resolveTools,
+  extractTools,
+  executeTools,
+  stateSummary,
+  executionLog
+) = template "../prompts/planner.att"
+
+exe @coercePlannerDecision(raw) = [
+  if @raw == null [ => null ]
+  let @parsed = @raw | @parse.llm
+  => @parsed
+]
+
+>> mlld's array index grammar is intentionally simple. Keep one helper
+>> for "last entry" so planner hints can inspect the most recent phase
+>> outcome without falling back to JS or computed-index tricks.
+exe @lastArrayItem(items) = loop(1000) [
+  let @ctx = when [
+    @input["_rig_cursor"] == "lastArrayItem" => @input
+    * => { _rig_cursor: "lastArrayItem", index: 0, last: null }
+  ]
+  if !@items.isDefined() [ done null ]
+  if @ctx.index >= @items.length [ done @ctx.last ]
+  continue {
+    _rig_cursor: "lastArrayItem",
+    index: @ctx.index + 1,
+    last: @items[@ctx.index]
+  }
+]
+
+>> Planner hints should stay local to the already-built planner context.
+>> Re-scanning phase catalogs here is expensive and redundant: the
+>> dispatch path has already materialized the phase tool docs that prove
+>> whether the planner has any actionable tools. Thread that boolean in
+>> directly so hint evaluation stays proportional to the current
+>> decision, not to the entire tool graph.
+exe @plannerHint(agent, decision, state, retrying, hasTools) = [
+  let @phase = @decision.phase ?? null
+  >> This helper is not the retry mechanism. It only suppresses
+  >> execution-log-derived repair hints once the planner is already on
+  >> the second prompt, so stale phase errors do not override the new
+  >> decision. Model retries/resumes remain owned by mlld's real guard
+  >> and LLM-session machinery.
+  let @isRetry = @retrying == true || `@retrying` == "true"
+  let @executionLog = @arrayItems(@state.execution_log)
+  let @lastLogEntry = @lastArrayItem(@executionLog)
+  let @lastLogStatus = when [
+    @lastLogEntry["status"].isDefined() => `@lastLogEntry["status"]`
+    * => null
+  ]
+  let @lastErrorSummary = when [
+    @lastLogEntry["summary"].isDefined() => `@lastLogEntry["summary"]`
+    @lastLogEntry["error"].isDefined() => `@lastLogEntry["error"]`
+    * => ""
+  ]
+  >> Execution-log-derived repair hints are first-attempt guidance. On the
+  >> retry turn, evaluate the new decision on its own merits instead of
+  >> re-firing stale errors from the previous phase result.
+  let @controlArgSourceError = !@isRetry && @lastLogStatus == "error" && @lastErrorSummary.includes("payload_only_source_in_control_arg")
+  let @knownLiteralFormatError = !@isRetry && @lastLogStatus == "error" && @lastErrorSummary.includes("known_value_not_in_task_text")
+  if !@decision [ => "Return a valid JSON planner decision." ]
+  if !@phase.isDefined() [ => "Decision must include a phase." ]
+  let @argIssues = @nonComposeDecisionArgIssues(@decision)
+  if @argIssues.length > 0 [
+    => `Non-compose planner args must use canonical structured refs. Invalid fields: @argIssues | @pretty`
+  ]
+  => when [
+    >> `known` is proof of "the user literally said this", not "the planner
+    >> can safely normalize this". Keep the correction structural so suites
+    >> with natural-language dates/titles reuse the same guidance.
+    @knownLiteralFormatError => `A prior phase used a known literal that does not appear verbatim in the user task. Known values must be exact substrings from the task text. Do not normalize, reformat, or paraphrase dates, titles, names, or phrases into a new string. If the user wrote "April 14th, 2026", keep that exact text in the known ref or omit the optional filter and ground the value another way.`
+    @controlArgSourceError => `A prior phase tried to use a derived or extracted payload value in a control arg. Control args for BOTH resolve and execute must stay grounded as resolved, selection, or known. If an identifier such as a filename, email address, calendar title, or event id only appears inside untrusted content, first resolve a broader grounded candidate family, then derive a selection ref over those grounded candidates. Do not pass derived or extracted fields directly to read-tool control args.`
+    @plannerPrematureCompose(@decision, @executionLog) && @hasTools => @prematureComposeHint()
+    @plannerPrematureBlocked(@decision, @executionLog) => @prematureBlockedHint()
+    @plannerExtractBeforeResolve(@decision, @executionLog) => @extractBeforeResolveHint()
+    @plannerBlockedAfterExtract(@decision, @executionLog, when [ @isRetry => 2 * => 1 ]) => @blockedAfterExtractHint()
+    @plannerBlockedAfterResolve(@decision, @executionLog, when [ @isRetry => 2 * => 1 ]) => @blockedAfterResolveHint()
+    * => null
+  ]
+]
+
+>> Planner dispatch owns the decision call and one bounded repair
+>> attempt. The loop only consumes the validated decision object.
+exe @dispatchPlanner(agent, state, query) = [
+  @plannerDebug(@agent, "start")
+  let @resolveDocs = @phaseToolDocs(@agent, "resolve")
+  @plannerDebug(@agent, "resolveDocs")
+  let @extractDocs = @phaseToolDocs(@agent, "extract")
+  @plannerDebug(@agent, "extractDocs")
+  let @executeDocs = @phaseToolDocs(@agent, "execute")
+  @plannerDebug(@agent, "executeDocs")
+  let @stateSummary = @plannerStateSummary(@agent, @state)
+  @plannerDebug(@agent, "stateSummary")
+  let @executionLog = @arrayItems(@state.execution_log)
+  @plannerDebug(@agent, "executionLog")
+  let @prompt = @plannerPrompt(
+    @query,
+    @resolveDocs,
+    @extractDocs,
+    @executeDocs,
+    @stateSummary,
+    @executionLog
+  )
+  let @hasTools = @resolveDocs.length + @extractDocs.length + @executeDocs.length > 0
+  @plannerDebug(@agent, "prompt")
+  let @config = {
+    model: @agent.model,
+    tools: [],
+    stubPhase: "planner",
+    stubResponses: @agent.stub.planner ?? [],
+    stubIndex: @executionLog.length
+  }
+  let @resume1 = @normalizeSessionId(@state.planner_session_id)
+  @plannerDebug(@agent, "before_llm_1")
+  let @raw1 = @llmCall(
+    @agent.harness,
+    @prompt,
+    when [
+      @resume1 => { ...@config, resume: @resume1 }
+      * => @config
+    ]
+  )
+  let @session1 = @llmSessionId(@raw1)
+  let @decision1 = @coercePlannerDecision(@raw1)
+  let @hint1 = @plannerHint(@agent, @decision1, @state, false, @hasTools)
+  let @log1 = @llmCallEntry("planner", @prompt, @raw1, @decision1, @session1, {
+    attempt: 1,
+    resumed_from: @resume1 ?? null
+  })
+  if !@hint1 [
+    => {
+      decision: @decision1,
+      session_id: @normalizeSessionId(@session1),
+      llm_log: @log1
+    }
+  ]
+
+  let @retryPrompt = `@prompt
+
+The previous decision was rejected. @hint1`
+  let @resume2 = @normalizeSessionId(@session1) ?? @resume1
+  let @raw2 = @llmCall(
+    @agent.harness,
+    @retryPrompt,
+    when [
+      @resume2 => { ...@config, resume: @resume2 }
+      * => @config
+    ]
+  )
+  let @session2 = @llmSessionId(@raw2)
+  let @decision2 = @coercePlannerDecision(@raw2)
+  let @hint2 = @plannerHint(@agent, @decision2, @state, true, @hasTools)
+  let @log2 = @llmCallEntry("planner", @retryPrompt, @raw2, @decision2, @session2, {
+    attempt: 2,
+    resumed_from: @resume2 ?? null,
+    retry_hint: @hint1
+  })
+  => when [
+    !@hint2 => {
+      decision: @decision2,
+      session_id: @normalizeSessionId(@session2),
+      llm_log: @log2
+    }
+    * => {
+      decision: {
+        phase: "blocked",
+        reason: "planner_schema_validation_failed_after_retry"
+      },
+      session_id: @normalizeSessionId(@session2),
+      llm_log: @log2
+    }
+  ]
+]
+
+export { @plannerPrompt, @coercePlannerDecision, @plannerHint, @dispatchPlanner }

@@ -1,0 +1,568 @@
+>> rig v2 tool-catalog helpers.
+>>
+>> The tool catalog is planner-facing metadata plus the executable
+>> binding rig needs at dispatch time. Keep the helpers mechanical and
+>> native so metadata survives across module boundaries.
+
+exe @pairsToObject(pairs) = [
+  if !@pairs.isDefined() [ => {} ]
+  let @acc = loop(1000) [
+    let @cursor = when [
+      >> Loop bodies can inherit ambient caller input on the first turn.
+      >> Resume only from this loop's own tagged continuation object.
+      @input["_rig_cursor"] == "pairsToObject" => @input
+      * => { _rig_cursor: "pairsToObject", index: 0, obj: {} }
+    ]
+    if @cursor.index >= @pairs.length [ done @cursor ]
+    let @pair = @pairs.at(@cursor.index)
+    >> Object spread over an accumulator breaks when the computed key is
+    >> literally "value" (local repro: datetime_context/value). Keep the
+    >> update native via augmented assignment so wrapper-bearing values
+    >> and ordinary string keys both survive intact.
+    let @nextObj = @cursor.obj
+    if @pair.key.isDefined() [
+      @nextObj += { [@pair.key]: @pair.value }
+    ]
+    continue {
+      _rig_cursor: "pairsToObject",
+      index: @cursor.index + 1,
+      obj: @nextObj
+    }
+  ]
+  => @acc.obj
+]
+
+exe @mxEntry(entries, key) = [
+  if !@entries.isDefined() [ => null ]
+  let @matches = for @entry in @entries when @entry[0] == @key => @entry[1]
+  => when [
+    @matches.length > 0 => @matches[0]
+    * => null
+  ]
+]
+
+exe @toolCatalogObject(tools) = [
+  let @catalog = when [
+    @tools.data.isDefined() && @tools.data.mx.entries.isDefined() => @tools.data
+    * => @tools
+  ]
+  >> Native keyed access on `var tools` collections is already the stable
+  >> planner/runtime surface we want. Rebuilding the catalog through
+  >> `pairsToObject()` forces mlld to walk every entry eagerly, which
+  >> balloons imported tool capsules and can stall before the planner ever
+  >> starts. Keep the original keyed object intact whenever one exists.
+  if @typeof(@catalog) == "object" [
+    => @catalog
+  ]
+  if @catalog.mx.entries.isDefined() [
+    >> `var tools` collections expose their full entry metadata through
+    >> `mx.entries` on some imported wrapper shapes that do not present an
+    >> ordinary object surface. Materialize that fallback only when the
+    >> direct object path above is unavailable.
+    let @pairs = for @entry in @catalog.mx.entries => {
+      key: @entry[0],
+      value: @entry[1]
+    }
+    => @pairsToObject(@pairs)
+  ]
+  => @catalog
+]
+
+exe @toolEntryObject(toolEntry) = when [
+  @toolEntry.data.isDefined() && @toolEntry.data.mx.entries.isDefined() => @toolEntry.data
+  * => @toolEntry
+]
+
+exe @asArray(inputValue) = when [
+  !@inputValue.isDefined() => []
+  @typeof(@inputValue) == "array" => @inputValue
+  @inputValue.data.isDefined() && @typeof(@inputValue.data) == "array" => @inputValue.data
+  @inputValue.length.isDefined() && @inputValue.join.isDefined() => @inputValue.slice(0)
+  @inputValue.data.length.isDefined() && @inputValue.data.join.isDefined() => @inputValue.data.slice(0)
+  @typeof(@inputValue) == "string" && @inputValue == "" => []
+  @inputValue.data.isDefined() && @typeof(@inputValue.data) == "string" && @inputValue.data == "" => []
+  @inputValue.data.isDefined() => [@inputValue.data]
+  * => [@inputValue]
+]
+
+>> Tool metadata names are planner/runtime bookkeeping, not proof-bearing
+>> values. Cast them to plain strings so comparisons like arg-name
+>> matching stay stable across module boundaries.
+exe @stringArray(inputValue) = [
+  => for @value in @asArray(@inputValue) => `@value`
+]
+
+exe @toolExecutable(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @typeof(@entry) == "executable" => @entry
+    @typeof(@entry.mlld) == "executable" => @entry.mlld
+    * => null
+  ]
+]
+
+exe @toolKind(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.kind.isDefined() => @entry.kind
+    @toolLabels(@toolEntry).includes("execute:w") || @toolLabels(@toolEntry).includes("tool:w") => "write"
+    @toolLabels(@toolEntry).includes("resolve:r") || @toolLabels(@toolEntry).includes("extract:r") || @toolLabels(@toolEntry).includes("tool:r") => "read"
+    * => null
+  ]
+]
+
+exe @toolOperation(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.operation.isDefined() => @entry.operation
+    * => {}
+  ]
+]
+
+exe @toolLabels(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.labels.isDefined() => @stringArray(@entry.labels)
+    @typeof(@toolEntry) == "executable" => @stringArray(@toolEntry.mx.labels)
+    @typeof(@entry.mlld) == "executable" => @stringArray(@entry.mlld.mx.labels)
+    @entry.kind == "write" => ["execute:w", "tool:w"]
+    @entry.kind == "read" => ["resolve:r", "tool:r"]
+    * => []
+  ]
+]
+
+exe @toolSemantics(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.operation.semantics.isDefined() => @entry.operation.semantics
+    @entry.semantics.isDefined() => @entry.semantics
+    * => null
+  ]
+]
+
+exe @toolControlArgs(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.controlArgs.isDefined() => @stringArray(@entry.controlArgs)
+    @entry.operation.controlArgs.isDefined() => @stringArray(@entry.operation.controlArgs)
+    @entry.mlld.mx.controlArgs.isDefined() => @stringArray(@entry.mlld.mx.controlArgs)
+    @entry.mx.controlArgs.isDefined() => @stringArray(@entry.mx.controlArgs)
+    * => []
+  ]
+]
+
+exe @toolPayloadArgs(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.operation.payloadArgs.isDefined() => @stringArray(@entry.operation.payloadArgs)
+    * => []
+  ]
+]
+
+exe @toolOptionalArgs(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.optional.isDefined() => @stringArray(@entry.optional)
+    * => []
+  ]
+]
+
+exe @toolParamNames(toolEntry) = [
+  let @exe = @toolExecutable(@toolEntry)
+  let @entry = @toolEntryObject(@toolEntry)
+  let @params = when [
+    @typeof(@exe) == "executable" => @exe.mx.params ?? []
+    * => []
+  ]
+  if @params.length > 0 [
+    => for @param in @params [
+      => when [
+        @typeof(@param.name) == "string" => `@param.name`
+        * => `@param`
+      ]
+    ]
+  ]
+  if @entry.expose.isDefined() [ => @stringArray(@entry.expose) ]
+  let @fallback = @toolControlArgs(@toolEntry).concat(@toolPayloadArgs(@toolEntry))
+  => @uniqueValues(@fallback)
+]
+
+exe @toolUpdateArgs(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.operation.updateArgs.isDefined() => @stringArray(@entry.operation.updateArgs)
+    @entry.mlld.mx.updateArgs.isDefined() => @stringArray(@entry.mlld.mx.updateArgs)
+    @entry.mx.updateArgs.isDefined() => @stringArray(@entry.mx.updateArgs)
+    * => []
+  ]
+]
+
+exe @toolExactPayloadArgs(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.operation.exactPayloadArgs.isDefined() => @stringArray(@entry.operation.exactPayloadArgs)
+    @entry.mlld.mx.exactPayloadArgs.isDefined() => @stringArray(@entry.mlld.mx.exactPayloadArgs)
+    @entry.mx.exactPayloadArgs.isDefined() => @stringArray(@entry.mx.exactPayloadArgs)
+    * => []
+  ]
+]
+
+exe @toolCorrelateControlArgs(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.operation.correlateControlArgs == true => true
+    * => false
+  ]
+]
+
+exe @toolRisk(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.operation.risk.isDefined() => @stringArray(@entry.operation.risk)
+    @entry.risk.isDefined() => @stringArray(@entry.risk)
+    * => []
+  ]
+]
+
+exe @toolAuthorizable(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.operation.authorizable == false => false
+    * => true
+  ]
+]
+
+exe @toolReturnsRecord(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.returns.isDefined() => @entry.returns
+    * => null
+  ]
+]
+
+exe @toolBind(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.bind.isDefined() => @entry.bind
+    * => {}
+  ]
+]
+
+exe @arrayContainsPrefix(values, prefix) = [
+  if !@values.isDefined() [ => false ]
+  let @matches = for @value in @values when @value.startsWith(@prefix) => @value
+  => @matches.length > 0
+]
+
+exe @arrayContainsFetchRisk(values) = [
+  if !@values.isDefined() [ => false ]
+  let @matches = for @value in @values when @value.includes("fetch") || @value.includes("url") => @value
+  => @matches.length > 0
+]
+
+exe @uniqueValues(values) = [
+  if !@values.isDefined() [ => [] ]
+  let @acc = loop(1000) [
+    let @cursor = when [
+      @input["_rig_cursor"] == "uniqueValues" => @input
+      * => { _rig_cursor: "uniqueValues", index: 0, values: [] }
+    ]
+    if @cursor.index >= @values.length [ done @cursor ]
+    let @value = @values[@cursor.index]
+    continue when [
+      @cursor.values.includes(@value) => { _rig_cursor: "uniqueValues", index: @cursor.index + 1, values: @cursor.values }
+      * => { _rig_cursor: "uniqueValues", index: @cursor.index + 1, values: @cursor.values.concat([@value]) }
+    ]
+  ]
+  => @acc.values
+]
+
+>> Runtime tool collections can add `expose`, `optional`, and `direct`
+>> hints without duplicating the whole planner-facing catalog.
+exe @mergedToolEntry(toolEntry, runtimeEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  let @runtime = @toolEntryObject(@runtimeEntry)
+  let @entryControlArgs = @toolControlArgs(@entry)
+  let @readControlArgs = when [
+    @entry.kind == "read" && @entry.controlArgs.isDefined() => @entry.controlArgs
+    @entry.kind == "read" && @entryControlArgs.length > 0 => @entryControlArgs
+    @entry.kind == "read" && @runtime.expose.isDefined() => @runtime.expose
+    * => @entry.controlArgs
+  ]
+  let @readExpose = when [
+    @entry.kind == "read" && @entry.expose.isDefined() => @entry.expose
+    @entry.kind == "read" && @runtime.expose.isDefined() => @runtime.expose
+    @entry.kind == "read" && @entryControlArgs.length > 0 => @entryControlArgs
+    * => @runtime.expose ?? @entry.expose
+  ]
+  >> This helper feeds the planner/runtime metadata catalog, not the live
+  >> dispatch bridge. Keeping the executable internals here makes routed
+  >> tool subsets balloon into multi-megabyte objects because imported
+  >> `exe` values carry their whole runtime capsule. Actual dispatch still
+  >> resolves the callable from `toolsCollection` / `runtimeTools` in
+  >> `@lookupRuntimeTool`, so the merged planner catalog only keeps the
+  >> metadata needed for docs, validation, and routing.
+  => {
+    kind: @entry.kind ?? @runtime.kind,
+    returns: @entry.returns ?? @runtime.returns,
+    labels: @entry.labels ?? @runtime.labels,
+    semantics: @entry.semantics ?? @runtime.semantics,
+    risk: @entry.risk ?? @runtime.risk,
+    operation: @entry.operation ?? @runtime.operation,
+    bind: @entry.bind ?? @runtime.bind,
+    expose: @readExpose,
+    optional: @runtime.optional ?? @entry.optional,
+    direct: @runtime.direct ?? @entry.direct,
+    controlArgs: @readControlArgs
+  }
+]
+
+exe @mergePlannerCatalog(tools, toolsCollection) = [
+  let @catalog = @toolCatalogObject(@tools)
+  let @runtimeCatalog = @toolCatalogObject(@toolsCollection)
+  let @pairs = for @name, @entry in @catalog [
+    let @mergedValue = when [
+      @runtimeCatalog[@name].isDefined() => @mergedToolEntry(@entry, @runtimeCatalog[@name])
+      * => @entry
+    ]
+    => {
+      key: @name,
+      value: @mergedValue
+    }
+  ]
+  => @pairsToObject(@pairs)
+]
+
+exe @routeToolCatalog(tools) = [
+  let @catalog = @toolCatalogObject(@tools)
+  let @resolvePairs = for @name, @tool in @catalog when @toolKind(@tool) == "read" && !@toolLabels(@tool).includes("extract:r") => {
+    key: @name,
+    value: @tool
+  }
+  let @extractPairs = for @name, @tool in @catalog when @toolKind(@tool) == "read" && @toolLabels(@tool).includes("extract:r") => {
+    key: @name,
+    value: @tool
+  }
+  let @executePairs = for @name, @tool in @catalog when @toolKind(@tool) == "write" => {
+    key: @name,
+    value: @tool
+  }
+  => {
+    resolve: @pairsToObject(@resolvePairs),
+    extract: @pairsToObject(@extractPairs),
+    execute: @pairsToObject(@executePairs)
+  }
+]
+
+>> Benchmark suite entrypoints assemble `agent.routedTools` locally before
+>> entering the phase loop. Prefer that precomputed handle when it is
+>> present so the loop does not repeatedly re-merge large tool catalogs on
+>> every planner/worker dispatch. Keep the rebuild path as a fallback for
+>> imported agents that only carry the raw config fields across a module
+>> boundary.
+exe @plannerCatalogForAgent(agent) = [
+  let @runtimeCollection = @agent.toolsCollection ?? @agent.tools
+  let @runtimeOverrides = @agent.runtimeTools ?? {}
+  => @mergePlannerCatalog(
+    @mergePlannerCatalog(@agent.tools, @runtimeCollection),
+    @runtimeOverrides
+  )
+]
+
+exe @routedToolsForAgent(agent) = [
+  => when [
+    @agent.routedTools.isDefined() => @agent.routedTools
+    * => @routeToolCatalog(@plannerCatalogForAgent(@agent))
+  ]
+]
+
+>> Most runtime paths only need one tool entry or a plain documentation row,
+>> not the full routed catalog object. Resolve/extract use the phase-specific
+>> entry helper below, while planner prompts use `@phaseToolDocs()`.
+exe @toolInPhase(tool, phase) = when [
+  @phase == "resolve" => @toolKind(@tool) == "read" && !@toolLabels(@tool).includes("extract:r")
+  @phase == "extract" => @toolKind(@tool) == "read" && @toolLabels(@tool).includes("extract:r")
+  @phase == "execute" => @toolKind(@tool) == "write"
+  * => false
+]
+
+>> Agents already carry a pre-routed planner catalog. Prefer that stable
+>> phase slice so planner docs and worker metadata reads stay on the
+>> lightweight merged catalog, not on the executable-bearing runtime
+>> collection. Rebuild only as a fallback for older imported handles.
+exe @phaseCatalog(agent, phase) = [
+  let @catalog = @toolCatalogObject(@agent.tools)
+  let @pairs = for @name, @tool in @catalog when @toolInPhase(@tool, @phase) => {
+    key: @name,
+    value: @tool
+  }
+  let @directPhaseCatalog = @pairsToObject(@pairs)
+  >> Prefer direct phase filtering from the merged planner catalog on
+  >> `agent.tools`. The routed slices are still available as a fallback,
+  >> but imported nested routed objects have proven much heavier to walk
+  >> than the flat keyed planner catalog.
+  if @pairs.length > 0 [
+    => @directPhaseCatalog
+  ]
+  if @agent.routedTools.isDefined() && @agent.routedTools[@phase].isDefined() [
+    => @agent.routedTools[@phase]
+  ]
+  => @directPhaseCatalog
+]
+
+exe @phaseToolNames(agent, phase) = [
+  let @catalog = @phaseCatalog(@agent, @phase)
+  let @names = for @name, @tool in @catalog => @name
+  => @names
+]
+
+exe @phaseToolEntry(agent, phase, toolName) = [
+  >> Worker dispatch usually needs one keyed metadata entry, not the
+  >> whole routed phase slice. Prefer the merged planner catalog on
+  >> `agent.tools` when it already contains the tool for this phase, and
+  >> only fall back to the routed view when the keyed lookup is missing.
+  >> This keeps the hot worker path off the heavier routed object graph.
+  let @directCatalog = @toolCatalogObject(@agent.tools)
+  if @directCatalog[@toolName].isDefined() && @toolInPhase(@directCatalog[@toolName], @phase) [
+    => @directCatalog[@toolName]
+  ]
+  let @catalog = @phaseCatalog(@agent, @phase)
+  => when [
+    @catalog[@toolName].isDefined() => @catalog[@toolName]
+    * => null
+  ]
+]
+
+exe @toolNames(tools) = [
+  if !@tools.isDefined() [ => [] ]
+  if @typeof(@tools) == "array" [
+    => for @tool in @tools when @typeof(@toolExecutable(@tool)) == "executable" => @toolExecutable(@tool).mx.name
+  ]
+  let @catalog = @toolCatalogObject(@tools)
+  let @names = for @name, @tool in @catalog => @name
+  => @names
+]
+
+exe @renderToolDocs(tools) = [
+  if !@tools.isDefined() [ => [] ]
+  let @catalog = @toolCatalogObject(@tools)
+  let @catalogNames = @toolNames(@catalog)
+  let @docs = for @toolName in @catalogNames => @renderToolDoc(@toolName, @catalog[@toolName])
+  => @docs
+]
+
+exe @renderToolDoc(toolName, tool) = [
+    => {
+      name: @toolName,
+      kind: @toolKind(@tool),
+      params: @toolParamNames(@tool),
+      controlArgs: @toolControlArgs(@tool),
+      payloadArgs: @toolPayloadArgs(@tool),
+      updateArgs: @toolUpdateArgs(@tool),
+      exactPayloadArgs: @toolExactPayloadArgs(@tool),
+      risk: @toolRisk(@tool),
+      authorizable: @toolAuthorizable(@tool),
+      semantics: @toolSemantics(@tool),
+      labels: @toolLabels(@tool)
+    }
+]
+
+exe @phaseToolDocs(agent, phase) = [
+  let @names = @phaseToolNames(@agent, @phase)
+  let @docs = for @toolName in @names => @renderToolDoc(@toolName, @phaseToolEntry(@agent, @phase, @toolName))
+  => @docs
+]
+
+exe @synthesizedOperations(tools) = [
+  let @catalog = @toolCatalogObject(@tools)
+  let @explicitPairs = for @name, @tool in @catalog [
+    let @risks = @toolRisk(@tool)
+    => for @risk in @risks => { key: @risk, value: @name }
+  ]
+  let @flattened = loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "riskPairs" => @input
+      * => { _rig_cursor: "riskPairs", index: 0, pairs: [] }
+    ]
+    if @ctx.index >= @explicitPairs.length [ done @ctx.pairs ]
+    continue {
+      _rig_cursor: "riskPairs",
+      index: @ctx.index + 1,
+      pairs: @ctx.pairs.concat(@explicitPairs[@ctx.index] ?? [])
+    }
+  ]
+  let @riskNames = for @pair in @flattened => @pair.key
+  let @uniqueRisks = @uniqueValues(@riskNames)
+  let @explicit = for @risk in @uniqueRisks [
+    let @riskValues = for @pair in @flattened when @pair.key == @risk => @pair.value
+    => {
+      key: @risk,
+      value: @riskValues
+    }
+  ]
+  let @destructiveTools = for @name, @tool in @catalog when @arrayContainsPrefix(@toolRisk(@tool), "destructive") => @name
+  let @privilegedTools = for @name, @tool in @catalog when @arrayContainsPrefix(@toolRisk(@tool), "privileged") => @name
+  => @pairsToObject(@explicit.concat([
+    { key: "destructive", value: @destructiveTools },
+    { key: "privileged", value: @privilegedTools }
+  ]))
+]
+
+exe @synthesizedAuthorizations(tools) = [
+  let @catalog = @toolCatalogObject(@tools)
+  let @deny = for @name, @tool in @catalog when !@toolAuthorizable(@tool) => @name
+  let @authorizable = for @name, @tool in @catalog when @toolAuthorizable(@tool) => @name
+  => {
+    deny: @deny,
+    authorizable: {
+      "role:planner": @authorizable
+    }
+  }
+]
+
+exe @hasNovelUrlRisk(tools) = [
+  let @catalog = @toolCatalogObject(@tools)
+  let @matches = for @name, @tool in @catalog when @arrayContainsFetchRisk(@toolRisk(@tool)) => @name
+  => @matches.length > 0
+]
+
+export {
+  @pairsToObject,
+  @mxEntry,
+  @toolCatalogObject,
+  @toolEntryObject,
+  @asArray,
+  @toolExecutable,
+  @toolKind,
+  @toolOperation,
+  @toolLabels,
+  @toolSemantics,
+  @toolParamNames,
+  @toolControlArgs,
+  @toolPayloadArgs,
+  @toolOptionalArgs,
+  @toolUpdateArgs,
+  @toolExactPayloadArgs,
+  @toolCorrelateControlArgs,
+  @toolRisk,
+  @toolAuthorizable,
+  @toolReturnsRecord,
+  @toolBind,
+  @arrayContainsPrefix,
+  @arrayContainsFetchRisk,
+  @uniqueValues,
+  @mergePlannerCatalog,
+  @routeToolCatalog,
+  @plannerCatalogForAgent,
+  @routedToolsForAgent,
+  @phaseCatalog,
+  @phaseToolNames,
+  @phaseToolEntry,
+  @toolNames,
+  @renderToolDoc,
+  @renderToolDocs,
+  @phaseToolDocs,
+  @synthesizedOperations,
+  @synthesizedAuthorizations,
+  @hasNovelUrlRisk
+}

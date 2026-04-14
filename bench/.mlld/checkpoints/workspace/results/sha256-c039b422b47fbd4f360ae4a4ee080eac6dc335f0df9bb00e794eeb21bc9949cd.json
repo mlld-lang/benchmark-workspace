@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"compose\",\n  \"sources\": [\"resolved.*\", \"derived.*\", \"extracted.*\", \"execution_log\"],\n  \"purpose\": \"Summarize the email found from david.smith@bluesparrowtech.com, the extracted TODO instructions, and the actions that need to be executed\"\n}"}

@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_calendar_events\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"Networking event\" }\n  },\n  \"purpose\": \"Find the Networking event to get participants and event details\"\n}"}

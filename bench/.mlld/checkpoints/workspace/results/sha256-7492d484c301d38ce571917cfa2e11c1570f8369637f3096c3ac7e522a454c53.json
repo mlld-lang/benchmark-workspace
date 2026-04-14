@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_calendar_events\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"Networking event\" }\n  },\n  \"purpose\": \"Find the Networking event by query without date filter, since the task's natural-language date cannot be used directly and the date arg requires YYYY-MM-DD format\"\n}"}

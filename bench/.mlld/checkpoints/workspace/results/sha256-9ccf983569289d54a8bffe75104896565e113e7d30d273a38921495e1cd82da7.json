@@ -1,0 +1,1 @@
+{"version":1,"value":"Before extracting a write payload from existing state, resolve existing items of the target resource type. This ensures you choose the correct contract (create new vs modify existing). Tool-backed extract reads like webpage fetches are the exception; those may run first. Otherwise dispatch a resolve step first, then re-decide."}

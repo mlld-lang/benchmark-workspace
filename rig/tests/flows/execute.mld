@@ -1,0 +1,212 @@
+>> Step 5 execute flow, plus the control-arg firewall and selection-ref path.
+
+import { @rigBuild, @rigRun } from "../../index.mld"
+import { @records, @tools, @get_note, @append_note, @get_contacts, @send_email } from "../fixtures.mld"
+import { @check, @field, @firstByPhase } from "../helpers.mld"
+
+>> The local runtime collection mirrors the planner-facing catalog,
+>> but adds the executable binding details that the dispatcher needs
+>> at call time. Exposed arg order is the contract for rehydrating
+>> planner-produced objects into tool calls.
+var tools @runtimeToolsCollection = {
+  get_note: {
+    mlld: @get_note,
+    expose: ["note_id"]
+  },
+  append_note: {
+    mlld: @append_note,
+    expose: ["note_id", "content"]
+  },
+  get_contacts: { mlld: @get_contacts },
+  send_email: {
+    mlld: @send_email,
+    expose: ["recipients", "subject", "body"]
+  }
+}
+
+var @successAgent = @rigBuild({
+  suite: "execute-success-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: [
+        {
+          phase: "resolve",
+          tool: "get_note",
+          args: {
+            note_id: { source: "known", value: "note_1" }
+          },
+          purpose: "ground the note id"
+        },
+        {
+          phase: "execute",
+          operation: "append_note",
+          args: {
+            note_id: { source: "resolved", record: "note_entry", handle: "r_note_entry_note_1", field: "id_" },
+            content: { source: "known", value: "add status line" }
+          },
+          purpose: "append the requested content"
+        },
+        {
+          phase: "compose",
+          sources: ["resolved.*", "execution_log"],
+          purpose: "confirm the write"
+        }
+      ],
+      compose: [{
+        text: "Appended the requested note content."
+      }]
+    }
+  }
+})
+
+var @successResult = @rigRun(@successAgent, "Append add status line to note_1.")
+var @successExecution = @field(@field(@successResult, "debug"), "execution_log") ?? []
+var @successExecuteEntry = @firstByPhase(@successExecution, "execute")
+var @successExecutionPretty = @successExecution | @pretty
+var @successPretty = @successResult | @pretty
+var @successLogOk = @field(@successExecuteEntry, "tool") == "append_note" &&
+  @field(@successExecuteEntry, "summary") == "executed append_note"
+
+var @firewallAgent = @rigBuild({
+  suite: "execute-firewall-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: [
+        {
+          phase: "resolve",
+          tool: "get_note",
+          args: {
+            note_id: { source: "known", value: "note_1" }
+          },
+          purpose: "ground the note"
+        },
+        {
+          phase: "derive",
+          sources: [{ source: "resolved", record: "note_entry" }],
+          goal: "copy the note id into a derived object",
+          schema: { note_id: "string" },
+          name: "bad_note",
+          purpose: "set up the firewall check"
+        },
+        {
+          phase: "execute",
+          operation: "append_note",
+          args: {
+            note_id: { source: "derived", name: "bad_note", field: "note_id" },
+            content: { source: "known", value: "add status line" }
+          },
+          purpose: "this should be rejected"
+        }
+      ],
+      derive: [{
+        status: "derived",
+        payload: { note_id: "note_1" },
+        summary: "derived a note id"
+      }]
+    }
+  }
+})
+
+var @firewallResult = @rigRun(@firewallAgent, "Append add status line to note_1.")
+var @firewallPretty = @firewallResult | @pretty
+var @firewallOk = @field(@firewallResult, "terminal") == "blocked" && @field(@firewallResult, "text") == "intent_compile_failed"
+
+var @selectionAgent = @rigBuild({
+  suite: "execute-selection-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: [
+        {
+          phase: "resolve",
+          tool: "get_contacts",
+          args: {},
+          purpose: "ground the contacts"
+        },
+        {
+          phase: "derive",
+          sources: [{ source: "resolved", record: "contact" }],
+          goal: "pick Alice",
+          schema: { choice: "string" },
+          name: "picked_contact",
+          purpose: "select the contact"
+        },
+        {
+          phase: "execute",
+          operation: "send_email",
+          args: {
+            recipients: [{
+              source: "selection",
+              backing: { record: "contact", handle: "r_contact_alice.example" }
+            }],
+            subject: { source: "known", value: "hello" },
+            body: { source: "known", value: "hello" }
+          },
+          purpose: "send the email to the selected contact"
+        },
+        {
+          phase: "compose",
+          sources: ["resolved.*", "derived.*", "execution_log"],
+          purpose: "confirm the send"
+        }
+      ],
+      derive: [{
+        status: "derived",
+        payload: { choice: "Alice" },
+        selection_refs: [{
+          source: "selection",
+          backing: { record: "contact", handle: "r_contact_alice.example" }
+        }],
+        summary: "selected Alice"
+      }],
+      compose: [{
+        text: "Sent the email to Alice."
+      }]
+    }
+  }
+})
+
+var @selectionResult = @rigRun(@selectionAgent, "Send hello to Alice.")
+var @selectionExecution = @field(@field(@selectionResult, "debug"), "execution_log") ?? []
+var @selectionExecuteEntry = @firstByPhase(@selectionExecution, "execute")
+var @selectionExecutionPretty = @selectionExecution | @pretty
+var @selectionPretty = @selectionResult | @pretty
+var @selectionLogOk = @field(@selectionExecuteEntry, "tool") == "send_email" &&
+  @field(@selectionExecuteEntry, "summary") == "executed send_email"
+var @successTerminalOk = @field(@successResult, "terminal") == "complete"
+var @successTextOk = @field(@successResult, "text") == "Appended the requested note content."
+var @selectionTerminalOk = @field(@selectionResult, "terminal") == "complete"
+var @selectionTextOk = @field(@selectionResult, "text") == "Sent the email to Alice."
+
+var @c1 = @check("success-terminal", @successTerminalOk, @successPretty)
+var @c2 = @check("success-text", @successTextOk, @field(@successResult, "text"))
+var @c3 = @check("success-log", @successLogOk, @successExecutionPretty)
+var @c4 = @check("firewall-blocked", @firewallOk, @firewallPretty)
+var @c5 = @check("selection-terminal", @selectionTerminalOk, @selectionPretty)
+var @c6 = @check("selection-text", @selectionTextOk, @field(@selectionResult, "text"))
+var @c7 = @check("selection-log", @selectionLogOk, @selectionExecutionPretty)
+
+var @checks = [@c1, @c2, @c3, @c4, @c5, @c6, @c7]
+
+var @fails = for @check in @checks when @check.status == "FAIL" => @check
+
+show "Rig v2 execute flow"
+for @check in @checks => show `[@check.status] @check.id  @check.detail`
+
+if @fails.length > 0 [
+  run sh { exit 1 }
+]

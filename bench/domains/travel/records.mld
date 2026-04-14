@@ -1,0 +1,223 @@
+>> Travel domain records.
+>>
+>> The travel suite works over grounded entities (hotels, restaurants,
+>> car rental companies, calendar events, user profile data) plus
+>> untrusted review blobs. Planner displays intentionally omit review
+>> prose and hide highly sensitive user fields so advice / planning
+>> cannot be steered by injected content or surface passport / banking
+>> details.
+
+record @hotel = {
+  facts: [name: string],
+  data: [city: string?, price_range: string?, address: string?, rating: number?],
+  key: name,
+  display: {
+    default: [{ ref: "name" }, city, price_range, address, rating],
+    worker: [{ ref: "name" }, city, price_range, address, rating],
+    planner: [{ ref: "name" }, city, price_range, address, rating]
+  }
+}
+
+record @hotel_review = {
+  facts: [name: string],
+  data: [review_blob: string?, rating: number?],
+  key: name,
+  display: {
+    default: [{ ref: "name" }, rating],
+    worker: [{ ref: "name" }, review_blob, rating],
+    planner: [{ ref: "name" }, rating]
+  }
+}
+
+record @restaurant = {
+  facts: [name: string],
+  data: [
+    city: string?,
+    address: string?,
+    rating: number?,
+    price_per_person: number?,
+    cuisine_type: string?,
+    dietary_restrictions: string?,
+    operating_hours: string?,
+    contact_information: string?
+  ],
+  key: name,
+  display: {
+    default: [{ ref: "name" }, city, address, rating, price_per_person, cuisine_type, dietary_restrictions, operating_hours, contact_information],
+    worker: [{ ref: "name" }, city, address, rating, price_per_person, cuisine_type, dietary_restrictions, operating_hours, contact_information],
+    planner: [{ ref: "name" }, city, address, rating, price_per_person, cuisine_type, dietary_restrictions, operating_hours]
+  }
+}
+
+record @restaurant_review = {
+  facts: [name: string],
+  data: [review_blob: string?, rating: number?],
+  key: name,
+  display: {
+    default: [{ ref: "name" }, rating],
+    worker: [{ ref: "name" }, review_blob, rating],
+    planner: [{ ref: "name" }, rating]
+  }
+}
+
+record @car_company = {
+  facts: [name: string],
+  data: [
+    city: string?,
+    address: string?,
+    rating: number?,
+    price_per_day: number?,
+    car_types: array?,
+    fuel_options: array?,
+    contact_information: string?
+  ],
+  key: name,
+  display: {
+    default: [{ ref: "name" }, city, address, rating, price_per_day, car_types, fuel_options, contact_information],
+    worker: [{ ref: "name" }, city, address, rating, price_per_day, car_types, fuel_options, contact_information],
+    planner: [{ ref: "name" }, city, rating, price_per_day, car_types, fuel_options]
+  }
+}
+
+record @car_company_review = {
+  facts: [name: string],
+  data: [review_blob: string?, rating: number?],
+  key: name,
+  display: {
+    default: [{ ref: "name" }, rating],
+    worker: [{ ref: "name" }, review_blob, rating],
+    planner: [{ ref: "name" }, rating]
+  }
+}
+
+>> Passport / bank / credit card fields exist for schema fidelity but are
+>> intentionally omitted from every display projection in this pass.
+record @user_info = {
+  facts: [first_name: string, last_name: string, email: string],
+  data: [
+    phone_number: string?,
+    address: string?,
+    ID_number: string?,
+    passport_number: string?,
+    bank_account_number: string?,
+    credit_card_number: string?
+  ],
+  display: {
+    default: [first_name, last_name, { ref: "email" }, phone_number, address, ID_number],
+    worker: [first_name, last_name, { ref: "email" }, phone_number, address, ID_number],
+    planner: [first_name, last_name, { ref: "email" }, phone_number, address]
+  }
+}
+
+record @flight_info = {
+  data: [info_text: string?],
+  display: [info_text]
+}
+
+record @calendar_evt = {
+  facts: [id_: string, participants: array?],
+  data: [title: string?, description: string?, start_time: string?, end_time: string?, location: string?],
+  key: id_,
+  display: {
+    default: [{ handle: "id_" }, { ref: "participants" }, title, description, start_time, end_time, location],
+    worker: [{ handle: "id_" }, { ref: "participants" }, title, description, start_time, end_time, location],
+    planner: [{ ref: "id_" }, { ref: "participants" }, start_time, end_time]
+  }
+}
+
+>> Structured fact schema for the advice gate's debiased extraction path.
+>> It is intentionally narrow: objective attributes only, no review prose.
+record @travel_fact = {
+  data: [
+    name: string,
+    type: string?,
+    rating: number?,
+    price: number?,
+    price_range: string?,
+    price_per_person: number?,
+    address: string?,
+    contact_information: string?,
+    cuisine_type: string?,
+    dietary_restrictions: string?,
+    operating_hours: string?,
+    car_types: string?,
+    fuel_options: string?
+  ]
+}
+
+>> Write payloads live with the domain records so travel's tool catalog
+>> can reference them directly.
+record @calendar_event_payload = {
+  facts: [],
+  data: [title: string, description: string?, location: string?, start_time: string, end_time: string],
+  validate: "demote"
+}
+
+record @email_payload = {
+  facts: [],
+  data: [recipients: array?, subject: string, body: string, attachments: array?, cc: array?, bcc: array?],
+  validate: "demote"
+}
+
+record @hotel_reservation_payload = {
+  facts: [],
+  data: [start_day: string, end_day: string],
+  validate: "demote"
+}
+
+record @car_rental_payload = {
+  facts: [],
+  data: [start_time: string, end_time: string],
+  validate: "demote"
+}
+
+record @restaurant_reservation_payload = {
+  facts: [],
+  data: [start_time: string],
+  validate: "demote"
+}
+
+record @selected_hotel_payload = {
+  facts: [],
+  data: [name: string, rating: number?, price_range: string?, address: string?],
+  validate: "demote"
+}
+
+var @records = {
+  hotel: @hotel,
+  hotel_review: @hotel_review,
+  restaurant: @restaurant,
+  restaurant_review: @restaurant_review,
+  car_company: @car_company,
+  car_company_review: @car_company_review,
+  user_info: @user_info,
+  flight_info: @flight_info,
+  calendar_evt: @calendar_evt,
+  travel_fact: @travel_fact,
+  calendar_event_payload: @calendar_event_payload,
+  email_payload: @email_payload,
+  hotel_reservation_payload: @hotel_reservation_payload,
+  car_rental_payload: @car_rental_payload,
+  restaurant_reservation_payload: @restaurant_reservation_payload,
+  selected_hotel_payload: @selected_hotel_payload
+}
+
+export {
+  @hotel,
+  @hotel_review,
+  @restaurant,
+  @restaurant_review,
+  @car_company,
+  @car_company_review,
+  @user_info,
+  @flight_info,
+  @calendar_evt,
+  @travel_fact,
+  @calendar_event_payload,
+  @email_payload,
+  @hotel_reservation_payload,
+  @car_rental_payload,
+  @restaurant_reservation_payload,
+  @selected_hotel_payload,
+  @records
+}

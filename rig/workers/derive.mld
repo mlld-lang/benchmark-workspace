@@ -1,0 +1,128 @@
+import {
+  @llmCall,
+  @llmCallEntry,
+  @llmSessionId,
+  @arrayItems,
+  @previewFields,
+  @updateNamedState,
+  @appendExecutionLog
+} from "../runtime.mld"
+import { @lowerSelectionRef, @resolveRefValue } from "../intent.mld"
+import { @deriveAttestation } from "../records.mld"
+
+exe @derivePrompt(query, sources, schemaDoc, decision) = template "../prompts/derive.att"
+
+exe @coerceDeriveAttestation(raw) = [
+  if @raw == null [ => null ]
+  let @parsed = @raw | @parse.llm
+  => @parsed
+] => record @deriveAttestation
+
+exe @allowedSelectionKeys(state, sources) = [
+  let @pairs = for @source in (@sources ?? []) [
+    => when [
+      @source.source == "resolved" && @source.handle.isDefined() => [{ key: `@source.record:@source.handle`, value: true }]
+      @source.source == "resolved" => for @entry in (@state.resolved[@source.record] ?? []) => {
+        key: `@source.record:@entry.handle`,
+        value: true
+      }
+      @source.source == "selection" => [{
+        key: `@source.backing.record:@source.backing.handle`,
+        value: true
+      }]
+      * => []
+    ]
+  ]
+  let @flattened = loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "deriveFlattened" => @input
+      * => { _rig_cursor: "deriveFlattened", index: 0, values: [] }
+    ]
+    if @ctx.index >= @pairs.length [ done @ctx.values ]
+    continue {
+      _rig_cursor: "deriveFlattened",
+      index: @ctx.index + 1,
+      values: @ctx.values.concat(@pairs[@ctx.index] ?? [])
+    }
+  ]
+  let @keys = for @pair in @flattened => @pair.key
+  => @keys
+]
+
+exe @validateSelectionRefs(state, sources, refs) = [
+  let @allowed = @allowedSelectionKeys(@state, @sources)
+  let @validated = for @ref in (@refs ?? []) [
+    let @lowered = @lowerSelectionRef(@state, @ref)
+    => when [
+      !@lowered.ok => { ok: false, error: @lowered.error, ref: @ref }
+      !@allowed.includes(`@lowered.ref.record:@lowered.ref.handle`) => {
+        ok: false,
+        error: "selection_ref_not_in_derive_input",
+        ref: @ref
+      }
+      * => { ok: true, ref: @ref }
+    ]
+  ]
+  let @errors = for @entry in @validated when !@entry.ok => @entry
+  let @refsValue = for @entry in @validated => @entry.ref
+  => when [
+    @errors.length == 0 => { ok: true, refs: @refsValue }
+    * => { ok: false, error: "selection_ref_validation_failed", issues: @errors }
+  ]
+]
+
+exe @dispatchDerive(agent, state, decision, query) = [
+  let @resolved = for @source in (@decision.sources ?? []) => @resolveRefValue(@state, @source)
+  let @errors = for @entry in @resolved when !@entry.ok => @entry
+  if @errors.length > 0 [ => { error: "derive_source_resolution_failed", summary: @errors | @pretty } ]
+  let @sources = for @entry in @resolved => @entry.value
+  let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision)
+  let @raw = @llmCall(@agent.harness, @prompt, {
+    model: @agent.model,
+    tools: [],
+    stubPhase: "derive",
+    stubResponses: @agent.stub.derive ?? [],
+    stubIndex: @arrayItems(@state.execution_log).length
+  })
+  let @attestation = @coerceDeriveAttestation(@raw)
+  let @sessionId = @llmSessionId(@raw)
+  let @logEntry = @llmCallEntry("derive", @prompt, @raw, @attestation, @sessionId, {
+    name: @decision.name,
+    goal: @decision.goal ?? null
+  })
+  if !@attestation.isDefined() [ => { error: "derive_empty_response", summary: "derive_empty_response", session_id: @sessionId, llm_log: @logEntry } ]
+  let @selectionCheck = @validateSelectionRefs(@state, @decision.sources ?? [], @attestation.selection_refs ?? [])
+  if !@selectionCheck.ok [ => { error: @selectionCheck.error, summary: @selectionCheck | @pretty, session_id: @sessionId, llm_log: @logEntry } ]
+  let @summary = @attestation.summary ?? `derived @decision.name`
+  let @schemaName = @attestation.schema_name ?? "inline-schema"
+  let @nextState = @appendExecutionLog(
+    @updateNamedState(@state, "derived", @decision.name, {
+      provenance: "derived",
+      schema_name: @schemaName,
+      preview_fields: @previewFields(@attestation.payload),
+      value: @attestation.payload,
+      selection_refs: @selectionCheck.refs
+    }),
+    {
+      phase: "derive",
+      name: @decision.name,
+      summary: @summary,
+      session_id: @sessionId
+    }
+  )
+  => {
+    state: @nextState,
+    result: {
+      status: "derived",
+      schema_name: @schemaName,
+      name: @decision.name,
+      provenance: "derived",
+      selection_refs: @selectionCheck.refs,
+      summary: @summary
+    },
+    session_id: @sessionId,
+    llm_log: @logEntry
+  }
+]
+
+export { @derivePrompt, @coerceDeriveAttestation, @dispatchDerive }

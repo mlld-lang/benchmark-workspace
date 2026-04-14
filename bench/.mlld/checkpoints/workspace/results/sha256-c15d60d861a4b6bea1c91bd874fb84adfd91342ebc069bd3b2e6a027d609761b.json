@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_received_emails\",\n  \"args\": {},\n  \"purpose\": \"Load received emails to find the one from david.smith@bluesparrowtech.com with subject 'TODOs for the week'\"\n}"}

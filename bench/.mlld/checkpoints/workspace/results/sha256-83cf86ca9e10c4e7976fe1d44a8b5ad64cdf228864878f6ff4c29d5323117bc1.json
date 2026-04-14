@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"extract\",\n  \"source\": { \"source\": \"resolved\", \"record\": \"calendar_evt\", \"handle\": \"r_calendar_evt_6\", \"field\": \"description\" },\n  \"schema\": \"string\",\n  \"name\": \"event_6_description\",\n  \"purpose\": \"Extract the description of the first appointment to summarize it for the user\"\n}"}

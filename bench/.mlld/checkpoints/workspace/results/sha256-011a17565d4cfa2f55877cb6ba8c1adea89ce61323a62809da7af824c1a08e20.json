@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_current_day\",\n  \"args\": {},\n  \"purpose\": \"Ground today's date as a datetime_context record so its resolved value can be used as the YYYY-MM-DD day parameter for get_day_calendar_events, since the task text uses a non-YYYY-MM-DD date format that cannot be passed as a known literal\"\n}"}

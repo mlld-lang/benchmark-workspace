@@ -1,0 +1,413 @@
+import {
+  @mergePlannerCatalog,
+  @toolCatalogObject,
+  @toolKind,
+  @toolNames,
+  @routeToolCatalog,
+  @synthesizedOperations,
+  @synthesizedAuthorizations,
+  @hasNovelUrlRisk
+} from "./tooling.mld"
+import {
+  @serializeLifecycleJson,
+  @appendPhaseEvent,
+  @appendLlmCall,
+  @writePhaseStateFile,
+  @betweenState,
+  @resetLifecycleFiles,
+  @truncateLlmCallLog,
+  @plannerIterationEvent,
+  @phaseStartEvent,
+  @phaseEndEvent,
+  @phaseState
+} from "./lifecycle.mld"
+import {
+  @defaultHarness,
+  @normalizePositiveInt,
+  @normalizeSessionId,
+  @emptyState,
+  @withPlannerSession,
+  @appendPhaseEvents,
+  @appendExecutionLog,
+  @plannerStateSummary,
+  @workerStateSummary,
+  @nonComposeDecisionArgIssues,
+  @updateNamedState,
+  @correlatedControlArgsCheck
+} from "./runtime.mld"
+import { @dispatchPlanner } from "./workers/planner.mld"
+import { @dispatchResolve } from "./workers/resolve.mld"
+import { @dispatchExtract } from "./workers/extract.mld"
+import { @dispatchDerive } from "./workers/derive.mld"
+import { @dispatchExecute } from "./workers/execute.mld"
+import { @dispatchCompose } from "./workers/compose.mld"
+
+>> Build-time policy synthesis from the tool catalog.
+exe @synthesizedPolicy(tools, overridePolicy) = [
+  let @rules = [
+    "no-secret-exfil",
+    "no-sensitive-exfil",
+    "no-untrusted-destructive",
+    "no-untrusted-privileged",
+    "no-send-to-unknown",
+    "no-destroy-unknown",
+    "untrusted-llms-get-influenced",
+    "no-unknown-extraction-sources"
+  ]
+  let @policyRules = when [
+    @hasNovelUrlRisk(@tools) => @rules.concat(["no-novel-urls"])
+    * => @rules
+  ]
+  let @basePolicy = {
+    defaults: {
+      rules: @policyRules,
+      unlabeled: "untrusted"
+    },
+    capabilities: {
+      allow: ["cmd:*", "sh", "js", "node", "fs:r:**", "fs:w:**", "network"]
+    },
+    operations: @synthesizedOperations(@tools),
+    labels: {
+      influenced: { deny: ["destructive", "exfil"] }
+    },
+    authorizations: @synthesizedAuthorizations(@tools)
+  }
+  if !@overridePolicy.isDefined() [ => @basePolicy ]
+  let @extraRules = for @rule in (@overridePolicy.defaults.rules ?? []) when !@basePolicy.defaults.rules.includes(@rule) => @rule
+  let @extraDeny = for @toolName in (@overridePolicy.authorizations.deny ?? []) when !@basePolicy.authorizations.deny.includes(@toolName) => @toolName
+  let @overrideOperations = @overridePolicy.operations ?? {}
+  let @overrideLabels = @overridePolicy.labels ?? {}
+  => {
+    defaults: {
+      ...@basePolicy.defaults,
+      rules: @basePolicy.defaults.rules.concat(@extraRules)
+    },
+    capabilities: @basePolicy.capabilities,
+    operations: {
+      ...@basePolicy.operations,
+      ...@overrideOperations
+    },
+    labels: {
+      ...@basePolicy.labels,
+      ...@overrideLabels
+    },
+    authorizations: {
+      ...@basePolicy.authorizations,
+      deny: @basePolicy.authorizations.deny.concat(@extraDeny)
+    }
+  }
+]
+
+exe @validateToolCatalog(tools) = [
+  let @catalog = @toolCatalogObject(@tools)
+  let @issues = for @name, @tool in @catalog => when [
+    !@toolKind(@tool).isDefined() => { tool: @name, error: "tool_missing_kind" }
+    @toolKind(@tool) == "read" && !@tool.returns.isDefined() => { tool: @name, error: "read_tool_missing_returns_record" }
+    @toolKind(@tool) == "write" && !@tool.operation.isDefined() => { tool: @name, error: "write_tool_missing_operation" }
+    * => null
+  ]
+  let @realIssues = for @issue in @issues when @issue => @issue
+  => when [
+    @realIssues.length == 0 => { ok: true }
+    * => { ok: false, issues: @realIssues }
+  ]
+]
+
+exe @validateConfig(config) = [
+  if !@config.suite.isDefined() [ => { error: "missing_required_field", field: "suite" } ]
+  if !@config.records.isDefined() [ => { error: "missing_required_field", field: "records" } ]
+  if !@config.tools.isDefined() [ => { error: "missing_required_field", field: "tools" } ]
+  if !@config.model.isDefined() [ => { error: "missing_required_field", field: "model" } ]
+  let @toolValidation = @validateToolCatalog(@config.tools)
+  if !@toolValidation.ok [ => { error: "invalid_tool_catalog", issues: @toolValidation.issues } ]
+  let @defense = @config.defense ?? "defended"
+  let @overrides = @config.overrides ?? {}
+  let @runtimeCollection = @config.toolsCollection ?? @config.tools
+  let @runtimeOverrides = @config.runtimeTools ?? {}
+  let @plannerTools = @mergePlannerCatalog(
+    @mergePlannerCatalog(@config.tools, @runtimeCollection),
+    @runtimeOverrides
+  )
+  let @basePolicy = when [
+    @defense == "defended" => @synthesizedPolicy(@config.tools, @overrides.policy)
+    * => null
+  ]
+  >> Keep the merged planner catalog on `agent.tools`. Plain write-tool
+  >> metadata already lives there, and read tools need the runtime
+  >> collection's `expose`/`controlArgs` copied onto the same stable
+  >> surface so imported handles do not lose them.
+  => {
+    ok: true,
+    suite: @config.suite,
+    defense: @defense,
+    model: @config.model,
+    harness: @config.harness ?? @defaultHarness(@config.model),
+    records: @config.records,
+    tools: @plannerTools,
+    routedTools: @routeToolCatalog(@plannerTools),
+    toolsCollection: @runtimeCollection,
+    runtimeTools: @config.runtimeTools ?? null,
+    basePolicy: @basePolicy,
+    maxIterations: @config.maxIterations ?? 40,
+    overrides: @overrides,
+    stub: @overrides.stub ?? {},
+    phaseLogFile: @config.phaseLogFile ?? null,
+    phaseStateFile: @config.phaseStateFile ?? null,
+    llmCallLogFile: @config.llmCallLogFile ?? null,
+    logLlmCalls: @config.logLlmCalls ?? false
+  }
+]
+
+exe @appendLlmDebug(agent, entry) = [
+  if !@agent.logLlmCalls [ => false ]
+  if !@agent.llmCallLogFile.isDefined() [ => false ]
+  if !@entry.isDefined() [ => false ]
+  @appendLlmCall(@agent.llmCallLogFile, @serializeLifecycleJson(@entry))
+  => true
+]
+
+exe @orchestrationDebug(agent, label) = [
+  if !(@agent.logLlmCalls ?? false) [ => null ]
+  run sh {
+    printf '[orchestration] %s\n' "$label" >> /tmp/orchestration-debug.log
+  }
+  => null
+]
+
+exe @recoverablePhaseError(errorName) = when [
+  @errorName == "tool_arg_validation_failed" => true
+  @errorName == "unknown_tool" => true
+  @errorName == "unknown_resolve_tool" => true
+  @errorName == "unknown_extract_tool" => true
+  @errorName == "tool_runtime_error" => true
+  @errorName == "update_args_missing_values" => true
+  * => false
+]
+
+>> The loop is deliberately mechanical: planner decides, one worker
+>> executes, lifecycle is emitted, then the next iteration sees the
+>> updated state and decides again.
+exe @runPhaseLoop(agent, query) = [
+  @resetLifecycleFiles(@agent.phaseLogFile, @agent.phaseStateFile)
+  if @agent.logLlmCalls [
+    run sh {
+      printf '%s\n' 'runPhaseLoop:afterResetLifecycle' >> /tmp/orchestration-debug.log
+    }
+  ]
+  @truncateLlmCallLog(@agent.llmCallLogFile)
+  if @agent.logLlmCalls [
+    run sh {
+      printf '%s\n' 'runPhaseLoop:afterTruncateLlmLog' >> /tmp/orchestration-debug.log
+    }
+  ]
+  let @loopLimit = @normalizePositiveInt(@agent.maxIterations, 40)
+  if @agent.logLlmCalls [
+    run sh {
+      printf '%s\n' 'runPhaseLoop:afterLoopLimit' >> /tmp/orchestration-debug.log
+    }
+  ]
+  let @result = loop(@loopLimit) [
+    if @agent.logLlmCalls [
+      run sh {
+        printf '%s\n' 'runPhaseLoop:loopEntered' >> /tmp/orchestration-debug.log
+      }
+    ]
+    let @ctx = when [
+      >> The phase loop should only resume from its own tagged continuation
+      >> object, never from ambient pipeline input such as the outer query.
+      @input["_rig_cursor"] == "phaseLoop" => @input
+      * => {
+        _rig_cursor: "phaseLoop",
+        iteration: 0,
+        state: @emptyState(),
+        final: null,
+        terminal: null,
+        last_decision: null
+      }
+    ]
+
+    if @ctx.terminal [ done @ctx ]
+
+    let @iteration = @ctx.iteration + 1
+    if @agent.logLlmCalls [
+      run sh {
+        printf '%s\n' 'runPhaseLoop:beforeDispatchPlanner' >> /tmp/orchestration-debug.log
+      }
+    ]
+    >> Reuse the original agent handle for planner dispatch. Rebuilding a
+    >> narrowed planner-only object here forces mlld to walk and copy the
+    >> full tool graph up front, which is slower than letting the worker
+    >> touch only the fields it actually needs.
+    let @planner = @dispatchPlanner(@agent, @ctx.state, @query)
+    @appendLlmDebug(@agent, @planner.llm_log)
+    let @decision = @planner.decision
+    let @decisionPhase = @decision.phase ?? null
+    let @plannerSessionId = @normalizeSessionId(@planner.session_id)
+
+    if !@decisionPhase.isDefined() [
+      done {
+        _rig_cursor: "phaseLoop",
+        iteration: @iteration,
+        state: @ctx.state,
+        final: { text: "planner_schema_validation_failed_after_retry" },
+        terminal: "blocked",
+        last_decision: {
+          phase: "blocked",
+          reason: "planner_schema_validation_failed_after_retry"
+        }
+      }
+    ]
+
+    let @plannerEvent = @plannerIterationEvent(@iteration, @decisionPhase, @plannerSessionId)
+    @appendPhaseEvent(@agent.phaseLogFile, @serializeLifecycleJson(@plannerEvent))
+    let @stateWithPlanner = @withPlannerSession(@ctx.state, @plannerSessionId)
+
+    if @decisionPhase == "blocked" [
+      done {
+        _rig_cursor: "phaseLoop",
+        iteration: @iteration,
+        state: @appendPhaseEvents(@stateWithPlanner, [@plannerEvent]),
+        final: { text: @decision.reason ?? "blocked" },
+        terminal: "blocked",
+        last_decision: @decision
+      }
+    ]
+
+    let @phaseId = `@decisionPhase:@iteration`
+    let @startEvent = @phaseStartEvent(@iteration, @decisionPhase, @phaseId, @plannerSessionId)
+    @appendPhaseEvent(@agent.phaseLogFile, @serializeLifecycleJson(@startEvent))
+    @writePhaseStateFile(
+      @agent.phaseStateFile,
+      @serializeLifecycleJson(@phaseState(@decisionPhase, @phaseId, @iteration, @plannerSessionId, null))
+    )
+
+    let @phaseResult = when [
+      @decisionPhase == "resolve" => @dispatchResolve(@agent, @stateWithPlanner, @decision, @query)
+      @decisionPhase == "extract" => @dispatchExtract(@agent, @stateWithPlanner, @decision, @query)
+      @decisionPhase == "derive" => @dispatchDerive(@agent, @stateWithPlanner, @decision, @query)
+      @decisionPhase == "execute" => @dispatchExecute(@agent, @stateWithPlanner, @decision, @query)
+      @decisionPhase == "compose" => @dispatchCompose(@agent, @stateWithPlanner, @query)
+      * => { error: "unknown_phase", summary: @decisionPhase }
+    ]
+    if @agent.logLlmCalls [
+      run sh {
+        printf '%s\n' 'runPhaseLoop:afterPhaseResult' >> /tmp/orchestration-debug.log
+      }
+    ]
+
+    @appendLlmDebug(@agent, @phaseResult.llm_log)
+    let @workerSessionId = @normalizeSessionId(@phaseResult.session_id)
+    @writePhaseStateFile(
+      @agent.phaseStateFile,
+      @serializeLifecycleJson(@phaseState(@decisionPhase, @phaseId, @iteration, @plannerSessionId, @workerSessionId))
+    )
+
+    let @endEvent = @phaseEndEvent(
+      @iteration,
+      @decisionPhase,
+      @phaseId,
+      @workerSessionId,
+      when [ @phaseResult["error"].isDefined() => "error"; * => "success" ],
+      @phaseResult.result.summary ?? @phaseResult.summary ?? @phaseResult.text ?? @phaseResult["error"] ?? "completed"
+    )
+    @appendPhaseEvent(@agent.phaseLogFile, @serializeLifecycleJson(@endEvent))
+    @writePhaseStateFile(@agent.phaseStateFile, @serializeLifecycleJson(@betweenState()))
+
+    let @nextState = when [
+      @phaseResult.state.isDefined() => @phaseResult.state
+      * => @stateWithPlanner
+    ]
+    if @agent.logLlmCalls [
+      run sh {
+        printf '%s\n' 'runPhaseLoop:afterNextState' >> /tmp/orchestration-debug.log
+      }
+    ]
+    let @stateAfterPhase = when [
+      @phaseResult["error"].isDefined() => @appendExecutionLog(@nextState, {
+        phase: @decisionPhase,
+        tool: @decision.tool ?? @decision.operation ?? null,
+        status: "error",
+        error: @phaseResult["error"],
+        summary: @phaseResult.summary ?? @phaseResult["error"],
+        raw_error: @phaseResult.raw_error ?? null
+      })
+      * => @nextState
+    ]
+    if @agent.logLlmCalls [
+      run sh {
+        printf '%s\n' 'runPhaseLoop:afterStateAfterPhase' >> /tmp/orchestration-debug.log
+      }
+    ]
+    let @eventsAppended = @appendPhaseEvents(@stateAfterPhase, [@plannerEvent, @startEvent, @endEvent])
+    if @agent.logLlmCalls [
+      run sh {
+        printf '%s\n' 'runPhaseLoop:afterEventsAppended' >> /tmp/orchestration-debug.log
+      }
+    ]
+
+    if @phaseResult["error"].isDefined() && @recoverablePhaseError(@phaseResult["error"]) [
+      continue {
+        _rig_cursor: "phaseLoop",
+        iteration: @iteration,
+        state: @eventsAppended,
+        final: null,
+        terminal: null,
+        last_decision: @decision
+      }
+    ]
+
+    if @phaseResult["error"].isDefined() [
+      done {
+        _rig_cursor: "phaseLoop",
+        iteration: @iteration,
+        state: @eventsAppended,
+        final: { text: @phaseResult["error"] },
+        terminal: "blocked",
+        last_decision: @decision
+      }
+    ]
+
+    if @decisionPhase == "compose" [
+      done {
+        _rig_cursor: "phaseLoop",
+        iteration: @iteration,
+        state: @eventsAppended,
+        final: { text: @phaseResult.text },
+        terminal: "complete",
+        last_decision: @decision
+      }
+    ]
+
+    continue {
+      _rig_cursor: "phaseLoop",
+      iteration: @iteration,
+      state: @eventsAppended,
+      final: null,
+      terminal: null,
+      last_decision: @decision
+    }
+  ]
+
+  @writePhaseStateFile(@agent.phaseStateFile, @serializeLifecycleJson(@betweenState()))
+
+  => {
+    terminal: @result.terminal ?? "max_iterations",
+    final: @result.final ?? { text: "blocked: max_iterations_reached" },
+    execution_log: @result.state.execution_log ?? [],
+    phase_events: @result.state.phase_events ?? [],
+    last_decision: @result.last_decision,
+    planner_session_id: @normalizeSessionId(@result.state.planner_session_id)
+  }
+]
+
+export {
+  @validateConfig,
+  @synthesizedPolicy,
+  @runPhaseLoop,
+  @plannerStateSummary,
+  @workerStateSummary,
+  @nonComposeDecisionArgIssues,
+  @updateNamedState,
+  @appendExecutionLog,
+  @correlatedControlArgsCheck
+}

@@ -1,0 +1,1 @@
+{"version":1,"value":"```json\n{\n  \"phase\": \"extract\",\n  \"source\": { \"source\": \"resolved\", \"record\": \"calendar_evt\", \"handle\": \"r_calendar_evt_13\", \"field\": \"description\" },\n  \"schema\": \"string\",\n  \"name\": \"event_description\",\n  \"purpose\": \"Extract the event description to provide a summary of the Networking event\"\n}\n```"}

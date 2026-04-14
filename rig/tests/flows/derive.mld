@@ -1,0 +1,136 @@
+>> Step 4 derive flow, including a validated selection ref.
+
+import { @rigBuild, @rigRun } from "../../index.mld"
+import { @records, @tools, @get_numbers, @get_contacts } from "../fixtures.mld"
+import { @check, @field, @firstByPhase } from "../helpers.mld"
+
+var tools @runtimeToolsCollection = {
+  get_numbers: { mlld: @get_numbers },
+  get_contacts: { mlld: @get_contacts }
+}
+
+var @maxAgent = @rigBuild({
+  suite: "derive-max-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: [
+        {
+          phase: "resolve",
+          tool: "get_numbers",
+          args: {},
+          purpose: "ground numeric rows"
+        },
+        {
+          phase: "derive",
+          sources: [{ source: "resolved", record: "number_row" }],
+          goal: "pick the maximum value",
+          schema: { max: "number" },
+          name: "largest_number",
+          purpose: "compute the max"
+        },
+        {
+          phase: "compose",
+          sources: ["resolved.*", "derived.*"],
+          purpose: "answer from the derived result"
+        }
+      ],
+      derive: [{
+        status: "derived",
+        payload: { max: 8 },
+        summary: "derived the max value"
+      }],
+      compose: [{
+        text: "The max is 8."
+      }]
+    }
+  }
+})
+
+var @maxResult = @rigRun(@maxAgent, "What is the max number?")
+var @maxExecution = @field(@field(@maxResult, "debug"), "execution_log") ?? []
+var @maxDeriveEntry = @firstByPhase(@maxExecution, "derive")
+var @maxExecutionPretty = @maxExecution | @pretty
+var @maxPretty = @maxResult | @pretty
+var @maxLogOk = @field(@maxDeriveEntry, "name") == "largest_number" &&
+  @field(@maxDeriveEntry, "summary") == "derived largest_number"
+
+var @selectionAgent = @rigBuild({
+  suite: "derive-selection-flow",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @runtimeToolsCollection,
+  overrides: {
+    stub: {
+      planner: [
+        {
+          phase: "resolve",
+          tool: "get_contacts",
+          args: {},
+          purpose: "ground contacts"
+        },
+        {
+          phase: "derive",
+          sources: [{ source: "resolved", record: "contact" }],
+          goal: "pick Alice",
+          schema: { choice: "string" },
+          name: "picked_contact",
+          purpose: "select a grounded contact"
+        },
+        {
+          phase: "compose",
+          sources: ["resolved.*", "derived.*"],
+          purpose: "confirm the selected contact"
+        }
+      ],
+      derive: [{
+        status: "derived",
+        payload: { choice: "Alice" },
+        selection_refs: [{
+          source: "selection",
+          backing: { record: "contact", handle: "r_contact_alice.example" }
+        }],
+        summary: "selected Alice"
+      }],
+      compose: [{
+        text: "Alice was selected."
+      }]
+    }
+  }
+})
+
+var @selectionResult = @rigRun(@selectionAgent, "Pick Alice from contacts.")
+var @selectionExecution = @field(@field(@selectionResult, "debug"), "execution_log") ?? []
+var @selectionDeriveEntry = @firstByPhase(@selectionExecution, "derive")
+var @selectionExecutionPretty = @selectionExecution | @pretty
+var @selectionPretty = @selectionResult | @pretty
+var @selectionLogOk = @field(@selectionDeriveEntry, "name") == "picked_contact" &&
+  @field(@selectionDeriveEntry, "summary") == "derived picked_contact"
+var @maxTerminalOk = @field(@maxResult, "terminal") == "complete"
+var @maxTextOk = @field(@maxResult, "text") == "The max is 8."
+var @selectionTerminalOk = @field(@selectionResult, "terminal") == "complete"
+var @selectionTextOk = @field(@selectionResult, "text") == "Alice was selected."
+
+var @c1 = @check("max-terminal", @maxTerminalOk, @maxPretty)
+var @c2 = @check("max-text", @maxTextOk, @field(@maxResult, "text"))
+var @c3 = @check("max-log", @maxLogOk, @maxExecutionPretty)
+var @c4 = @check("selection-terminal", @selectionTerminalOk, @selectionPretty)
+var @c5 = @check("selection-text", @selectionTextOk, @field(@selectionResult, "text"))
+var @c6 = @check("selection-log", @selectionLogOk, @selectionExecutionPretty)
+
+var @checks = [@c1, @c2, @c3, @c4, @c5, @c6]
+
+var @fails = for @check in @checks when @check.status == "FAIL" => @check
+
+show "Rig v2 derive flow"
+for @check in @checks => show `[@check.status] @check.id  @check.detail`
+
+if @fails.length > 0 [
+  run sh { exit 1 }
+]

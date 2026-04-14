@@ -1,0 +1,64 @@
+>> Step 1 smoke: planner -> compose with no tools, plus lifecycle files.
+
+import { @rigBuild, @rigRun } from "../../index.mld"
+import { @check, @field, @mktempPath, @readFile, @removeFile } from "../helpers.mld"
+
+var @phaseLogFile = @mktempPath("rig-phase-log", ".jsonl")
+var @phaseStateFile = @mktempPath("rig-phase-state", ".json")
+
+var @agent = @rigBuild({
+  suite: "smoke",
+  defense: "defended",
+  model: "stub",
+  records: {},
+  tools: {},
+  phaseLogFile: @phaseLogFile,
+  phaseStateFile: @phaseStateFile,
+  overrides: {
+    stub: {
+      planner: [{
+        phase: "compose",
+        sources: ["execution_log"],
+        purpose: "nothing to ground"
+      }],
+      compose: [{
+        text: "No tools were available."
+      }]
+    }
+  }
+})
+
+var @result = @rigRun(@agent, "Say that there are no tools.")
+var @resultPretty = @result | @pretty
+var @debugInfo = @field(@result, "debug")
+var @debugPretty = @debugInfo | @pretty
+var @plannerIterations = @field(@debugInfo, "planner_iterations") ?? []
+var @resultText = @field(@result, "text")
+var @resultTerminal = @field(@result, "terminal")
+var @phaseLog = @readFile(@phaseLogFile)
+var @phaseState = @readFile(@phaseStateFile)
+
+var @phaseLogOk = @phaseLog.includes("\"event\":\"planner_iteration\"") &&
+  @phaseLog.includes("\"event\":\"phase_start\"") &&
+  @phaseLog.includes("\"event\":\"phase_end\"")
+var @phaseStateOk = @phaseState.includes("\"phase\":\"between\"")
+
+var @checks = [
+  @check("terminal", @resultTerminal == "complete", @resultPretty),
+  @check("text", @resultText == "No tools were available.", @resultText),
+  @check("planner-iterations", @plannerIterations.length == 1, @debugPretty),
+  @check("phase-log-events", @phaseLogOk, @phaseLog),
+  @check("phase-state-between", @phaseStateOk, @phaseState)
+]
+
+var @fails = for @check in @checks when @check.status == "FAIL" => @check
+
+show "Rig v2 flow smoke"
+for @check in @checks => show `[@check.status] @check.id  @check.detail`
+
+@removeFile(@phaseLogFile)
+@removeFile(@phaseStateFile)
+
+if @fails.length > 0 [
+  run sh { exit 1 }
+]

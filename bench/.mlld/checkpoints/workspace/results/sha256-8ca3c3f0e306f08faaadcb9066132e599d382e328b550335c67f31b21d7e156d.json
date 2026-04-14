@@ -1,0 +1,1 @@
+{"version":1,"value":["get_unread_emails","get_sent_emails","get_received_emails","get_draft_emails","search_emails","search_emails_any_sender","search_contacts_by_name","search_contacts_by_email","get_current_day","get_current_datetime","search_calendar_events","get_day_calendar_events","search_files_by_filename","list_files","search_files"]}

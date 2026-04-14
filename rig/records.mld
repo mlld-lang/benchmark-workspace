@@ -1,0 +1,83 @@
+>> Framework-internal records for rig v2.
+>>
+>> These are not app records. They are the typed contracts between the
+>> orchestrator and the worker coercers. We keep them permissive enough
+>> for retryable demotion, but specific enough that a malformed planner
+>> or worker response fails in a local, debuggable place.
+
+record @plannerDecision = {
+  data: [
+    phase: string,
+    tool: string?,
+    operation: string?,
+    args: object?,
+    source: object?,
+    sources: array?,
+    schema: object?,
+    name: string?,
+    purpose: string?,
+    reason: string?
+  ],
+  validate: "demote"
+}
+
+record @resolveAttestation = {
+  data: [
+    status: string,
+    record_type: string?,
+    count: number?,
+    handles: array?,
+    summary: string?
+  ],
+  validate: "demote"
+}
+
+record @extractAttestation = {
+  data: [
+    status: string,
+    schema_name: string?,
+    name: string?,
+    provenance: string?,
+    preview_fields: array?,
+    payload: object?
+  ],
+  validate: "demote"
+}
+
+record @deriveAttestation = {
+  data: [
+    status: string,
+    schema_name: string?,
+    name: string?,
+    provenance: string?,
+    selection_refs: array?,
+    payload: object?
+  ],
+  validate: "demote"
+}
+
+record @executeAttestation = {
+  data: [
+    status: string,
+    tool: string?,
+    result_handles: array?,
+    summary: string?
+  ],
+  validate: "demote"
+}
+
+record @composeAttestation = {
+  data: [
+    text: string
+  ],
+  validate: "demote"
+}
+
+export {
+  @plannerDecision,
+  @resolveAttestation,
+  @extractAttestation,
+  @deriveAttestation,
+  @executeAttestation,
+  @composeAttestation
+}

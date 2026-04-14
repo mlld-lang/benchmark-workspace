@@ -1,0 +1,215 @@
+>> Slack tool catalog for rig v2.
+>>
+>> The suite mixes ordinary workspace messaging with one literal-source
+>> fetch tool (`get_webpage`). That fetch stays on the extract path so
+>> the planner can load a webpage as the first phase without fabricating
+>> a prior resolved record.
+
+import tools from mcp "tools" as @mcp
+
+import {
+  @slack_msg,
+  @slack_user,
+  @slack_channel,
+  @webpage_content,
+  @channel_message_payload,
+  @direct_message_payload,
+  @webpage_post_payload
+} from "./records.mld"
+
+>> Read tools
+
+exe resolve:r, known, tool:r @get_channels() = [
+  let @raw = @mcp.getChannels()
+  => for @channel in @raw => { name: @channel }
+] => record @slack_channel
+
+exe resolve:r, known, tool:r @get_users_in_channel(channel) = [
+  let @raw = @mcp.getUsersInChannel(@channel)
+  => for @user in @raw => { name: @user }
+] => record @slack_user with { controlArgs: ["channel"] }
+
+exe resolve:r, untrusted, tool:r @read_channel_messages(channel) = [
+  => @mcp.readChannelMessages(@channel)
+] => record @slack_msg with { controlArgs: ["channel"] }
+
+exe resolve:r, untrusted, tool:r @read_inbox(user) = [
+  => @mcp.readInbox(@user)
+] => record @slack_msg with { controlArgs: ["user"] }
+
+>> get_webpage is the literal-source extract path. Rig stores the typed
+>> fetched result under the extract namespace rather than as a resolved
+>> record family.
+exe extract:r, untrusted, tool:r @get_webpage(url) = [
+  => {
+    url: @url,
+    content: @mcp.getWebpage(@url)
+  }
+] => record @webpage_content with { controlArgs: ["url"] }
+
+>> Write tools
+
+exe execute:w, comm:w, tool:w @send_channel_message(channel, body) = [
+  => @mcp.sendChannelMessage(@channel, @body)
+] with { controlArgs: ["channel"] }
+
+exe execute:w, comm:w, exfil:send, tool:w @send_direct_message(recipient, body) = [
+  => @mcp.sendDirectMessage(@recipient, @body)
+] with { controlArgs: ["recipient"] }
+
+exe execute:w, membership:w, exfil:send, tool:w @invite_user_to_slack(user, user_email) = [
+  => @mcp.inviteUserToSlack(@user, @user_email)
+] with { controlArgs: ["user", "user_email"] }
+
+exe execute:w, membership:w, tool:w @add_user_to_channel(user, channel) = [
+  => @mcp.addUserToChannel(@user, @channel)
+] with { controlArgs: ["user", "channel"] }
+
+exe execute:w, destructive:targeted, tool:w @remove_user_from_slack(user) = [
+  => @mcp.removeUserFromSlack(@user)
+] with { controlArgs: ["user"] }
+
+exe execute:w, exfil:send, tool:w @post_webpage(url, content) = [
+  => @mcp.postWebpage(@url, @content)
+] with { controlArgs: ["url"] }
+
+var @tools = {
+  get_channels: {
+    kind: "read",
+    mlld: @get_channels,
+    returns: @slack_channel,
+    labels: ["resolve:r", "known"],
+    semantics: "List all workspace channels."
+  },
+  get_users_in_channel: {
+    kind: "read",
+    mlld: @get_users_in_channel,
+    returns: @slack_user,
+    labels: ["resolve:r", "known"],
+    semantics: "List members of one channel."
+  },
+  read_channel_messages: {
+    kind: "read",
+    mlld: @read_channel_messages,
+    returns: @slack_msg,
+    labels: ["resolve:r", "untrusted"],
+    semantics: "Read messages from one channel."
+  },
+  read_inbox: {
+    kind: "read",
+    mlld: @read_inbox,
+    returns: @slack_msg,
+    labels: ["resolve:r", "untrusted"],
+    semantics: "Read direct messages for one user."
+  },
+  get_webpage: {
+    kind: "read",
+    mlld: @get_webpage,
+    returns: @webpage_content,
+    labels: ["extract:r", "untrusted"],
+    risk: ["exfil:fetch"],
+    semantics: "Fetch a webpage by URL and return its raw content."
+  },
+  send_channel_message: {
+    kind: "write",
+    mlld: @send_channel_message,
+    operation: {
+      controlArgs: ["channel"],
+      payloadArgs: ["body"],
+      payloadRecord: @channel_message_payload,
+      risk: ["comm:w"],
+      authorizable: true,
+      semantics: "Send one message to an internal Slack channel."
+    }
+  },
+  send_direct_message: {
+    kind: "write",
+    mlld: @send_direct_message,
+    operation: {
+      controlArgs: ["recipient"],
+      payloadArgs: ["body"],
+      payloadRecord: @direct_message_payload,
+      risk: ["comm:w", "exfil:send"],
+      authorizable: true,
+      semantics: "Send one direct message to a grounded recipient."
+    }
+  },
+  invite_user_to_slack: {
+    kind: "write",
+    mlld: @invite_user_to_slack,
+    operation: {
+      controlArgs: ["user", "user_email"],
+      payloadArgs: [],
+      risk: ["membership:w", "exfil:send"],
+      authorizable: true,
+      semantics: "Invite one user to the workspace using their email."
+    }
+  },
+  add_user_to_channel: {
+    kind: "write",
+    mlld: @add_user_to_channel,
+    operation: {
+      controlArgs: ["user", "channel"],
+      payloadArgs: [],
+      risk: ["membership:w"],
+      authorizable: true,
+      semantics: "Add one existing user to one existing channel."
+    }
+  },
+  remove_user_from_slack: {
+    kind: "write",
+    mlld: @remove_user_from_slack,
+    operation: {
+      controlArgs: ["user"],
+      payloadArgs: [],
+      risk: ["destructive:targeted"],
+      authorizable: true,
+      semantics: "Remove one user from the Slack workspace."
+    }
+  },
+  post_webpage: {
+    kind: "write",
+    mlld: @post_webpage,
+    operation: {
+      controlArgs: ["url"],
+      payloadArgs: ["content"],
+      payloadRecord: @webpage_post_payload,
+      risk: ["exfil:send"],
+      authorizable: true,
+      semantics: "Write content to one grounded webpage URL."
+    }
+  }
+}
+
+>> The plain catalog drives prompts and policy synthesis. The companion
+>> `var tools` bridge is for live dispatch, where mlld preserves the
+>> named-arg tool-calling surface across module boundaries.
+var tools @toolsCollection = {
+  get_channels: { mlld: @get_channels },
+  get_users_in_channel: { mlld: @get_users_in_channel },
+  read_channel_messages: { mlld: @read_channel_messages },
+  read_inbox: { mlld: @read_inbox },
+  get_webpage: { mlld: @get_webpage },
+  send_channel_message: { mlld: @send_channel_message },
+  send_direct_message: { mlld: @send_direct_message },
+  invite_user_to_slack: { mlld: @invite_user_to_slack },
+  add_user_to_channel: { mlld: @add_user_to_channel },
+  remove_user_from_slack: { mlld: @remove_user_from_slack },
+  post_webpage: { mlld: @post_webpage }
+}
+
+export {
+  @tools,
+  @toolsCollection,
+  @get_channels,
+  @get_users_in_channel,
+  @read_channel_messages,
+  @read_inbox,
+  @get_webpage,
+  @send_channel_message,
+  @send_direct_message,
+  @invite_user_to_slack,
+  @add_user_to_channel,
+  @remove_user_from_slack,
+  @post_webpage
+}

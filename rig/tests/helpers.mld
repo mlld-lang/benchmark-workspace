@@ -1,0 +1,50 @@
+>> Shared helpers for rig test scripts.
+
+exe @status(ok) = when [
+  @ok => "PASS"
+  * => "FAIL"
+]
+
+exe @check(id, ok, detail) = [
+  => {
+    id: @id,
+    status: @status(@ok),
+    detail: @detail
+  }
+]
+
+exe @field(inputValue, key) = js {
+  return inputValue?.[key] ?? null;
+}
+
+>> Flow assertions care about semantic phase entries, not pretty-print
+>> spacing. Keep phase lookup as a helper so each test can assert on the
+>> structured execution log directly.
+exe @firstByPhase(entries, phase) = [
+  let @matches = for @entry in (@entries ?? []) when @field(@entry, "phase") == @phase => @entry
+  => when [
+    @matches.length > 0 => @matches[0]
+    * => null
+  ]
+]
+
+exe @mktempPath(prefix, suffix) = sh {
+  # BSD `mktemp` requires the XXXXXX run at the end of the template, so
+  # generate a unique base path first and then append the requested suffix.
+  # The tests only need a collision-free pathname, not a pre-created file.
+  base="$(mktemp -t "$prefix")" || exit 1
+  rm -f "$base"
+  printf '%s%s\n' "$base" "$suffix"
+}
+
+exe @readFile(path) = sh {
+  if [ -f "$path" ]; then
+    cat "$path"
+  fi
+}
+
+exe @removeFile(path) = sh {
+  rm -f "$path"
+}
+
+export { @status, @check, @field, @firstByPhase, @mktempPath, @readFile, @removeFile }

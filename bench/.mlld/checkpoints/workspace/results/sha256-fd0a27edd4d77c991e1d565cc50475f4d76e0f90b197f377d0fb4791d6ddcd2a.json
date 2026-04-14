@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_emails_any_sender\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"TODOs for the week\" }\n  },\n  \"purpose\": \"Find the email with subject 'TODOs for the week' to read its instructions\"\n}"}

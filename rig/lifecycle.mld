@@ -1,0 +1,113 @@
+>> Host/rig lifecycle helpers.
+>>
+>> The benchmark host treats lifecycle emission as part of the runtime
+>> contract, not optional debug noise. Keeping the file IO in one module
+>> makes the contract easy to audit and easy to test with stub flows.
+
+>> Lifecycle files carry plain diagnostic JSON. They are not proof-
+>> bearing values, so compact JSON serialization through JS is fine here.
+exe @serializeLifecycleJson(input) = js {
+  return JSON.stringify(input);
+}
+
+exe @appendPhaseEvent(phaseLogFile, eventJson) = sh {
+  if [ -n "$phaseLogFile" ] && [ -n "$eventJson" ]; then
+    printf '%s\n' "$eventJson" >> "$phaseLogFile"
+  fi
+}
+
+exe @writePhaseStateFile(phaseStateFile, stateJson) = sh {
+  if [ -n "$phaseStateFile" ]; then
+    printf '%s' "$stateJson" > "$phaseStateFile"
+  fi
+}
+
+>> LLM call logging uses the same NDJSON file discipline as phase events:
+>> append-only lines written by rig, consumed later by the benchmark host.
+>> These logs are debug-only and never participate in authorization.
+exe @appendLlmCall(llmCallLogFile, entryJson) = sh {
+  if [ -n "$llmCallLogFile" ] && [ -n "$entryJson" ]; then
+    printf '%s\n' "$entryJson" >> "$llmCallLogFile"
+  fi
+}
+
+exe @betweenState() = [
+  => { phase: "between" }
+]
+
+exe @resetLifecycleFiles(phaseLogFile, phaseStateFile) = [
+  let @between = @serializeLifecycleJson(@betweenState())
+  @truncatePhaseLog(@phaseLogFile)
+  @writePhaseStateFile(@phaseStateFile, @between)
+  => true
+]
+
+exe @truncateLlmCallLog(llmCallLogFile) = sh {
+  if [ -n "$llmCallLogFile" ]; then
+    : > "$llmCallLogFile"
+  fi
+}
+
+exe @truncatePhaseLog(phaseLogFile) = sh {
+  if [ -n "$phaseLogFile" ]; then
+    : > "$phaseLogFile"
+  fi
+}
+
+exe @plannerIterationEvent(iteration, phase, plannerSessionId) = [
+  => {
+    event: "planner_iteration",
+    iteration: @iteration,
+    decision_phase: @phase,
+    planner_session_id: @plannerSessionId
+  }
+]
+
+exe @phaseStartEvent(iteration, phase, phaseId, plannerSessionId) = [
+  => {
+    event: "phase_start",
+    iteration: @iteration,
+    worker: @phase,
+    phase: @phase,
+    phase_id: @phaseId,
+    planner_session_id: @plannerSessionId
+  }
+]
+
+exe @phaseEndEvent(iteration, phase, phaseId, workerSessionId, outcome, summary) = [
+  => {
+    event: "phase_end",
+    iteration: @iteration,
+    worker: @phase,
+    phase: @phase,
+    phase_id: @phaseId,
+    worker_session_id: @workerSessionId,
+    outcome: @outcome,
+    summary: @summary
+  }
+]
+
+exe @phaseState(phase, phaseId, iteration, plannerSessionId, workerSessionId) = [
+  => {
+    phase: @phase,
+    phase_id: @phaseId,
+    iteration: @iteration,
+    planner_session_id: @plannerSessionId,
+    worker_session_id: @workerSessionId
+  }
+]
+
+export {
+  @serializeLifecycleJson,
+  @appendPhaseEvent,
+  @appendLlmCall,
+  @writePhaseStateFile,
+  @truncatePhaseLog,
+  @truncateLlmCallLog,
+  @betweenState,
+  @resetLifecycleFiles,
+  @plannerIterationEvent,
+  @phaseStartEvent,
+  @phaseEndEvent,
+  @phaseState
+}

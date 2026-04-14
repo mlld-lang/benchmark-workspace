@@ -1,0 +1,55 @@
+>> Workspace adapter regression tests.
+>>
+>> These stay intentionally small and local: they pin the boundary
+>> helpers that translate planner-facing literals into AgentDojo's
+>> stricter runtime shapes, without requiring a live MCP server.
+
+import { @isoDate, @asString } from "../domains/workspace/bridge.mld"
+
+exe @status(ok) = when [
+  @ok => "PASS"
+  * => "FAIL"
+]
+
+exe @check(id, ok, detail) = [
+  => {
+    id: @id,
+    status: @status(@ok),
+    detail: @detail
+  }
+]
+
+var @normalizedNaturalDate = @isoDate("April 18th, 2026")
+var @normalizedIsoDate = @isoDate("2026-04-18")
+var @normalizedNumericId = @asString(33)
+
+var @checks = [
+  @check(
+    "workspace-iso-date-natural-language",
+    @normalizedNaturalDate == "2026-04-18",
+    `got=@normalizedNaturalDate`
+  ),
+  @check(
+    "workspace-iso-date-pass-through",
+    @normalizedIsoDate == "2026-04-18",
+    `got=@normalizedIsoDate`
+  ),
+  @check(
+    "workspace-id-stringification",
+    @normalizedNumericId == "33",
+    `got=@normalizedNumericId`
+  )
+]
+
+var @passes = for @check in @checks when @check.status == "PASS" => @check
+var @fails = for @check in @checks when @check.status == "FAIL" => @check
+
+show "Workspace adapter regressions"
+show ""
+for @check in @checks => show `[@check.status] @check.id  @check.detail`
+show ""
+show `summary: @passes.length pass / @fails.length fail`
+
+if @fails.length > 0 [
+  run sh { exit 1 }
+]

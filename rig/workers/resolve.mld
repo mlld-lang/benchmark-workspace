@@ -1,0 +1,94 @@
+import { @recordTypeName, @toolRuntimeMessage, @toolFailureDetail, @toolCallError } from "../runtime.mld"
+import {
+  @callTool,
+  @normalizeResolvedValues,
+  @updateResolvedState,
+  @appendExecutionLog
+} from "../runtime.mld"
+import { @resolveAttestation } from "../records.mld"
+import { @compileToolArgs } from "../intent.mld"
+import { @phaseToolEntry } from "../tooling.mld"
+
+exe @resolvePrompt(query, decision, toolDocs, stateSummary) = template "../prompts/resolve.att"
+
+exe @coerceResolveAttestation(raw) = [
+  if @raw == null [ => null ]
+  let @parsed = @raw | @parse.llm
+  => @parsed
+] => record @resolveAttestation
+
+exe @resolveDebug(agent, marker) = [
+  if !(@agent.logLlmCalls ?? false) [ => null ]
+  run sh {
+    printf '%s\n' "$marker" >> /tmp/resolve-dispatch-debug.log
+  }
+  => null
+]
+
+>> Resolve dispatch is mechanical: validate the planner's control refs
+>> through the shared intent compiler, call the read tool, normalize
+>> returned records into rig state, then append the execution log entry.
+exe @dispatchResolve(agent, state, decision, query) = [
+  @resolveDebug(@agent, "dispatchResolve:start")
+  let @tool = @phaseToolEntry(@agent, "resolve", @decision.tool)
+  if !@tool [ => { error: "unknown_resolve_tool", summary: @decision.tool } ]
+  @resolveDebug(@agent, "dispatchResolve:tool")
+  let @argsCheck = @compileToolArgs(@state, @tool, @decision.args ?? {}, @query)
+  if !@argsCheck.ok [ => { error: "tool_arg_validation_failed", summary: @argsCheck.issues | @pretty } ]
+  @resolveDebug(@agent, "dispatchResolve:args")
+  >> Dispatch through the routed entry so runtime metadata such as
+  >> `expose` and `optional` survives. `@callTool` still resolves the
+  >> concrete executable from the runtime bridge when needed.
+  @resolveDebug(@agent, "dispatchResolve:beforeCallTool")
+  let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, @argsCheck.args, @agent.runtimeTools ?? null)
+  @resolveDebug(@agent, "dispatchResolve:afterCallTool")
+  let @toolError = @toolCallError(@raw)
+  >> Helper-return locals can be defined while still holding `null`.
+  >> Check explicitly against null here so successful tool payloads do
+  >> not fall into the runtime-error branch.
+  if @toolError != null [
+    let @detail = @toolFailureDetail(@toolError)
+    => {
+      error: "tool_runtime_error",
+      summary: @detail ?? "tool_runtime_error",
+      raw_error: @detail ?? null
+    }
+  ]
+  let @toolMessage = @toolRuntimeMessage(@decision.tool, @raw)
+  if @toolMessage != null [
+    let @detail = @toolFailureDetail(@raw)
+    => {
+      error: "tool_runtime_error",
+      summary: @toolMessage,
+      raw_error: @detail ?? @toolMessage
+    }
+  ]
+  let @recordDef = @tool.returns
+  let @recordType = @recordTypeName(@recordDef)
+  let @entries = @normalizeResolvedValues(@recordType, @recordDef, @raw)
+  let @handles = for @entry in @entries => @entry.handle
+  let @summary = `resolved @entries.length @recordType record(s)`
+  let @nextState = @appendExecutionLog(
+    @updateResolvedState(@state, @recordType, @entries),
+    {
+      phase: "resolve",
+      tool: @decision.tool,
+      handles: @handles,
+      summary: @summary,
+      session_id: null
+    }
+  )
+  => {
+    state: @nextState,
+    result: {
+      status: "resolved",
+      record_type: @recordType,
+      count: @entries.length,
+      handles: @handles,
+      summary: @summary
+    },
+    session_id: null
+  }
+]
+
+export { @resolvePrompt, @coerceResolveAttestation, @dispatchResolve }

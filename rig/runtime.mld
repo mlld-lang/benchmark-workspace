@@ -1,0 +1,887 @@
+import { @claude } from "@mlld/claude"
+import { @opencode } from "@mlld/opencode"
+
+import {
+  @mxEntry,
+  @pairsToObject,
+  @toolParamNames,
+  @toolOptionalArgs,
+  @phaseToolNames
+} from "./tooling.mld"
+import { @resolveRefValue } from "./intent.mld"
+
+>> Shared runtime helpers for the rig loop and per-phase workers.
+>> These helpers stay on native mlld values so resolved factsources and
+>> record wrappers survive across phase boundaries.
+
+exe llm @llmCall(harness, prompt, config) = when [
+  @harness == "stub" => @stubLlmResponse(@config)
+  @harness == "opencode" => @opencode(@prompt, @config)
+  * => @claude(@prompt, @config)
+]
+
+exe @defaultHarness(model) = when [
+  @model == "stub" => "stub"
+  @model.startsWith("openrouter/") => "opencode"
+  * => "claude"
+]
+
+>> Stub responses are already suite-authored plain data. Serialize one
+>> selected fixture exactly once so flow tests exercise the real loop.
+exe @stubLlmResponse(config) = js {
+  const responses = config?.stubResponses || [];
+  const index = Number.isInteger(config?.stubIndex) ? config.stubIndex : 0;
+  const picked = responses[index] ?? responses[responses.length - 1] ?? {};
+  return JSON.stringify(picked);
+}
+
+>> Provider SDK responses can surface session ids through several nested
+>> metadata paths. Keep this extractor deliberately non-recursive in
+>> mlld terms so provider-specific object graphs cannot trip the
+>> interpreter's recursion guard before the agent does any work.
+exe @normalizeSessionId(inputValue) = js {
+  function normalized(value) {
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    if (trimmed === "" || trimmed === "undefined" || trimmed === "null") return null;
+    return trimmed;
+  }
+
+  function pick(value, seen = new Set()) {
+    const direct = normalized(value);
+    if (direct) return direct;
+    if (value == null || typeof value !== "object") return null;
+    if (seen.has(value)) return null;
+    seen.add(value);
+
+    return (
+      pick(value.session_id, seen) ||
+      pick(value.sessionId, seen) ||
+      pick(value.mx?.sessionId, seen) ||
+      pick(value._mlld?.sessionId, seen) ||
+      pick(value._mlld?.resume?.sessionId, seen) ||
+      pick(value.resume?.sessionId, seen)
+    );
+  }
+
+  return pick(inputValue);
+}
+
+exe @llmSessionId(raw) = [
+  >> Raw model text is often just a string completion. Only look through
+  >> explicit session-id carrier fields here; otherwise planner retries
+  >> can accidentally try to resume from the prior JSON output.
+  => when [
+    !@raw.isDefined() => null
+    @raw.session_id.isDefined() => @normalizeSessionId(@raw.session_id)
+    @raw.sessionId.isDefined() => @normalizeSessionId(@raw.sessionId)
+    @raw.mx.sessionId.isDefined() => @normalizeSessionId(@raw.mx.sessionId)
+    @raw._mlld.sessionId.isDefined() => @normalizeSessionId(@raw._mlld.sessionId)
+    @raw._mlld.resume.sessionId.isDefined() => @normalizeSessionId(@raw._mlld.resume.sessionId)
+    @raw.resume.sessionId.isDefined() => @normalizeSessionId(@raw.resume.sessionId)
+    * => null
+  ]
+]
+
+exe @normalizePositiveInt(inputValue, fallbackValue) = js {
+  const candidate = Number(inputValue);
+  if (Number.isInteger(candidate) && candidate > 0) return candidate;
+  const fallback = Number(fallbackValue);
+  if (Number.isInteger(fallback) && fallback > 0) return fallback;
+  return 1;
+}
+
+>> Diagnostic logs are intentionally plain JSON. They never participate
+>> in authorization, so a JSON round-trip keeps the surface stable.
+exe @sanitizeJson(inputValue) = js {
+  return JSON.parse(JSON.stringify(inputValue ?? null));
+}
+
+exe @llmCallEntry(phase, prompt, raw, parsed, sessionId, extra) = [
+  => {
+    phase: @phase,
+    prompt: @prompt,
+    raw: @sanitizeJson(@raw),
+    parsed: @sanitizeJson(@parsed),
+    session_id: @normalizeSessionId(@sessionId),
+    extra: @extra ?? {}
+  }
+]
+
+exe @structuredData(inputValue) = when [
+  @inputValue.mx.data.isDefined() => @inputValue.mx.data
+  @inputValue.data.isDefined() => @inputValue.data
+  * => @inputValue
+]
+
+exe @arrayItems(values) = when [
+  @values.mx.data.items.isDefined() => @values.mx.data.items
+  @values.mx.data.length.isDefined() => @values.mx.data
+  @values.data.items.isDefined() => @values.data.items
+  @values.data.length.isDefined() => @values.data
+  @values.items.isDefined() => @values.items
+  @typeof(@values) == "array" => @values
+  @typeof(@values) == "object" && @values.length.isDefined() && @values.join.isDefined() => @values.slice(0)
+  * => []
+]
+
+exe @plainObjectKeys(inputValue) = [
+  let @target = @structuredData(@inputValue)
+  let @mxKeys = for @entry in (@target.mx.entries ?? []) => @entry[0]
+  => when [
+    @mxKeys.length > 0 => @mxKeys
+    @typeof(@target) == "object" => for @entryKey, @entryValue in @target => @entryKey
+    * => []
+  ]
+]
+
+exe @replaceObjectField(objectValue, key, replacementValue) = [
+  let @target = @structuredData(@objectValue)
+  let @pairs = for @entryKey, @entryValue in @target when @entryKey != @key => {
+    key: @entryKey,
+    value: @entryValue
+  }
+  => @pairsToObject(@pairs.concat([{ key: @key, value: @replacementValue }]))
+]
+
+exe @recordMeta(recordDef, key) = [
+  => @mxEntry(@recordDef.mx.entries, @key)
+]
+
+exe @recordTypeName(recordDef) = [
+  => @recordMeta(@recordDef, "name")
+]
+
+exe @recordKeyField(recordDef) = [
+  => @recordMeta(@recordDef, "key")
+]
+
+exe @recordFieldDefs(recordDef) = [
+  => @recordMeta(@recordDef, "fields") ?? []
+]
+
+exe @recordFieldNames(recordDef) = [
+  => for @field in @recordFieldDefs(@recordDef) => @field.name
+]
+
+exe @recordIdentityField(recordDef) = [
+  let @keyField = @recordKeyField(@recordDef)
+  >> Records without an explicit `key:` still return a null-ish slot from
+  >> the metadata lookup. Treat only a real non-empty string as an explicit
+  >> key so fact-field fallback works for records like `@contact`.
+  if @typeof(@keyField) == "string" && @keyField != "" [ => @keyField ]
+  let @factFields = for @field in @recordFieldDefs(@recordDef) when @field.classification == "fact" => @field.name
+  => when [
+    @factFields.length > 0 => @factFields[0]
+    * => null
+  ]
+]
+
+exe @nativeRecordFieldValue(recordValue, fieldName) = [
+  let @fieldKey = `@fieldName`
+  => when [
+    @recordValue.mx.data[@fieldKey].isDefined() => @recordValue.mx.data[@fieldKey]
+    @recordValue.data[@fieldKey].isDefined() => @recordValue.data[@fieldKey]
+    @recordValue[@fieldKey].isDefined() => @recordValue[@fieldKey]
+    * => null
+  ]
+]
+
+exe @stateKeyValue(fieldName, fieldValue, index) = when [
+  !@fieldName.isDefined() => @index
+  (@fieldName == "id" || @fieldName == "id_" || @fieldName.endsWith("_id")) && (@typeof(@fieldValue) == "number" || @typeof(@fieldValue) == "boolean") => `@fieldValue`
+  @fieldValue.isDefined() => @fieldValue
+  * => @index
+]
+
+exe @stateHandle(recordType, keyValue, index) = [
+  let @keyPart = when [
+    @keyValue.isDefined() && `@keyValue` != "" => `@keyValue`
+    * => `@index`
+  ]
+  => `r_@recordType\_@keyPart`
+]
+
+exe @normalizeResolvedValues(recordType, recordDef, rawValue) = [
+  let @items = when [
+    @typeof(@rawValue) == "array" => @rawValue
+    @rawValue.isDefined() => [@rawValue]
+    * => []
+  ]
+  let @identityField = @recordIdentityField(@recordDef)
+  let @fieldNames = @recordFieldNames(@recordDef)
+  => for @value in @items [
+    let @index = @mx.for.index
+    let @identityValue = when [
+      @identityField.isDefined() => @nativeRecordFieldValue(@value, @identityField)
+      * => null
+    ]
+    let @fieldPairs = for @fieldName in @fieldNames => {
+      key: @fieldName,
+      value: @nativeRecordFieldValue(@value, @fieldName)
+    }
+    let @fieldValues = @pairsToObject(@fieldPairs)
+    let @entryKey = @stateKeyValue(@identityField, @identityValue, @index)
+    => {
+      handle: @stateHandle(@recordType, @entryKey, @index),
+      key: @entryKey,
+      value: @value,
+      identity_field: @identityField,
+      identity_value: @identityValue,
+      field_values: @fieldValues
+    }
+  ]
+]
+
+exe @extractToolResultValue(recordType, recordDef, rawValue) = [
+  let @entries = @normalizeResolvedValues(@recordType, @recordDef, @rawValue)
+  let @values = for @entry in @entries => @entry.value
+  => when [
+    @typeof(@rawValue) == "array" => @values
+    @values.length == 1 => @values[0]
+    * => @values
+  ]
+]
+
+exe @previewFields(inputValue) = when [
+  !@inputValue.isDefined() => []
+  @inputValue.data.isDefined() && @typeof(@inputValue.data) == "object" => @plainObjectKeys(@inputValue.data)
+  @typeof(@inputValue) == "object" => @plainObjectKeys(@inputValue)
+  * => []
+]
+
+exe @displayModeKeys(role) = [
+  let @plainRole = when [
+    @role == "role:planner" => "planner"
+    @role == "role:worker" => "worker"
+    * => @role
+  ]
+  => [@role, @plainRole]
+]
+
+exe @recordDisplayMode(recordDef, role) = [
+  let @display = @recordMeta(@recordDef, "display")
+  let @modeKeys = @displayModeKeys(@role)
+  => when [
+    !@display.isDefined() => []
+    @display.kind == "named" && @display.modes[@modeKeys[0]].isDefined() => @display.modes[@modeKeys[0]]
+    @display.kind == "named" && @display.modes[@modeKeys[1]].isDefined() => @display.modes[@modeKeys[1]]
+    @display.kind == "named" && @display.modes.default.isDefined() => @display.modes.default
+    @display.kind == "legacy" && @display.entries.isDefined() => @display.entries
+    @typeof(@display) == "array" => @display
+    * => []
+  ]
+]
+
+exe @displayEntry(modeEntry) = when [
+  @typeof(@modeEntry) == "string" => { kind: "field", field: @modeEntry }
+  @modeEntry.ref.isDefined() => { kind: "field", field: @modeEntry.ref }
+  @modeEntry.mask.isDefined() => { kind: "mask", field: @modeEntry.mask }
+  @modeEntry.handle.isDefined() => { kind: "handle", field: @modeEntry.handle }
+  @modeEntry.field.isDefined() => { kind: @modeEntry.kind ?? "field", field: @modeEntry.field }
+  * => null
+]
+
+exe @maskPreview(maskedValue) = [
+  if !@maskedValue.isDefined() [ => null ]
+  if @typeof(@maskedValue) == "array" [ => `[masked:@maskedValue.length]` ]
+  if @typeof(@maskedValue) == "string" [
+    => when [
+      @maskedValue.length <= 3 => "***"
+      * => `@maskedValue.slice(0, 2)***`
+    ]
+  ]
+  => "[masked]"
+]
+
+exe @projectResolvedFieldValue(entry, fieldName) = [
+  let @fieldKey = `@fieldName`
+  => when [
+    @entry.identity_field.isDefined() && @fieldKey == `@entry.identity_field` && @entry.identity_value.isDefined() => @entry.identity_value
+    @entry.value.mx.data[@fieldKey].isDefined() => @entry.value.mx.data[@fieldKey]
+    @entry.value.data[@fieldKey].isDefined() => @entry.value.data[@fieldKey]
+    @entry.field_values[@fieldKey].isDefined() => @entry.field_values[@fieldKey]
+    @entry.value[@fieldKey].isDefined() => @entry.value[@fieldKey]
+    * => null
+  ]
+]
+
+exe @projectResolvedEntry(recordType, recordDef, entry, role) = [
+  let @mode = @recordDisplayMode(@recordDef, @role)
+  let @pairs = for @modeEntry in @mode [
+    let @display = @displayEntry(@modeEntry)
+    if !@display [ => null ]
+    let @value = @projectResolvedFieldValue(@entry, @display.field)
+    if !@value.isDefined() [ => null ]
+    let @projectedValue = when [
+      @display.kind == "mask" => @maskPreview(@value)
+      @display.kind == "handle" => @entry.handle
+      * => @value
+    ]
+    => {
+      key: @display.field,
+      value: @projectedValue
+    }
+  ]
+  let @visible = for @pair in @pairs when @pair => @pair
+  let @visibleFields = @pairsToObject(@visible)
+  => {
+    handle: @entry.handle,
+    record: @recordType,
+    ...@visibleFields
+  }
+]
+
+exe @projectResolvedSummary(records, state, role) = [
+  let @resolved = @structuredData(@state.resolved)
+  let @pairs = for @recordType, @recordDef in @records [
+    let @entries = for @entry in @arrayItems(@resolved[@recordType]) => @projectResolvedEntry(@recordType, @recordDef, @entry, @role)
+    => {
+      key: @recordType,
+      value: @entries
+    }
+  ]
+  => @pairsToObject(@pairs)
+]
+
+>> Named extract/derive entries keep full native values in state for
+>> worker-side ref resolution. Planner summaries should use the schema's
+>> display projection when the named result is record-backed, and fall
+>> back to attestation-only when no safe display surface exists.
+exe @projectNamedRecordFields(recordDef, namedValue, role) = [
+  let @mode = @recordDisplayMode(@recordDef, @role)
+  let @pairs = for @modeEntry in @mode [
+    let @display = @displayEntry(@modeEntry)
+    if !@display [ => null ]
+    let @value = @nativeRecordFieldValue(@namedValue, @display.field)
+    if !@value.isDefined() [ => null ]
+    >> Named state does not mint its own handles. If a record uses the
+    >> `handle` projection form here, omit that field rather than
+    >> inventing a handle-like surrogate for planner-visible state.
+    let @projectedValue = when [
+      @display.kind == "mask" => @maskPreview(@value)
+      @display.kind == "handle" => null
+      * => @value
+    ]
+    if !@projectedValue.isDefined() [ => null ]
+    => {
+      key: @display.field,
+      value: @projectedValue
+    }
+  ]
+  let @visible = for @pair in @pairs when @pair => @pair
+  => @pairsToObject(@visible)
+]
+
+exe @projectNamedEntry(records, entry, role) = [
+  let @named = @structuredData(@entry)
+  let @recordDef = when [
+    @named.schema_name.isDefined() && @records[@named.schema_name].isDefined() => @records[@named.schema_name]
+    * => null
+  ]
+  let @fieldNames = @previewFields(@named.value)
+  let @projectedFields = when [
+    @recordDef => @projectNamedRecordFields(@recordDef, @named.value, @role)
+    * => {}
+  ]
+  >> Reserved attestation keys stay top-level. Any planner-visible
+  >> record-display fields live under `display` so suite-defined record
+  >> fields cannot collide with the framework envelope.
+  => when [
+    @role == "role:planner" && @plainObjectKeys(@projectedFields).length > 0 => {
+      provenance: @named.provenance,
+      schema_name: @named.schema_name ?? null,
+      fields: @fieldNames,
+      selection_refs: @named.selection_refs ?? [],
+      display: @projectedFields
+    }
+    @role == "role:planner" => {
+      provenance: @named.provenance,
+      schema_name: @named.schema_name ?? null,
+      fields: @fieldNames,
+      selection_refs: @named.selection_refs ?? []
+    }
+    * => {
+      provenance: @named.provenance,
+      schema_name: @named.schema_name ?? null,
+      preview_fields: @named.preview_fields ?? @previewFields(@named.value),
+      value: @named.value,
+      selection_refs: @named.selection_refs ?? []
+    }
+  ]
+]
+
+exe @projectNamedState(records, stateMap, role) = [
+  let @bucket = @structuredData(@stateMap)
+  let @pairs = for @name in @plainObjectKeys(@bucket) => {
+    key: @name,
+    value: @projectNamedEntry(@records, @bucket[@name], @role)
+  }
+  => @pairsToObject(@pairs)
+]
+
+exe @plannerStateSummary(agent, state) = [
+  => {
+    resolved: @projectResolvedSummary(@agent.records ?? {}, @state, "role:planner"),
+    extracted: @projectNamedState(@agent.records ?? {}, @state.extracted, "role:planner"),
+    derived: @projectNamedState(@agent.records ?? {}, @state.derived, "role:planner")
+  }
+]
+
+exe @workerStateSummary(agent, state) = [
+  => {
+    resolved: @projectResolvedSummary(@agent.records ?? {}, @state, "role:worker"),
+    extracted: @projectNamedState(@agent.records ?? {}, @state.extracted, "role:worker"),
+    derived: @projectNamedState(@agent.records ?? {}, @state.derived, "role:worker")
+  }
+]
+
+exe @rigState(resolved, extracted, derived, executionLog, plannerSessionId, phaseEvents) = [
+  => {
+    resolved: @resolved,
+    extracted: @extracted,
+    derived: @derived,
+    execution_log: @executionLog,
+    planner_session_id: @plannerSessionId,
+    phase_events: @phaseEvents
+  }
+]
+
+exe @emptyState() = [
+  => {
+    resolved: {},
+    extracted: {},
+    derived: {},
+    execution_log: [],
+    planner_session_id: null,
+    phase_events: []
+  }
+]
+
+exe @withPlannerSession(state, plannerSessionId) = [
+  let @nextPlannerSession = @normalizeSessionId(@plannerSessionId) ?? @normalizeSessionId(@state.planner_session_id)
+  => @rigState(
+    @structuredData(@state.resolved),
+    @structuredData(@state.extracted),
+    @structuredData(@state.derived),
+    @arrayItems(@state.execution_log),
+    @nextPlannerSession,
+    @arrayItems(@state.phase_events)
+  )
+]
+
+exe @mergeResolvedEntries(existingEntries, newEntries) = [
+  let @seed = @arrayItems(@existingEntries)
+  let @incoming = @arrayItems(@newEntries)
+  let @cursor = loop(1000) [
+    let @acc = when [
+      @input["_rig_cursor"] == "mergeResolvedEntries" => @input
+      * => { _rig_cursor: "mergeResolvedEntries", index: 0, entries: @seed }
+    ]
+    if @acc.index >= @incoming.length [ done @acc ]
+    let @entry = @incoming[@acc.index]
+    let @without = for @current in @acc.entries when @current.handle != @entry.handle => @current
+    continue {
+      _rig_cursor: "mergeResolvedEntries",
+      index: @acc.index + 1,
+      entries: @without.concat([@entry])
+    }
+  ]
+  => @cursor.entries
+]
+
+exe @updateResolvedState(state, recordName, entries) = [
+  let @resolved = @structuredData(@state.resolved)
+  let @nextResolved = @replaceObjectField(@resolved, @recordName, @mergeResolvedEntries(@resolved[@recordName], @entries))
+  => @rigState(
+    @nextResolved,
+    @structuredData(@state.extracted),
+    @structuredData(@state.derived),
+    @arrayItems(@state.execution_log),
+    @normalizeSessionId(@state.planner_session_id),
+    @arrayItems(@state.phase_events)
+  )
+]
+
+exe @updateNamedState(state, bucket, name, entry) = [
+  let @currentBucket = @structuredData(@state[@bucket])
+  let @nextBucket = @replaceObjectField(@currentBucket, @name, @entry)
+  => when [
+    @bucket == "extracted" => @rigState(
+      @structuredData(@state.resolved),
+      @nextBucket,
+      @structuredData(@state.derived),
+      @arrayItems(@state.execution_log),
+      @normalizeSessionId(@state.planner_session_id),
+      @arrayItems(@state.phase_events)
+    )
+    @bucket == "derived" => @rigState(
+      @structuredData(@state.resolved),
+      @structuredData(@state.extracted),
+      @nextBucket,
+      @arrayItems(@state.execution_log),
+      @normalizeSessionId(@state.planner_session_id),
+      @arrayItems(@state.phase_events)
+    )
+    * => @state
+  ]
+]
+
+exe @appendExecutionLog(state, entry) = [
+  let @plainEntry = @sanitizeJson(@entry)
+  => @rigState(
+    @structuredData(@state.resolved),
+    @structuredData(@state.extracted),
+    @structuredData(@state.derived),
+    @arrayItems(@state.execution_log).concat([@plainEntry]),
+    @normalizeSessionId(@state.planner_session_id),
+    @arrayItems(@state.phase_events)
+  )
+]
+
+exe @appendPhaseEvents(state, events) = [
+  let @plainEvents = for @event in @arrayItems(@events) => @sanitizeJson(@event)
+  => @rigState(
+    @structuredData(@state.resolved),
+    @structuredData(@state.extracted),
+    @structuredData(@state.derived),
+    @arrayItems(@state.execution_log),
+    @normalizeSessionId(@state.planner_session_id),
+    @arrayItems(@state.phase_events).concat(@plainEvents)
+  )
+]
+
+exe @isStructuredRef(inputValue) = when [
+  @typeof(@inputValue) == "object" && @inputValue.source.isDefined() => true
+  * => false
+]
+
+exe @nonComposeDecisionArgIssues(decision) = [
+  let @phase = @decision.phase ?? null
+  if !@phase.isDefined() || @phase == "compose" || @phase == "blocked" || @phase == "done" [ => [] ]
+  let @argIssues = for @argName, @argValue in (@decision.args ?? {}) [
+    => when [
+      @typeof(@argValue) == "array" => for @item in @argValue when !@isStructuredRef(@item) => { field: @argName, error: "non_compose_arg_requires_structured_ref" }
+      !@isStructuredRef(@argValue) => [{ field: @argName, error: "non_compose_arg_requires_structured_ref" }]
+      * => []
+    ]
+  ]
+  let @issues = loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "argIssues" => @input
+      * => { _rig_cursor: "argIssues", index: 0, values: [] }
+    ]
+    if @ctx.index >= @argIssues.length [ done @ctx.values ]
+    continue {
+      _rig_cursor: "argIssues",
+      index: @ctx.index + 1,
+      values: @ctx.values.concat(@argIssues[@ctx.index] ?? [])
+    }
+  ]
+  let @extractIssue = when [
+    @phase == "extract" && @decision.tool.isDefined() => []
+    @phase == "extract" && !@isStructuredRef(@decision.source) => [{ field: "source", error: "extract_source_requires_structured_ref" }]
+    * => []
+  ]
+  let @deriveIssue = when [
+    @phase == "derive" => for @source in (@decision.sources ?? []) when !@isStructuredRef(@source) => { field: "sources", error: "derive_sources_require_structured_refs" }
+    * => []
+  ]
+  => @issues.concat(@extractIssue).concat(@deriveIssue)
+]
+
+exe @resolveDispatchArgValue(state, argValue) = [
+  => when [
+    @typeof(@argValue) == "array" => [
+      let @items = for @item in @argValue => @resolveDispatchArgValue(@state, @item)
+      let @errors = for @entry in @items when !@entry.ok => @entry
+      if @errors.length > 0 [ => { ok: false, error: "resolve_arg_ref_failed", issues: @errors } ]
+      let @values = for @entry in @items => @entry.value
+      => { ok: true, value: @values }
+    ]
+    @isStructuredRef(@argValue) => @resolveRefValue(@state, @argValue)
+    * => { ok: true, value: @argValue }
+  ]
+]
+
+exe @resolveDispatchArgs(state, args) = [
+  let @results = for @argName, @argValue in (@args ?? {}) => {
+    key: @argName,
+    result: @resolveDispatchArgValue(@state, @argValue)
+  }
+  let @errors = for @entry in @results when !@entry.result.ok => {
+    arg: @entry.key,
+    error: @entry.result.error ?? "resolve_arg_ref_failed",
+    detail: @entry.result
+  }
+  if @errors.length > 0 [ => { ok: false, error: "resolve_arg_ref_failed", issues: @errors } ]
+  let @pairs = for @entry in @results => {
+    key: @entry.key,
+    value: @entry.result.value
+  }
+  => { ok: true, args: @pairsToObject(@pairs) }
+]
+
+exe @validateToolCallArgs(entry, args) = [
+  >> Comparison here is purely on metadata names. Cast the arg and param
+  >> labels to plain strings so `includes()` behaves consistently.
+  let @paramNames = for @paramName in @toolParamNames(@entry) => `@paramName`
+  let @optionalArgs = for @optionalArg in @toolOptionalArgs(@entry) => `@optionalArg`
+  if @paramNames.length == 0 [ => { ok: true } ]
+  if @paramNames.length == 1 && @typeof(@args) != "object" [ => { ok: true } ]
+  let @argKeys = for @argKey in @plainObjectKeys(@args) => `@argKey`
+  let @missing = for @paramName in @paramNames when !@argKeys.includes(@paramName) && !@optionalArgs.includes(@paramName) => @paramName
+  let @extra = for @argKey in @argKeys when !@paramNames.includes(@argKey) => @argKey
+  => when [
+    @missing.length == 0 && @extra.length == 0 => { ok: true }
+    * => {
+      ok: false,
+      error: "tool_arg_validation_failed",
+      summary: {
+        missing: @missing,
+        extra: @extra
+      }
+    }
+  ]
+]
+
+exe @lookupRuntimeTool(toolEntry, toolsCollection, toolName, runtimeTools) = [
+  let @runtimeOverride = when [
+    @runtimeTools.isDefined() && @runtimeTools[@toolName].isDefined() => @runtimeTools[@toolName]
+    * => null
+  ]
+  >> `@rig.build` already merges the planner catalog with runtime hints.
+  >> Keep that merged entry as the primary dispatch target when it has a
+  >> real executable. Raw `var tools` collection entries can expose the
+  >> tool name string as `.mlld`, which is useful metadata but not a
+  >> callable binding.
+  => when [
+    @typeof(@runtimeOverride) == "executable" => @runtimeOverride
+    @typeof(@runtimeOverride.mlld) == "executable" => @runtimeOverride
+    @typeof(@toolEntry) == "executable" => @toolEntry
+    @typeof(@toolEntry.mlld) == "executable" => @toolEntry
+    @runtimeOverride.isDefined() => @runtimeOverride
+    @toolsCollection.mx.entries.isDefined() && @mxEntry(@toolsCollection.mx.entries, @toolName).isDefined() => @mxEntry(@toolsCollection.mx.entries, @toolName)
+    @toolsCollection[@toolName].isDefined() => @toolsCollection[@toolName]
+    * => @toolEntry
+  ]
+]
+
+exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, policyValue, runtimeTools) = [
+  let @runtimeEntry = @lookupRuntimeTool(@toolEntry, @toolsCollection, @toolName, @runtimeTools)
+  let @entry = when [
+    @runtimeEntry.isDefined() => @runtimeEntry
+    * => @toolEntry
+  ]
+  >> Runtime dispatch can source its executable from one catalog entry
+  >> and its param docs from another. Keep metadata lookup separate from
+  >> executable lookup so argument validation still sees `expose` or
+  >> control-arg names even when the callable binding is bare.
+  let @entryParamNames = @toolParamNames(@entry)
+  let @toolEntryParamNames = @toolParamNames(@toolEntry)
+  let @metadataEntry = when [
+    @entryParamNames.length > 0 => @entry
+    @toolEntryParamNames.length > 0 => @toolEntry
+    * => @entry
+  ]
+  let @argCheck = @validateToolCallArgs(@metadataEntry, @args)
+  if !@argCheck.ok [ => { error: @argCheck.error, summary: @argCheck.summary, tool: @toolName } ]
+  let @preferDirect = (@entry.direct ?? false) == true || (@toolEntry.direct ?? false) == true
+  let @paramNames = @toolParamNames(@metadataEntry)
+  let @argKeys = when [
+    @typeof(@args) == "object" => @plainObjectKeys(@args)
+    * => []
+  ]
+  let @singleArgName = when [
+    @argKeys.length > 0 => @argKeys[0]
+    @paramNames.length > 0 => @paramNames[0]
+    * => null
+  ]
+  let @singleArg = when [
+    @typeof(@args) == "object" && @singleArgName.isDefined() => @args[@singleArgName]
+    * => @args
+  ]
+  >> Direct single-parameter reads expect a scalar positional argument.
+  >> Without a policy boundary, passing a structured text wrapper here
+  >> causes mlld to coerce it as an object. Bridge only this narrow case
+  >> to the underlying scalar value and leave execute-with-policy calls
+  >> on the original native objects.
+  let @exe = when [
+    @typeof(@entry) == "executable" => @entry
+    @typeof(@entry.mlld) == "executable" => @entry.mlld
+    * => null
+  ]
+  >> Policy-bearing dispatch must go through the tool collection proxy
+  >> so the runtime sees the named tool authorization surface rather
+  >> than a generic bare `exe`.
+  if @policyValue.isDefined() && @toolsCollection.mx.entries.isDefined() && @toolsCollection[@toolName].isDefined() [
+    => when [
+      @argKeys.length == 0 => @toolsCollection[@toolName]() with { policy: @policyValue }
+      @paramNames.length == 1 => @toolsCollection[@toolName](@singleArg) with { policy: @policyValue }
+      * => @toolsCollection[@toolName](@args) with { policy: @policyValue }
+    ]
+  ]
+  >> The benchmark agents intentionally build a local `var tools`
+  >> collection in the same file that runs the phase loop. That bridge is
+  >> the primary non-policy dispatch surface: it preserves same-file call
+  >> binding and native mlld coercion for imported tools. Bare executable
+  >> refs remain the fallback, and `direct: true` is the explicit escape
+  >> hatch for wrappers that must bypass the collection proxy.
+  if !@preferDirect && @toolsCollection.mx.entries.isDefined() && @toolsCollection[@toolName].isDefined() [
+    => when [
+      @argKeys.length == 0 => @toolsCollection[@toolName]()
+      @paramNames.length == 1 => @toolsCollection[@toolName](@singleArg)
+      * => @toolsCollection[@toolName](@args)
+    ]
+  ]
+  if @typeof(@exe) != "executable" [ => { error: "tool_missing_executable", tool: @toolName } ]
+  => when [
+    @policyValue.isDefined() && @paramNames.length == 0 => @exe() with { policy: @policyValue }
+    >> Direct executable calls keep the native mlld value for single-arg tools.
+    >> Do not unwrap through `.data` or `.text` here: those bridges lose the
+    >> runtime's own typed/coerced behavior and are exactly where wrapper bugs
+    >> creep in. The executable boundary is responsible for consuming the value.
+    @policyValue.isDefined() && @paramNames.length == 1 => @exe(@singleArg) with { policy: @policyValue }
+    @policyValue.isDefined() => @exe(@args) with { policy: @policyValue }
+    @paramNames.length == 0 => @exe()
+    @paramNames.length == 1 => @exe(@singleArg)
+    * => @exe(@args)
+  ]
+]
+
+exe @callTool(toolEntry, toolsCollection, toolName, args, runtimeTools) = [
+  => @callToolWithOptionalPolicy(@toolEntry, @toolsCollection, @toolName, @args, null, @runtimeTools)
+]
+
+exe @callToolWithPolicy(toolEntry, toolsCollection, toolName, args, policyValue, runtimeTools) = [
+  => @callToolWithOptionalPolicy(@toolEntry, @toolsCollection, @toolName, @args, @policyValue, @runtimeTools)
+]
+
+>> MCP-backed tools surface runtime failures as `ERROR: ...` strings. Turn
+>> those into short retry guidance so the planner can correct formatting
+>> mistakes instead of treating the text as successful data.
+exe @toolRuntimeMessage(toolName, raw) = when [
+  @typeof(@raw) == "string" && @raw.startsWith("ERROR:") && @raw.includes("does not match format '%Y-%m-%d'") => `@toolName date args must use YYYY-MM-DD (for example 2026-04-25) or be omitted. Original error: @raw.replace(\"ERROR: \", \"\").trim()`
+  @typeof(@raw) == "string" && @raw.startsWith("ERROR:") => @raw.replace("ERROR: ", "").trim()
+  * => null
+]
+
+>> Error logs need the underlying bridge failure, not just the rig-level
+>> classification. Collapse common raw error shapes into one readable
+>> string so failing flow tests show the actual boundary break.
+exe @toolFailureDetail(raw) = when [
+  !@raw.isDefined() => null
+  @typeof(@raw) == "string" => @raw
+  @raw["message"].isDefined() => `@raw["message"]`
+  @raw["summary"].isDefined() => `@raw["summary"]`
+  @raw["error"].isDefined() && @raw["error"] != true => `@raw["error"]`
+  * => @sanitizeJson(@raw) | @pretty
+]
+
+>> Runtime bridges sometimes return an object envelope with `error: false`
+>> on success. Treat only an explicit boolean `true` as a structured tool
+>> failure; checking mere field presence turns valid MCP payloads into
+>> false-positive phase errors.
+exe @toolCallError(raw) = when [
+  @typeof(@raw) == "object" && @raw["error"] == true => @raw
+  * => null
+]
+
+exe @correlatedControlArgsCheck(compiledEntries, controlArgs) = [
+  let @selected = for @entry in (@compiledEntries ?? []) when @controlArgs.includes(@entry.arg) => @entry
+  let @refs = loop(1000) [
+    let @cursor = when [
+      @input["_rig_cursor"] == "correlatedRefs" => @input
+      * => { _rig_cursor: "correlatedRefs", index: 0, values: [] }
+    ]
+    if @cursor.index >= @selected.length [ done @cursor.values ]
+    continue {
+      _rig_cursor: "correlatedRefs",
+      index: @cursor.index + 1,
+      values: @cursor.values.concat(@selected[@cursor.index].backing_refs ?? [])
+    }
+  ]
+  let @keys = for @ref in @refs when @ref.record.isDefined() && @ref.handle.isDefined() => `@ref.record:@ref.handle`
+  let @unique = loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "correlatedUniqueKeys" => @input
+      * => { _rig_cursor: "correlatedUniqueKeys", index: 0, values: [] }
+    ]
+    if @ctx.index >= @keys.length [ done @ctx.values ]
+    let @nextKey = @keys[@ctx.index]
+    continue when [
+      @ctx.values.includes(@nextKey) => { _rig_cursor: "correlatedUniqueKeys", index: @ctx.index + 1, values: @ctx.values }
+      * => { _rig_cursor: "correlatedUniqueKeys", index: @ctx.index + 1, values: @ctx.values.concat([@nextKey]) }
+    ]
+  ]
+  => when [
+    @unique.length <= 1 => { ok: true }
+    * => {
+      ok: false,
+      error: "correlate_control_args_cross_record_mixture",
+      refs: @refs
+    }
+  ]
+]
+
+exe @plannerHasAnyTools(agent) = [
+  let @names = @phaseToolNames(@agent, "resolve").concat(@phaseToolNames(@agent, "extract")).concat(@phaseToolNames(@agent, "execute"))
+  => @names.length > 0
+]
+
+export {
+  @llmCall,
+  @defaultHarness,
+  @stubLlmResponse,
+  @normalizeSessionId,
+  @llmSessionId,
+  @normalizePositiveInt,
+  @sanitizeJson,
+  @llmCallEntry,
+  @structuredData,
+  @arrayItems,
+  @plainObjectKeys,
+  @replaceObjectField,
+  @recordMeta,
+  @recordTypeName,
+  @recordKeyField,
+  @recordFieldDefs,
+  @recordFieldNames,
+  @recordIdentityField,
+  @nativeRecordFieldValue,
+  @stateHandle,
+  @normalizeResolvedValues,
+  @extractToolResultValue,
+  @previewFields,
+  @recordDisplayMode,
+  @displayEntry,
+  @maskPreview,
+  @projectResolvedFieldValue,
+  @projectResolvedEntry,
+  @projectResolvedSummary,
+  @projectNamedRecordFields,
+  @projectNamedEntry,
+  @projectNamedState,
+  @plannerStateSummary,
+  @workerStateSummary,
+  @rigState,
+  @emptyState,
+  @withPlannerSession,
+  @mergeResolvedEntries,
+  @updateResolvedState,
+  @updateNamedState,
+  @appendExecutionLog,
+  @appendPhaseEvents,
+  @isStructuredRef,
+  @nonComposeDecisionArgIssues,
+  @resolveDispatchArgValue,
+  @resolveDispatchArgs,
+  @validateToolCallArgs,
+  @callTool,
+  @callToolWithPolicy,
+  @toolRuntimeMessage,
+  @toolFailureDetail,
+  @toolCallError,
+  @correlatedControlArgsCheck,
+  @plannerHasAnyTools
+}

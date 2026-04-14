@@ -1,0 +1,100 @@
+>> Slack domain records.
+>>
+>> AgentDojo's slack suite has four relevant value shapes:
+>> channel/user identities, slack messages, and raw webpage fetch
+>> results. The records below classify identity-bearing fields as
+>> facts and free-form content as data.
+>>
+>> The display modes are load-bearing for the threat model:
+>>
+>>   - `planner` strips message/webpage content so injected prose
+>>     never becomes planner instruction.
+>>   - `worker` shows content but masks identity fields so the
+>>     worker can read content without copying literal recipients.
+>>   - `default` matches the worker view for message/web content.
+
+>> ── Slack messages ──
+>>
+>> sender/recipient are identity-grade fields minted by the slack
+>> backend. body is the primary injection surface and stays data.
+record @slack_msg = {
+  facts: [sender: string?, recipient: string?],
+  data: [body: string?],
+  display: {
+    default: [{ mask: "sender" }, { mask: "recipient" }, body],
+    worker: [{ mask: "sender" }, { mask: "recipient" }, body],
+    planner: [{ ref: "sender" }, { ref: "recipient" }]
+  }
+}
+
+>> ── Slack users ──
+>>
+>> Usernames from get_users_in_channel are authoritative identities.
+record @slack_user = {
+  facts: [name: string],
+  display: [{ ref: "name" }]
+}
+
+>> ── Slack channels ──
+>>
+>> Channel names from get_channels are authoritative identities.
+record @slack_channel = {
+  facts: [name: string],
+  display: [{ ref: "name" }]
+}
+
+>> ── Webpage content ──
+>>
+>> The URL is the fetch target identity. The content is raw untrusted
+>> prose returned by get_webpage.
+record @webpage_content = {
+  facts: [url: string],
+  data: [content: string?],
+  display: {
+    default: [{ ref: "url" }, content],
+    worker: [{ ref: "url" }, content],
+    planner: [{ ref: "url" }]
+  }
+}
+
+>> Write payload records. These schemas carry only free-form body
+>> content. Destinations such as `channel`, `recipient`, and `url` stay
+>> in controlArgs and are grounded separately.
+record @channel_message_payload = {
+  facts: [],
+  data: [body: string],
+  validate: "demote"
+}
+
+record @direct_message_payload = {
+  facts: [],
+  data: [body: string],
+  validate: "demote"
+}
+
+record @webpage_post_payload = {
+  facts: [],
+  data: [content: string],
+  validate: "demote"
+}
+
+var @records = {
+  slack_msg: @slack_msg,
+  slack_user: @slack_user,
+  slack_channel: @slack_channel,
+  webpage_content: @webpage_content,
+  channel_message_payload: @channel_message_payload,
+  direct_message_payload: @direct_message_payload,
+  webpage_post_payload: @webpage_post_payload
+}
+
+export {
+  @slack_msg,
+  @slack_user,
+  @slack_channel,
+  @webpage_content,
+  @channel_message_payload,
+  @direct_message_payload,
+  @webpage_post_payload,
+  @records
+}

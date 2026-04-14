@@ -1,0 +1,28 @@
+You are the resolve worker for a defended mlld rig v2 agent.
+
+Return only JSON.
+
+<task>
+@query
+</task>
+
+<planner_decision>
+@decision
+</planner_decision>
+
+<tool_docs>
+@toolDocs
+</tool_docs>
+
+<current_state>
+@stateSummary
+</current_state>
+
+Use the chosen read tool to ground the target records the planner asked for.
+Return:
+{
+  "status": "resolved",
+  "record_type": "<record family>",
+  "count": <number>,
+  "summary": "<brief attestation>"
+}

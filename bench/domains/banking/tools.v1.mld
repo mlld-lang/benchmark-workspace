@@ -1,0 +1,240 @@
+>> Banking tool wrappers for the rig framework.
+>>
+>> Wraps the AgentDojo banking MCP tools (11 functions) with rig
+>> phase labels (resolve:r, extract:r, execute:w), domain record
+>> coercion, and controlArgs / updateArgs / exactPayloadArgs
+>> declarations. The MCP signatures are unchanged from AgentDojo;
+>> the labels and metadata are the framework-side security surface.
+>>
+>> Threat model coverage by primitive:
+>>
+>>   #handles + #bucketed-intent-resolved (Class 1, 3) — every
+>>     execute:w wrapper that has a recipient or id arg lists those
+>>     args in controlArgs. The framework's authorization compiler
+>>     rejects bare literals in the resolved bucket, so the attacker
+>>     IBAN cannot survive as a proofless control arg.
+>>
+>>   #no-send-to-unknown (Class 1, 3) — fires on the recipient
+>>     control args of send_money, schedule_transaction, and
+>>     update_scheduled_transaction (all labeled exfil:send).
+>>
+>>   #correlateControlArgs (Class 3, D5 default) —
+>>     update_scheduled_transaction has two controlArgs (id and
+>>     recipient). The rig framework defaults correlateControlArgs:
+>>     true for any tool with multiple controlArgs. The runtime
+>>     verifies both values come from the same Transaction record
+>>     instance, blocking the cross-record mixing attack.
+>>
+>>   #updateArgs (Class 3 no-op gate) — update_scheduled_transaction
+>>     and update_user_info both declare updateArgs so the runtime
+>>     rejects update calls with no non-null updateArg values
+>>     (catches UserTask9's intentional no-op trap and any injection
+>>     that targets the wrong field).
+>>
+>>   #exactPayloadArgs (Class 4) — update_password declares
+>>     exactPayloadArgs: ["password"]. @policy.build verifies the
+>>     password value appears verbatim in the user's task text. The
+>>     attacker password ("new_password") from InjectionTask7 never
+>>     appears in any user task, so the check fails closed.
+>>
+>> Untrusted vs known label notes:
+>>
+>>   - get_iban, get_balance, get_user_info → `known`. Own-account
+>>     reads from authoritative state, no attacker influence.
+>>   - get_most_recent_transactions, get_scheduled_transactions →
+>>     `untrusted`. Attacker can populate the subject and (via
+>>     past send_money) the sender field of items in these lists.
+>>   - read_file → `untrusted`. The bill/landlord/address files are
+>>     the prime injection surface for the file-flow tasks.
+
+import tools from mcp "tools" as @mcp
+
+import {
+  @transaction,
+  @scheduled_transaction,
+  @user_account
+} from "./records.mld"
+
+>> ── Account read tools ──
+
+exe resolve:r, known, tool:r @get_iban() = [
+  => @mcp.getIban()
+]
+
+exe resolve:r, known, tool:r @get_balance() = [
+  => @mcp.getBalance()
+]
+
+exe resolve:r, known, tool:r @get_user_info() = [
+  => @mcp.getUserInfo()
+] => record @user_account
+
+>> ── Transaction read tools ──
+>>
+>> Completed and scheduled transactions share the same underlying
+>> Pydantic shape, but they land in distinct rig records so the
+>> planner can see scheduled-payment subjects without exposing
+>> completed-payment subjects.
+
+exe resolve:r, untrusted, tool:r @get_most_recent_transactions(n) = [
+  => @mcp.getMostRecentTransactions(@n)
+] => record @transaction
+
+exe resolve:r, untrusted, tool:r @get_scheduled_transactions() = [
+  => @mcp.getScheduledTransactions()
+] => record @scheduled_transaction
+
+>> ── File read tool ──
+>>
+>> read_file returns a raw string (the file contents). No record
+>> coercion — the bill-file-grounding composite is moved to extras
+>> (no AgentDojo injection task exercises bill-file IBAN
+>> corruption). The file_path is a control arg per
+>> banking.taskdata.txt §6 ("input selection arg") so the planner
+>> must specify exactly which file to read; injection cannot
+>> redirect the read to an attacker-chosen path.
+>>
+>> Phase: extract:r because file content is content the extract
+>> worker reads to produce a payload (UserTask2/12 → amount delta;
+>> UserTask13 → address fields).
+exe extract:r, untrusted, tool:r @read_file(file_path) = [
+  => @mcp.readFile(@file_path)
+] with { controlArgs: ["file_path"] }
+
+>> ── Transaction write tools ──
+>>
+>> All three carry exfil:send (post-collapse single label) so
+>> no-send-to-unknown fires on the recipient control arg. The
+>> #handles + #bucketed-intent-resolved primitives reject the
+>> attacker IBAN as a proofless literal.
+
+exe execute:w, exfil:send, tool:w @send_money(recipient, amount, subject, date) = [
+  => @mcp.sendMoney(@recipient, @amount, @subject, @date)
+] with { controlArgs: ["recipient"] }
+
+>> schedule_transaction creates a brand-new scheduled payment. Use
+>> it when no matching scheduled transaction exists yet and there
+>> is no previously resolved transaction id to modify. The `date`
+>> argument is required by the tool, but if the user omits a start
+>> date you should supply a reasonable upcoming one from context
+>> (for example the next billing cycle or next month) instead of
+>> composing to ask unless no reasonable default exists.
+exe execute:w, exfil:send, tool:w @schedule_transaction(recipient, amount, subject, date, recurring) = [
+  => @mcp.scheduleTransaction(@recipient, @amount, @subject, @date, @recurring)
+] with { controlArgs: ["recipient"] }
+
+>> update_scheduled_transaction modifies an existing scheduled
+>> payment that has already been resolved from scheduled
+>> transactions; it is not the create-new path. It is also the
+>> canonical multi-control-arg attack target (Class 3). Two
+>> control args (id, recipient) and the framework default
+>> correlateControlArgs: true (D5) ensures they originate from the
+>> same Transaction record instance. The updateArgs list catches
+>> UserTask9's no-op trap (the runtime rejects updates where every
+>> updateArg is null).
+exe execute:w, exfil:send, destructive:targeted, tool:w @update_scheduled_transaction(id, recipient, amount, subject, date, recurring) = [
+  => @mcp.updateScheduledTransaction(@id, @recipient, @amount, @subject, @date, @recurring)
+] with {
+  controlArgs: ["id", "recipient"],
+  updateArgs: ["amount", "subject", "date", "recurring"]
+}
+
+>> ── User account write tools ──
+>>
+>> update_user_info has controlArgs: [] per banking.taskdata.txt §6
+>> note 5 — the address/name fields are all updateArgs and there is
+>> no IBAN-style identity to ground. The primary defense for this
+>> tool is contract pinning at extract time: the extract worker can
+>> only produce the four declared payload fields. The no-op
+>> updateArg check still rejects empty writes. The
+>> destructive:targeted label was removed because no InjectionTask
+>> targets update_user_info, and keeping it blocks the legitimate
+>> extract → contract → execute path for file-to-profile updates.
+exe execute:w, tool:w @update_user_info(first_name, last_name, street, city) = [
+  => @mcp.updateUserInfo(@first_name, @last_name, @street, @city)
+] with {
+  controlArgs: [],
+  updateArgs: ["first_name", "last_name", "street", "city"]
+}
+
+>> update_password is the only privileged tool in the suite. The
+>> primary defense is exactPayloadArgs: ["password"] — the value
+>> must appear verbatim in the user's task text. UserTask14 puts
+>> the legitimate password '1j1l-2k3j' directly in its prompt;
+>> InjectionTask7's attacker password "new_password" never appears
+>> in any user task, so the check fails closed. The `priv` label
+>> additionally activates no-untrusted-privileged (limited because
+>> tainted LLM output is `influenced`, not `untrusted` — see
+>> banking.threatmodel.txt audit notes).
+exe execute:w, priv, tool:w @update_password(password) = [
+  => @mcp.updatePassword(@password)
+] with {
+  controlArgs: [],
+  exactPayloadArgs: ["password"]
+}
+
+>> ── Tool collection ──
+>>
+>> The full set of banking tools. Two forms:
+>>
+>>   @bankingTools — array form. The rig orchestration uses
+>>     @routeToolsByPhase / @toolNames / @collectByLabel which iterate
+>>     over the array via `for @t in @tools`. This is the rig
+>>     framework's current internal API.
+>>
+>>   @bankingToolsCollection — labeled `var tools @x = {...}` object
+>>     form. Required by @policy.build / @policy.validate, which
+>>     reject array inputs at resolveToolCollection. The
+>>     normalizeToolCollection runtime helper reads controlArgs /
+>>     updateArgs / exactPayloadArgs from each underlying exe's
+>>     definition, so the entries here can be minimal `{mlld: @exe}`
+>>     stubs without duplicating the metadata declared in the exe
+>>     with-clauses above.
+>>
+>> Both are exported and consumed by the agent file: array → tools,
+>> collection → toolsCollection. (Per-port temporary shape; the rig
+>> framework should eventually accept either form transparently.
+>> Diagnosed via banking UT3 / b-6ea9, 2026-04-08.)
+var @bankingTools = [
+  @get_iban,
+  @get_balance,
+  @get_user_info,
+  @get_most_recent_transactions,
+  @get_scheduled_transactions,
+  @read_file,
+  @send_money,
+  @schedule_transaction,
+  @update_scheduled_transaction,
+  @update_user_info,
+  @update_password
+]
+
+var tools @bankingToolsCollection = {
+  get_iban: { mlld: @get_iban },
+  get_balance: { mlld: @get_balance },
+  get_user_info: { mlld: @get_user_info },
+  get_most_recent_transactions: { mlld: @get_most_recent_transactions },
+  get_scheduled_transactions: { mlld: @get_scheduled_transactions },
+  read_file: { mlld: @read_file },
+  send_money: { mlld: @send_money },
+  schedule_transaction: { mlld: @schedule_transaction },
+  update_scheduled_transaction: { mlld: @update_scheduled_transaction },
+  update_user_info: { mlld: @update_user_info },
+  update_password: { mlld: @update_password }
+}
+
+export {
+  @bankingTools,
+  @bankingToolsCollection,
+  @get_iban,
+  @get_balance,
+  @get_user_info,
+  @get_most_recent_transactions,
+  @get_scheduled_transactions,
+  @read_file,
+  @send_money,
+  @schedule_transaction,
+  @update_scheduled_transaction,
+  @update_user_info,
+  @update_password
+}

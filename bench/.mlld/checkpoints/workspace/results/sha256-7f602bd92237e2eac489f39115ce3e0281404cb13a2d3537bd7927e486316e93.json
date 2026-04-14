@@ -1,0 +1,1 @@
+{"version":1,"value":"```json\n{\n  \"status\": \"derived\",\n  \"schema_name\": \"inline-schema\",\n  \"name\": \"lunch_slot\",\n  \"provenance\": \"derived\",\n  \"selection_refs\": [],\n  \"payload\": {\n    \"start_time\": \"2026-04-18 12:00\",\n    \"end_time\": \"2026-04-18 13:00\",\n    \"is_free\": true\n  }\n}\n```"}

@@ -1,0 +1,172 @@
+import {
+  @llmCall,
+  @llmCallEntry,
+  @llmSessionId,
+  @arrayItems,
+  @recordTypeName,
+  @resolveDispatchArgs,
+  @callTool,
+  @toolCallError,
+  @toolRuntimeMessage,
+  @extractToolResultValue,
+  @previewFields,
+  @updateNamedState,
+  @appendExecutionLog
+} from "../runtime.mld"
+import { @resolveRefValue } from "../intent.mld"
+import { @extractAttestation } from "../records.mld"
+import { @phaseToolEntry } from "../tooling.mld"
+
+exe @extractPrompt(query, sourceValue, schemaDoc, decision) = template "../prompts/extract.att"
+
+exe @coerceExtractEnvelope(parsed) = [
+  => @parsed
+] => record @extractAttestation
+
+exe @coerceExtractAttestation(raw) = [
+  if @raw == null [ => null ]
+  let @parsed = @raw | @parse.llm
+  let @coerced = @coerceExtractEnvelope(@parsed)
+  let @parsedPayloadType = @typeof(@parsed.payload)
+  let @result = when [
+    !@coerced => null
+    @parsed.payload.isDefined() && (@parsedPayloadType == "array" || @parsedPayloadType != "object") => {
+      status: @coerced.status,
+      schema_name: @coerced.schema_name,
+      name: @coerced.name,
+      provenance: @coerced.provenance,
+      preview_fields: @coerced.preview_fields,
+      payload: @parsed.payload
+    }
+    * => @coerced
+  ]
+  => @result
+]
+
+exe @schemaRecord(agent, schema) = when [
+  @typeof(@schema) == "string" && @agent.records[@schema].isDefined() => @agent.records[@schema]
+  * => null
+]
+
+>> Extract may not manufacture selection refs. The only valid producer
+>> is derive, which validates them against its input set.
+exe @containsSelectionRef(inputValue) = js {
+  function hasSelection(value) {
+    if (value == null) return false;
+    if (Array.isArray(value)) return value.some(hasSelection);
+    if (typeof value !== "object") return false;
+    if (value.source === "selection" && value.backing) return true;
+    return Object.values(value).some(hasSelection);
+  }
+
+  return hasSelection(inputValue);
+}
+
+exe @dispatchExtract(agent, state, decision, query) = [
+  if @decision.tool.isDefined() [
+    let @tool = @phaseToolEntry(@agent, "extract", @decision.tool)
+    if !@tool [ => { error: "unknown_extract_tool", summary: @decision.tool } ]
+    let @argsCheck = @resolveDispatchArgs(@state, @decision.args ?? {})
+    if !@argsCheck.ok [ => { error: @argsCheck.error, summary: @argsCheck.issues | @pretty } ]
+    >> Keep the routed entry intact so dispatch sees the runtime arg docs
+    >> instead of a planner-only catalog object that may have shed them.
+    let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, @argsCheck.args, @agent.runtimeTools ?? null)
+    let @toolError = @toolCallError(@raw)
+    >> `toolCallError()` returns null on success. Compare explicitly so a
+    >> defined local holding null does not trip the error path.
+    if @toolError != null [ => @toolError ]
+    let @toolMessage = @toolRuntimeMessage(@decision.tool, @raw)
+    if @toolMessage != null [ => { error: "tool_runtime_error", summary: @toolMessage } ]
+    let @recordDef = @tool.returns
+    let @recordType = @recordTypeName(@recordDef)
+    let @typed = @extractToolResultValue(@recordType, @recordDef, @raw)
+    let @summary = `fetched @decision.tool into @decision.name`
+    let @nextState = @appendExecutionLog(
+      @updateNamedState(@state, "extracted", @decision.name, {
+        provenance: "extracted",
+        schema_name: @recordType,
+        preview_fields: @previewFields(@typed),
+        value: @typed
+      }),
+      {
+        phase: "extract",
+        tool: @decision.tool,
+        name: @decision.name,
+        summary: @summary,
+        session_id: null
+      }
+    )
+    => {
+      state: @nextState,
+      result: {
+        status: "extracted",
+        schema_name: @recordType,
+        name: @decision.name,
+        provenance: "extracted",
+        preview_fields: @previewFields(@typed),
+        summary: @summary
+      },
+      session_id: null
+    }
+  ]
+
+  let @resolvedSource = @resolveRefValue(@state, @decision.source)
+  if !@resolvedSource.ok [ => { error: @resolvedSource.error, summary: @resolvedSource.error } ]
+  let @schemaDef = @schemaRecord(@agent, @decision.schema)
+  let @prompt = @extractPrompt(@query, @resolvedSource.value, @schemaDef ?? @decision.schema, @decision)
+  let @raw = @llmCall(@agent.harness, @prompt, {
+    model: @agent.model,
+    tools: [],
+    stubPhase: "extract",
+    stubResponses: @agent.stub.extract ?? [],
+    stubIndex: @arrayItems(@state.execution_log).length
+  })
+  let @attestation = @coerceExtractAttestation(@raw)
+  let @sessionId = @llmSessionId(@raw)
+  let @logEntry = @llmCallEntry("extract", @prompt, @raw, @attestation, @sessionId, {
+    name: @decision.name,
+    source: @decision.source
+  })
+  if !@attestation.isDefined() [ => { error: "extract_empty_response", summary: "extract_empty_response", session_id: @sessionId, llm_log: @logEntry } ]
+  if @containsSelectionRef(@attestation.payload) [
+    => { error: "extract_may_not_emit_selection_refs", summary: "extract_may_not_emit_selection_refs", session_id: @sessionId, llm_log: @logEntry }
+  ]
+  let @typed = when [
+    @schemaDef => @cast(@attestation.payload, @schemaDef)
+    * => @attestation.payload
+  ]
+  let @summary = @attestation.summary ?? `extracted @decision.name`
+  let @schemaName = when [
+    @typeof(@decision.schema) == "string" => @decision.schema
+    * => "inline-schema"
+  ]
+  let @nextState = @appendExecutionLog(
+    @updateNamedState(@state, "extracted", @decision.name, {
+      provenance: "extracted",
+      schema_name: @schemaName,
+      preview_fields: @previewFields(@typed),
+      value: @typed
+    }),
+    {
+      phase: "extract",
+      name: @decision.name,
+      summary: @summary,
+      session_id: @sessionId
+    }
+  )
+  => {
+    state: @nextState,
+    result: {
+      status: "extracted",
+      schema_name: @schemaName,
+      name: @decision.name,
+      provenance: "extracted",
+      preview_fields: @previewFields(@typed),
+      summary: @summary
+    },
+    session_id: @sessionId,
+    llm_log: @logEntry
+  }
+]
+
+export { @extractPrompt, @coerceExtractAttestation, @dispatchExtract }

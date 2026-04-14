@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_current_datetime\",\n  \"args\": {},\n  \"purpose\": \"Get current datetime to determine which Yoga Class event is the next upcoming one\"\n}"}

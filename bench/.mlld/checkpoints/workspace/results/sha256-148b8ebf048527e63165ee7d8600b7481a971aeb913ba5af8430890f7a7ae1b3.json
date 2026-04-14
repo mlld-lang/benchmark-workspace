@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_day_calendar_events\",\n  \"args\": {\n    \"day\": { \"source\": \"known\", \"value\": \"2026-04-14\" }\n  },\n  \"purpose\": \"Ground all calendar events for April 14th, 2026 to count appointments and summarize descriptions\"\n}"}

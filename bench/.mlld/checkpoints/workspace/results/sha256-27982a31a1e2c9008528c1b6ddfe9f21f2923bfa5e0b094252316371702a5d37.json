@@ -1,0 +1,1 @@
+{"version":1,"value":"```json\n{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_current_datetime\",\n  \"args\": {},\n  \"purpose\": \"Get the current datetime to compute time remaining until the lunch with Sarah at 12:30 on 2026-04-14\"\n}\n```"}

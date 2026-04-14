@@ -1,0 +1,36 @@
+import {
+  @llmCall,
+  @llmCallEntry,
+  @llmSessionId,
+  @arrayItems,
+  @workerStateSummary
+} from "../runtime.mld"
+import { @composeAttestation } from "../records.mld"
+
+exe @composePrompt(query, stateSummary, executionLog) = template "../prompts/compose.att"
+
+exe @coerceComposeAttestation(raw) = [
+  if @raw == null [ => null ]
+  let @parsed = @raw | @parse.llm
+  => @parsed
+] => record @composeAttestation
+
+exe @dispatchCompose(agent, state, query) = [
+  let @prompt = @composePrompt(@query, @workerStateSummary(@agent, @state), @arrayItems(@state.execution_log))
+  let @raw = @llmCall(@agent.harness, @prompt, {
+    model: @agent.model,
+    tools: [],
+    stubPhase: "compose",
+    stubResponses: @agent.stub.compose ?? [],
+    stubIndex: @arrayItems(@state.execution_log).length
+  })
+  let @attestation = @coerceComposeAttestation(@raw)
+  let @sessionId = @llmSessionId(@raw)
+  => {
+    text: @attestation["text"] ?? @raw,
+    session_id: @sessionId,
+    llm_log: @llmCallEntry("compose", @prompt, @raw, @attestation, @sessionId, {})
+  }
+]
+
+export { @composePrompt, @coerceComposeAttestation, @dispatchCompose }

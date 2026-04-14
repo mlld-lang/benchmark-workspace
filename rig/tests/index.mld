@@ -1,0 +1,1209 @@
+>> Rig v2 invariant tests.
+>>
+>> This is the fast zero-LLM regression guard the plan calls for. Each
+>> assertion names a concrete contract so failures point straight at the
+>> broken primitive instead of forcing a full benchmark run to localize
+>> the issue.
+
+import { @records, @tools, @toolsCollection, @sampleState, @sampleAgent, @get_contacts, @get_today, @note_entry } from "./fixtures.mld"
+import { @renderToolDocs, @toolLabels, @toolParamNames, @toolControlArgs, @phaseCatalog, @phaseToolEntry } from "../tooling.mld"
+import { @rigBuild } from "../index.mld"
+import {
+  @synthesizedPolicy,
+  @plannerStateSummary,
+  @workerStateSummary,
+  @nonComposeDecisionArgIssues,
+  @updateNamedState,
+  @appendExecutionLog,
+  @correlatedControlArgsCheck
+} from "../orchestration.mld"
+import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue } from "../intent.mld"
+import { @callTool, @toolCallError, @emptyState } from "../runtime.mld"
+import { @dispatchResolve } from "../workers/resolve.mld"
+import { @dispatchExecute } from "../workers/execute.mld"
+import { @coerceExtractAttestation } from "../workers/extract.mld"
+
+exe @status(ok) = when [
+  @ok => "PASS"
+  * => "FAIL"
+]
+
+exe @check(id, ok, detail) = [
+  => {
+    id: @id,
+    status: @status(@ok),
+    detail: @detail
+  }
+]
+
+exe @field(inputValue, key) = js {
+  return inputValue?.[key] ?? null;
+}
+
+>> Workspace contact records use unnamed display arrays such as
+>> `[name, { ref: "email" }]`. Keep one fixture inline here so the
+>> invariant suite exercises the exact shorthand that the live benchmark
+>> depends on.
+record @flat_display_contact = {
+  facts: [email: string],
+  data: [name: string, notes: string?],
+  display: [name, { ref: "email" }]
+}
+
+>> Benchmark suites use plain mode keys (`planner`, `worker`, `default`)
+>> rather than the test fixtures' `role:*` form. Keep one record with
+>> that spelling here so the planner summary cannot silently fall back
+>> to `default` and expose hidden content.
+record @plain_mode_message = {
+  facts: [id_: string, sender: string?],
+  data: [subject: string?, body: string?],
+  key: id_,
+  display: {
+    default: [{ ref: "id_" }, subject, body],
+    worker: [{ ref: "id_" }, subject, body],
+    planner: [{ ref: "id_" }, subject]
+  }
+}
+
+>> Named extract/derive results should use record display when their
+>> schema is a real record. This keeps the planner on a declared safe
+>> surface while workers still resolve full fields from state later.
+record @named_display_extract = {
+  facts: [id_: string],
+  data: [subject: string, body: string, note: string?],
+  key: id_,
+  display: {
+    planner: [{ ref: "id_" }, subject],
+    worker: [{ ref: "id_" }, subject, body, note]
+  }
+}
+
+record @thin_arrow_output = {
+  data: [leaked: string?, input: string?],
+  validate: "demote"
+}
+
+record @string_id_holder = {
+  facts: [id_: string]
+}
+
+>> Thin-arrow regression from the v1 smoke. If strict mode leaks the
+>> tool-slot value back into mlld, the serialized output contains the
+>> sentinel string and this check trips immediately.
+exe @thinArrowProbe(x) = [
+  -> { leaked: "tool-slot-value", input: @x }
+] => record @thin_arrow_output
+
+>> Runtime regression for single-parameter direct tool dispatch. Numeric-
+>> looking string ids must remain strings all the way into the executable
+>> boundary; otherwise benchmark tools like `get_email_by_id("33")` fail
+>> their parameter validation before the tool body even runs.
+exe resolve:r, tool:r @get_numeric_note(note_id: string) = [
+  => { id_: @note_id, title: "Todo", content: "Existing note body" }
+] => record @note_entry with { controlArgs: ["note_id"] }
+
+record @optional_participant_payload = {
+  data: [title: string, start_time: string, end_time: string]
+}
+
+>> Regression for optional control args on exfil-like writes. When the
+>> control surface is entirely optional and the planner omits it, execute
+>> must synthesize a flat allow internally instead of handing an empty
+>> policy fragment to the runtime and self-denying the write.
+exe execute:w, calendar:w, exfil:send, tool:w @schedule_meeting(title, start_time, end_time, participants: array) = [
+  => {
+    title: @title,
+    start_time: @start_time,
+    end_time: @end_time,
+    participants: @participants
+  }
+] with { controlArgs: ["participants"] }
+
+var tools @thinArrowToolCollection = {
+  thin_arrow_probe: { mlld: @thinArrowProbe }
+}
+
+var tools @numericDispatchToolCollection = {
+  get_numeric_note: {
+    mlld: @get_numeric_note,
+    labels: ["resolve:r"],
+    expose: ["note_id"],
+    controlArgs: ["note_id"]
+  }
+}
+
+var @optionalControlTools = {
+  schedule_meeting: {
+    kind: "write",
+    mlld: @schedule_meeting,
+    operation: {
+      controlArgs: ["participants"],
+      payloadArgs: ["title", "start_time", "end_time"],
+      payloadRecord: @optional_participant_payload,
+      risk: ["calendar:w", "exfil:send"],
+      authorizable: true
+    },
+    optional: ["participants"]
+  }
+}
+
+var tools @optionalControlToolCollection = {
+  schedule_meeting: {
+    mlld: @schedule_meeting,
+    expose: ["title", "start_time", "end_time", "participants"],
+    optional: ["participants"]
+  }
+}
+
+exe @serialize(v) = [ => @v | @pretty ]
+
+exe @collectionRoundtrip(toolCatalog, basePolicy) = [
+  let @built = @policy.build(
+    { allow: { create_note: true } },
+    @toolCatalog,
+    { task: "create a note", basePolicy: @basePolicy }
+  )
+  => @built.valid
+]
+
+>> Runtime primitive baseline — verifies @policy.build itself accepts a
+>> reasonable hand-constructed base policy before the rig synthesizer is
+>> even involved.
+var @manualBasePolicy = {
+  defaults: { rules: ["no-send-to-unknown"] },
+  operations: { "exfil:send": ["send_email"] },
+  labels: { influenced: { deny: ["exfil"] } },
+  authorizations: {
+    deny: [],
+    authorizable: { "role:planner": ["create_note", "send_email"] }
+  }
+}
+
+var @policyRuntime = @policy.build(
+  { allow: { create_note: true } },
+  @toolsCollection,
+  { task: "create a note named demo", basePolicy: @manualBasePolicy }
+)
+
+var @numericStringIdRecord = {
+  id_: "33"
+} as record @string_id_holder
+var @numericStringIdValue = @numericStringIdRecord.id_
+var @fixtureReadDispatchResult = @callTool(
+  @tools.get_contacts,
+  @toolsCollection,
+  "get_contacts",
+  {},
+  null
+)
+var @builtFixtureAgent = @rigBuild({
+  suite: "fixture-build",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @toolsCollection
+})
+var @builtFixtureReadDispatchResult = @callTool(
+  @builtFixtureAgent.tools.get_contacts,
+  @builtFixtureAgent.toolsCollection,
+  "get_contacts",
+  {},
+  null
+)
+>> Regression for the routed-catalog drift that left live workers with a
+>> phase catalog they could inspect but not actually dispatch through.
+>> The phase helpers must return native callable tool entries, not just
+>> doc-shaped copies.
+var @resolvePhaseCatalog = @phaseCatalog(@builtFixtureAgent, "resolve")
+var @phaseCatalogDispatchResult = @callTool(
+  @resolvePhaseCatalog.get_contacts,
+  @builtFixtureAgent.toolsCollection,
+  "get_contacts",
+  {},
+  null
+)
+var @phaseToolEntryValue = @phaseToolEntry(@builtFixtureAgent, "resolve", "get_contacts")
+var @phaseToolEntryDispatchResult = @callTool(
+  @phaseToolEntryValue,
+  @builtFixtureAgent.toolsCollection,
+  "get_contacts",
+  {},
+  null
+)
+>> Regression for the null-check bug in phase workers. Successful read
+>> payloads must stay on the success path when dispatched through the
+>> real resolve worker, not get reclassified as tool runtime errors.
+var @dispatchResolveResult = @dispatchResolve(
+  @builtFixtureAgent,
+  @emptyState(),
+  {
+    phase: "resolve",
+    tool: "get_contacts",
+    args: {},
+    purpose: "ground the contact list"
+  },
+  "Find Alice in my contacts."
+)
+>> Regression for arg-less resolve tools that return one keyed record.
+>> This mirrors workspace `get_current_day` without depending on MCP.
+var @dispatchScalarResolveResult = @dispatchResolve(
+  @builtFixtureAgent,
+  @emptyState(),
+  {
+    phase: "resolve",
+    tool: "get_today",
+    args: {},
+    purpose: "ground one synthetic day context"
+  },
+  "What day is it?"
+)
+var @numericDispatchResult = @callTool(
+  {
+    kind: "read",
+    mlld: @get_numeric_note,
+    returns: @note_entry,
+    labels: ["resolve:r"],
+    semantics: "Load one note by a numeric-looking string id."
+  },
+  @numericDispatchToolCollection,
+  "get_numeric_note",
+  { note_id: @numericStringIdValue },
+  null
+)
+var @optionalControlAgent = {
+  defense: "defended",
+  tools: @optionalControlTools,
+  toolsCollection: @optionalControlToolCollection,
+  basePolicy: @synthesizedPolicy(@optionalControlTools, null)
+}
+var @optionalControlExecuteResult = @dispatchExecute(
+  @optionalControlAgent,
+  @emptyState(),
+  {
+    phase: "execute",
+    operation: "schedule_meeting",
+    args: {
+      title: { source: "known", value: "Lunch" },
+      start_time: { source: "known", value: "2026-04-18 12:00" },
+      end_time: { source: "known", value: "2026-04-18 13:00" }
+    }
+  },
+  "Create a Lunch event from 2026-04-18 12:00 to 2026-04-18 13:00."
+)
+
+>> Synthesized policy coverage.
+var @syntheticPolicy = @synthesizedPolicy(@tools, null)
+var @plannerAuth = @syntheticPolicy.authorizations.authorizable["role:planner"] ?? []
+var @denyList = @syntheticPolicy.authorizations.deny ?? []
+var @defaultRules = @syntheticPolicy.defaults.rules ?? []
+
+>> Runtime metadata probes.
+var @renderedDocs = @renderToolDocs(@tools)
+var @sendDocs = for @entry in @renderedDocs when @field(@entry, "name") == "send_email" => @entry
+var @sendDoc = @sendDocs[0]
+>> Access runtime metadata through the catalog helpers here. Imported exe
+>> metadata on its own can pick up extra module-level taint, while the
+>> catalog entry preserves the tool-local surface the framework relies on.
+var @crossModuleLabels = @toolLabels(@tools.send_email)
+var @sendParams = @toolParamNames(@tools.send_email)
+var @sendControlArgs = @toolControlArgs(@tools.send_email)
+var @factValue = @get_contacts()[0].email
+
+>> Display projection coverage.
+var @plannerSummary = @plannerStateSummary(@sampleAgent, @sampleState) | @pretty
+var @workerSummary = @workerStateSummary(@sampleAgent, @sampleState) | @pretty
+
+>> Intent compiler / source-class coverage.
+var @selectionLowered = @lowerSelectionRef(@sampleState, {
+  source: "selection",
+  backing: { record: "contact", handle: "r_contact_alice.example" }
+})
+
+var @firewallAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [{ source: "derived", name: "top_contact", field: "body" }],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  },
+  "send hello"
+)
+
+>> Read-phase selectors are control args too. Reject derived/extracted
+>> refs here so the planner cannot launder untrusted content into a
+>> subsequent resolve tool call.
+var @resolveControlFirewallAttempt = @compileToolArgs(
+  @sampleState,
+  @tools.get_note,
+  {
+    note_id: { source: "derived", name: "top_contact", field: "body" }
+  },
+  "load note_1"
+)
+
+var @allowAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: { source: "allow" },
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  },
+  "send hello"
+)
+
+var @wrongSourceAttempt = @resolveRefValue(@sampleState, {
+  source: "resolved",
+  record: "summary",
+  handle: "summary_1",
+  field: "summary"
+})
+
+var @perElementAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [
+        { source: "resolved", record: "contact", handle: "r_contact_alice.example", field: "email" },
+        { source: "resolved", record: "contact", handle: "missing", field: "email" }
+      ],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  },
+  "send hello"
+)
+
+>> Keyed resolved records are allowed as fieldless selection refs in
+>> control-arg positions. The compiler should recover the record's
+>> declared identity field (`note_id` here) without forcing the planner
+>> to spell the field name back out.
+var @selectionKeyedAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "append_note",
+    args: {
+      note_id: {
+        source: "selection",
+        backing: {
+          record: "note_entry",
+          handle: "r_note_entry_note_1"
+        }
+      },
+      content: { source: "known", value: "append a status line" }
+    }
+  },
+  "append a status line"
+)
+
+>> Canonical planner args are a planner-loop contract, not just an
+>> execute-time policy concern. Catch raw scalar leakage here so the
+>> retry hint stays deterministic and benchmark runs do not depend on
+>> provider-specific leniency.
+var @rawScalarDecisionIssues = @nonComposeDecisionArgIssues({
+  phase: "extract",
+  tool: "get_message_body",
+  args: {
+    message_id: "msg_1"
+  }
+})
+var @structuredDecisionIssues = @nonComposeDecisionArgIssues({
+  phase: "extract",
+  tool: "get_message_body",
+  args: {
+    message_id: { source: "known", value: "msg_1" }
+  }
+})
+
+var @policyBuildRuntimeOk = @policyRuntime.valid == true
+var @policyBuildRuntimeDetail = `valid=@policyRuntime.valid`
+
+var @syntheticPolicyOk = @defaultRules.includes("no-send-to-unknown") &&
+  @defaultRules.includes("untrusted-llms-get-influenced") &&
+  @defaultRules.includes("no-novel-urls") &&
+  @plannerAuth.includes("send_email") &&
+  @denyList.includes("update_password")
+var @syntheticPolicyDetail = `rules=@defaultRules deny=@denyList planner=@plannerAuth`
+
+var @collectionRoundtripOk = @collectionRoundtrip(@toolsCollection, @manualBasePolicy) == true
+var @toolMetadataOk = @sendParams.length == 3 &&
+  @sendControlArgs.includes("recipients") &&
+  @crossModuleLabels.includes("execute:w")
+var @toolMetadataDetail = `params=@sendParams.length control=@sendControlArgs labels=@crossModuleLabels`
+
+var @factsourceOk = @factValue.mx.factsources.isDefined()
+var @factsourceDetail = `factsources=@factValue.mx.factsources`
+
+var @toolDocsOk = @field(@sendDoc, "controlArgs").includes("recipients") &&
+  @field(@sendDoc, "payloadArgs").includes("subject") &&
+  @field(@sendDoc, "semantics").includes("email")
+var @toolDocsDetail = @sendDoc | @pretty
+
+var @numericDispatchPretty = @numericDispatchResult | @pretty
+var @numericDispatchOk = @field(@numericDispatchResult, "id_") == "33"
+var @fixtureReadDispatchPretty = @fixtureReadDispatchResult | @pretty
+var @fixtureReadDispatchOk = @typeof(@fixtureReadDispatchResult) == "array" &&
+  @fixtureReadDispatchResult.length == 2
+var @builtFixtureReadDispatchPretty = @builtFixtureReadDispatchResult | @pretty
+var @builtFixtureReadDispatchOk = @typeof(@builtFixtureReadDispatchResult) == "array" &&
+  @builtFixtureReadDispatchResult.length == 2
+var @phaseCatalogDispatchPretty = @phaseCatalogDispatchResult | @pretty
+var @phaseCatalogDispatchOk = @typeof(@phaseCatalogDispatchResult) == "array" &&
+  @phaseCatalogDispatchResult.length == 2
+var @phaseToolEntryDispatchPretty = @phaseToolEntryDispatchResult | @pretty
+var @phaseToolEntryDispatchOk = @typeof(@phaseToolEntryDispatchResult) == "array" &&
+  @phaseToolEntryDispatchResult.length == 2
+var @dispatchResolvePretty = @dispatchResolveResult | @pretty
+var @dispatchResolveOk =
+  @dispatchResolveResult["error"] == null &&
+  @dispatchResolveResult.result.status == "resolved" &&
+  @dispatchResolveResult.result.count == 2
+var @dispatchScalarResolvePretty = @dispatchScalarResolveResult | @pretty
+var @dispatchScalarResolveOk =
+  @dispatchScalarResolveResult["error"] == null &&
+  @dispatchScalarResolveResult.result.status == "resolved" &&
+  @dispatchScalarResolveResult.result.count == 1 &&
+  @dispatchScalarResolveResult.result.record_type == "datetime_context"
+var @optionalControlExecutePretty = @optionalControlExecuteResult | @pretty
+var @optionalControlExecuteOk =
+  @optionalControlExecuteResult["error"] == null &&
+  @optionalControlExecuteResult.result.status == "sent" &&
+  @optionalControlExecuteResult.result.tool == "schedule_meeting"
+
+>> MCP and adapter bridges often include `error: false` in successful
+>> envelopes. The runtime must only short-circuit on `error: true`;
+>> otherwise valid tool payloads disappear before they ever reach state.
+var @toolEnvelopeSuccess = @toolCallError({
+  error: false,
+  text: "ok"
+})
+var @toolEnvelopeFailure = @toolCallError({
+  error: true,
+  summary: "boom"
+})
+var @toolEnvelopeOk = @toolEnvelopeSuccess == null &&
+  @field(@toolEnvelopeFailure, "summary") == "boom"
+var @toolEnvelopeDetail = `success=@toolEnvelopeSuccess failure=@toolEnvelopeFailure`
+
+var @thinArrowSerialized = @serialize(@thinArrowProbe("probe"))
+var @thinArrowOk = !@thinArrowSerialized.includes("tool-slot-value")
+
+var @displayProjectionOk = @plannerSummary.includes("Alice") &&
+  @plannerSummary.includes("alice.example") &&
+  !@plannerSummary.includes("planner-hidden note") &&
+  @workerSummary.includes("planner-hidden note")
+var @displayProjectionDetail = `planner=@plannerSummary worker=@workerSummary`
+
+var @flatDisplayRecord = {
+  email: "carol.example",
+  name: "Carol",
+  notes: "plain-display"
+} as record @flat_display_contact
+var @flatDisplaySummary = @plannerStateSummary(
+  {
+    suite: "fixtures",
+    records: { flat_display_contact: @flat_display_contact }
+  },
+  {
+    resolved: {
+      flat_display_contact: [{
+        handle: "r_flat_display_contact_carol.example",
+        key: "carol.example",
+        value: @flatDisplayRecord,
+        field_values: {
+          email: @flatDisplayRecord.email,
+          name: @flatDisplayRecord.name,
+          notes: @flatDisplayRecord.notes
+        }
+      }]
+    },
+    extracted: {},
+    derived: {},
+    execution_log: [],
+    planner_session_id: null,
+    phase_events: []
+  }
+) | @pretty
+var @flatDisplayOk = @flatDisplaySummary.includes("Carol") &&
+  @flatDisplaySummary.includes("carol.example")
+
+var @plainModeRecord = {
+  id_: "msg_1",
+  sender: "david.example",
+  subject: "Project kickoff agenda",
+  body: "planner-must-not-see-this"
+} as record @plain_mode_message
+var @plainModePlannerSummary = @plannerStateSummary(
+  {
+    suite: "fixtures",
+    records: { plain_mode_message: @plain_mode_message }
+  },
+  {
+    resolved: {
+      plain_mode_message: [{
+        handle: "r_plain_mode_message_msg_1",
+        key: "msg_1",
+        value: @plainModeRecord,
+        field_values: {
+          id_: @plainModeRecord.id_,
+          sender: @plainModeRecord.sender,
+          subject: @plainModeRecord.subject,
+          body: @plainModeRecord.body
+        }
+      }]
+    },
+    extracted: {},
+    derived: {},
+    execution_log: [],
+    planner_session_id: null,
+    phase_events: []
+  }
+) | @pretty
+var @plainModeWorkerSummary = @workerStateSummary(
+  {
+    suite: "fixtures",
+    records: { plain_mode_message: @plain_mode_message }
+  },
+  {
+    resolved: {
+      plain_mode_message: [{
+        handle: "r_plain_mode_message_msg_1",
+        key: "msg_1",
+        value: @plainModeRecord,
+        field_values: {
+          id_: @plainModeRecord.id_,
+          sender: @plainModeRecord.sender,
+          subject: @plainModeRecord.subject,
+          body: @plainModeRecord.body
+        }
+      }]
+    },
+    extracted: {},
+    derived: {},
+    execution_log: [],
+    planner_session_id: null,
+    phase_events: []
+  }
+) | @pretty
+var @plainModeOk = @plainModePlannerSummary.includes("Project kickoff agenda") &&
+  !@plainModePlannerSummary.includes("planner-must-not-see-this") &&
+  @plainModeWorkerSummary.includes("planner-must-not-see-this")
+
+>> Checkpoint restore can materialize resolved entries as plain objects
+>> that keep both the synthetic numeric `key` and the original fact value
+>> under `identity_value` / `value.data`. Planner summaries must keep
+>> showing the fact-bearing string id, otherwise the planner emits raw
+>> numeric args instead of structured resolved refs for follow-up tools.
+var @checkpointRestoredState = {
+  resolved: {
+    plain_mode_message: [{
+      handle: "r_plain_mode_message_msg_1",
+      key: 1,
+      value: {
+        id_: 1,
+        sender: "david.example",
+        subject: "Project kickoff agenda",
+        body: "planner-must-not-see-this",
+        data: {
+          id_: "msg_1",
+          sender: "david.example",
+          subject: "Project kickoff agenda",
+          body: "planner-must-not-see-this"
+        }
+      },
+      identity_field: "id_",
+      identity_value: "msg_1",
+      field_values: {
+        id_: 1,
+        sender: "david.example",
+        subject: "Project kickoff agenda",
+        body: "planner-must-not-see-this"
+      }
+    }]
+  },
+  extracted: {},
+  derived: {},
+  execution_log: [],
+  planner_session_id: null,
+  phase_events: []
+}
+var @checkpointRestoredSummary = @plannerStateSummary(
+  {
+    suite: "fixtures",
+    records: { plain_mode_message: @plain_mode_message }
+  },
+  @checkpointRestoredState
+) | @pretty
+var @checkpointRestoredOk = @checkpointRestoredSummary.includes('"id_": "msg_1"') &&
+  !@checkpointRestoredSummary.includes('"id_": 1')
+var @checkpointResolvedValue = @resolveRefValue(
+  @checkpointRestoredState,
+  {
+    source: "resolved",
+    record: "plain_mode_message",
+    handle: "r_plain_mode_message_msg_1",
+    field: "id_"
+  }
+)
+var @checkpointResolvedOk = @checkpointResolvedValue.ok &&
+  @field(@checkpointResolvedValue, "value") == "msg_1"
+var @checkpointResolvedDetail = @checkpointResolvedValue | @pretty
+
+var @selectionLoweredPretty = @selectionLowered | @pretty
+var @selectionLoweredOk = @selectionLowered.ok &&
+  @field(@field(@selectionLowered, "ref"), "source") == "resolved" &&
+  @field(@field(@selectionLowered, "ref"), "handle") == "r_contact_alice.example"
+
+var @firewallPretty = @firewallAttempt | @pretty
+var @firewallOk = !@firewallAttempt.ok && @firewallPretty.includes("payload_only_source_in_control_arg")
+
+var @resolveControlFirewallPretty = @resolveControlFirewallAttempt | @pretty
+var @resolveControlFirewallOk = !@resolveControlFirewallAttempt.ok && @resolveControlFirewallPretty.includes("payload_only_source_in_control_arg")
+
+var @allowPretty = @allowAttempt | @pretty
+var @allowOk = !@allowAttempt.ok && @allowPretty.includes("allow_requires_no_control_args")
+
+var @wrongSourcePretty = @wrongSourceAttempt | @pretty
+var @wrongSourceOk = !@wrongSourceAttempt.ok && @field(@wrongSourceAttempt, "error") == "resolved_handle_not_found"
+
+var @perElementPretty = @perElementAttempt | @pretty
+var @perElementOk = !@perElementAttempt.ok && @perElementPretty.includes("array_arg_element_invalid")
+
+var @selectionKeyedPretty = @selectionKeyedAttempt | @pretty
+var @selectionKeyedOk = @selectionKeyedAttempt.ok
+
+>> Proof-chain invariant: resolved fact-bearing values must carry their
+>> factsource attestations all the way into the execute compiler's flat
+>> policy intent. This is the core resolved -> execute security path.
+var @proofChainRef = {
+  source: "resolved",
+  record: "note_entry",
+  handle: "r_note_entry_note_1",
+  field: "id_"
+}
+var @proofResolvedControl = @resolveControlRefValue(@sampleState, @proofChainRef)
+var @proofResolvedAttestations = @field(@proofResolvedControl, "policy_attestations") ?? []
+var @weakenedState = {
+  resolved: {
+    note_entry: [{
+      handle: "r_note_entry_note_1",
+      key: "note_1",
+      value: { id_: "note_1", title: "Todo", content: "Existing note body" },
+      field_values: { id_: "note_1", title: "Todo", content: "Existing note body" }
+    }]
+  },
+  extracted: {},
+  derived: {},
+  execution_log: [],
+  planner_session_id: null,
+  phase_events: []
+}
+var @proofWeakenedControl = @resolveControlRefValue(@weakenedState, @proofChainRef)
+var @proofWeakenedAttestations = @field(@proofWeakenedControl, "policy_attestations") ?? []
+var @proofChainAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "append_note",
+    args: {
+      note_id: @proofChainRef,
+      content: { source: "known", value: "append a status line" }
+    }
+  },
+  "append a status line"
+)
+var @proofChainEntries = @field(@proofChainAttempt, "compiled_entries") ?? []
+var @proofChainMatches = for @entry in @proofChainEntries when @field(@entry, "arg") == "note_id" => @entry
+var @proofChainEntry = @proofChainMatches[0]
+var @proofChainAttestations = @field(@proofChainEntry, "flat_attestations") ?? []
+var @proofChainPolicyPretty = @field(@proofChainAttempt, "policy_intent") | @pretty
+var @proofChainFactRef = "fact:@@note_entry.id_"
+var @proofChainOk = @proofResolvedControl.ok &&
+  @proofResolvedAttestations.includes(@proofChainFactRef) &&
+  @proofWeakenedControl.ok &&
+  @proofWeakenedAttestations.length == 0 &&
+  @proofChainAttempt.ok &&
+  @proofChainPolicyPretty.includes(@proofChainFactRef)
+
+>> Dispatch-time correlate-control-args invariant: once execute intent
+>> compilation has produced concrete backing refs for control args, the
+>> correlate check must reject mixed resolved records.
+exe execute:w, comm:w, tool:w @share_note_with_contact(note_id, recipient) = [
+  => {
+    note_id: @note_id,
+    recipient: @recipient
+  }
+] with { controlArgs: ["note_id", "recipient"], correlateControlArgs: true }
+
+var @correlateTools = {
+  share_note_with_contact: {
+    kind: "write",
+    mlld: @share_note_with_contact,
+    operation: {
+      controlArgs: ["note_id", "recipient"],
+      payloadArgs: [],
+      risk: ["comm:w"],
+      authorizable: true,
+      semantics: "Share one note with one recipient.",
+      correlateControlArgs: true
+    }
+  }
+}
+
+var @correlateIntent = @compileExecuteIntent(
+  @sampleState,
+  @correlateTools,
+  {
+    phase: "execute",
+    operation: "share_note_with_contact",
+    args: {
+      note_id: {
+        source: "resolved",
+        record: "note_entry",
+        handle: "r_note_entry_note_1",
+        field: "id_"
+      },
+      recipient: {
+        source: "resolved",
+        record: "contact",
+        handle: "r_contact_alice.example",
+        field: "email"
+      }
+    }
+  },
+  "Share note_1 with alice.example."
+)
+var @correlateEntries = @field(@correlateIntent, "compiled_entries") ?? []
+var @correlateControlArgs = ["note_id", "recipient"]
+var @correlateCheck = @correlatedControlArgsCheck(@correlateEntries, @correlateControlArgs)
+var @correlatePretty = @correlateCheck | @pretty
+var @correlateOk = @correlateIntent.ok &&
+  !@field(@correlateCheck, "ok") &&
+  @field(@correlateCheck, "error") == "correlate_control_args_cross_record_mixture"
+
+var @rawScalarDecisionPretty = @rawScalarDecisionIssues | @pretty
+var @structuredDecisionPretty = @structuredDecisionIssues | @pretty
+var @plannerArgShapePretty = `raw=@rawScalarDecisionPretty structured=@structuredDecisionPretty`
+var @plannerArgShapeOk = @rawScalarDecisionIssues.length == 1 &&
+  @field(@rawScalarDecisionIssues[0], "field") == "message_id" &&
+  @structuredDecisionIssues.length == 0
+
+>> Source-backed `schema: "text"` extracts are valid benchmark behavior.
+>> Keep a direct regression here so the worker coercer cannot silently
+>> demote scalar payloads back to null and strand the planner in a
+>> resolve/extract loop.
+var @scalarExtractAttestation = @coerceExtractAttestation({
+  status: "extracted",
+  schema_name: "text",
+  name: "body_text",
+  provenance: "extracted",
+  preview_fields: [],
+  payload: "bounded text payload"
+})
+var @scalarExtractState = {
+  resolved: {},
+  extracted: {
+    body_text: {
+      provenance: "extracted",
+      schema_name: "text",
+      preview_fields: [],
+      value: @field(@scalarExtractAttestation, "payload")
+    }
+  },
+  derived: {},
+  execution_log: [],
+  planner_session_id: null,
+  phase_events: []
+}
+var @scalarExtractPlannerSummary = @plannerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @scalarExtractState
+) | @pretty
+var @scalarExtractWorkerSummary = @workerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @scalarExtractState
+) | @pretty
+var @scalarExtractPretty = @scalarExtractAttestation | @pretty
+var @scalarExtractOk = @field(@scalarExtractAttestation, "payload") == "bounded text payload" &&
+  !@scalarExtractPlannerSummary.includes('"bounded text payload"') &&
+  @scalarExtractPlannerSummary.includes('"fields": []') &&
+  @scalarExtractWorkerSummary.includes('"bounded text payload"')
+
+>> Security invariant: planner-facing named-state projection must never
+>> include payload values from extracted or derived state. The planner
+>> only needs schema/field structure so it can emit refs by name.
+var @taintedExtractMarker = "ATTACKER_INJECTED_PAYLOAD_MARKER"
+var @taintedDerivedMarker = "DERIVED_ATTACK_PAYLOAD_MARKER"
+var @stateWithTaintedNamedValues = {
+  resolved: {},
+  extracted: {
+    email_task: {
+      provenance: "extracted",
+      schema_name: "email_task_payload",
+      preview_fields: ["body", "metadata"],
+      value: {
+        body: `legitimate preamble @taintedExtractMarker continues here`,
+        metadata: {
+          nested: `nested @taintedExtractMarker content`
+        }
+      }
+    }
+  },
+  derived: {
+    ranked_choice: {
+      provenance: "derived",
+      schema_name: "inline-schema",
+      preview_fields: ["body", "nested"],
+      value: {
+        body: `derived preamble @taintedDerivedMarker continues here`,
+        nested: {
+          note: `nested @taintedDerivedMarker content`
+        }
+      },
+      selection_refs: [{
+        source: "selection",
+        backing: {
+          record: "contact",
+          handle: "r_contact_alice.example"
+        }
+      }]
+    }
+  },
+  execution_log: [],
+  planner_session_id: null,
+  phase_events: []
+}
+var @taintedPlannerSummary = @plannerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @stateWithTaintedNamedValues
+) | @pretty
+var @taintedWorkerSummary = @workerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @stateWithTaintedNamedValues
+) | @pretty
+var @taintedPlannerProjectionOk = !@taintedPlannerSummary.includes(@taintedExtractMarker) &&
+  !@taintedPlannerSummary.includes(@taintedDerivedMarker) &&
+  @taintedPlannerSummary.includes('"schema_name": "email_task_payload"') &&
+  @taintedPlannerSummary.includes('"schema_name": "inline-schema"') &&
+  @taintedPlannerSummary.includes('"selection_refs"')
+var @taintedWorkerProjectionOk = @taintedWorkerSummary.includes(@taintedExtractMarker) &&
+  @taintedWorkerSummary.includes(@taintedDerivedMarker)
+var @extractedPayloadCompile = @compileExecuteIntent(
+  @stateWithTaintedNamedValues,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "extracted", name: "email_task", field: "body" }
+    }
+  },
+  "create a note from extracted content"
+)
+var @derivedPayloadCompile = @compileExecuteIntent(
+  @stateWithTaintedNamedValues,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "derived", name: "ranked_choice", field: "body" }
+    }
+  },
+  "create a note from derived content"
+)
+var @extractedPayloadCompileOk = @extractedPayloadCompile.ok &&
+  @field(@field(@extractedPayloadCompile, "compiled_args"), "content").includes(@taintedExtractMarker)
+var @derivedPayloadCompileOk = @derivedPayloadCompile.ok &&
+  @field(@field(@derivedPayloadCompile, "compiled_args"), "content").includes(@taintedDerivedMarker)
+var @extractedPayloadCompilePretty = @extractedPayloadCompile | @pretty
+var @derivedPayloadCompilePretty = @derivedPayloadCompile | @pretty
+
+var @recordBackedMarker = "RECORD_BACKED_BODY_MARKER"
+var @recordBackedNestedMarker = "RECORD_BACKED_NOTE_MARKER"
+>> Deliberately hostile preview_fields prove planner summaries derive
+>> field names from the live value rather than trusting stored metadata.
+var @recordBackedNamedState = {
+  resolved: {},
+  extracted: {
+    selected_message: {
+      provenance: "extracted",
+      schema_name: "named_display_extract",
+      preview_fields: ["Quarterly update", @recordBackedMarker, @recordBackedNestedMarker],
+      value: {
+        id_: "msg_42",
+        subject: "Quarterly update",
+        body: `line one
+middle @recordBackedMarker
+line end @recordBackedMarker`,
+        note: `nested field @recordBackedNestedMarker`
+      } as record @named_display_extract
+    }
+  },
+  derived: {},
+  execution_log: [],
+  planner_session_id: null,
+  phase_events: []
+}
+var @recordBackedPlannerSummary = @plannerStateSummary(
+  {
+    suite: "fixtures",
+    records: {
+      named_display_extract: @named_display_extract
+    }
+  },
+  @recordBackedNamedState
+) | @pretty
+var @recordBackedCompile = @compileExecuteIntent(
+  @recordBackedNamedState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "extracted", name: "selected_message", field: "body" }
+    }
+  },
+  "create a note from the hidden body"
+)
+var @recordBackedDisplayOk = @recordBackedPlannerSummary.includes('"display"') &&
+  @recordBackedPlannerSummary.includes('"Quarterly update"') &&
+  @recordBackedPlannerSummary.includes('"id_": "msg_42"') &&
+  !@recordBackedPlannerSummary.includes(@recordBackedMarker) &&
+  !@recordBackedPlannerSummary.includes(@recordBackedNestedMarker) &&
+  !@recordBackedPlannerSummary.includes('"Quarterly update","RECORD_BACKED_BODY_MARKER"') &&
+  @recordBackedCompile.ok &&
+  @field(@field(@recordBackedCompile, "compiled_args"), "content").includes(@recordBackedMarker) &&
+  !@field(@field(@recordBackedCompile, "compiled_args"), "content").includes(@recordBackedNestedMarker)
+var @recordBackedDisplayPretty = `planner=@recordBackedPlannerSummary compile=@recordBackedCompile`
+
+>> Named extract/derive results are updated incrementally through the
+>> planner loop. Keep a focused regression here so adding a later named
+>> result cannot demote the earlier ones back to null in the planner
+>> summary.
+var @namedStateBodyMarker = "ATTACKER_INJECTED_BODY_MARKER"
+var @namedStateTitleMarker = "ATTACKER_INJECTED_TITLE_MARKER"
+var @namedStateRoomMarker = "ATTACKER_INJECTED_ROOM_MARKER"
+var @namedStateBase = {
+  resolved: {},
+  extracted: {},
+  derived: {},
+  execution_log: [],
+  planner_session_id: null,
+  phase_events: []
+}
+var @namedStateAfterFirstExtract = @updateNamedState(
+  @namedStateBase,
+  "extracted",
+  "meeting_invitation_body",
+  {
+    provenance: "extracted",
+    schema_name: "text",
+    preview_fields: [],
+    value: @namedStateBodyMarker
+  }
+)
+var @namedStateAfterDerive = @updateNamedState(
+  @namedStateAfterFirstExtract,
+  "derived",
+  "event_details",
+  {
+    provenance: "derived",
+    schema_name: "inline-schema",
+    preview_fields: ["event_title", "start_time"],
+    value: {
+      event_title: @namedStateTitleMarker,
+      start_time: "2026-05-12T09:00:00",
+      room_note: @namedStateRoomMarker
+    }
+  }
+)
+var @namedStateAfterSecondExtract = @updateNamedState(
+  @namedStateAfterDerive,
+  "extracted",
+  "room_context",
+  {
+    provenance: "extracted",
+    schema_name: "inline-schema",
+    preview_fields: ["room_name"],
+    value: {
+      room_name: @namedStateRoomMarker
+    }
+  }
+)
+var @namedStatePlannerSummary = @plannerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @namedStateAfterSecondExtract
+) | @pretty
+var @namedStateWorkerSummary = @workerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @namedStateAfterSecondExtract
+) | @pretty
+var @namedStateExecutionLogPretty = @field(@namedStateAfterSecondExtract, "execution_log") | @pretty
+var @namedStateOk = @namedStatePlannerSummary.includes('"meeting_invitation_body"') &&
+  !@namedStatePlannerSummary.includes(@namedStateBodyMarker) &&
+  !@namedStatePlannerSummary.includes(@namedStateTitleMarker) &&
+  !@namedStatePlannerSummary.includes(@namedStateRoomMarker) &&
+  @namedStateWorkerSummary.includes(@namedStateBodyMarker) &&
+  @namedStateWorkerSummary.includes(@namedStateTitleMarker) &&
+  @namedStateWorkerSummary.includes(@namedStateRoomMarker)
+
+>> Array-valued state fields often pass through helper exe parameters as
+>> object-like collections. Keep a direct regression for execution-log
+>> retention so source-backed extract/derive updates cannot silently
+>> erase earlier phase history and trip planner guards later.
+var @namedStateWithExecutionLog = {
+  resolved: {},
+  extracted: {},
+  derived: {},
+  execution_log: [
+    {
+      phase: "resolve",
+      tool: "search_emails",
+      summary: "resolved 1 email_msg record(s)",
+      session_id: null
+    }
+  ],
+  planner_session_id: null,
+  phase_events: []
+}
+var @namedStateLogRetained = @updateNamedState(
+  @namedStateWithExecutionLog,
+  "extracted",
+  "meeting_invitation_body",
+  {
+    provenance: "extracted",
+    value: @namedStateBodyMarker
+  }
+)
+var @namedStateLogPretty = @field(@namedStateLogRetained, "execution_log") | @pretty
+var @namedStateLogEntries = @field(@namedStateLogRetained, "execution_log") ?? []
+var @namedStateLogOk = @namedStateLogEntries.length == 1 &&
+  @field(@namedStateLogEntries[0], "tool") == "search_emails" &&
+  @field(@namedStateLogEntries[0], "summary") == "resolved 1 email_msg record(s)"
+
+>> Live planner/worker outputs carry runtime metadata, but execution-log
+>> entries are diagnostic-only state. Flatten just the appended log
+>> entry so later planner prompts and debug payloads keep the full log
+>> instead of carrying wrapper metadata forward.
+var @wrappedLogState = {
+  resolved: {},
+  extracted: {},
+  derived: {},
+  execution_log: [
+    {
+      phase: "resolve",
+      tool: "seed",
+      summary: "seed",
+      session_id: null
+    }
+  ],
+  planner_session_id: null,
+  phase_events: []
+}
+var @wrappedLogRetained = @appendExecutionLog(@wrappedLogState, {
+  phase: "extract",
+  name: @factValue,
+  summary: @factValue,
+  session_id: @factValue
+})
+var @wrappedLogEntries = @field(@wrappedLogRetained, "execution_log") ?? []
+var @wrappedLogPretty = @field(@wrappedLogRetained, "execution_log") | @pretty
+var @wrappedLogValue = `@factValue`
+var @wrappedLogOk = @wrappedLogEntries.length == 2 &&
+  @field(@wrappedLogEntries[1], "phase") == "extract" &&
+  @field(@wrappedLogEntries[1], "name") == @wrappedLogValue &&
+  @field(@wrappedLogEntries[1], "summary") == @wrappedLogValue &&
+  @field(@wrappedLogEntries[1], "session_id") == @wrappedLogValue &&
+  !@wrappedLogPretty.includes('"metadata"')
+
+var @checks = [
+  @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
+  @check("synthesized-policy-shape", @syntheticPolicyOk, @syntheticPolicyDetail),
+  @check("collection-roundtrip", @collectionRoundtripOk, "policy.build succeeded inside a wrapper exe"),
+  @check("tool-metadata-access", @toolMetadataOk, @toolMetadataDetail),
+  @check("factsource-roundtrip", @factsourceOk, @factsourceDetail),
+  @check("tool-docs-control-args", @toolDocsOk, @toolDocsDetail),
+  @check("fixture-read-dispatch", @fixtureReadDispatchOk, @fixtureReadDispatchPretty),
+  @check("built-agent-read-dispatch", @builtFixtureReadDispatchOk, @builtFixtureReadDispatchPretty),
+  @check("phase-catalog-preserves-callability", @phaseCatalogDispatchOk, @phaseCatalogDispatchPretty),
+  @check("phase-tool-entry-preserves-callability", @phaseToolEntryDispatchOk, @phaseToolEntryDispatchPretty),
+  @check("resolve-worker-success-path", @dispatchResolveOk, @dispatchResolvePretty),
+  @check("resolve-worker-scalar-keyed-path", @dispatchScalarResolveOk, @dispatchScalarResolvePretty),
+  @check("optional-control-arg-omission-allows-payload-only-write", @optionalControlExecuteOk, @optionalControlExecutePretty),
+  @check("single-arg-direct-dispatch-keeps-string-ids", @numericDispatchOk, @numericDispatchPretty),
+  @check("tool-error-envelope-only-fails-on-true", @toolEnvelopeOk, @toolEnvelopeDetail),
+  @check("strict-thin-arrow", @thinArrowOk, @thinArrowSerialized),
+  @check("display-projection", @displayProjectionOk, @displayProjectionDetail),
+  @check("display-shorthand-array", @flatDisplayOk, @flatDisplaySummary),
+  @check("display-plain-mode-keys", @plainModeOk, `planner=@plainModePlannerSummary worker=@plainModeWorkerSummary`),
+  @check("display-checkpoint-identity", @checkpointRestoredOk, @checkpointRestoredSummary),
+  @check("resolve-checkpoint-identity", @checkpointResolvedOk, @checkpointResolvedDetail),
+  @check("execute-proof-chain", @proofChainOk, @proofChainPolicyPretty),
+  @check("correlate-control-args", @correlateOk, @correlatePretty),
+  @check("lowering-selection-ref", @selectionLoweredOk, @selectionLoweredPretty),
+  @check("derived-control-arg-rejected", @firewallOk, @firewallPretty),
+  @check("derived-resolve-control-arg-rejected", @resolveControlFirewallOk, @resolveControlFirewallPretty),
+  @check("firewall-derived-to-control", @firewallOk, @firewallPretty),
+  @check("allow-with-control-args", @allowOk, @allowPretty),
+  @check("source-class-mismatch", @wrongSourceOk, @wrongSourcePretty),
+  @check("array-control-proof", @perElementOk, @perElementPretty),
+  @check("selection-keyed-control", @selectionKeyedOk, @selectionKeyedPretty),
+  @check("planner-arg-shape", @plannerArgShapeOk, @plannerArgShapePretty),
+  @check("scalar-extract-payload", @scalarExtractOk, `attestation=@scalarExtractPretty planner=@scalarExtractPlannerSummary worker=@scalarExtractWorkerSummary`),
+  @check("planner-named-state-hides-tainted-values", @taintedPlannerProjectionOk, @taintedPlannerSummary),
+  @check("worker-named-state-retains-tainted-values", @taintedWorkerProjectionOk, @taintedWorkerSummary),
+  @check("execute-compile-reads-extracted-state", @extractedPayloadCompileOk, @extractedPayloadCompilePretty),
+  @check("execute-compile-reads-derived-state", @derivedPayloadCompileOk, @derivedPayloadCompilePretty),
+  @check("record-backed-named-state-projects-display", @recordBackedDisplayOk, @recordBackedDisplayPretty),
+  @check("named-state-retains-prior-results", @namedStateOk, `planner=@namedStatePlannerSummary worker=@namedStateWorkerSummary`),
+  @check("named-state-retains-execution-log", @namedStateLogOk, @namedStateLogPretty),
+  @check("execution-log-flattens-diagnostic-wrappers", @wrappedLogOk, @wrappedLogPretty)
+]
+
+var @passes = for @check in @checks when @check.status == "PASS" => @check
+var @fails = for @check in @checks when @check.status == "FAIL" => @check
+
+show "Rig v2 invariant tests"
+show ""
+for @check in @checks => show `[@check.status] @check.id  @check.detail`
+show ""
+show `summary: @passes.length pass / @fails.length fail`
+
+if @fails.length > 0 [
+  run sh { exit 1 }
+]

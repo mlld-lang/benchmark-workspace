@@ -1,0 +1,1 @@
+{"version":1,"value":"Search cloud files by filename. Returned file_entry records include the content field when available, so later extract steps can read that resolved field directly by handle."}

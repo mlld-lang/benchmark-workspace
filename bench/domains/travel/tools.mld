@@ -1,0 +1,609 @@
+>> Travel tool catalog for rig v2.
+>>
+>> Travel is the broadest suite: multi-domain lookup, review reading,
+>> ranking/selection, calendar work, bookings, and email follow-up. The
+>> catalog stays flat so rig can derive prompts and policy directly from
+>> one object.
+
+import tools from mcp "tools" as @mcp
+
+import {
+  @hotel,
+  @hotel_review,
+  @restaurant,
+  @restaurant_review,
+  @car_company,
+  @car_company_review,
+  @user_info,
+  @flight_info,
+  @calendar_evt,
+  @calendar_event_payload,
+  @email_payload,
+  @hotel_reservation_payload,
+  @car_rental_payload,
+  @restaurant_reservation_payload
+} from "./records.mld"
+
+exe @namesInCity(raw, prefix, city) = [
+  let @clean = @raw.replace(@prefix, "")
+  let @lines = @clean.split("\n")
+  => for @line in @lines when @line.trim() => {
+    name: @line.trim(),
+    city: @city
+  }
+]
+
+exe @ratingFromReviewBlob(reviewBlob) = [
+  let @ratingLine = @reviewBlob.split("\n")[0]
+  => @ratingLine && @ratingLine.startsWith("Rating: ")
+    ? @ratingLine.replace("Rating: ", "").trim() * 1
+    : null
+]
+
+>> Calendar read tools take user-facing date phrases, while AgentDojo's
+>> backend expects strict ISO dates. Normalize that formatting at the
+>> adapter boundary so the planner can keep citing the task literal.
+exe @isoDate(inputValue) = js {
+  if (inputValue == null) return null;
+  const raw = String(inputValue).trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const match = raw.match(/^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,\s*(\d{4}))?$/);
+  if (!match) return raw;
+
+  const months = {
+    january: "01",
+    february: "02",
+    march: "03",
+    april: "04",
+    may: "05",
+    june: "06",
+    july: "07",
+    august: "08",
+    september: "09",
+    october: "10",
+    november: "11",
+    december: "12"
+  };
+
+  const month = months[match[1].toLowerCase()];
+  if (!month) return raw;
+
+  const day = String(parseInt(match[2], 10)).padStart(2, "0");
+  const year = match[3] || String(new Date().getFullYear());
+  return `${year}-${month}-${day}`;
+}
+
+>> AgentDojo returns many travel lookups as `{ name: value }` maps. Keep
+>> this conversion in native mlld so the entry values stay intact and the
+>> helper never strips wrapper metadata.
+exe @namedPairs(inputValue) = [
+  let @target = when [
+    @inputValue.mx.data.isDefined() => @inputValue.mx.data
+    @inputValue.data.isDefined() => @inputValue.data
+    * => @inputValue
+  ]
+  => when [
+    @typeof(@target) == "object" => for @name, @value in @target => { name: @name, value: @value }
+    * => []
+  ]
+]
+
+>> Read tools
+
+exe resolve:r, known, tool:r @get_user_information() = [
+  let @raw = @mcp.getUserInformation()
+  => {
+    first_name: @raw["First Name"],
+    last_name: @raw["Last Name"],
+    ID_number: @raw["ID Number"],
+    email: @raw["Email"],
+    phone_number: @raw["Phone Number"],
+    address: @raw["Address"],
+    passport_number: @raw["Passport Number"],
+    bank_account_number: @raw["Bank Account Number"],
+    credit_card_number: @raw["Credit Card Number"]
+  }
+] => record @user_info
+
+exe resolve:r, known, tool:r @get_all_hotels_in_city(city) = [
+  let @raw = @mcp.getAllHotelsInCity(@city)
+  => @namesInCity(@raw, "Hotel Names: ", @city)
+] => record @hotel
+
+exe resolve:r, known, tool:r @get_hotels_prices(hotel_names: array) = [
+  let @raw = @mcp.getHotelsPrices(@hotel_names)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    price_range: @pair.value.replace("Price range: ", "")
+  }
+] => record @hotel with { controlArgs: ["hotel_names"] }
+
+exe resolve:r, untrusted, tool:r @get_rating_reviews_for_hotels(hotel_names: array) = [
+  let @raw = @mcp.getRatingReviewsForHotels(@hotel_names)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    rating: @ratingFromReviewBlob(@pair.value),
+    review_blob: @pair.value
+  }
+] => record @hotel_review with { controlArgs: ["hotel_names"] }
+
+exe resolve:r, known, tool:r @get_hotels_address(hotel_name) = [
+  let @raw = @mcp.getHotelsAddress(@hotel_name)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    address: @pair.value
+  }
+] => record @hotel with { controlArgs: ["hotel_name"] }
+
+exe resolve:r, known, tool:r @get_all_restaurants_in_city(city) = [
+  let @raw = @mcp.getAllRestaurantsInCity(@city)
+  let @prefix = `Restaurant in @city: `
+  => @namesInCity(@raw, @prefix, @city)
+] => record @restaurant
+
+exe resolve:r, known, tool:r @get_cuisine_type_for_restaurants(restaurant_names: array) = [
+  let @raw = @mcp.getCuisineTypeForRestaurants(@restaurant_names)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    cuisine_type: @pair.value
+  }
+] => record @restaurant with { controlArgs: ["restaurant_names"] }
+
+exe resolve:r, known, tool:r @get_restaurants_address(restaurant_names: array) = [
+  let @raw = @mcp.getRestaurantsAddress(@restaurant_names)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    address: @pair.value
+  }
+] => record @restaurant with { controlArgs: ["restaurant_names"] }
+
+exe resolve:r, untrusted, tool:r @get_rating_reviews_for_restaurants(restaurant_names: array) = [
+  let @raw = @mcp.getRatingReviewsForRestaurants(@restaurant_names)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    rating: @ratingFromReviewBlob(@pair.value),
+    review_blob: @pair.value
+  }
+] => record @restaurant_review with { controlArgs: ["restaurant_names"] }
+
+exe resolve:r, known, tool:r @get_dietary_restrictions_for_all_restaurants(restaurant_names: array) = [
+  let @raw = @mcp.getDietaryRestrictionsForAllRestaurants(@restaurant_names)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    dietary_restrictions: @pair.value
+  }
+] => record @restaurant with { controlArgs: ["restaurant_names"] }
+
+exe resolve:r, known, tool:r @get_contact_information_for_restaurants(restaurant_names: array) = [
+  let @raw = @mcp.getContactInformationForRestaurants(@restaurant_names)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    contact_information: @pair.value
+  }
+] => record @restaurant with { controlArgs: ["restaurant_names"] }
+
+exe resolve:r, known, tool:r @get_price_for_restaurants(restaurant_names: array) = [
+  let @raw = @mcp.getPriceForRestaurants(@restaurant_names)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    price_per_person: @pair.value
+  }
+] => record @restaurant with { controlArgs: ["restaurant_names"] }
+
+exe resolve:r, known, tool:r @check_restaurant_opening_hours(restaurant_names: array) = [
+  let @raw = @mcp.checkRestaurantOpeningHours(@restaurant_names)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    operating_hours: @pair.value
+  }
+] => record @restaurant with { controlArgs: ["restaurant_names"] }
+
+exe resolve:r, known, tool:r @get_all_car_rental_companies_in_city(city) = [
+  let @raw = @mcp.getAllCarRentalCompaniesInCity(@city)
+  let @prefix = `Car Rental Companies in @city: `
+  => @namesInCity(@raw, @prefix, @city)
+] => record @car_company
+
+exe resolve:r, known, tool:r @get_car_types_available(company_name: array) = [
+  let @raw = @mcp.getCarTypesAvailable(@company_name)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    car_types: @pair.value
+  }
+] => record @car_company with { controlArgs: ["company_name"] }
+
+exe resolve:r, untrusted, tool:r @get_rating_reviews_for_car_rental(company_name: array) = [
+  let @raw = @mcp.getRatingReviewsForCarRental(@company_name)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    rating: @ratingFromReviewBlob(@pair.value),
+    review_blob: @pair.value
+  }
+] => record @car_company_review with { controlArgs: ["company_name"] }
+
+exe resolve:r, known, tool:r @get_car_fuel_options(company_name: array) = [
+  let @raw = @mcp.getCarFuelOptions(@company_name)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    fuel_options: @pair.value
+  }
+] => record @car_company with { controlArgs: ["company_name"] }
+
+exe resolve:r, known, tool:r @get_car_rental_address(company_name: array) = [
+  let @raw = @mcp.getCarRentalAddress(@company_name)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    address: @pair.value
+  }
+] => record @car_company with { controlArgs: ["company_name"] }
+
+exe resolve:r, known, tool:r @get_car_price_per_day(company_name: array) = [
+  let @raw = @mcp.getCarPricePerDay(@company_name)
+  let @pairs = @namedPairs(@raw)
+  => for @pair in @pairs => {
+    name: @pair.name,
+    price_per_day: @pair.value
+  }
+] => record @car_company with { controlArgs: ["company_name"] }
+
+exe resolve:r, untrusted, tool:r @search_calendar_events(query, date) = [
+  let @dateFilter = @exists(@date) ? @isoDate(@date) : null
+  => @mcp.searchCalendarEvents(@query, @dateFilter)
+] => record @calendar_evt
+
+exe resolve:r, untrusted, tool:r @get_day_calendar_events(day) = [
+  => @mcp.getDayCalendarEvents(@isoDate(@day))
+] => record @calendar_evt
+
+exe resolve:r, known, tool:r @get_flight_information(departure_city, arrival_city) = [
+  let @raw = @mcp.getFlightInformation(@departure_city, @arrival_city)
+  => { info_text: @raw }
+] => record @flight_info
+
+>> Write tools
+
+>> Travel's calendar creation path keeps AgentDojo's optional participant
+>> field nullable. These tasks are about personal planning, not sending
+>> invitations.
+exe execute:w, calendar:w, tool:w @create_calendar_event(title, start_time, end_time, description, participants: array, location) = [
+  let @descriptionValue = @exists(@description) ? @description : ""
+  let @participantsValue = @exists(@participants) ? @participants : null
+  let @locationValue = @exists(@location) ? @location : null
+  => @mcp.createCalendarEvent(@title, @start_time, @end_time, @descriptionValue, @participantsValue, @locationValue)
+] with { controlArgs: [] }
+
+exe execute:w, destructive:targeted, tool:w @cancel_calendar_event(event_id) = [
+  => @mcp.cancelCalendarEvent(@event_id)
+] with { controlArgs: ["event_id"] }
+
+exe execute:w, booking:w, tool:w @reserve_hotel(hotel, start_day, end_day) = [
+  => @mcp.reserveHotel(@hotel, @start_day, @end_day)
+] with { controlArgs: ["hotel"] }
+
+exe execute:w, booking:w, tool:w @reserve_car_rental(company, start_time, end_time) = [
+  => @mcp.reserveCarRental(@company, @start_time, @end_time)
+] with { controlArgs: ["company"] }
+
+exe execute:w, booking:w, tool:w @reserve_restaurant(restaurant, start_time) = [
+  => @mcp.reserveRestaurant(@restaurant, @start_time)
+] with { controlArgs: ["restaurant"] }
+
+exe execute:w, comm:w, exfil:send, tool:w @send_email(recipients: array, subject, body, attachments: array, cc: array, bcc: array) = [
+  let @attachmentsValue = @exists(@attachments) ? @attachments : null
+  let @ccValue = @exists(@cc) ? @cc : null
+  let @bccValue = @exists(@bcc) ? @bcc : null
+  => @mcp.sendEmail(@recipients, @subject, @body, @attachmentsValue, @ccValue, @bccValue)
+] with { controlArgs: ["recipients", "cc", "bcc"] }
+
+var @tools = {
+  get_user_information: {
+    kind: "read",
+    mlld: @get_user_information,
+    returns: @user_info,
+    labels: ["resolve:r", "known"],
+    semantics: "Return the user's travel profile information."
+  },
+  get_all_hotels_in_city: {
+    kind: "read",
+    mlld: @get_all_hotels_in_city,
+    returns: @hotel,
+    labels: ["resolve:r", "known"],
+    semantics: "List hotels in one city."
+  },
+  get_hotels_prices: {
+    kind: "read",
+    mlld: @get_hotels_prices,
+    returns: @hotel,
+    labels: ["resolve:r", "known"],
+    semantics: "Load hotel price ranges for a set of hotel names."
+  },
+  get_rating_reviews_for_hotels: {
+    kind: "read",
+    mlld: @get_rating_reviews_for_hotels,
+    returns: @hotel_review,
+    labels: ["resolve:r", "untrusted"],
+    semantics: "Load hotel ratings and review text."
+  },
+  get_hotels_address: {
+    kind: "read",
+    mlld: @get_hotels_address,
+    returns: @hotel,
+    labels: ["resolve:r", "known"],
+    semantics: "Load hotel addresses."
+  },
+  get_all_restaurants_in_city: {
+    kind: "read",
+    mlld: @get_all_restaurants_in_city,
+    returns: @restaurant,
+    labels: ["resolve:r", "known"],
+    semantics: "List restaurants in one city."
+  },
+  get_cuisine_type_for_restaurants: {
+    kind: "read",
+    mlld: @get_cuisine_type_for_restaurants,
+    returns: @restaurant,
+    labels: ["resolve:r", "known"],
+    semantics: "Load cuisine types for restaurants."
+  },
+  get_restaurants_address: {
+    kind: "read",
+    mlld: @get_restaurants_address,
+    returns: @restaurant,
+    labels: ["resolve:r", "known"],
+    semantics: "Load restaurant addresses."
+  },
+  get_rating_reviews_for_restaurants: {
+    kind: "read",
+    mlld: @get_rating_reviews_for_restaurants,
+    returns: @restaurant_review,
+    labels: ["resolve:r", "untrusted"],
+    semantics: "Load restaurant ratings and review text."
+  },
+  get_dietary_restrictions_for_all_restaurants: {
+    kind: "read",
+    mlld: @get_dietary_restrictions_for_all_restaurants,
+    returns: @restaurant,
+    labels: ["resolve:r", "known"],
+    semantics: "Load dietary restriction support for restaurants."
+  },
+  get_contact_information_for_restaurants: {
+    kind: "read",
+    mlld: @get_contact_information_for_restaurants,
+    returns: @restaurant,
+    labels: ["resolve:r", "known"],
+    semantics: "Load restaurant contact information."
+  },
+  get_price_for_restaurants: {
+    kind: "read",
+    mlld: @get_price_for_restaurants,
+    returns: @restaurant,
+    labels: ["resolve:r", "known"],
+    semantics: "Load restaurant pricing."
+  },
+  check_restaurant_opening_hours: {
+    kind: "read",
+    mlld: @check_restaurant_opening_hours,
+    returns: @restaurant,
+    labels: ["resolve:r", "known"],
+    semantics: "Load restaurant opening hours."
+  },
+  get_all_car_rental_companies_in_city: {
+    kind: "read",
+    mlld: @get_all_car_rental_companies_in_city,
+    returns: @car_company,
+    labels: ["resolve:r", "known"],
+    semantics: "List car rental companies in one city."
+  },
+  get_car_types_available: {
+    kind: "read",
+    mlld: @get_car_types_available,
+    returns: @car_company,
+    labels: ["resolve:r", "known"],
+    semantics: "Load available car types for one or more companies."
+  },
+  get_rating_reviews_for_car_rental: {
+    kind: "read",
+    mlld: @get_rating_reviews_for_car_rental,
+    returns: @car_company_review,
+    labels: ["resolve:r", "untrusted"],
+    semantics: "Load car rental ratings and review text."
+  },
+  get_car_fuel_options: {
+    kind: "read",
+    mlld: @get_car_fuel_options,
+    returns: @car_company,
+    labels: ["resolve:r", "known"],
+    semantics: "Load fuel options for rental companies."
+  },
+  get_car_rental_address: {
+    kind: "read",
+    mlld: @get_car_rental_address,
+    returns: @car_company,
+    labels: ["resolve:r", "known"],
+    semantics: "Load rental company addresses."
+  },
+  get_car_price_per_day: {
+    kind: "read",
+    mlld: @get_car_price_per_day,
+    returns: @car_company,
+    labels: ["resolve:r", "known"],
+    semantics: "Load car rental daily pricing."
+  },
+  search_calendar_events: {
+    kind: "read",
+    mlld: @search_calendar_events,
+    returns: @calendar_evt,
+    labels: ["resolve:r", "untrusted"],
+    semantics: "Search calendar events by query and optional date filter. If `date` is provided, it must use YYYY-MM-DD."
+  },
+  get_day_calendar_events: {
+    kind: "read",
+    mlld: @get_day_calendar_events,
+    returns: @calendar_evt,
+    labels: ["resolve:r", "untrusted"],
+    semantics: "Load calendar events for one day. `day` must use YYYY-MM-DD."
+  },
+  get_flight_information: {
+    kind: "read",
+    mlld: @get_flight_information,
+    returns: @flight_info,
+    labels: ["resolve:r", "known"],
+    semantics: "Return flight information between two cities."
+  },
+  create_calendar_event: {
+    kind: "write",
+    mlld: @create_calendar_event,
+    operation: {
+      controlArgs: [],
+      payloadArgs: ["title", "start_time", "end_time", "description", "location"],
+      payloadRecord: @calendar_event_payload,
+      risk: ["calendar:w"],
+      authorizable: true,
+      semantics: "Create a personal calendar event. `start_time` and `end_time` must use YYYY-MM-DD HH:MM."
+    },
+    bind: { participants: [] }
+  },
+  cancel_calendar_event: {
+    kind: "write",
+    mlld: @cancel_calendar_event,
+    operation: {
+      controlArgs: ["event_id"],
+      payloadArgs: [],
+      risk: ["destructive:targeted"],
+      authorizable: true,
+      semantics: "Cancel one existing calendar event."
+    }
+  },
+  reserve_hotel: {
+    kind: "write",
+    mlld: @reserve_hotel,
+    operation: {
+      controlArgs: ["hotel"],
+      payloadArgs: ["start_day", "end_day"],
+      payloadRecord: @hotel_reservation_payload,
+      risk: ["booking:w"],
+      authorizable: true,
+      semantics: "Reserve one hotel for a date range."
+    }
+  },
+  reserve_car_rental: {
+    kind: "write",
+    mlld: @reserve_car_rental,
+    operation: {
+      controlArgs: ["company"],
+      payloadArgs: ["start_time", "end_time"],
+      payloadRecord: @car_rental_payload,
+      risk: ["booking:w"],
+      authorizable: true,
+      semantics: "Reserve one car rental company for a time range."
+    }
+  },
+  reserve_restaurant: {
+    kind: "write",
+    mlld: @reserve_restaurant,
+    operation: {
+      controlArgs: ["restaurant"],
+      payloadArgs: ["start_time"],
+      payloadRecord: @restaurant_reservation_payload,
+      risk: ["booking:w"],
+      authorizable: true,
+      semantics: "Reserve one restaurant at a specific time."
+    }
+  },
+  send_email: {
+    kind: "write",
+    mlld: @send_email,
+    operation: {
+      controlArgs: ["recipients", "cc", "bcc"],
+      payloadArgs: ["subject", "body", "attachments"],
+      payloadRecord: @email_payload,
+      risk: ["comm:w", "exfil:send"],
+      authorizable: true,
+      semantics: "Send one email to one or more recipients."
+    },
+    bind: { attachments: [], cc: [], bcc: [] }
+  }
+}
+
+>> The plain catalog is the framework authority for docs, routing, and
+>> synthesized policy. Runtime dispatch uses the companion `var tools`
+>> bridge so multi-arg calls keep mlld's named-arg behavior.
+var tools @toolsCollection = {
+  get_user_information: { mlld: @get_user_information },
+  get_all_hotels_in_city: { mlld: @get_all_hotels_in_city },
+  get_hotels_prices: { mlld: @get_hotels_prices },
+  get_rating_reviews_for_hotels: { mlld: @get_rating_reviews_for_hotels },
+  get_hotels_address: { mlld: @get_hotels_address },
+  get_all_restaurants_in_city: { mlld: @get_all_restaurants_in_city },
+  get_cuisine_type_for_restaurants: { mlld: @get_cuisine_type_for_restaurants },
+  get_restaurants_address: { mlld: @get_restaurants_address },
+  get_rating_reviews_for_restaurants: { mlld: @get_rating_reviews_for_restaurants },
+  get_dietary_restrictions_for_all_restaurants: { mlld: @get_dietary_restrictions_for_all_restaurants },
+  get_contact_information_for_restaurants: { mlld: @get_contact_information_for_restaurants },
+  get_price_for_restaurants: { mlld: @get_price_for_restaurants },
+  check_restaurant_opening_hours: { mlld: @check_restaurant_opening_hours },
+  get_all_car_rental_companies_in_city: { mlld: @get_all_car_rental_companies_in_city },
+  get_car_types_available: { mlld: @get_car_types_available },
+  get_rating_reviews_for_car_rental: { mlld: @get_rating_reviews_for_car_rental },
+  get_car_fuel_options: { mlld: @get_car_fuel_options },
+  get_car_rental_address: { mlld: @get_car_rental_address },
+  get_car_price_per_day: { mlld: @get_car_price_per_day },
+  search_calendar_events: { mlld: @search_calendar_events },
+  get_day_calendar_events: { mlld: @get_day_calendar_events },
+  get_flight_information: { mlld: @get_flight_information },
+  create_calendar_event: { mlld: @create_calendar_event },
+  cancel_calendar_event: { mlld: @cancel_calendar_event },
+  reserve_hotel: { mlld: @reserve_hotel },
+  reserve_car_rental: { mlld: @reserve_car_rental },
+  reserve_restaurant: { mlld: @reserve_restaurant },
+  send_email: { mlld: @send_email }
+}
+
+export {
+  @tools,
+  @toolsCollection,
+  @get_user_information,
+  @get_all_hotels_in_city,
+  @get_hotels_prices,
+  @get_rating_reviews_for_hotels,
+  @get_hotels_address,
+  @get_all_restaurants_in_city,
+  @get_cuisine_type_for_restaurants,
+  @get_restaurants_address,
+  @get_rating_reviews_for_restaurants,
+  @get_dietary_restrictions_for_all_restaurants,
+  @get_contact_information_for_restaurants,
+  @get_price_for_restaurants,
+  @check_restaurant_opening_hours,
+  @get_all_car_rental_companies_in_city,
+  @get_car_types_available,
+  @get_rating_reviews_for_car_rental,
+  @get_car_fuel_options,
+  @get_car_rental_address,
+  @get_car_price_per_day,
+  @search_calendar_events,
+  @get_day_calendar_events,
+  @get_flight_information,
+  @create_calendar_event,
+  @cancel_calendar_event,
+  @reserve_hotel,
+  @reserve_car_rental,
+  @reserve_restaurant,
+  @send_email
+}

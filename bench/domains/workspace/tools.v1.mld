@@ -1,0 +1,279 @@
+>> Workspace tool wrappers for the rig framework.
+>>
+>> Wraps the AgentDojo MCP tools with rig phase labels (resolve:r,
+>> extract:r, execute:w), domain record coercion, and controlArgs
+>> declarations. The underlying MCP function calls are unchanged from
+>> the reference implementation in benchmarks/llm/tools/workspace.mld
+>> — only the mlld wrapping is new.
+>>
+>> Per plan-rig-rewrite.md "Not changing tool definitions": the MCP
+>> signatures are load-bearing for AgentDojo benchmark visibility and
+>> stay as-is. The labels and controlArgs are the framework-side
+>> security metadata that rig uses for phase routing and policy
+>> compilation.
+>>
+>> Threat model gaps addressed:
+>>   - Class 5 [!] #create_calendar_event-not-in-exfil-group: this
+>>     wrapper adds the bare `exfil` label (post-collapse) to
+>>     create_calendar_event so no-send-to-unknown fires on its
+>>     participants control arg. The defense gains a second layer on
+>>     top of bucketed-intent-resolved.
+
+import tools from mcp "tools" as @mcp
+
+import {
+  @contact,
+  @email_msg,
+  @calendar_evt,
+  @file_entry
+} from "./records.mld"
+import { @datetime_context } from "./shelf.mld"
+
+>> AgentDojo surfaces some ids as numbers even though the MCP tool
+>> signatures expect strings. Normalize those bridge-facing ids at the
+>> adapter boundary so both v1 and v2 wrappers hand the runtime the
+>> concrete shape it validates.
+exe @asString(inputValue) = js {
+  if (inputValue == null) return "";
+  return String(inputValue);
+}
+
+>> ── Email read tools ──
+
+exe resolve:r, untrusted, tool:r @get_unread_emails() = [
+  => @mcp.getUnreadEmails()
+] => record @email_msg
+
+exe resolve:r, tool:r @get_sent_emails() = [
+  => @mcp.getSentEmails()
+] => record @email_msg
+
+exe resolve:r, tool:r @get_received_emails() = [
+  => @mcp.getReceivedEmails()
+] => record @email_msg
+
+exe resolve:r, tool:r @get_draft_emails() = [
+  => @mcp.getDraftEmails()
+] => record @email_msg
+
+exe resolve:r, untrusted, tool:r @search_emails(query, sender) = [
+  => @mcp.searchEmails(@query, @sender)
+] => record @email_msg with { controlArgs: ["sender"] }
+
+exe resolve:r, untrusted, tool:r @search_emails_any_sender(query) = [
+  => @mcp.searchEmailsAnySender(@query)
+] => record @email_msg
+
+exe extract:r, untrusted, tool:r @get_email_by_id(email_id) = [
+  => @mcp.getEmailById(@asString(@email_id))
+] => record @email_msg with { controlArgs: ["email_id"] }
+
+>> ── Contact tools ──
+
+exe resolve:r, known, tool:r @search_contacts_by_name(query) = [
+  => @mcp.searchContactsByName(@query)
+] => record @contact with { controlArgs: ["query"] }
+
+exe resolve:r, known, tool:r @search_contacts_by_email(query) = [
+  => @mcp.searchContactsByEmail(@query)
+] => record @contact with { controlArgs: ["query"] }
+
+>> ── Calendar read tools ──
+
+exe resolve:r, known, tool:r @get_current_day() = [
+  => @mcp.getCurrentDay()
+]
+
+exe resolve:r, known, tool:r @get_current_datetime() = [
+  let @dt = @mcp.getCurrentDatetime()
+  => { datetime: @dt }
+] => record @datetime_context with { controlArgs: [] }
+
+exe resolve:r, untrusted, tool:r @search_calendar_events(query, date) = [
+  => @mcp.searchCalendarEvents(@query, @date)
+] => record @calendar_evt
+
+>> Used by both resolve and extract phases — labeled with both phase
+>> tags so @rig.routeToolsByPhase can include it in either bucket.
+exe resolve:r, extract:r, untrusted, tool:r @get_day_calendar_events(day) = [
+  => @mcp.getDayCalendarEvents(@day)
+] => record @calendar_evt
+
+>> ── File read tools ──
+
+exe resolve:r, untrusted, tool:r @search_files_by_filename(filename) = [
+  => @mcp.searchFilesByFilename(@filename)
+] => record @file_entry
+
+exe resolve:r, untrusted, tool:r @list_files() = [
+  => @mcp.listFiles()
+] => record @file_entry
+
+exe resolve:r, untrusted, tool:r @search_files(query) = [
+  => @mcp.searchFiles(@query)
+] => record @file_entry
+
+exe extract:r, untrusted, tool:r @get_file_by_id(file_id) = [
+  => @mcp.getFileById(@asString(@file_id))
+] => record @file_entry with { controlArgs: ["file_id"] }
+
+>> ── Email write tools ──
+
+exe execute:w, comm:w, exfil:send, tool:w @send_email(recipients: array, subject, body, attachments: array, cc: array, bcc: array) = [
+  => @mcp.sendEmail(@recipients, @subject, @body, @attachments, @cc, @bcc)
+] with { controlArgs: ["bcc", "cc", "recipients"] }
+
+exe execute:w, destructive:targeted, tool:w @delete_email(email_id) = [
+  => @mcp.deleteEmail(@asString(@email_id))
+] with { controlArgs: ["email_id"] }
+
+>> ── Calendar write tools ──
+>>
+>> Note: create_calendar_event and add_calendar_event_participants both
+>> carry the bare `exfil` label (post-collapse) so no-send-to-unknown
+>> fires on their participant control args. The reference
+>> implementation only labeled add_calendar_event_participants as
+>> exfil:send, leaving create_calendar_event with only the
+>> bucketed-intent-resolved defense per the [!] gap in workspace
+>> threat model Class 5. This wrapper closes that gap.
+exe execute:w, calendar:w, exfil:send, tool:w @create_calendar_event(title, start_time, end_time, description, participants: array, location) = [
+  => @mcp.createCalendarEvent(@title, @start_time, @end_time, @description, @participants, @location)
+] with { controlArgs: ["participants"] }
+
+exe execute:w, destructive:targeted, tool:w @cancel_calendar_event(event_id) = [
+  => @mcp.cancelCalendarEvent(@asString(@event_id))
+] with { controlArgs: ["event_id"] }
+
+exe execute:w, calendar:w, tool:w @reschedule_calendar_event(event_id, new_start_time, new_end_time) = [
+  => @mcp.rescheduleCalendarEvent(@asString(@event_id), @new_start_time, @new_end_time)
+] with {
+  controlArgs: ["event_id"],
+  updateArgs: ["new_start_time", "new_end_time"]
+}
+
+exe execute:w, calendar:w, exfil:send, tool:w @add_calendar_event_participants(participants: array, event_id) = [
+  => @mcp.addCalendarEventParticipants(@participants, @asString(@event_id))
+] with { controlArgs: ["event_id", "participants"] }
+
+>> ── File write tools ──
+
+exe execute:w, file:w, tool:w @append_to_file(file_id, content) = [
+  => @mcp.appendToFile(@asString(@file_id), @content)
+] with { controlArgs: ["file_id"] }
+
+exe execute:w, file:w, tool:w @create_file(filename, content) = [
+  => @mcp.createFile(@filename, @content)
+] with { controlArgs: [] }
+
+exe execute:w, destructive:targeted, tool:w @delete_file(file_id) = [
+  => @mcp.deleteFile(@asString(@file_id))
+] with { controlArgs: ["file_id"] }
+
+exe execute:w, comm:w, exfil:send, tool:w @share_file(email, file_id, permission) = [
+  => @mcp.shareFile(@email, @asString(@file_id), @permission)
+] with { controlArgs: ["email", "file_id"] }
+
+>> ── Tool collection ──
+>>
+>> The full set of workspace tools, in declaration order. The agent
+>> entry point passes this to @rig.build, which uses
+>> @rig.routeToolsByPhase to derive the per-phase subsets.
+var @workspaceTools = [
+  @get_unread_emails,
+  @get_sent_emails,
+  @get_received_emails,
+  @get_draft_emails,
+  @search_emails,
+  @search_emails_any_sender,
+  @get_email_by_id,
+  @search_contacts_by_name,
+  @search_contacts_by_email,
+  @get_current_day,
+  @get_current_datetime,
+  @search_calendar_events,
+  @get_day_calendar_events,
+  @search_files_by_filename,
+  @list_files,
+  @search_files,
+  @get_file_by_id,
+  @send_email,
+  @delete_email,
+  @create_calendar_event,
+  @cancel_calendar_event,
+  @reschedule_calendar_event,
+  @add_calendar_event_participants,
+  @append_to_file,
+  @create_file,
+  @delete_file,
+  @share_file
+]
+
+>> Labeled tools collection — required by @policy.build (m-071b family).
+>> The plain array form above is used by @routeToolsByPhase for phase
+>> routing; this object form is used by the execute dispatcher's
+>> @policy.build call to compile per-step authorization fragments.
+>> normalizeToolCollection reads controlArgs / updateArgs /
+>> exactPayloadArgs from each underlying exe definition, so the
+>> entries here can be minimal { mlld: @exe } stubs without
+>> duplicating the metadata declared on the exe with-clauses above.
+var tools @workspaceToolsCollection = {
+  get_unread_emails: { mlld: @get_unread_emails },
+  get_sent_emails: { mlld: @get_sent_emails },
+  get_received_emails: { mlld: @get_received_emails },
+  get_draft_emails: { mlld: @get_draft_emails },
+  search_emails: { mlld: @search_emails },
+  search_emails_any_sender: { mlld: @search_emails_any_sender },
+  get_email_by_id: { mlld: @get_email_by_id },
+  search_contacts_by_name: { mlld: @search_contacts_by_name },
+  search_contacts_by_email: { mlld: @search_contacts_by_email },
+  get_current_day: { mlld: @get_current_day },
+  get_current_datetime: { mlld: @get_current_datetime },
+  search_calendar_events: { mlld: @search_calendar_events },
+  get_day_calendar_events: { mlld: @get_day_calendar_events },
+  search_files_by_filename: { mlld: @search_files_by_filename },
+  list_files: { mlld: @list_files },
+  search_files: { mlld: @search_files },
+  get_file_by_id: { mlld: @get_file_by_id },
+  send_email: { mlld: @send_email },
+  delete_email: { mlld: @delete_email },
+  create_calendar_event: { mlld: @create_calendar_event },
+  cancel_calendar_event: { mlld: @cancel_calendar_event },
+  reschedule_calendar_event: { mlld: @reschedule_calendar_event },
+  add_calendar_event_participants: { mlld: @add_calendar_event_participants },
+  append_to_file: { mlld: @append_to_file },
+  create_file: { mlld: @create_file },
+  delete_file: { mlld: @delete_file },
+  share_file: { mlld: @share_file }
+}
+
+export {
+  @workspaceTools,
+  @workspaceToolsCollection,
+  @get_unread_emails,
+  @get_sent_emails,
+  @get_received_emails,
+  @get_draft_emails,
+  @search_emails,
+  @search_emails_any_sender,
+  @get_email_by_id,
+  @search_contacts_by_name,
+  @search_contacts_by_email,
+  @get_current_day,
+  @get_current_datetime,
+  @search_calendar_events,
+  @get_day_calendar_events,
+  @search_files_by_filename,
+  @list_files,
+  @search_files,
+  @get_file_by_id,
+  @send_email,
+  @delete_email,
+  @create_calendar_event,
+  @cancel_calendar_event,
+  @reschedule_calendar_event,
+  @add_calendar_event_participants,
+  @append_to_file,
+  @create_file,
+  @delete_file,
+  @share_file
+}

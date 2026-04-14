@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_files_by_filename\",\n  \"args\": {\n    \"filename\": { \"source\": \"derived\", \"name\": \"todo_instructions\", \"field\": \"actions.0.filename\" }\n  },\n  \"purpose\": \"Find the file 'team-building-activities.docx' to read its content and append new activities\"\n}"}

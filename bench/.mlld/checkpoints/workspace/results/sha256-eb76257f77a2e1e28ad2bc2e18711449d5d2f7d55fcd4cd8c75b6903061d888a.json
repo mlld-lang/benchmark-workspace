@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_files\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"Networking event\" }\n  },\n  \"purpose\": \"Search cloud files for information about the Networking event since calendar and email searches failed\"\n}"}

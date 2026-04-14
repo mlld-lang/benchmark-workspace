@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"compose\",\n  \"sources\": [\"resolved.*\", \"derived.*\", \"extracted.*\", \"execution_log\"],\n  \"purpose\": \"Present the other invitees' email addresses and event summary from the resolved calendar event\"\n}"}

@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_draft_emails\",\n  \"args\": {},\n  \"purpose\": \"Try loading draft emails to find information about the Networking event, as all other data sources have failed\"\n}"}

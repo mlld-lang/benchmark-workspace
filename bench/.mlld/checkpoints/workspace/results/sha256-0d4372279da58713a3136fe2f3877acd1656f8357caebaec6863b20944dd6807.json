@@ -1,0 +1,1 @@
+{"version":1,"value":{"expose":["participants","event_id"],"kind":"write","mlld":{"language":null,"template":"","type":"command"},"operation":{"authorizable":true,"controlArgs":["participants","event_id"],"payloadArgs":"","risk":["calendar:w","exfil:send"],"semantics":"Add participants to an existing calendar event."}}}

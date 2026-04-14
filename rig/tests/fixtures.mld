@@ -1,0 +1,497 @@
+>> Shared test fixtures for rig v2.
+>>
+>> These records and tools are intentionally tiny, but they cover the
+>> core surfaces the plan requires: display projection, record-backed
+>> proofs, payload records, synthesized policy metadata, and direct tool
+>> invocation during the stubbed flow tests.
+
+record @contact = {
+  facts: [email: string],
+  data: [name: string, notes: string?],
+  display: {
+    role:planner: [name, { ref: "email" }],
+    role:worker: [name, { ref: "email" }, notes]
+  }
+}
+
+record @note_entry = {
+  facts: [id_: string],
+  data: [title: string, content: string?],
+  key: id_,
+  display: {
+    role:planner: [{ ref: "id_" }, title],
+    role:worker: [{ ref: "id_" }, title, content]
+  }
+}
+
+record @message_entry = {
+  facts: [id_: string, sender: string?],
+  data: [body: string?, subject: string?],
+  key: id_,
+  display: {
+    role:planner: [{ ref: "id_" }, { ref: "sender" }],
+    role:worker: [{ ref: "id_" }, { ref: "sender" }, subject, body]
+  }
+}
+
+record @email_payload = {
+  facts: [],
+  data: [subject: string, body: string, recipients: array?],
+  validate: "demote"
+}
+
+record @note_payload = {
+  facts: [],
+  data: [content: string],
+  validate: "demote"
+}
+
+record @summary_payload = {
+  facts: [],
+  data: [summary: string],
+  validate: "demote"
+}
+
+record @webpage_content = {
+  facts: [url: string],
+  data: [content: string?],
+  key: url,
+  display: {
+    role:planner: [{ ref: "url" }],
+    role:worker: [{ ref: "url" }, content]
+  }
+}
+
+record @number_row = {
+  facts: [id_: string],
+  data: [value: number],
+  key: id_,
+  display: {
+    role:planner: [{ ref: "id_" }, value],
+    role:worker: [{ ref: "id_" }, value]
+  }
+}
+
+>> Arg-less scalar-lookalike resolve fixture. Workspace's
+>> `@datetime_context` uses `value` as both fact field and record key, so
+>> this mirrors the same "single record keyed by a scalar field" shape
+>> without depending on MCP.
+record @datetime_context = {
+  facts: [value: string],
+  data: [kind: string?],
+  key: value,
+  display: {
+    role:planner: [{ ref: "value" }, kind],
+    role:worker: [{ ref: "value" }, kind]
+  }
+}
+
+>> Read tools return static fixtures so the phase loop tests can focus
+>> on rig mechanics instead of external variability.
+exe resolve:r, tool:r @get_contacts() = [
+  => [
+    { email: "alice.example", name: "Alice", notes: "planner-hidden note" },
+    { email: "bob.example", name: "Bob", notes: "secondary record" }
+  ]
+] => record @contact
+
+exe resolve:r, tool:r @get_note(note_id) = [
+  => { id_: @note_id, title: "Todo", content: "Existing note body" }
+] => record @note_entry with { controlArgs: ["note_id"] }
+
+exe resolve:r, tool:r @get_message(message_id) = [
+  => {
+    id_: @message_id,
+    sender: "mallory.example",
+    subject: "Follow up",
+    body: "Draft a short summary and keep it factual."
+  }
+] => record @message_entry with { controlArgs: ["message_id"] }
+
+exe resolve:r, tool:r @get_numbers() = [
+  => [
+    { id_: "n1", value: 3 },
+    { id_: "n2", value: 8 },
+    { id_: "n3", value: 5 }
+  ]
+] => record @number_row
+
+exe resolve:r, tool:r @get_today() = [
+  => {
+    value: "2026-04-14",
+    kind: "day"
+  }
+] => record @datetime_context
+
+>> Literal-source extract fixture. This covers the extract:r read-tool
+>> path used by Slack's webpage fetches.
+exe extract:r, tool:r @get_webpage(url) = [
+  => {
+    url: @url,
+    content: "Synthetic webpage content."
+  }
+] => record @webpage_content with { controlArgs: ["url"] }
+
+>> Write tools echo their inputs. The tests assert on the phase log and
+>> the execute attestation rather than on side effects outside mlld.
+exe execute:w, tool:w @send_email(recipients: array, subject, body) = [
+  => {
+    ok: true,
+    recipients: @recipients,
+    subject: @subject,
+    body: @body
+  }
+] with { controlArgs: ["recipients"] }
+
+exe execute:w, tool:w @append_note(note_id, content) = [
+  => {
+    ok: true,
+    note_id: @note_id,
+    content: @content
+  }
+] with { controlArgs: ["note_id"] }
+
+exe execute:w, tool:w @create_note(content) = [
+  => {
+    ok: true,
+    content: @content
+  }
+] with { controlArgs: [] }
+
+exe execute:w, tool:w @update_password(password) = [
+  => {
+    ok: true,
+    password: @password
+  }
+] with { controlArgs: [] }
+
+var @records = {
+  contact: @contact,
+  note_entry: @note_entry,
+  message_entry: @message_entry,
+  email_payload: @email_payload,
+  note_payload: @note_payload,
+  summary_payload: @summary_payload,
+  webpage_content: @webpage_content,
+  number_row: @number_row,
+  datetime_context: @datetime_context
+}
+
+>> The catalog mirrors the v2 interface shape: kind, mlld, returns for
+>> reads; operation metadata for writes; optional bind defaults.
+var @tools = {
+  get_contacts: {
+    kind: "read",
+    mlld: @get_contacts,
+    returns: @contact,
+    labels: ["resolve:r"],
+    semantics: "Load the small synthetic contact list."
+  },
+  get_note: {
+    kind: "read",
+    mlld: @get_note,
+    returns: @note_entry,
+    labels: ["resolve:r"],
+    semantics: "Load a single note by id."
+  },
+  get_message: {
+    kind: "read",
+    mlld: @get_message,
+    returns: @message_entry,
+    labels: ["resolve:r"],
+    semantics: "Load a single message by id."
+  },
+  get_numbers: {
+    kind: "read",
+    mlld: @get_numbers,
+    returns: @number_row,
+    labels: ["resolve:r"],
+    semantics: "Return a short numeric list for derive tests."
+  },
+  get_today: {
+    kind: "read",
+    mlld: @get_today,
+    returns: @datetime_context,
+    labels: ["resolve:r", "known"],
+    semantics: "Return one synthetic day context record."
+  },
+  get_webpage: {
+    kind: "read",
+    mlld: @get_webpage,
+    returns: @webpage_content,
+    labels: ["extract:r", "untrusted"],
+    risk: ["exfil:fetch"],
+    semantics: "Fetch a single synthetic webpage."
+  },
+  send_email: {
+    kind: "write",
+    mlld: @send_email,
+    operation: {
+      controlArgs: ["recipients"],
+      payloadArgs: ["subject", "body"],
+      payloadRecord: @email_payload,
+      risk: ["exfil:send"],
+      authorizable: true,
+      semantics: "Send the same email body to one or more recipients."
+    }
+  },
+  append_note: {
+    kind: "write",
+    mlld: @append_note,
+    operation: {
+      controlArgs: ["note_id"],
+      payloadArgs: ["content"],
+      payloadRecord: @note_payload,
+      risk: ["destructive:targeted"],
+      authorizable: true,
+      semantics: "Append content to an existing note identified by id."
+    }
+  },
+  create_note: {
+    kind: "write",
+    mlld: @create_note,
+    operation: {
+      controlArgs: [],
+      payloadArgs: ["content"],
+      payloadRecord: @note_payload,
+      risk: ["file:w"],
+      authorizable: true,
+      semantics: "Create a brand-new note with freeform content."
+    }
+  },
+  update_password: {
+    kind: "write",
+    mlld: @update_password,
+    operation: {
+      controlArgs: [],
+      payloadArgs: ["password"],
+      exactPayloadArgs: ["password"],
+      payloadRecord: @note_payload,
+      risk: ["privileged:account"],
+      authorizable: false,
+      semantics: "Update the account password."
+    }
+  }
+}
+
+>> Runtime dispatch needs a preserved `var tools` collection so mlld can
+>> keep the cross-module tool bridge callable. The plain `@tools`
+>> catalog above remains the authority for rig metadata, planner docs,
+>> and policy synthesis.
+var tools @toolsCollection = {
+  get_contacts: {
+    mlld: @get_contacts,
+    labels: ["resolve:r"],
+    expose: []
+  },
+  get_note: {
+    mlld: @get_note,
+    labels: ["resolve:r"],
+    expose: ["note_id"],
+    controlArgs: ["note_id"]
+  },
+  get_message: {
+    mlld: @get_message,
+    labels: ["resolve:r"],
+    expose: ["message_id"],
+    controlArgs: ["message_id"]
+  },
+  get_numbers: {
+    mlld: @get_numbers,
+    labels: ["resolve:r"],
+    expose: []
+  },
+  get_today: {
+    mlld: @get_today,
+    labels: ["resolve:r"],
+    expose: []
+  },
+  get_webpage: {
+    mlld: @get_webpage,
+    labels: ["extract:r"],
+    expose: ["url"],
+    controlArgs: ["url"]
+  },
+  send_email: {
+    mlld: @send_email,
+    labels: ["execute:w"],
+    expose: ["recipients", "subject", "body"],
+    controlArgs: ["recipients"]
+  },
+  append_note: {
+    mlld: @append_note,
+    labels: ["execute:w"],
+    expose: ["note_id", "content"],
+    controlArgs: ["note_id"]
+  },
+  create_note: {
+    mlld: @create_note,
+    labels: ["execute:w"],
+    expose: ["content"]
+  },
+  update_password: {
+    mlld: @update_password,
+    labels: ["execute:w"],
+    expose: ["password"]
+  }
+}
+
+>> Sample typed values are factored out so importers do not need to
+>> re-run inline casts inside a larger exported object.
+var @aliceContactRecord = {
+  email: "alice.example",
+  name: "Alice",
+  notes: "planner-hidden note"
+} as record @contact
+
+var @bobContactRecord = {
+  email: "bob.example",
+  name: "Bob",
+  notes: "secondary record"
+} as record @contact
+
+var @noteEntryRecord = {
+  id_: "note_1",
+  title: "Todo",
+  content: "Existing note body"
+} as record @note_entry
+
+var @numberOneRecord = {
+  id_: "n1",
+  value: 3
+} as record @number_row
+
+var @numberTwoRecord = {
+  id_: "n2",
+  value: 8
+} as record @number_row
+
+var @summaryRecord = {
+  summary: "Existing summary"
+} as record @summary_payload
+
+>> Nested object literals materialize their child values, so any
+>> fact-bearing field we want to reuse later must be captured once as a
+>> standalone value before we tuck it under `sampleState.field_values`.
+var @aliceContactEmail = @aliceContactRecord.email
+var @aliceContactName = @aliceContactRecord.name
+var @aliceContactNotes = @aliceContactRecord.notes
+var @bobContactEmail = @bobContactRecord.email
+var @bobContactName = @bobContactRecord.name
+var @bobContactNotes = @bobContactRecord.notes
+var @noteEntryId = @noteEntryRecord.id_
+var @noteEntryTitle = @noteEntryRecord.title
+var @noteEntryContent = @noteEntryRecord.content
+var @numberOneId = @numberOneRecord.id_
+var @numberOneValue = @numberOneRecord.value
+var @numberTwoId = @numberTwoRecord.id_
+var @numberTwoValue = @numberTwoRecord.value
+
+var @sampleState = {
+  resolved: {
+    contact: [
+      {
+        handle: "r_contact_alice.example",
+        key: "alice.example",
+        value: @aliceContactRecord,
+        field_values: {
+          email: @aliceContactEmail,
+          name: @aliceContactName,
+          notes: @aliceContactNotes
+        }
+      },
+      {
+        handle: "r_contact_bob.example",
+        key: "bob.example",
+        value: @bobContactRecord,
+        field_values: {
+          email: @bobContactEmail,
+          name: @bobContactName,
+          notes: @bobContactNotes
+        }
+      }
+    ],
+    note_entry: [
+      {
+        handle: "r_note_entry_note_1",
+        key: "note_1",
+        value: @noteEntryRecord,
+        field_values: {
+          id_: @noteEntryId,
+          title: @noteEntryTitle,
+          content: @noteEntryContent
+        }
+      }
+    ],
+    number_row: [
+      {
+        handle: "r_number_row_n1",
+        key: "n1",
+        value: @numberOneRecord,
+        field_values: {
+          id_: @numberOneId,
+          value: @numberOneValue
+        }
+      },
+      {
+        handle: "r_number_row_n2",
+        key: "n2",
+        value: @numberTwoRecord,
+        field_values: {
+          id_: @numberTwoId,
+          value: @numberTwoValue
+        }
+      }
+    ]
+  },
+  extracted: {
+    summary: {
+      provenance: "extracted",
+      value: @summaryRecord
+    }
+  },
+  derived: {
+    top_contact: {
+      provenance: "derived",
+      value: { choice: "Alice", body: "Derived body text" },
+      selection_refs: [{
+        source: "selection",
+        backing: { record: "contact", handle: "r_contact_alice.example" }
+      }]
+    }
+  },
+  execution_log: [],
+  planner_session_id: null,
+  phase_events: []
+}
+
+var @sampleAgent = {
+  suite: "fixtures",
+  records: @records
+}
+
+export {
+  @contact,
+  @note_entry,
+  @message_entry,
+  @email_payload,
+  @note_payload,
+  @summary_payload,
+  @number_row,
+  @datetime_context,
+  @records,
+  @tools,
+  @toolsCollection,
+  @sampleState,
+  @sampleAgent,
+  @get_contacts,
+  @get_note,
+  @get_message,
+  @get_numbers,
+  @get_today,
+  @get_webpage,
+  @send_email,
+  @append_note,
+  @create_note,
+  @update_password
+}

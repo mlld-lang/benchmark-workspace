@@ -1,0 +1,1 @@
+{"version":1,"value":"{\n  \"phase\": \"extract\",\n  \"source\": { \"source\": \"resolved\", \"record\": \"email_msg\", \"handle\": \"r_email_msg_33\", \"field\": \"body\" },\n  \"schema\": \"text\",\n  \"name\": \"todo_email_body\",\n  \"purpose\": \"Extract the body of the email from david.smith@bluesparrowtech.com to read the TODO instructions for the week\"\n}"}

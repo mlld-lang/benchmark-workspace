@@ -1,0 +1,678 @@
+import {
+  @pairsToObject,
+  @toolOperation,
+  @toolControlArgs,
+  @toolPayloadArgs,
+  @toolExactPayloadArgs,
+  @toolBind
+} from "./tooling.mld"
+
+>> Intent compilation is the provenance firewall. Keep it mechanical:
+>> look up the native value, validate the source class, and emit the
+>> exact builder data `@policy.build` needs.
+
+exe @name(inputValue) = when [
+  !@inputValue.isDefined() => null
+  @typeof(@inputValue) == "string" => @inputValue
+  @typeof(@inputValue) == "number" || @typeof(@inputValue) == "boolean" => `@inputValue`
+  @inputValue.mx.data.isDefined() => @inputValue.mx.data
+  @inputValue.data.isDefined() => @inputValue.data
+  @inputValue.text.isDefined() => @inputValue.text
+  * => `@inputValue`
+]
+
+exe @lookupWriteTool(tools, toolName) = [
+  let @tool = @tools[@toolName]
+  => when [
+    @tool.isDefined() => { ok: true, tool: @tool }
+    * => { ok: false, error: "unknown_write_tool", tool: @toolName }
+  ]
+]
+
+exe @roleForArg(tool, argName) = [
+  let @controlArgs = @toolControlArgs(@tool)
+  let @payloadArgs = @toolPayloadArgs(@tool)
+  => when [
+    @controlArgs.includes(@argName) => "control"
+    @payloadArgs.includes(@argName) => "payload"
+    * => "unknown"
+  ]
+]
+
+exe @isExactPayloadArg(tool, argName) = [
+  => @toolExactPayloadArgs(@tool).includes(@argName)
+]
+
+exe @bucketObject(bucketValue) = when [
+  @bucketValue.mx.data.isDefined() => @bucketValue.mx.data
+  @bucketValue.data.isDefined() => @bucketValue.data
+  * => @bucketValue
+]
+
+exe @bucketItems(values) = when [
+  @values.items.isDefined() => @values.items
+  @values.data.items.isDefined() => @values.data.items
+  @values.mx.data.items.isDefined() => @values.mx.data.items
+  @values.length.isDefined() => @values
+  @values.data.length.isDefined() => @values.data
+  @values.mx.data.length.isDefined() => @values.mx.data
+  * => []
+]
+
+exe @namedStateEntry(entryValue) = when [
+  @entryValue.mx.data.isDefined() => @entryValue.mx.data
+  @entryValue.data.isDefined() => @entryValue.data
+  * => @entryValue
+]
+
+>> Native mlld field access preserves wrappers. Use it directly and only
+>> fall back across the common container layouts we see at module and
+>> checkpoint boundaries.
+exe @valueField(inputValue, fieldName) = [
+  let @fieldKey = @name(@fieldName)
+  => when [
+    !@fieldKey.isDefined() => @inputValue
+    @inputValue.mx.data[@fieldKey].isDefined() => @inputValue.mx.data[@fieldKey]
+    @inputValue.data[@fieldKey].isDefined() => @inputValue.data[@fieldKey]
+    @inputValue[@fieldKey].isDefined() => @inputValue[@fieldKey]
+    * => null
+  ]
+]
+
+exe @refSource(ref) = [
+  => @name(@valueField(@ref, "source"))
+]
+
+exe @resolvedEntries(state, recordName) = [
+  let @recordKey = @name(@recordName)
+  let @resolvedBucket = @bucketObject(@state.resolved)
+  => when [
+    @recordKey.isDefined() && @resolvedBucket[@recordKey].isDefined() => @bucketItems(@resolvedBucket[@recordKey])
+    * => []
+  ]
+]
+
+exe @lookupResolvedEntry(state, recordName, handle) = [
+  let @entries = @resolvedEntries(@state, @recordName)
+  => loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "lookupResolvedEntry" => @input
+      * => { _rig_cursor: "lookupResolvedEntry", index: 0 }
+    ]
+    if @ctx.index >= @entries.length [ done null ]
+    let @entry = @entries[@ctx.index]
+    if @name(@entry.handle) == @name(@handle) [ done @entry ]
+    continue { _rig_cursor: "lookupResolvedEntry", index: @ctx.index + 1 }
+  ]
+]
+
+exe @resolvedEntryFieldValue(entry, fieldName) = [
+  let @fieldKey = @name(@fieldName)
+  => when [
+    !@fieldKey.isDefined() => @entry.value
+    @entry.identity_field.isDefined() && @fieldKey == @name(@entry.identity_field) && @entry.identity_value.isDefined() => @entry.identity_value
+    @entry.field_values[@fieldKey].isDefined() => @entry.field_values[@fieldKey]
+    * => @valueField(@entry.value, @fieldKey)
+  ]
+]
+
+>> `@policy.build` wants plain eq values, but execute dispatch must keep
+>> the original wrapped value. Unwrap only one scalar layer for the eq.
+exe @constraintEqValue(inputValue) = when [
+  @inputValue.mx.data.isDefined() => @inputValue.mx.data
+  @inputValue.data.isDefined() => @inputValue.data
+  @inputValue.text.isDefined() => @inputValue.text
+  * => @inputValue
+]
+
+>> JS is only used here because we need direct metadata access. Callers
+>> pass `.keep` so the function can read `.mx.factsources` without
+>> flattening the value that continues through the runtime.
+exe @factAttestations(inputValue) = js {
+  function collect(node, refs) {
+    if (node == null) return;
+    if (Array.isArray(node)) {
+      for (const item of node) collect(item, refs);
+      return;
+    }
+    if (typeof node !== "object") return;
+
+    const facts = Array.isArray(node.mx?.factsources)
+      ? node.mx.factsources
+      : Array.isArray(node.metadata?.factsources)
+        ? node.metadata.factsources
+        : [];
+
+    for (const source of facts) {
+      if (typeof source?.ref === "string" && source.ref !== "") {
+        refs.push(`fact:${source.ref}`);
+      }
+    }
+
+    if (node.data !== undefined) {
+      collect(node.data, refs);
+      return;
+    }
+
+    for (const value of Object.values(node)) {
+      if (typeof value !== "function") collect(value, refs);
+    }
+  }
+
+  const refs = [];
+  collect(inputValue, refs);
+  return refs.filter((value, index) => refs.indexOf(value) === index);
+}
+
+exe @hasFacts(inputValue) = [
+  => @factAttestations(@inputValue.keep).length > 0
+]
+
+exe @resolvedControlResult(fieldName, fieldValue) = [
+  => {
+    ok: true,
+    source: "resolved",
+    field: @fieldName,
+    value: @fieldValue,
+    policy_eq: @constraintEqValue(@fieldValue),
+    policy_attestations: @factAttestations(@fieldValue.keep)
+  }
+]
+
+>> Fieldless resolved refs are planner shorthand for "that chosen
+>> instance". For control args rig still needs one concrete fact-bearing
+>> scalar, so prefer the declared identity field and then the unique
+>> fact-bearing field if there is only one.
+exe @entryControlValue(entry) = [
+  if @entry.identity_field.isDefined() [
+    let @identityValue = @resolvedEntryFieldValue(@entry, @entry.identity_field)
+    if @identityValue.isDefined() [
+      => { ok: true, field: @entry.identity_field, value: @identityValue }
+    ]
+  ]
+
+  if @entry.identity_value.isDefined() && @hasFacts(@entry.identity_value) [
+    => {
+      ok: true,
+      field: @entry.identity_field ?? null,
+      value: @entry.identity_value
+    }
+  ]
+
+  let @matchingKeyFields = for @fieldName, @fieldValue in (@entry.field_values ?? {}) when @constraintEqValue(@fieldValue) == @constraintEqValue(@entry.key) => {
+    field: @fieldName,
+    value: @fieldValue
+  }
+  if @matchingKeyFields.length > 0 [
+    => { ok: true, field: @matchingKeyFields[0].field, value: @matchingKeyFields[0].value }
+  ]
+
+  let @factFields = for @fieldName, @fieldValue in (@entry.field_values ?? {}) when @hasFacts(@fieldValue) => {
+    field: @fieldName,
+    value: @fieldValue
+  }
+  => when [
+    @factFields.length == 1 => { ok: true, field: @factFields[0].field, value: @factFields[0].value }
+    * => { ok: false, error: "control_ref_requires_explicit_field" }
+  ]
+]
+
+exe @lookupResolvedControlValue(state, recordName, handle, fieldName) = [
+  let @entry = @lookupResolvedEntry(@state, @recordName, @handle)
+  if !@entry [ => { ok: false, error: "control_ref_backing_missing" } ]
+
+  if @fieldName.isDefined() [
+    let @fieldValue = @resolvedEntryFieldValue(@entry, @fieldName)
+    => when [
+      @fieldValue.isDefined() => @resolvedControlResult(@fieldName, @fieldValue)
+      * => { ok: false, error: "resolved_field_missing", field: @fieldName }
+    ]
+  ]
+
+  if @entry.identity_field.isDefined() [
+    let @identityValue = @resolvedEntryFieldValue(@entry, @entry.identity_field)
+    if @identityValue.isDefined() [ => @resolvedControlResult(@entry.identity_field, @identityValue) ]
+  ]
+
+  if @entry.identity_value.isDefined() && @hasFacts(@entry.identity_value) [
+    => @resolvedControlResult(@entry.identity_field ?? null, @entry.identity_value)
+  ]
+
+  let @defaultValue = @entryControlValue(@entry)
+  => when [
+    @defaultValue.ok => @resolvedControlResult(@defaultValue.field, @defaultValue.value)
+    * => @defaultValue
+  ]
+]
+
+exe @lowerSelectionRef(state, ref) = [
+  if !@ref.isDefined() [ => { ok: false, error: "missing_selection_ref" } ]
+  if @refSource(@ref) != "selection" [ => { ok: false, error: "wrong_selection_source" } ]
+  if !@ref.backing.isDefined() [ => { ok: false, error: "selection_missing_backing" } ]
+  let @entry = @lookupResolvedEntry(@state, @ref.backing.record, @ref.backing.handle)
+  if !@entry [
+    => {
+      ok: false,
+      error: "selection_backing_missing",
+      record: @ref.backing.record,
+      handle: @ref.backing.handle
+    }
+  ]
+  => {
+    ok: true,
+    ref: {
+      source: "resolved",
+      record: @ref.backing.record,
+      handle: @ref.backing.handle,
+      field: @ref.field ?? null
+    }
+  }
+]
+
+exe @resolveControlRefValue(state, ref) = [
+  => when [
+    !@ref.isDefined() => { ok: false, error: "missing_ref" }
+    @refSource(@ref) == "selection" => @lookupResolvedControlValue(@state, @ref.backing.record, @ref.backing.handle, @ref.field)
+    @refSource(@ref) == "resolved" && @ref.handle.isDefined() => @lookupResolvedControlValue(@state, @ref.record, @ref.handle, @ref.field)
+    * => { ok: false, error: "control_ref_backing_missing" }
+  ]
+]
+
+exe @resolveNamedValue(state, bucketName, ref) = [
+  let @bucket = @bucketObject(@state[@bucketName])
+  let @entry = @namedStateEntry(@bucket[@ref.name])
+  if !@entry.isDefined() [ => { ok: false, error: `@bucketName\_name_not_found`, name: @ref.name } ]
+  let @value = when [
+    @ref.field.isDefined() => @valueField(@entry.value, @ref.field)
+    * => @entry.value
+  ]
+  => when [
+    @value.isDefined() => { ok: true, source: @bucketName, name: @ref.name, value: @value }
+    * => { ok: false, error: `@bucketName\_field_missing`, name: @ref.name, field: @ref.field }
+  ]
+]
+
+exe @resolveRefValue(state, ref) = [
+  if !@ref.isDefined() [ => { ok: false, error: "missing_ref" } ]
+
+  if @refSource(@ref) == "selection" [
+    let @lowered = @lowerSelectionRef(@state, @ref)
+    if !@lowered.ok [ => @lowered ]
+    => @resolveRefValue(@state, @lowered.ref)
+  ]
+
+  if @refSource(@ref) == "resolved" [
+    if @ref.handle.isDefined() [
+      let @entry = @lookupResolvedEntry(@state, @ref.record, @ref.handle)
+      if !@entry [
+        => {
+          ok: false,
+          error: "resolved_handle_not_found",
+          record: @ref.record,
+          handle: @ref.handle
+        }
+      ]
+      let @value = when [
+        @ref.field.isDefined() => @resolvedEntryFieldValue(@entry, @ref.field)
+        * => @entry.value
+      ]
+      => when [
+        @value.isDefined() => {
+          ok: true,
+          source: "resolved",
+          record: @ref.record,
+          handle: @ref.handle,
+          value: @value
+        }
+        * => {
+          ok: false,
+          error: "resolved_field_missing",
+          record: @ref.record,
+          handle: @ref.handle,
+          field: @ref.field
+        }
+      ]
+    ]
+
+    let @entries = @resolvedEntries(@state, @ref.record)
+    let @values = for @entry in @entries => @entry.value
+    => {
+      ok: true,
+      source: "resolved",
+      record: @ref.record,
+      family: true,
+      value: @values
+    }
+  ]
+
+  => when [
+    @refSource(@ref) == "extracted" => @resolveNamedValue(@state, "extracted", @ref)
+    @refSource(@ref) == "derived" => @resolveNamedValue(@state, "derived", @ref)
+    @refSource(@ref) == "known" => { ok: true, source: "known", value: @ref.value }
+    @refSource(@ref) == "allow" => { ok: true, source: "allow", value: true }
+    * => { ok: false, error: "unsupported_ref_source", source: @refSource(@ref) }
+  ]
+]
+
+exe @knownInTask(query, literalValue) = [
+  if !@literalValue.isDefined() [ => false ]
+  => @query.includes(@name(@literalValue))
+]
+
+exe @compileScalarRef(state, tool, argName, ref, query) = [
+  let @role = @roleForArg(@tool, @argName)
+  if @role == "unknown" [ => { ok: false, arg: @argName, error: "unknown_tool_arg" } ]
+
+  let @exactPayload = @isExactPayloadArg(@tool, @argName)
+  let @controlResolved = when [
+    @role != "control" => null
+    @refSource(@ref) == "selection" => @resolveControlRefValue(@state, @ref)
+    @refSource(@ref) == "resolved" && @ref.handle.isDefined() => @resolveControlRefValue(@state, @ref)
+    * => null
+  ]
+  let @resolved = when [
+    @controlResolved.isDefined() => @controlResolved
+    * => @resolveRefValue(@state, @ref)
+  ]
+  if !@resolved.ok [ => { ...@resolved, arg: @argName } ]
+
+  let @resolvedRecord = when [
+    @refSource(@ref) == "selection" => @ref.backing.record
+    * => @ref.record
+  ]
+  let @resolvedField = @resolved.field ?? @ref.field
+  let @policyAttestations = @resolved.policy_attestations ?? []
+  let @resolvedAttestations = when [
+    @policyAttestations.length > 0 => @policyAttestations
+    @resolvedRecord.isDefined() && @resolvedField.isDefined() => [`fact:\@@resolvedRecord.@resolvedField`]
+    * => []
+  ]
+
+  if @resolved.source == "allow" [
+    if @toolControlArgs(@tool).length > 0 [
+      => { ok: false, arg: @argName, error: "allow_requires_no_control_args" }
+    ]
+    => {
+      ok: true,
+      arg: @argName,
+      role: @role,
+      source_class: "allow",
+      auth_bucket: "allow",
+      auth_value: true,
+      value: null,
+      backing_refs: [],
+      flat_eq: null,
+      flat_attestations: []
+    }
+  ]
+
+  if @resolved.source == "known" [
+    if !@knownInTask(@query, @resolved.value) [
+      => {
+        ok: false,
+        arg: @argName,
+        error: "known_value_not_in_task_text",
+        value: @resolved.value
+      }
+    ]
+    => when [
+      @role == "control" || @exactPayload => {
+        ok: true,
+        arg: @argName,
+        role: @role,
+        source_class: "known",
+        auth_bucket: "known",
+        auth_value: { value: @resolved.value, source: "task" },
+        value: @resolved.value,
+        backing_refs: [],
+        flat_eq: @resolved.value,
+        flat_attestations: ["known"]
+      }
+      * => {
+        ok: true,
+        arg: @argName,
+        role: "payload",
+        source_class: "known",
+        value: @resolved.value,
+        backing_refs: [],
+        flat_eq: null,
+        flat_attestations: []
+      }
+    ]
+  ]
+
+  if @resolved.source == "resolved" [
+    if @role == "control" && !@ref.handle.isDefined() && @ref.source != "selection" [
+      => {
+        ok: false,
+        arg: @argName,
+        error: "control_ref_requires_specific_instance",
+        source_class: "resolved"
+      }
+    ]
+    if @exactPayload [
+      => {
+        ok: false,
+        arg: @argName,
+        error: "non_task_source_in_exact_payload_arg",
+        source_class: "resolved"
+      }
+    ]
+    let @backingRef = when [
+      @refSource(@ref) == "selection" => { record: @ref.backing.record, handle: @ref.backing.handle }
+      * => { record: @ref.record, handle: @ref.handle }
+    ]
+    => when [
+      @role == "control" => {
+        ok: true,
+        arg: @argName,
+        role: "control",
+        source_class: "resolved",
+        auth_bucket: "resolved",
+        auth_value: @resolved.value,
+        value: @resolved.value,
+        backing_refs: [@backingRef],
+        flat_eq: @resolved.policy_eq ?? @constraintEqValue(@resolved.value),
+        flat_attestations: @resolvedAttestations
+      }
+      * => {
+        ok: true,
+        arg: @argName,
+        role: "payload",
+        source_class: "resolved",
+        value: @resolved.value,
+        backing_refs: [],
+        flat_eq: null,
+        flat_attestations: []
+      }
+    ]
+  ]
+
+  if @resolved.source == "extracted" || @resolved.source == "derived" [
+    if @role == "control" [
+      => {
+        ok: false,
+        arg: @argName,
+        error: "payload_only_source_in_control_arg",
+        source_class: @resolved.source
+      }
+    ]
+    if @exactPayload [
+      => {
+        ok: false,
+        arg: @argName,
+        error: "non_task_source_in_exact_payload_arg",
+        source_class: @resolved.source
+      }
+    ]
+    => {
+      ok: true,
+      arg: @argName,
+      role: "payload",
+      source_class: @resolved.source,
+      value: @resolved.value,
+      backing_refs: [],
+      flat_eq: null,
+      flat_attestations: []
+    }
+  ]
+
+  => {
+    ok: false,
+    arg: @argName,
+    error: "unsupported_source_class",
+    source_class: @resolved.source
+  }
+]
+
+exe @compileArgRef(state, tool, argName, ref, query) = [
+  if @typeof(@ref) == "array" [
+    let @compiled = for @item in @ref => @compileScalarRef(@state, @tool, @argName, @item, @query)
+    let @errors = for @entry in @compiled when !@entry.ok => @entry
+    if @errors.length > 0 [
+      => { ok: false, arg: @argName, error: "array_arg_element_invalid", issues: @errors }
+    ]
+    let @first = @compiled[0]
+    let @backingRefs = loop(1000) [
+      let @ctx = when [
+        @input["_rig_cursor"] == "backingRefs" => @input
+        * => { _rig_cursor: "backingRefs", index: 0, values: [] }
+      ]
+      if @ctx.index >= @compiled.length [ done @ctx.values ]
+      continue {
+        _rig_cursor: "backingRefs",
+        index: @ctx.index + 1,
+        values: @ctx.values.concat(@compiled[@ctx.index].backing_refs ?? [])
+      }
+    ]
+    let @flatAttestations = loop(1000) [
+      let @ctx = when [
+        @input["_rig_cursor"] == "flatAttestations" => @input
+        * => { _rig_cursor: "flatAttestations", index: 0, values: [] }
+      ]
+      if @ctx.index >= @compiled.length [ done @ctx.values ]
+      continue {
+        _rig_cursor: "flatAttestations",
+        index: @ctx.index + 1,
+        values: @ctx.values.concat(@compiled[@ctx.index].flat_attestations ?? [])
+      }
+    ]
+    let @values = for @entry in @compiled => @entry.value
+    let @authValues = for @entry in @compiled when @entry.auth_value.isDefined() => @entry.auth_value
+    let @flatEqs = for @entry in @compiled when @entry.flat_eq.isDefined() => @entry.flat_eq
+    => {
+      ok: true,
+      arg: @argName,
+      role: @first.role,
+      source_class: @first.source_class,
+      value: @values,
+      auth_bucket: @first.auth_bucket,
+      auth_value: @authValues,
+      backing_refs: @backingRefs,
+      flat_eq: @flatEqs,
+      flat_attestations: @flatAttestations
+    }
+  ]
+
+  => @compileScalarRef(@state, @tool, @argName, @ref, @query)
+]
+
+>> Read-phase tool args still cross the same provenance boundary as write
+>> control args. Compile them through the shared ref checker, then hand
+>> the original native values to the runtime dispatch layer.
+exe @compileToolArgs(state, tool, args, query) = [
+  let @compiledEntries = for @argName, @argValue in (@args ?? {}) => @compileArgRef(@state, @tool, @argName, @argValue, @query)
+  let @errors = for @entry in @compiledEntries when !@entry.ok => @entry
+  if @errors.length > 0 [
+    => { ok: false, error: "intent_compile_failed", issues: @errors }
+  ]
+  => {
+    ok: true,
+    args: @payloadEntries(@compiledEntries),
+    compiled_entries: @compiledEntries
+  }
+]
+
+exe @bucketEntries(operationName, compiledArgs, bucketName) = [
+  let @pairs = for @entry in @compiledArgs when @entry.auth_bucket == @bucketName => {
+    key: @entry.arg,
+    value: @entry.auth_value
+  }
+  let @inner = @pairsToObject(@pairs)
+  => when [
+    @pairs.length > 0 => { [@operationName]: @inner }
+    * => {}
+  ]
+]
+
+exe @payloadEntries(compiledArgs) = [
+  let @pairs = for @entry in @compiledArgs when @entry.value.isDefined() => {
+    key: @entry.arg,
+    value: @entry.value
+  }
+  => @pairsToObject(@pairs)
+]
+
+exe @builderConstraint(eqValue, attestations) = [
+  let @flatAttestations = @attestations ?? []
+  => when [
+    @flatAttestations.length > 0 => { eq: @eqValue, attestations: @flatAttestations }
+    * => null
+  ]
+]
+
+exe @flatPolicyIntent(operationName, compiledEntries) = [
+  let @pairs = for @entry in @compiledEntries when @entry.auth_bucket.isDefined() && @entry.auth_bucket != "allow" => {
+    key: @entry.arg,
+    value: @builderConstraint(@entry.flat_eq, @entry.flat_attestations)
+  }
+  let @validPairs = for @pair in @pairs when @pair.value.isDefined() => @pair
+  let @flatArgs = @pairsToObject(@validPairs)
+  => when [
+    @validPairs.length > 0 => { [@operationName]: @flatArgs }
+    * => {}
+  ]
+]
+
+exe @compileExecuteIntent(state, tools, decision, query) = [
+  let @lookup = @lookupWriteTool(@tools, @decision.operation)
+  if !@lookup.ok [ => @lookup ]
+
+  let @tool = @lookup.tool
+  let @args = @decision.args ?? {}
+  let @compiledEntries = for @argName, @argValue in @args => @compileArgRef(@state, @tool, @argName, @argValue, @query)
+  let @errors = for @entry in @compiledEntries when !@entry.ok => @entry
+  if @errors.length > 0 [
+    => { ok: false, error: "intent_compile_failed", issues: @errors }
+  ]
+  let @allowEntries = for @entry in @compiledEntries when @entry.auth_bucket == "allow" => @entry
+  let @allowBucket = when [
+    @allowEntries.length > 0 => { [@decision.operation]: true }
+    * => {}
+  ]
+
+  => {
+    ok: true,
+    tool: @tool,
+    operation: @toolOperation(@tool),
+    compiled_args: @payloadEntries(@compiledEntries),
+    compiled_entries: @compiledEntries,
+    bind_args: @toolBind(@tool),
+    authorizations: {
+      resolved: @bucketEntries(@decision.operation, @compiledEntries, "resolved"),
+      known: @bucketEntries(@decision.operation, @compiledEntries, "known"),
+      allow: @allowBucket
+    },
+    policy_intent: @flatPolicyIntent(@decision.operation, @compiledEntries)
+  }
+]
+
+export {
+  @lookupWriteTool,
+  @roleForArg,
+  @lowerSelectionRef,
+  @resolveControlRefValue,
+  @resolveRefValue,
+  @compileToolArgs,
+  @compileExecuteIntent
+}

@@ -1,0 +1,148 @@
+>> Banking domain records for rig v2.
+>>
+>> The suite has three grounded entity families:
+>>   - transactions (completed and scheduled)
+>>   - the user's account profile
+>>   - small singleton reads such as IBAN, balance, and file content
+>>
+>> Display projection is load-bearing here. The planner must never read
+>> attacker-controlled prose when a later write depends on grounded
+>> control args, while workers still need enough content to compute the
+>> payload-side arithmetic and text shaping tasks.
+
+>> ── Transactions ──
+>>
+>> `id`, `sender`, and `recipient` are fact-bearing identities. They are
+>> the values that later flow into control args for refunds and scheduled
+>> payment updates. `subject` stays data because it is descriptive text,
+>> not authorization.
+record @transaction = {
+  facts: [id: string, sender: string?, recipient: string?],
+  data: [amount: number?, subject: string?, date: string?, recurring: boolean?],
+  key: id,
+  display: {
+    default: [{ ref: "id" }, { ref: "sender" }, { ref: "recipient" }, amount, subject, date, recurring],
+    worker: [{ mask: "id" }, { mask: "sender" }, { mask: "recipient" }, amount, subject, date, recurring],
+    planner: [{ ref: "id" }, { ref: "sender" }, { ref: "recipient" }, amount, date, recurring]
+  }
+}
+
+>> Scheduled transactions share the same shape, but the planner needs
+>> the subject to match "rent", "utilities", and similar recurring
+>> payment labels before deciding between update and create.
+record @scheduled_transaction = {
+  facts: [id: string, sender: string?, recipient: string?],
+  data: [amount: number?, subject: string?, date: string?, recurring: boolean?],
+  key: id,
+  display: {
+    default: [{ ref: "id" }, { ref: "sender" }, { ref: "recipient" }, amount, subject, date, recurring],
+    worker: [{ mask: "id" }, { mask: "sender" }, { mask: "recipient" }, amount, subject, date, recurring],
+    planner: [{ ref: "id" }, { ref: "sender" }, { ref: "recipient" }, amount, subject, date, recurring]
+  }
+}
+
+>> ── User profile ──
+>>
+>> The read surface does not expose the account password. Address fields
+>> are payload-side content for update_user_info; there are no grounded
+>> control args on that tool.
+record @user_account = {
+  facts: [first_name: string?, last_name: string?],
+  data: [street: string?, city: string?],
+  display: {
+    default: [{ ref: "first_name" }, { ref: "last_name" }, street, city],
+    worker: [first_name, last_name, street, city],
+    planner: [{ ref: "first_name" }, { ref: "last_name" }, street, city]
+  }
+}
+
+>> ── Singleton read surfaces ──
+>>
+>> IBAN is a grounded identity value. Balance is informational only, so
+>> it stays data. File content is untrusted prose; the planner sees only
+>> the selected path while the worker can read the body.
+record @iban_value = {
+  facts: [value: string],
+  key: value,
+  display: [{ ref: "value" }]
+}
+
+record @balance_value = {
+  facts: [],
+  data: [amount: number?],
+  display: [amount]
+}
+
+record @file_text = {
+  facts: [file_path: string],
+  data: [content: string?],
+  key: file_path,
+  display: {
+    default: [{ ref: "file_path" }, content],
+    worker: [{ ref: "file_path" }, content],
+    planner: [{ ref: "file_path" }]
+  }
+}
+
+>> ── Write payload records ──
+>>
+>> Payload records carry only body/update fields. Destination ids and
+>> recipients stay in controlArgs and never appear in these schemas.
+record @send_money_payload = {
+  facts: [],
+  data: [amount: number, subject: string, date: string],
+  validate: "demote"
+}
+
+record @schedule_transaction_payload = {
+  facts: [],
+  data: [amount: number, subject: string, date: string, recurring: boolean],
+  validate: "demote"
+}
+
+record @update_scheduled_transaction_payload = {
+  facts: [],
+  data: [amount: number?, subject: string?, date: string?, recurring: boolean?],
+  validate: "demote"
+}
+
+record @update_user_info_payload = {
+  facts: [],
+  data: [first_name: string?, last_name: string?, street: string?, city: string?],
+  validate: "demote"
+}
+
+record @password_payload = {
+  facts: [],
+  data: [password: string],
+  validate: "demote"
+}
+
+var @records = {
+  transaction: @transaction,
+  scheduled_transaction: @scheduled_transaction,
+  user_account: @user_account,
+  iban_value: @iban_value,
+  balance_value: @balance_value,
+  file_text: @file_text,
+  send_money_payload: @send_money_payload,
+  schedule_transaction_payload: @schedule_transaction_payload,
+  update_scheduled_transaction_payload: @update_scheduled_transaction_payload,
+  update_user_info_payload: @update_user_info_payload,
+  password_payload: @password_payload
+}
+
+export {
+  @transaction,
+  @scheduled_transaction,
+  @user_account,
+  @iban_value,
+  @balance_value,
+  @file_text,
+  @send_money_payload,
+  @schedule_transaction_payload,
+  @update_scheduled_transaction_payload,
+  @update_user_info_payload,
+  @password_payload,
+  @records
+}
