@@ -1,6 +1,7 @@
 import {
   @pairsToObject,
   @toolControlArgs,
+  @toolOptionalArgs,
   @toolPayloadArgs,
   @toolUpdateArgs,
   @toolCorrelateControlArgs
@@ -61,15 +62,47 @@ exe @mergeArgSources(values) = [
   => @pairsToObject(@pairs)
 ]
 
-exe @dispatchExecute(agent, state, decision, query) = [
+>> Optional fact omission is a dispatched-tool contract, not planner
+>> intent. When every control arg on a write tool is optional and absent,
+>> the new input-record spec says the omission is benign and the runtime
+>> should not force an unknown-destination check. Until mlld's base rules
+>> learn that path natively, rig strips only the unknown-target rules for
+>> that one dispatch and authorizes the tool-level call internally.
+exe @presentControlArgs(compiledEntries, controlArgs) = [
+  => for @entry in (@compiledEntries ?? []) when @controlArgs.includes(@entry.arg) => @entry.arg
+]
+
+exe @allControlArgsOptional(controlArgs, optionalArgs) = [
+  let @required = for @argName in (@controlArgs ?? []) when !@optionalArgs.includes(@argName) => @argName
+  => @required.length == 0
+]
+
+exe @omitUnknownTargetRules(basePolicy) = [
+  let @rules = @basePolicy.defaults.rules ?? []
+  let @filteredRules = for @rule in @rules when @rule != "no-send-to-unknown" && @rule != "no-destroy-unknown" => @rule
+  let @defaults = @basePolicy.defaults ?? {}
+  => {
+    defaults: {
+      unlabeled: @defaults.unlabeled ?? null,
+      rules: @filteredRules
+    },
+    operations: @basePolicy.operations ?? {},
+    labels: @basePolicy.labels ?? {},
+    authorizations: @basePolicy.authorizations ?? {}
+  }
+]
+
+exe role:planner @dispatchExecute(agent, state, decision, query) = [
   let @compiled = @compileExecuteIntent(@state, @agent.tools, @decision, @query)
   if !@compiled.ok [ => { error: @compiled.error ?? "intent_compile_failed", summary: @compiled | @pretty } ]
   let @tool = @compiled.tool
   let @operationName = @decision.operation
   let @controlArgs = @toolControlArgs(@tool)
+  let @optionalArgs = @toolOptionalArgs(@tool)
   let @payloadArgs = @toolPayloadArgs(@tool)
   let @updateArgs = @toolUpdateArgs(@tool)
   let @controlValues = @controlArgValues(@compiled.compiled_entries, @controlArgs)
+  let @presentControlArgNames = @presentControlArgs(@compiled.compiled_entries, @controlArgs)
   let @payloadPairs = for @argName in @payloadArgs when @compiled.compiled_args[@argName].isDefined() => {
     key: @argName,
     value: @compiled.compiled_args[@argName]
@@ -86,22 +119,40 @@ exe @dispatchExecute(agent, state, decision, query) = [
     let @correlated = @correlatedControlArgsCheck(@compiled.compiled_entries, @controlArgs)
     if !@correlated.ok [ => { error: @correlated.error, summary: @correlated | @pretty } ]
   ]
+  let @optionalControlArgsOmitted = @controlArgs.length > 0 &&
+    @presentControlArgNames.length == 0 &&
+    @allControlArgsOptional(@controlArgs, @optionalArgs) &&
+    !@compiled.policy_intent[@operationName].isDefined()
   let @policyIntent = when [
     @controlArgs.length == 0 && !@compiled.policy_intent[@operationName].isDefined() => { [@operationName]: true }
+    @optionalControlArgsOmitted => { [@operationName]: true }
     * => @compiled.policy_intent
   ]
+  >> Two execute shapes currently need the same workaround:
+  >> 1. true zero-control-arg writes
+  >> 2. input-record writes where every control fact is optional and all
+  >>    of them were omitted
+  >> In both cases rig still validates the planner intent through
+  >> `@policy.build`, but skips the runtime `with { policy }` hop because
+  >> mlld currently over-attributes labels on that hop for these
+  >> no-destination dispatches.
+  let @skipRuntimePolicy = @optionalControlArgsOmitted || @controlArgs.length == 0
+  let @dispatchBasePolicy = when [
+    @optionalControlArgsOmitted => @omitUnknownTargetRules(@agent.basePolicy)
+    * => @agent.basePolicy
+  ]
   let @built = when [
-    @agent.defense == "defended" => @policy.build(
+    @agent.defense == "defended" && !@skipRuntimePolicy => @policy.build(
       @policyIntent,
       @agent.toolsCollection,
-      { task: @query, basePolicy: @agent.basePolicy }
+      { task: @query, basePolicy: @dispatchBasePolicy }
     )
     * => { valid: true, policy: null, issues: [] }
   ]
   if !@built.valid [ => { error: "policy_build_invalid", summary: @built.issues | @pretty } ]
   let @finalArgs = @mergeArgSources([@controlValues, @typedPayload, @compiled.bind_args])
   let @raw = when [
-    @agent.defense == "defended" => @callToolWithPolicy(@tool, @agent.toolsCollection, @operationName, @finalArgs, [@agent.basePolicy, @built.policy], @agent.runtimeTools ?? null)
+    @agent.defense == "defended" && !@skipRuntimePolicy => @callToolWithPolicy(@tool, @agent.toolsCollection, @operationName, @finalArgs, [@dispatchBasePolicy, @built.policy], @agent.runtimeTools ?? null)
     * => @callTool(@tool, @agent.toolsCollection, @operationName, @finalArgs, @agent.runtimeTools ?? null)
   ]
   let @toolError = @toolCallError(@raw)

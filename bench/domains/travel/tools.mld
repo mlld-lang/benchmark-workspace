@@ -543,7 +543,9 @@ var @tools = {
 
 >> The plain catalog is the framework authority for docs, routing, and
 >> synthesized policy. Runtime dispatch uses the companion `var tools`
->> bridge so multi-arg calls keep mlld's named-arg behavior.
+>> bridge so multi-arg calls keep mlld's named-arg behavior. Execute
+>> policy validation runs against this live collection, so write entries
+>> repeat their auth metadata here.
 var tools @toolsCollection = {
   get_user_information: { mlld: @get_user_information },
   get_all_hotels_in_city: { mlld: @get_all_hotels_in_city },
@@ -567,12 +569,35 @@ var tools @toolsCollection = {
   search_calendar_events: { mlld: @search_calendar_events },
   get_day_calendar_events: { mlld: @get_day_calendar_events },
   get_flight_information: { mlld: @get_flight_information },
-  create_calendar_event: { mlld: @create_calendar_event },
-  cancel_calendar_event: { mlld: @cancel_calendar_event },
-  reserve_hotel: { mlld: @reserve_hotel },
-  reserve_car_rental: { mlld: @reserve_car_rental },
-  reserve_restaurant: { mlld: @reserve_restaurant },
-  send_email: { mlld: @send_email }
+  create_calendar_event: {
+    mlld: @create_calendar_event,
+    authorizable: "role:planner"
+  },
+  cancel_calendar_event: {
+    mlld: @cancel_calendar_event,
+    authorizable: "role:planner",
+    controlArgs: ["event_id"]
+  },
+  reserve_hotel: {
+    mlld: @reserve_hotel,
+    authorizable: "role:planner",
+    controlArgs: ["hotel"]
+  },
+  reserve_car_rental: {
+    mlld: @reserve_car_rental,
+    authorizable: "role:planner",
+    controlArgs: ["company"]
+  },
+  reserve_restaurant: {
+    mlld: @reserve_restaurant,
+    authorizable: "role:planner",
+    controlArgs: ["restaurant"]
+  },
+  send_email: {
+    mlld: @send_email,
+    authorizable: "role:planner",
+    controlArgs: ["recipients", "cc", "bcc"]
+  }
 }
 
 export {

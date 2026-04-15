@@ -40,6 +40,16 @@ record @email_payload = {
   validate: "demote"
 }
 
+>> Input-record fixture for the shipped tool-catalog redesign. This
+>> mirrors the workspace calendar case: one optional fact destination
+>> plus ordinary payload fields, authored on the surfaced tool instead
+>> of split across controlArgs/expose/optional metadata.
+record @meeting_request_inputs = {
+  facts: [participants: array?],
+  data: [title: string, start_time: string, end_time: string],
+  validate: "strict"
+}
+
 record @note_payload = {
   facts: [],
   data: [content: string],
@@ -143,6 +153,17 @@ exe execute:w, tool:w @send_email(recipients: array, subject, body) = [
   }
 ] with { controlArgs: ["recipients"] }
 
+exe execute:w, calendar:w, exfil:send, tool:w @schedule_meeting(title, start_time, end_time, participants: array) = [
+  let @participantsValue = @exists(@participants) ? @participants : null
+  => {
+    ok: true,
+    title: @title,
+    start_time: @start_time,
+    end_time: @end_time,
+    participants: @participantsValue
+  }
+]
+
 exe execute:w, tool:w @append_note(note_id, content) = [
   => {
     ok: true,
@@ -235,6 +256,13 @@ var @tools = {
       semantics: "Send the same email body to one or more recipients."
     }
   },
+  schedule_meeting: {
+    mlld: @schedule_meeting,
+    inputs: @meeting_request_inputs,
+    labels: ["execute:w", "calendar:w", "exfil:send"],
+    authorizable: "role:planner",
+    description: "Schedule a meeting. Omit participants for a personal event."
+  },
   append_note: {
     kind: "write",
     mlld: @append_note,
@@ -277,7 +305,8 @@ var @tools = {
 >> Runtime dispatch needs a preserved `var tools` collection so mlld can
 >> keep the cross-module tool bridge callable. The plain `@tools`
 >> catalog above remains the authority for rig metadata, planner docs,
->> and policy synthesis.
+>> and policy synthesis. Execute policy validation also reads this live
+>> bridge, so write entries keep their auth metadata here too.
 var tools @toolsCollection = {
   get_contacts: {
     mlld: @get_contacts,
@@ -314,24 +343,31 @@ var tools @toolsCollection = {
   },
   send_email: {
     mlld: @send_email,
-    labels: ["execute:w"],
+    authorizable: "role:planner",
     expose: ["recipients", "subject", "body"],
     controlArgs: ["recipients"]
   },
+  schedule_meeting: {
+    mlld: @schedule_meeting,
+    inputs: @meeting_request_inputs,
+    labels: ["execute:w", "calendar:w", "exfil:send"],
+    authorizable: "role:planner",
+    description: "Schedule a meeting. Omit participants for a personal event."
+  },
   append_note: {
     mlld: @append_note,
-    labels: ["execute:w"],
+    authorizable: "role:planner",
     expose: ["note_id", "content"],
     controlArgs: ["note_id"]
   },
   create_note: {
     mlld: @create_note,
-    labels: ["execute:w"],
+    authorizable: "role:planner",
     expose: ["content"]
   },
   update_password: {
     mlld: @update_password,
-    labels: ["execute:w"],
+    authorizable: false,
     expose: ["password"]
   }
 }
@@ -475,6 +511,7 @@ export {
   @note_entry,
   @message_entry,
   @email_payload,
+  @meeting_request_inputs,
   @note_payload,
   @summary_payload,
   @number_row,
@@ -491,6 +528,7 @@ export {
   @get_today,
   @get_webpage,
   @send_email,
+  @schedule_meeting,
   @append_note,
   @create_note,
   @update_password

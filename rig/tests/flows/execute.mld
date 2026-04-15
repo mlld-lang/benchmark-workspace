@@ -4,23 +4,41 @@ import { @rigBuild, @rigRun } from "../../index.mld"
 import { @records, @tools, @get_note, @append_note, @get_contacts, @send_email } from "../fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
+>> Policy-bearing dispatch currently behaves best through a local
+>> wrapper exe. The wrapper keeps the policy boundary on a caller-local
+>> operation instead of on an imported tool bridge that can accumulate
+>> unrelated labels.
+exe @runtime_append_note(note_id, content) = [
+  => @append_note(@note_id, @content)
+] with { controlArgs: ["note_id"] }
+
+exe @runtime_send_email(recipients, subject, body) = [
+  => @send_email(@recipients, @subject, @body)
+] with { controlArgs: ["recipients"] }
+
 >> The local runtime collection mirrors the planner-facing catalog,
 >> but adds the executable binding details that the dispatcher needs
 >> at call time. Exposed arg order is the contract for rehydrating
->> planner-produced objects into tool calls.
+>> planner-produced objects into tool calls. Execute policy validation
+>> reads this live collection too, so write entries keep their auth
+>> metadata here rather than relying on the plain planner catalog alone.
 var tools @runtimeToolsCollection = {
   get_note: {
     mlld: @get_note,
     expose: ["note_id"]
   },
   append_note: {
-    mlld: @append_note,
-    expose: ["note_id", "content"]
+    mlld: @runtime_append_note,
+    authorizable: "role:planner",
+    expose: ["note_id", "content"],
+    controlArgs: ["note_id"]
   },
   get_contacts: { mlld: @get_contacts },
   send_email: {
-    mlld: @send_email,
-    expose: ["recipients", "subject", "body"]
+    mlld: @runtime_send_email,
+    authorizable: "role:planner",
+    expose: ["recipients", "subject", "body"],
+    controlArgs: ["recipients"]
   }
 }
 

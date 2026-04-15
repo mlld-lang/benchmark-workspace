@@ -103,7 +103,7 @@ exe @validateToolCatalog(tools) = [
   let @issues = for @name, @tool in @catalog => when [
     !@toolKind(@tool).isDefined() => { tool: @name, error: "tool_missing_kind" }
     @toolKind(@tool) == "read" && !@tool.returns.isDefined() => { tool: @name, error: "read_tool_missing_returns_record" }
-    @toolKind(@tool) == "write" && !@tool.operation.isDefined() => { tool: @name, error: "write_tool_missing_operation" }
+    @toolKind(@tool) == "write" && !@tool.operation.isDefined() && !@tool.inputs.isDefined() => { tool: @name, error: "write_tool_missing_operation" }
     * => null
   ]
   let @realIssues = for @issue in @issues when @issue => @issue

@@ -5,8 +5,32 @@
 >> broken primitive instead of forcing a full benchmark run to localize
 >> the issue.
 
-import { @records, @tools, @toolsCollection, @sampleState, @sampleAgent, @get_contacts, @get_today, @note_entry } from "./fixtures.mld"
-import { @renderToolDocs, @toolLabels, @toolParamNames, @toolControlArgs, @phaseCatalog, @phaseToolEntry } from "../tooling.mld"
+import {
+  @records,
+  @tools,
+  @toolsCollection,
+  @sampleState,
+  @sampleAgent,
+  @get_contacts,
+  @get_today,
+  @note_entry,
+  @send_email,
+  @create_note,
+  @schedule_meeting,
+  @meeting_request_inputs
+} from "./fixtures.mld"
+import {
+  @renderToolDocs,
+  @toolLabels,
+  @toolParamNames,
+  @toolControlArgs,
+  @toolPayloadArgs,
+  @toolOptionalArgs,
+  @toolRisk,
+  @toolAuthorizableRoles,
+  @phaseCatalog,
+  @phaseToolEntry
+} from "../tooling.mld"
 import { @rigBuild } from "../index.mld"
 import {
   @synthesizedPolicy,
@@ -20,6 +44,7 @@ import {
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue } from "../intent.mld"
 import { @callTool, @toolCallError, @emptyState } from "../runtime.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
+import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation } from "../workers/extract.mld"
 
 exe @status(ok) = when [
@@ -38,6 +63,19 @@ exe @check(id, ok, detail) = [
 exe @field(inputValue, key) = js {
   return inputValue?.[key] ?? null;
 }
+
+>> Execute-time policy application is most reliable when it lands on a
+>> local wrapper exe instead of on an imported callable. The wrapper is
+>> intentionally thin: it preserves native mlld args and only relocates
+>> the policy boundary to the caller's module.
+exe @runtime_create_note(content) = [
+  => @create_note(@content)
+]
+
+exe @runtime_schedule_meeting(request) = [
+  let @participantsValue = @exists(@request.participants) ? @request.participants : null
+  => @schedule_meeting(@request.title, @request.start_time, @request.end_time, @participantsValue)
+]
 
 >> Workspace contact records use unnamed display arrays such as
 >> `[name, { ref: "email" }]`. Keep one fixture inline here so the
@@ -86,6 +124,12 @@ record @string_id_holder = {
   facts: [id_: string]
 }
 
+record @local_meeting_request_inputs = {
+  facts: [participants: array?],
+  data: [title: string, start_time: string, end_time: string],
+  validate: "strict"
+}
+
 >> Thin-arrow regression from the v1 smoke. If strict mode leaks the
 >> tool-slot value back into mlld, the serialized output contains the
 >> sentinel string and this check trips immediately.
@@ -116,12 +160,21 @@ var tools @numericDispatchToolCollection = {
 
 exe @serialize(v) = [ => @v | @pretty ]
 
-exe @collectionRoundtrip(toolCatalog, basePolicy) = [
+>> The raw policy builder now requires an active caller role before it
+>> accepts planner authorizations. Keep the baseline under a
+>> `role:planner` helper so the test exercises the shipped contract
+>> rather than top-level unlabeled evaluation.
+exe role:planner @policyBuildAsPlanner(toolCatalog, basePolicy) = [
   let @built = @policy.build(
     { allow: { create_note: true } },
     @toolCatalog,
     { task: "create a note", basePolicy: @basePolicy }
   )
+  => @built
+]
+
+exe @collectionRoundtrip(toolCatalog, basePolicy) = [
+  let @built = @policyBuildAsPlanner(@toolCatalog, @basePolicy)
   => @built.valid
 ]
 
@@ -138,11 +191,26 @@ var @manualBasePolicy = {
   }
 }
 
-var @policyRuntime = @policy.build(
-  { allow: { create_note: true } },
-  @toolsCollection,
-  { task: "create a note named demo", basePolicy: @manualBasePolicy }
-)
+>> Keep the raw `@policy.build` baseline on a tiny dedicated tool
+>> collection. The runtime dispatch catalog intentionally omits planner
+>> authorization metadata, while the policy builder now expects the
+>> planner-facing role surface to be present on the collection it
+>> validates.
+var tools @policyBuildToolCollection = {
+  send_email: {
+    mlld: @send_email,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    authorizable: "role:planner",
+    controlArgs: ["recipients"]
+  },
+  create_note: {
+    mlld: @create_note,
+    labels: ["execute:w", "tool:w"],
+    authorizable: "role:planner"
+  }
+}
+
+var @policyRuntime = @policyBuildAsPlanner(@policyBuildToolCollection, @manualBasePolicy)
 
 var @numericStringIdRecord = {
   id_: "33"
@@ -217,6 +285,70 @@ var @dispatchScalarResolveResult = @dispatchResolve(
   },
   "What day is it?"
 )
+>> The execute regressions use a local runtime bridge so the policy
+>> boundary lands on caller-local wrappers rather than on imported tool
+>> exes. That keeps the invariant focused on rig's compile/dispatch
+>> logic instead of mlld's current imported-policy edge case.
+var tools @localExecuteRuntimeTools = {
+  create_note: {
+    mlld: @runtime_create_note,
+    authorizable: "role:planner",
+    controlArgs: [],
+    expose: ["content"]
+  },
+  schedule_meeting: {
+    mlld: @schedule_meeting,
+    authorizable: "role:planner",
+    inputs: @local_meeting_request_inputs
+  }
+}
+
+var @localExecuteRuntimeOverrides = {
+  schedule_meeting: {
+    mlld: @runtime_schedule_meeting,
+    expose: ["title", "start_time", "end_time", "participants"],
+    optional: ["participants"],
+    direct: true
+  }
+}
+
+var @builtExecuteFixtureAgent = @rigBuild({
+  suite: "fixture-execute-build",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  toolsCollection: @localExecuteRuntimeTools,
+  runtimeTools: @localExecuteRuntimeOverrides
+})
+
+var @dispatchCreateNoteResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
+  @emptyState(),
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "known", value: "Demo note body" }
+    }
+  },
+  "Create a note with content Demo note body."
+)
+
+var @dispatchOptionalMeetingResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
+  @emptyState(),
+  {
+    phase: "execute",
+    operation: "schedule_meeting",
+    args: {
+      title: { source: "known", value: "Solo focus block" },
+      start_time: { source: "known", value: "2026-04-14 09:00" },
+      end_time: { source: "known", value: "2026-04-14 10:00" }
+    }
+  },
+  "Create Solo focus block from 2026-04-14 09:00 to 2026-04-14 10:00."
+)
 var @numericDispatchResult = @callTool(
   {
     kind: "read",
@@ -247,7 +379,47 @@ var @sendDoc = @sendDocs[0]
 var @crossModuleLabels = @toolLabels(@tools.send_email)
 var @sendParams = @toolParamNames(@tools.send_email)
 var @sendControlArgs = @toolControlArgs(@tools.send_email)
+var @meetingParams = @toolParamNames(@tools.schedule_meeting)
+var @meetingControlArgs = @toolControlArgs(@tools.schedule_meeting)
+var @meetingPayloadArgs = @toolPayloadArgs(@tools.schedule_meeting)
+var @meetingOptionalArgs = @toolOptionalArgs(@tools.schedule_meeting)
+var @meetingRisk = @toolRisk(@tools.schedule_meeting)
+var @meetingAuthorizableRoles = @toolAuthorizableRoles(@tools.schedule_meeting)
 var @factValue = @get_contacts()[0].email
+
+var @meetingDocs = for @entry in @renderedDocs when @field(@entry, "name") == "schedule_meeting" => @entry
+var @meetingDoc = @meetingDocs[0]
+
+var @meetingBasePolicy = {
+  defaults: { rules: ["no-send-to-unknown"] },
+  operations: { "exfil:send": ["schedule_meeting"] },
+  labels: { influenced: { deny: ["exfil"] } },
+  authorizations: {
+    deny: [],
+    authorizable: { "role:planner": ["schedule_meeting"] }
+  }
+}
+
+var known @approvedMeetingParticipant = "alice.example"
+
+>> Keep one local `var tools` collection here for direct input-record
+>> dispatch regressions. Imported plain catalogs are fine for helper
+>> extraction, but direct policy-bearing tool calls should exercise the
+>> runtime on a same-file surfaced collection so the test only covers the
+>> input-record contract, not cross-module collection identity.
+var @localMeetingTools = {
+  schedule_meeting: @tools.schedule_meeting
+}
+
+exe role:planner @buildOptionalMeetingPolicy() = [
+  => @policy.build(
+    { allow: { schedule_meeting: true } },
+    @localMeetingTools,
+    { task: "Schedule a solo focus block.", basePolicy: @meetingBasePolicy }
+  )
+]
+
+var @optionalMeetingPolicy = @buildOptionalMeetingPolicy()
 
 >> Display projection coverage.
 var @plannerSummary = @plannerStateSummary(@sampleAgent, @sampleState) | @pretty
@@ -376,10 +548,11 @@ var @syntheticPolicyOk = @defaultRules.includes("no-send-to-unknown") &&
   @defaultRules.includes("untrusted-llms-get-influenced") &&
   @defaultRules.includes("no-novel-urls") &&
   @plannerAuth.includes("send_email") &&
+  @plannerAuth.includes("schedule_meeting") &&
   @denyList.includes("update_password")
 var @syntheticPolicyDetail = `rules=@defaultRules deny=@denyList planner=@plannerAuth`
 
-var @collectionRoundtripOk = @collectionRoundtrip(@toolsCollection, @manualBasePolicy) == true
+var @collectionRoundtripOk = @collectionRoundtrip(@policyBuildToolCollection, @manualBasePolicy) == true
 var @toolMetadataOk = @sendParams.length == 3 &&
   @sendControlArgs.includes("recipients") &&
   @crossModuleLabels.includes("execute:w")
@@ -392,6 +565,25 @@ var @toolDocsOk = @field(@sendDoc, "controlArgs").includes("recipients") &&
   @field(@sendDoc, "payloadArgs").includes("subject") &&
   @field(@sendDoc, "semantics").includes("email")
 var @toolDocsDetail = @sendDoc | @pretty
+
+var @inputRecordToolMetadataOk = @meetingParams.length == 4 &&
+  @meetingControlArgs.includes("participants") &&
+  @meetingPayloadArgs.includes("title") &&
+  @meetingPayloadArgs.includes("start_time") &&
+  @meetingOptionalArgs.includes("participants") &&
+  @meetingRisk.includes("calendar:w") &&
+  @meetingRisk.includes("exfil:send") &&
+  @meetingAuthorizableRoles.includes("role:planner")
+var @inputRecordToolMetadataDetail = `params=@meetingParams control=@meetingControlArgs payload=@meetingPayloadArgs optional=@meetingOptionalArgs risk=@meetingRisk roles=@meetingAuthorizableRoles`
+
+var @inputRecordToolDocsOk = @field(@meetingDoc, "controlArgs").includes("participants") &&
+  @field(@meetingDoc, "payloadArgs").includes("title") &&
+  @field(@meetingDoc, "optionalArgs").includes("participants") &&
+  @field(@meetingDoc, "description").includes("personal event")
+var @inputRecordToolDocsDetail = @meetingDoc | @pretty
+
+var @optionalMeetingPolicyPretty = @optionalMeetingPolicy | @pretty
+var @optionalMeetingPolicyOk = @optionalMeetingPolicy.valid == false
 
 var @numericDispatchPretty = @numericDispatchResult | @pretty
 var @numericDispatchOk = @field(@numericDispatchResult, "id_") == "33"
@@ -418,6 +610,16 @@ var @dispatchScalarResolveOk =
   @dispatchScalarResolveResult.result.status == "resolved" &&
   @dispatchScalarResolveResult.result.count == 1 &&
   @dispatchScalarResolveResult.result.record_type == "datetime_context"
+var @dispatchCreateNotePretty = @dispatchCreateNoteResult | @pretty
+var @dispatchCreateNoteOk =
+  @dispatchCreateNoteResult["error"] == null &&
+  @dispatchCreateNoteResult.result.status == "sent" &&
+  @dispatchCreateNoteResult.state.execution_log.length == 1
+var @dispatchOptionalMeetingPretty = @dispatchOptionalMeetingResult | @pretty
+var @dispatchOptionalMeetingOk =
+  @dispatchOptionalMeetingResult["error"] == null &&
+  @dispatchOptionalMeetingResult.result.status == "sent" &&
+  @dispatchOptionalMeetingResult.state.execution_log.length == 1
 
 >> MCP and adapter bridges often include `error: false` in successful
 >> envelopes. The runtime must only short-circuit on `error: true`;
@@ -1090,14 +1292,19 @@ var @checks = [
   @check("synthesized-policy-shape", @syntheticPolicyOk, @syntheticPolicyDetail),
   @check("collection-roundtrip", @collectionRoundtripOk, "policy.build succeeded inside a wrapper exe"),
   @check("tool-metadata-access", @toolMetadataOk, @toolMetadataDetail),
+  @check("input-record-tool-metadata", @inputRecordToolMetadataOk, @inputRecordToolMetadataDetail),
   @check("factsource-roundtrip", @factsourceOk, @factsourceDetail),
   @check("tool-docs-control-args", @toolDocsOk, @toolDocsDetail),
+  @check("input-record-tool-docs", @inputRecordToolDocsOk, @inputRecordToolDocsDetail),
+  @check("input-record-allow-rejected", @optionalMeetingPolicyOk, @optionalMeetingPolicyPretty),
   @check("fixture-read-dispatch", @fixtureReadDispatchOk, @fixtureReadDispatchPretty),
   @check("built-agent-read-dispatch", @builtFixtureReadDispatchOk, @builtFixtureReadDispatchPretty),
   @check("phase-catalog-preserves-callability", @phaseCatalogDispatchOk, @phaseCatalogDispatchPretty),
   @check("phase-tool-entry-preserves-callability", @phaseToolEntryDispatchOk, @phaseToolEntryDispatchPretty),
   @check("resolve-worker-success-path", @dispatchResolveOk, @dispatchResolvePretty),
   @check("resolve-worker-scalar-keyed-path", @dispatchScalarResolveOk, @dispatchScalarResolvePretty),
+  @check("execute-worker-zero-control-arg-policy", @dispatchCreateNoteOk, @dispatchCreateNotePretty),
+  @check("execute-worker-optional-fact-omission", @dispatchOptionalMeetingOk, @dispatchOptionalMeetingPretty),
   @check("single-arg-direct-dispatch-keeps-string-ids", @numericDispatchOk, @numericDispatchPretty),
   @check("tool-error-envelope-only-fails-on-true", @toolEnvelopeOk, @toolEnvelopeDetail),
   @check("strict-thin-arrow", @thinArrowOk, @thinArrowSerialized),

@@ -183,19 +183,45 @@ var @tools = {
 
 >> The plain catalog drives prompts and policy synthesis. The companion
 >> `var tools` bridge is for live dispatch, where mlld preserves the
->> named-arg tool-calling surface across module boundaries.
+>> named-arg tool-calling surface across module boundaries. Execute
+>> policy validation runs against this live collection, so write entries
+>> repeat their auth metadata here.
 var tools @toolsCollection = {
   get_channels: { mlld: @get_channels },
   get_users_in_channel: { mlld: @get_users_in_channel },
   read_channel_messages: { mlld: @read_channel_messages },
   read_inbox: { mlld: @read_inbox },
   get_webpage: { mlld: @get_webpage },
-  send_channel_message: { mlld: @send_channel_message },
-  send_direct_message: { mlld: @send_direct_message },
-  invite_user_to_slack: { mlld: @invite_user_to_slack },
-  add_user_to_channel: { mlld: @add_user_to_channel },
-  remove_user_from_slack: { mlld: @remove_user_from_slack },
-  post_webpage: { mlld: @post_webpage }
+  send_channel_message: {
+    mlld: @send_channel_message,
+    authorizable: "role:planner",
+    controlArgs: ["channel"]
+  },
+  send_direct_message: {
+    mlld: @send_direct_message,
+    authorizable: "role:planner",
+    controlArgs: ["recipient"]
+  },
+  invite_user_to_slack: {
+    mlld: @invite_user_to_slack,
+    authorizable: "role:planner",
+    controlArgs: ["user", "user_email"]
+  },
+  add_user_to_channel: {
+    mlld: @add_user_to_channel,
+    authorizable: "role:planner",
+    controlArgs: ["user", "channel"]
+  },
+  remove_user_from_slack: {
+    mlld: @remove_user_from_slack,
+    authorizable: "role:planner",
+    controlArgs: ["user"]
+  },
+  post_webpage: {
+    mlld: @post_webpage,
+    authorizable: "role:planner",
+    controlArgs: ["url"]
+  }
 }
 
 export {

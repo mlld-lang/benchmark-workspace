@@ -146,6 +146,16 @@ record @calendar_event_payload = {
   validate: "demote"
 }
 
+>> Planner-facing create-calendar inputs in the new catalog shape.
+>> `participants` is the only fact because it is the notification
+>> destination set. Omitting it models the benign personal-event case;
+>> providing it requires per-element grounding.
+record @create_calendar_event_inputs = {
+  facts: [participants: array?],
+  data: [title: string, start_time: string, end_time: string, description: string?, location: string?],
+  validate: "strict"
+}
+
 record @calendar_reschedule_payload = {
   facts: [],
   data: [new_start_time: string, new_end_time: string?],
@@ -177,6 +187,7 @@ var @records = {
   file_entry: @file_entry,
   datetime_context: @datetime_context,
   email_payload: @email_payload,
+  create_calendar_event_inputs: @create_calendar_event_inputs,
   calendar_event_payload: @calendar_event_payload,
   calendar_reschedule_payload: @calendar_reschedule_payload,
   file_append_payload: @file_append_payload,
@@ -191,6 +202,7 @@ export {
   @file_entry,
   @datetime_context,
   @email_payload,
+  @create_calendar_event_inputs,
   @calendar_event_payload,
   @calendar_reschedule_payload,
   @file_append_payload,

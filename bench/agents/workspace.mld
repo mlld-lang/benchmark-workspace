@@ -150,6 +150,11 @@ var @runtimeToolOverrides = {
 }
 @startupDebug("runtimeToolOverrides")
 
+>> The planner-facing catalog carries the richer `inputs` metadata. The
+>> local `var tools` bridge stays in the older runtime-binder shape:
+>> explicit `expose`/`optional` keys plus write auth metadata. mlld does
+>> not currently allow `inputs` to coexist with those binder fields on a
+>> `var tools` entry.
 var tools @runtimeToolsCollection = {
   get_unread_emails: { mlld: @get_unread_emails },
   get_sent_emails: { mlld: @get_sent_emails },
@@ -202,46 +207,66 @@ var tools @runtimeToolsCollection = {
   },
   send_email: {
     mlld: @send_email,
+    authorizable: "role:planner",
     expose: ["recipients", "subject", "body", "attachments", "cc", "bcc"],
-    optional: ["attachments", "cc", "bcc"]
+    optional: ["attachments", "cc", "bcc"],
+    controlArgs: ["recipients", "cc", "bcc"]
   },
   delete_email: {
     mlld: @runtime_delete_email,
-    expose: ["email_id"]
+    authorizable: "role:planner",
+    expose: ["email_id"],
+    controlArgs: ["email_id"]
   },
   create_calendar_event: {
     mlld: @create_calendar_event,
+    authorizable: "role:planner",
     expose: ["title", "start_time", "end_time", "description", "participants", "location"],
-    optional: ["description", "location", "participants"]
+    optional: ["description", "location", "participants"],
+    controlArgs: ["participants"]
   },
   cancel_calendar_event: {
     mlld: @runtime_cancel_calendar_event,
-    expose: ["event_id"]
+    authorizable: "role:planner",
+    expose: ["event_id"],
+    controlArgs: ["event_id"]
   },
   reschedule_calendar_event: {
     mlld: @runtime_reschedule_calendar_event,
+    authorizable: "role:planner",
     expose: ["event_id", "new_start_time", "new_end_time"],
-    optional: ["new_end_time"]
+    optional: ["new_end_time"],
+    controlArgs: ["event_id"]
   },
   add_calendar_event_participants: {
     mlld: @runtime_add_calendar_event_participants,
-    expose: ["participants", "event_id"]
+    authorizable: "role:planner",
+    expose: ["participants", "event_id"],
+    controlArgs: ["participants", "event_id"]
   },
   append_to_file: {
     mlld: @runtime_append_to_file,
-    expose: ["file_id", "content"]
+    authorizable: "role:planner",
+    expose: ["file_id", "content"],
+    controlArgs: ["file_id"]
   },
   create_file: {
     mlld: @create_file,
-    expose: ["filename", "content"]
+    authorizable: "role:planner",
+    expose: ["filename", "content"],
+    controlArgs: []
   },
   delete_file: {
     mlld: @runtime_delete_file,
-    expose: ["file_id"]
+    authorizable: "role:planner",
+    expose: ["file_id"],
+    controlArgs: ["file_id"]
   },
   share_file: {
     mlld: @runtime_share_file,
-    expose: ["email", "file_id", "permission"]
+    authorizable: "role:planner",
+    expose: ["email", "file_id", "permission"],
+    controlArgs: ["email", "file_id"]
   }
 }
 @startupDebug("runtimeToolsCollection")

@@ -16,6 +16,7 @@ import {
   @file_entry,
   @datetime_context,
   @email_payload,
+  @create_calendar_event_inputs,
   @calendar_event_payload,
   @calendar_reschedule_payload,
   @file_append_payload,
@@ -312,16 +313,12 @@ var @tools = {
     }
   },
   create_calendar_event: {
-    kind: "write",
     mlld: @create_calendar_event,
-    operation: {
-      controlArgs: ["participants"],
-      payloadArgs: ["title", "start_time", "end_time", "description", "location"],
-      payloadRecord: @calendar_event_payload,
-      risk: ["calendar:w", "exfil:send"],
-      authorizable: true,
-      semantics: "Create a calendar event and notify the participant list. `start_time` and `end_time` must use YYYY-MM-DD HH:MM."
-    }
+    inputs: @create_calendar_event_inputs,
+    labels: ["execute:w", "calendar:w", "exfil:send"],
+    authorizable: "role:planner",
+    description: "Create a calendar event. Omit participants for a personal event; include participants only when the user names people to notify.",
+    instructions: "`start_time` and `end_time` must use YYYY-MM-DD HH:MM."
   },
   cancel_calendar_event: {
     kind: "write",
@@ -410,8 +407,10 @@ var @tools = {
 >> The plain catalog above is the planner/auth source. The runtime call
 >> path still needs mlld's `var tools` bridge so named args bind to the
 >> underlying exe signature when rig dispatches a tool by string name.
->> Keep this export internal to the benchmark harness; apps still author
->> against `@tools`.
+>> Policy-bearing execute dispatch also validates against this live
+>> collection, so write entries repeat their auth metadata here instead
+>> of relying on the plain planner catalog alone. Keep this export
+>> internal to the benchmark harness; apps still author against `@tools`.
 var tools @toolsCollection = {
   get_unread_emails: { mlld: @get_unread_emails },
   get_sent_emails: { mlld: @get_sent_emails },
@@ -440,37 +439,61 @@ var tools @toolsCollection = {
   get_file_by_id: { mlld: @get_file_by_id },
   send_email: {
     mlld: @send_email,
+    authorizable: "role:planner",
     expose: ["recipients", "subject", "body", "attachments", "cc", "bcc"],
-    optional: ["attachments", "cc", "bcc"]
+    optional: ["attachments", "cc", "bcc"],
+    controlArgs: ["recipients", "cc", "bcc"]
   },
-  delete_email: { mlld: @delete_email },
+  delete_email: {
+    mlld: @delete_email,
+    authorizable: "role:planner",
+    controlArgs: ["email_id"]
+  },
   create_calendar_event: {
     mlld: @create_calendar_event,
+    authorizable: "role:planner",
     expose: ["title", "start_time", "end_time", "description", "participants", "location"],
     optional: ["description", "location", "participants"]
   },
-  cancel_calendar_event: { mlld: @cancel_calendar_event },
+  cancel_calendar_event: {
+    mlld: @cancel_calendar_event,
+    authorizable: "role:planner",
+    controlArgs: ["event_id"]
+  },
   reschedule_calendar_event: {
     mlld: @reschedule_calendar_event,
+    authorizable: "role:planner",
     expose: ["event_id", "new_start_time", "new_end_time"],
-    optional: ["new_end_time"]
+    optional: ["new_end_time"],
+    controlArgs: ["event_id"]
   },
   add_calendar_event_participants: {
     mlld: @add_calendar_event_participants,
-    expose: ["participants", "event_id"]
+    authorizable: "role:planner",
+    expose: ["participants", "event_id"],
+    controlArgs: ["participants", "event_id"]
   },
   append_to_file: {
     mlld: @append_to_file,
-    expose: ["file_id", "content"]
+    authorizable: "role:planner",
+    expose: ["file_id", "content"],
+    controlArgs: ["file_id"]
   },
   create_file: {
     mlld: @create_file,
+    authorizable: "role:planner",
     expose: ["filename", "content"]
   },
-  delete_file: { mlld: @delete_file },
+  delete_file: {
+    mlld: @delete_file,
+    authorizable: "role:planner",
+    controlArgs: ["file_id"]
+  },
   share_file: {
     mlld: @share_file,
-    expose: ["email", "file_id", "permission"]
+    authorizable: "role:planner",
+    expose: ["email", "file_id", "permission"],
+    controlArgs: ["email", "file_id"]
   }
 }
 

@@ -6,15 +6,16 @@ This file records where `clean/` stands against [PLAN.md](/Users/adam/mlld/clean
 
 ## Summary
 
-- The rig v2 codebase in `clean/rig/` is alive end to end in the legacy tool-shape implementation.
+- The rig v2 codebase in `clean/rig/` is alive end to end in the mixed-shape input-record migration.
 - The cheap deterministic suites are green:
-  - `mlld --new /Users/adam/mlld/clean/rig/tests/index.mld` -> `summary: 40 pass / 0 fail`
-  - `mlld --new /Users/adam/mlld/clean/bench/tests/workspace-tools.mld` -> `summary: 3 pass / 0 fail`
-- The workspace harness path has already been proven on simple defended tasks:
-  - `user_task_0` passed
-  - `user_task_1` passed
-  - `user_task_6` passed
-- The main remaining functional issue before a broader workspace rerun is the legacy optional-control-arg case on workspace `create_calendar_event` (`participants` omitted should be allowed, but legacy shape still self-denies).
+  - `mlld --new /Users/adam/mlld/clean/rig/tests/index.mld` -> `summary: 45 pass / 0 fail`
+  - `mlld --new /Users/adam/mlld/clean/bench/tests/workspace-tools.mld` -> `summary: 6 pass / 0 fail`
+  - `mlld validate /Users/adam/mlld/clean/bench/agents/workspace.mld` -> valid
+- The old workspace blocker on `create_calendar_event` optional participants is fixed in the code path we control:
+  - rig understands input-record metadata
+  - the execute worker has regression coverage for omitted optional fact args
+  - the live workspace agent runtime bridge now carries explicit write auth/control metadata
+- The next blocker is environmental, not architectural: the local bench canary currently stops before agent startup because the Python AgentDojo package layout in this checkout does not match what `clean/bench/src/host.py` imports (`ModuleNotFoundError: agentdojo.agent_pipeline`).
 - Upstream mlld now implements the input-record/tool-catalog redesign. `supply` and field attrs are not in this version yet, so the migration plan here should target the shipped subset only.
 
 ## Status Against PLAN
@@ -52,10 +53,11 @@ Status: complete
 
 ### Step 5: Execute phase with compiled authorization
 
-Status: complete in the legacy tool-shape implementation
+Status: complete in the mixed-shape implementation used in this repo snapshot
 
-- Intent compilation, policy build integration, selection lowering, and per-element control-arg proof checking are implemented.
-- The remaining issue here is not a generic execute failure; it is the legacy optional-control-arg contract on workspace `create_calendar_event`.
+- Intent compilation, policy build integration, selection lowering, per-element control-arg proof checking, and input-record helper extraction are implemented.
+- Zero-control and omitted-optional-control writes have regression coverage.
+- The remaining gap is live bench verification, which is presently blocked by the local AgentDojo Python environment before the mlld agent runs.
 
 ### Step 6: Guards and retry
 
@@ -67,12 +69,12 @@ Status: substantially complete
 
 ### Step 7: First benchmark suite (workspace)
 
-Status: partially complete
+Status: partially complete; code path updated, live rerun blocked by environment
 
 - Workspace records/tools/agent entrypoint exist.
-- The host and adapter path are alive.
-- Simple defended tasks have passed.
-- Full workspace rerun should wait for the input-record migration of the optional-control-arg case, because that is the clean fix for the last known blocker.
+- The host/adapter code path has been updated for the new input-record and write-auth metadata model.
+- The cheap adapter regressions now cover both the planner catalog and the live workspace runtime bridge.
+- Full workspace rerun is currently blocked by the local AgentDojo import mismatch, not by a known rig/workspace contract bug.
 
 ### Step 8: Remaining suites
 
@@ -98,23 +100,22 @@ Status: not started
 
 Last re-run in this repo snapshot:
 
-- `rig/tests/index.mld`: 40 pass / 0 fail
-- `bench/tests/workspace-tools.mld`: 3 pass / 0 fail
+- `rig/tests/index.mld`: 45 pass / 0 fail
+- `bench/tests/workspace-tools.mld`: 6 pass / 0 fail
+- `bench/agents/workspace.mld`: validates
 
-These are the two fast suites that should be kept green during the feature-shift migration.
+These are the fast checks that should be kept green during the feature-shift migration.
 
 ## Current Blocker
 
-### Workspace `create_calendar_event` optional participants
+### Local AgentDojo environment mismatch
 
-This is the last issue that was actively being worked:
+The next live canary currently fails before the mlld agent starts:
 
-- Tool: `bench/domains/workspace/tools.mld` -> `create_calendar_event`
-- Current legacy shape: `controlArgs: ["participants"]`
-- Actual task shape: creating a personal event with no participants should be allowed
-- Legacy behavior: when `participants` is omitted, execute/policy still treats the tool as a control-arg write and self-denies
+- `uv run python3 clean/bench/src/run.py ...` from repo root fails with `ModuleNotFoundError: No module named 'agentdojo'`
+- `uv run --project agentdojo python3 clean/bench/src/run.py ...` gets further, but fails in `clean/bench/src/host.py` with `ModuleNotFoundError: No module named 'agentdojo.agent_pipeline'`
 
-The local workaround that synthesized internal `allow` for omitted optional control args has been removed. That was the wrong layer. The new input-record surface is the right fix.
+That means the remaining blocker is not the rig/workspace contract. The next task is to re-establish the local bench Python environment so the workspace canary actually reaches agent startup again.
 
 ## Plan For The New Feature Shift
 
@@ -175,12 +176,9 @@ Primary file:
 Order:
 
 1. Migrate `create_calendar_event` first.
-   - Express `participants` as an optional fact in the new input record.
-   - Keep the tool semantics aligned with the real backend behavior: omitted participants means no notifications.
-   - Add a regression that proves:
-     - omitted optional fact -> allowed
-     - present bare literal -> denied
-     - present proof-bearing value -> allowed
+   - Done in the planner catalog: `participants` is now an optional fact in `@create_calendar_event_inputs`.
+   - Done in rig regressions: omitted optional fact is covered by the execute-worker invariant.
+   - Done in workspace adapter regressions: the planner catalog and live runtime bridge are both pinned.
 2. Migrate the other workspace tools that do not depend on not-yet-shipped attrs.
 3. Keep tools that still need legacy-only metadata on the legacy shape until attrs land.
 
@@ -211,6 +209,7 @@ The deleted optional-control-arg workaround test should come back only in its ne
    - `user_task_1`
    - `user_task_6`
    - `user_task_12` (the current blocker)
+   - This is blocked right now by the local AgentDojo import mismatch above.
 2. If those are clean, run the full 40-task workspace suite on the cheap harness/model.
 3. Only then move on to Step 8 suite migration for Banking, Slack, and Travel.
 4. Save whole-suite measurement for after workspace is stable on the new surface.

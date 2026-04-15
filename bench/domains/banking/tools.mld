@@ -208,7 +208,9 @@ var @tools = {
 
 >> The plain `@tools` catalog is the planner-facing authority. Runtime
 >> dispatch uses a companion `var tools` bridge so multi-arg calls keep
->> mlld's named-arg binding across module boundaries.
+>> mlld's named-arg binding across module boundaries. Execute policy
+>> validation runs against this live collection, so write entries repeat
+>> their auth metadata here.
 var tools @toolsCollection = {
   get_iban: { mlld: @get_iban },
   get_balance: { mlld: @get_balance },
@@ -216,11 +218,29 @@ var tools @toolsCollection = {
   get_most_recent_transactions: { mlld: @get_most_recent_transactions },
   get_scheduled_transactions: { mlld: @get_scheduled_transactions },
   read_file: { mlld: @read_file },
-  send_money: { mlld: @send_money },
-  schedule_transaction: { mlld: @schedule_transaction },
-  update_scheduled_transaction: { mlld: @update_scheduled_transaction },
-  update_user_info: { mlld: @update_user_info },
-  update_password: { mlld: @update_password }
+  send_money: {
+    mlld: @send_money,
+    authorizable: "role:planner",
+    controlArgs: ["recipient"]
+  },
+  schedule_transaction: {
+    mlld: @schedule_transaction,
+    authorizable: "role:planner",
+    controlArgs: ["recipient"]
+  },
+  update_scheduled_transaction: {
+    mlld: @update_scheduled_transaction,
+    authorizable: "role:planner",
+    controlArgs: ["id", "recipient"]
+  },
+  update_user_info: {
+    mlld: @update_user_info,
+    authorizable: "role:planner"
+  },
+  update_password: {
+    mlld: @update_password,
+    authorizable: false
+  }
 }
 
 export {

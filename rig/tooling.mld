@@ -41,6 +41,61 @@ exe @mxEntry(entries, key) = [
   ]
 ]
 
+>> New-shape tool entries hang their surfaced contract off `inputs:
+>> @record`. Read the record metadata natively from `.mx.entries` so the
+>> helpers can derive control args, payload args, and optional fields
+>> without reconstructing JSON copies of the record.
+exe @toolInputRecord(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.inputs.mx.entries.isDefined() => @entry.inputs
+    @entry.inputs.data.mx.entries.isDefined() => @entry.inputs.data
+    * => null
+  ]
+]
+
+exe @toolInputRecordMeta(toolEntry, key) = [
+  let @record = @toolInputRecord(@toolEntry)
+  => when [
+    @record.isDefined() => @mxEntry(@record.mx.entries, @key)
+    * => null
+  ]
+]
+
+exe @toolInputFields(toolEntry) = [
+  => @toolInputRecordMeta(@toolEntry, "fields") ?? []
+]
+
+exe @toolInputFieldNames(toolEntry, classification) = [
+  let @fields = @toolInputFields(@toolEntry)
+  => for @field in @fields when @field.classification == @classification => `@field.name`
+]
+
+exe @toolOptionalInputFieldNames(toolEntry) = [
+  let @fields = @toolInputFields(@toolEntry)
+  => for @field in @fields when @field.optional == true => `@field.name`
+]
+
+exe @frameworkRiskLabels(labels) = [
+  let @entries = @stringArray(@labels)
+  => for @label in @entries when !(
+    @label.startsWith("role:") ||
+    [
+      "resolve:r",
+      "extract:r",
+      "execute:w",
+      "compose:r",
+      "advice:r",
+      "tool:r",
+      "tool:w",
+      "update:w",
+      "known",
+      "untrusted",
+      "trusted"
+    ].includes(@label)
+  ) => @label
+]
+
 exe @toolCatalogObject(tools) = [
   let @catalog = when [
     @tools.data.isDefined() && @tools.data.mx.entries.isDefined() => @tools.data
@@ -115,6 +170,16 @@ exe @toolOperation(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
   => when [
     @entry.operation.isDefined() => @entry.operation
+    @toolInputRecord(@toolEntry).isDefined() => {
+      controlArgs: @toolControlArgs(@toolEntry),
+      payloadArgs: @toolPayloadArgs(@toolEntry),
+      updateArgs: [],
+      exactPayloadArgs: [],
+      correlateControlArgs: @toolCorrelateControlArgs(@toolEntry),
+      risk: @toolRisk(@toolEntry),
+      authorizable: @toolAuthorizable(@toolEntry),
+      semantics: @toolSemantics(@toolEntry)
+    }
     * => {}
   ]
 ]
@@ -134,8 +199,11 @@ exe @toolLabels(toolEntry) = [
 exe @toolSemantics(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
   => when [
+    @entry.description.isDefined() && @entry.instructions.isDefined() => `@entry.description @entry.instructions`
+    @entry.description.isDefined() => @entry.description
     @entry.operation.semantics.isDefined() => @entry.operation.semantics
     @entry.semantics.isDefined() => @entry.semantics
+    @entry.instructions.isDefined() => @entry.instructions
     * => null
   ]
 ]
@@ -143,6 +211,7 @@ exe @toolSemantics(toolEntry) = [
 exe @toolControlArgs(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
   => when [
+    @toolInputFields(@toolEntry).length > 0 => @toolInputFieldNames(@toolEntry, "fact")
     @entry.controlArgs.isDefined() => @stringArray(@entry.controlArgs)
     @entry.operation.controlArgs.isDefined() => @stringArray(@entry.operation.controlArgs)
     @entry.mlld.mx.controlArgs.isDefined() => @stringArray(@entry.mlld.mx.controlArgs)
@@ -154,6 +223,7 @@ exe @toolControlArgs(toolEntry) = [
 exe @toolPayloadArgs(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
   => when [
+    @toolInputFields(@toolEntry).length > 0 => @toolInputFieldNames(@toolEntry, "data")
     @entry.operation.payloadArgs.isDefined() => @stringArray(@entry.operation.payloadArgs)
     * => []
   ]
@@ -162,6 +232,7 @@ exe @toolPayloadArgs(toolEntry) = [
 exe @toolOptionalArgs(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
   => when [
+    @toolInputFields(@toolEntry).length > 0 => @toolOptionalInputFieldNames(@toolEntry)
     @entry.optional.isDefined() => @stringArray(@entry.optional)
     * => []
   ]
@@ -170,6 +241,11 @@ exe @toolOptionalArgs(toolEntry) = [
 exe @toolParamNames(toolEntry) = [
   let @exe = @toolExecutable(@toolEntry)
   let @entry = @toolEntryObject(@toolEntry)
+  let @inputFieldNames = when [
+    @toolInputFields(@toolEntry).length > 0 => @toolInputFieldNames(@toolEntry, "fact").concat(@toolInputFieldNames(@toolEntry, "data"))
+    * => []
+  ]
+  if @inputFieldNames.length > 0 [ => @inputFieldNames ]
   let @params = when [
     @typeof(@exe) == "executable" => @exe.mx.params ?? []
     * => []
@@ -209,7 +285,11 @@ exe @toolExactPayloadArgs(toolEntry) = [
 
 exe @toolCorrelateControlArgs(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
+  let @inputCorrelate = @toolInputRecordMeta(@toolEntry, "correlate")
+  let @inputControlArgs = @toolControlArgs(@toolEntry)
   => when [
+    @toolInputFields(@toolEntry).length > 0 && @inputCorrelate == true => true
+    @toolInputFields(@toolEntry).length > 0 && !@inputCorrelate.isDefined() && @inputControlArgs.length > 1 => true
     @entry.operation.correlateControlArgs == true => true
     * => false
   ]
@@ -220,15 +300,55 @@ exe @toolRisk(toolEntry) = [
   => when [
     @entry.operation.risk.isDefined() => @stringArray(@entry.operation.risk)
     @entry.risk.isDefined() => @stringArray(@entry.risk)
-    * => []
+    * => @frameworkRiskLabels(@toolLabels(@toolEntry))
+  ]
+]
+
+exe @toolAuthorizableRoles(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  let @topLevelType = @typeof(@entry.authorizable)
+  let @legacyType = @typeof(@entry.operation.authorizable)
+  => when [
+    >> New-shape input-record tools surface planner authorization at the
+    >> top level. Dispatch on the actual value type here so a missing
+    >> field cannot accidentally shadow the legacy `operation` contract.
+    @topLevelType == "boolean" && @entry.authorizable == false => []
+    @topLevelType == "string" => [`@entry.authorizable`]
+    @topLevelType == "array" => @stringArray(@entry.authorizable)
+    @topLevelType == "boolean" && @entry.authorizable == true => ["role:planner"]
+    >> Legacy write tools still hang authorizable off `operation`. Keep
+    >> their default exactly as before so the input-record migration does
+    >> not silently move legacy tools onto the deny list.
+    @legacyType == "boolean" && @entry.operation.authorizable == false => []
+    @legacyType == "boolean" && @entry.operation.authorizable == true => ["role:planner"]
+    @entry.operation.isDefined() => ["role:planner"]
+    >> New-shape tools without an explicit authorizable surface default
+    >> to denied. This preserves the planner-facing contract: suites
+    >> must opt write authorization in explicitly.
+    @toolInputRecord(@toolEntry).isDefined() => []
+    * => ["role:planner"]
   ]
 ]
 
 exe @toolAuthorizable(toolEntry) = [
+  => @toolAuthorizableRoles(@toolEntry).length > 0
+]
+
+exe @toolDescription(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
   => when [
-    @entry.operation.authorizable == false => false
-    * => true
+    @entry.description.isDefined() => @entry.description
+    @entry.semantics.isDefined() => @entry.semantics
+    @entry.operation.semantics.isDefined() => @entry.operation.semantics
+    * => null
+  ]
+]
+
+exe @toolInstructions(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.instructions.isDefined() => @entry.instructions
+    * => null
   ]
 ]
 
@@ -305,10 +425,14 @@ exe @mergedToolEntry(toolEntry, runtimeEntry) = [
   => {
     kind: @entry.kind ?? @runtime.kind,
     returns: @entry.returns ?? @runtime.returns,
+    inputs: @entry.inputs ?? @runtime.inputs,
     labels: @entry.labels ?? @runtime.labels,
+    description: @entry.description ?? @runtime.description,
+    instructions: @entry.instructions ?? @runtime.instructions,
     semantics: @entry.semantics ?? @runtime.semantics,
     risk: @entry.risk ?? @runtime.risk,
     operation: @entry.operation ?? @runtime.operation,
+    authorizable: @entry.authorizable ?? @runtime.authorizable,
     bind: @entry.bind ?? @runtime.bind,
     expose: @readExpose,
     optional: @runtime.optional ?? @entry.optional,
@@ -458,10 +582,14 @@ exe @renderToolDoc(toolName, tool) = [
       params: @toolParamNames(@tool),
       controlArgs: @toolControlArgs(@tool),
       payloadArgs: @toolPayloadArgs(@tool),
+      optionalArgs: @toolOptionalArgs(@tool),
       updateArgs: @toolUpdateArgs(@tool),
       exactPayloadArgs: @toolExactPayloadArgs(@tool),
       risk: @toolRisk(@tool),
       authorizable: @toolAuthorizable(@tool),
+      authorizableRoles: @toolAuthorizableRoles(@tool),
+      description: @toolDescription(@tool),
+      instructions: @toolInstructions(@tool),
       semantics: @toolSemantics(@tool),
       labels: @toolLabels(@tool)
     }
@@ -511,12 +639,37 @@ exe @synthesizedOperations(tools) = [
 exe @synthesizedAuthorizations(tools) = [
   let @catalog = @toolCatalogObject(@tools)
   let @deny = for @name, @tool in @catalog when !@toolAuthorizable(@tool) => @name
-  let @authorizable = for @name, @tool in @catalog when @toolAuthorizable(@tool) => @name
+  let @rolePairsNested = for @name, @tool in @catalog [
+    let @roles = @toolAuthorizableRoles(@tool)
+    => for @role in @roles => {
+      key: @role,
+      value: @name
+    }
+  ]
+  let @rolePairs = loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "authorizableRolePairs" => @input
+      * => { _rig_cursor: "authorizableRolePairs", index: 0, pairs: [] }
+    ]
+    if @ctx.index >= @rolePairsNested.length [ done @ctx.pairs ]
+    continue {
+      _rig_cursor: "authorizableRolePairs",
+      index: @ctx.index + 1,
+      pairs: @ctx.pairs.concat(@rolePairsNested[@ctx.index] ?? [])
+    }
+  ]
+  let @roleNames = for @pair in @rolePairs => @pair.key
+  let @roles = @uniqueValues(@roleNames)
+  let @authorizable = for @role in @roles [
+    let @roleToolNames = for @pair in @rolePairs when @pair.key == @role => @pair.value
+    => {
+      key: @role,
+      value: @roleToolNames
+    }
+  ]
   => {
     deny: @deny,
-    authorizable: {
-      "role:planner": @authorizable
-    }
+    authorizable: @pairsToObject(@authorizable)
   }
 ]
 
@@ -545,7 +698,10 @@ export {
   @toolExactPayloadArgs,
   @toolCorrelateControlArgs,
   @toolRisk,
+  @toolAuthorizableRoles,
   @toolAuthorizable,
+  @toolDescription,
+  @toolInstructions,
   @toolReturnsRecord,
   @toolBind,
   @arrayContainsPrefix,
