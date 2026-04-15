@@ -20,7 +20,6 @@ import {
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue } from "../intent.mld"
 import { @callTool, @toolCallError, @emptyState } from "../runtime.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
-import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation } from "../workers/extract.mld"
 
 exe @status(ok) = when [
@@ -102,23 +101,6 @@ exe resolve:r, tool:r @get_numeric_note(note_id: string) = [
   => { id_: @note_id, title: "Todo", content: "Existing note body" }
 ] => record @note_entry with { controlArgs: ["note_id"] }
 
-record @optional_participant_payload = {
-  data: [title: string, start_time: string, end_time: string]
-}
-
->> Regression for optional control args on exfil-like writes. When the
->> control surface is entirely optional and the planner omits it, execute
->> must synthesize a flat allow internally instead of handing an empty
->> policy fragment to the runtime and self-denying the write.
-exe execute:w, calendar:w, exfil:send, tool:w @schedule_meeting(title, start_time, end_time, participants: array) = [
-  => {
-    title: @title,
-    start_time: @start_time,
-    end_time: @end_time,
-    participants: @participants
-  }
-] with { controlArgs: ["participants"] }
-
 var tools @thinArrowToolCollection = {
   thin_arrow_probe: { mlld: @thinArrowProbe }
 }
@@ -129,29 +111,6 @@ var tools @numericDispatchToolCollection = {
     labels: ["resolve:r"],
     expose: ["note_id"],
     controlArgs: ["note_id"]
-  }
-}
-
-var @optionalControlTools = {
-  schedule_meeting: {
-    kind: "write",
-    mlld: @schedule_meeting,
-    operation: {
-      controlArgs: ["participants"],
-      payloadArgs: ["title", "start_time", "end_time"],
-      payloadRecord: @optional_participant_payload,
-      risk: ["calendar:w", "exfil:send"],
-      authorizable: true
-    },
-    optional: ["participants"]
-  }
-}
-
-var tools @optionalControlToolCollection = {
-  schedule_meeting: {
-    mlld: @schedule_meeting,
-    expose: ["title", "start_time", "end_time", "participants"],
-    optional: ["participants"]
   }
 }
 
@@ -270,26 +229,6 @@ var @numericDispatchResult = @callTool(
   "get_numeric_note",
   { note_id: @numericStringIdValue },
   null
-)
-var @optionalControlAgent = {
-  defense: "defended",
-  tools: @optionalControlTools,
-  toolsCollection: @optionalControlToolCollection,
-  basePolicy: @synthesizedPolicy(@optionalControlTools, null)
-}
-var @optionalControlExecuteResult = @dispatchExecute(
-  @optionalControlAgent,
-  @emptyState(),
-  {
-    phase: "execute",
-    operation: "schedule_meeting",
-    args: {
-      title: { source: "known", value: "Lunch" },
-      start_time: { source: "known", value: "2026-04-18 12:00" },
-      end_time: { source: "known", value: "2026-04-18 13:00" }
-    }
-  },
-  "Create a Lunch event from 2026-04-18 12:00 to 2026-04-18 13:00."
 )
 
 >> Synthesized policy coverage.
@@ -479,11 +418,6 @@ var @dispatchScalarResolveOk =
   @dispatchScalarResolveResult.result.status == "resolved" &&
   @dispatchScalarResolveResult.result.count == 1 &&
   @dispatchScalarResolveResult.result.record_type == "datetime_context"
-var @optionalControlExecutePretty = @optionalControlExecuteResult | @pretty
-var @optionalControlExecuteOk =
-  @optionalControlExecuteResult["error"] == null &&
-  @optionalControlExecuteResult.result.status == "sent" &&
-  @optionalControlExecuteResult.result.tool == "schedule_meeting"
 
 >> MCP and adapter bridges often include `error: false` in successful
 >> envelopes. The runtime must only short-circuit on `error: true`;
@@ -1164,7 +1098,6 @@ var @checks = [
   @check("phase-tool-entry-preserves-callability", @phaseToolEntryDispatchOk, @phaseToolEntryDispatchPretty),
   @check("resolve-worker-success-path", @dispatchResolveOk, @dispatchResolvePretty),
   @check("resolve-worker-scalar-keyed-path", @dispatchScalarResolveOk, @dispatchScalarResolvePretty),
-  @check("optional-control-arg-omission-allows-payload-only-write", @optionalControlExecuteOk, @optionalControlExecutePretty),
   @check("single-arg-direct-dispatch-keeps-string-ids", @numericDispatchOk, @numericDispatchPretty),
   @check("tool-error-envelope-only-fails-on-true", @toolEnvelopeOk, @toolEnvelopeDetail),
   @check("strict-thin-arrow", @thinArrowOk, @thinArrowSerialized),

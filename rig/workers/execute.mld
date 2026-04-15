@@ -1,7 +1,6 @@
 import {
   @pairsToObject,
   @toolControlArgs,
-  @toolOptionalArgs,
   @toolPayloadArgs,
   @toolUpdateArgs,
   @toolCorrelateControlArgs
@@ -68,22 +67,8 @@ exe @dispatchExecute(agent, state, decision, query) = [
   let @tool = @compiled.tool
   let @operationName = @decision.operation
   let @controlArgs = @toolControlArgs(@tool)
-  let @optionalArgs = @toolOptionalArgs(@tool)
   let @payloadArgs = @toolPayloadArgs(@tool)
   let @updateArgs = @toolUpdateArgs(@tool)
-  >> Planner decisions cannot emit `allow` for control-arg tools, but
-  >> execute still needs one legitimate escape hatch: some write tools
-  >> expose optional control surfaces such as participant lists. When all
-  >> control args are optional and the planner omits them entirely, there
-  >> is no destination/target to authorize, so synthesize the flat tool
-  >> allow internally instead of handing an empty policy fragment to the
-  >> runtime and self-denying the write.
-  let @requiredControlArgs = for @argName in @controlArgs when !@optionalArgs.includes(@argName) => @argName
-  let @presentControlArgs = for @argName in @controlArgs when
-    @compiled.compiled_args[@argName].isDefined() &&
-    @compiled.compiled_args[@argName] != null &&
-    !(@typeof(@compiled.compiled_args[@argName]) == "array" && @compiled.compiled_args[@argName].length == 0)
-    => @argName
   let @controlValues = @controlArgValues(@compiled.compiled_entries, @controlArgs)
   let @payloadPairs = for @argName in @payloadArgs when @compiled.compiled_args[@argName].isDefined() => {
     key: @argName,
@@ -103,7 +88,6 @@ exe @dispatchExecute(agent, state, decision, query) = [
   ]
   let @policyIntent = when [
     @controlArgs.length == 0 && !@compiled.policy_intent[@operationName].isDefined() => { [@operationName]: true }
-    @requiredControlArgs.length == 0 && @presentControlArgs.length == 0 && !@compiled.policy_intent[@operationName].isDefined() => { [@operationName]: true }
     * => @compiled.policy_intent
   ]
   let @built = when [
