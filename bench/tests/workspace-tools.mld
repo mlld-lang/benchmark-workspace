@@ -92,7 +92,7 @@ var @workspaceThinAgentOk =
   @workspaceAgentText.includes('tools: @tools') &&
   @workspaceAgentText.includes('routedTools: @routeToolCatalog(@tools)') &&
   !@workspaceAgentText.includes('toolsCollection: @toolsCollection') &&
-  @workspaceAgentText.includes('runtimeTools: null') &&
+  !@workspaceAgentText.includes('runtimeTools:') &&
   !@workspaceAgentText.includes('@mergePlannerCatalog') &&
   !@workspaceAgentText.includes('@runtimeToolOverrides') &&
   !@workspaceAgentText.includes('@workspaceMcp') &&

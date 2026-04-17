@@ -77,7 +77,9 @@ record @iban_value = {
 
 record @balance_value = {
   facts: [],
-  data: [amount: number?],
+  data: {
+    trusted: [amount: number?]
+  },
   display: [amount]
 }
 
@@ -96,7 +98,7 @@ record @file_text = {
 
 >> ── Write input records ──
 >>
->> Input records replace legacy controlArgs/payloadArgs/updateArgs.
+>> Input records replace the old grouped write metadata.
 >> Fact fields carry the grounded identities that policy authorizes;
 >> data fields carry the free-form or sparse update payload values.
 record @send_money_inputs = {

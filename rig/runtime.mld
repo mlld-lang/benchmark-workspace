@@ -246,6 +246,21 @@ exe @extractToolResultValue(recordType, recordDef, rawValue) = [
 
 exe @previewFields(inputValue) = when [
   !@inputValue.isDefined() => []
+  @inputValue.data.items.isDefined() &&
+    @typeof(@inputValue.data.items) == "array" &&
+    @inputValue.data.items.length > 0 &&
+    @typeof(@inputValue.data.items[0]) == "object" => @plainObjectKeys(@inputValue.data.items[0])
+  @inputValue.data.isDefined() &&
+    @typeof(@inputValue.data) == "array" &&
+    @inputValue.data.length > 0 &&
+    @typeof(@inputValue.data[0]) == "object" => @plainObjectKeys(@inputValue.data[0])
+  @inputValue.items.isDefined() &&
+    @typeof(@inputValue.items) == "array" &&
+    @inputValue.items.length > 0 &&
+    @typeof(@inputValue.items[0]) == "object" => @plainObjectKeys(@inputValue.items[0])
+  @typeof(@inputValue) == "array" &&
+    @inputValue.length > 0 &&
+    @typeof(@inputValue[0]) == "object" => @plainObjectKeys(@inputValue[0])
   @inputValue.data.isDefined() && @typeof(@inputValue.data) == "object" => @plainObjectKeys(@inputValue.data)
   @typeof(@inputValue) == "object" => @plainObjectKeys(@inputValue)
   * => []

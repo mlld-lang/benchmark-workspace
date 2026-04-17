@@ -24,14 +24,14 @@ How the AgentDojo benchmark suites consume rig-v2. Two files per suite. No shelf
     travel/
       records.mld
       tools.mld
-  src/                   # Python host — minimal
-    host.py
-    run.py
-    mcp_server.py
-    date_shift.py
   ARCHITECTURE.md
   INTERFACE.md
   README.md
+~/mlld/clean/src/      # Python host — minimal
+  host.py
+  run.py
+  mcp_server.py
+  date_shift.py
 ```
 
 No `shelf.mld`. No `contracts.mld` as a standalone file. No `policy.mld`. No `toolsCollection`. These are framework ceremony; rig v2 generates what it needs from records and tool declarations.
@@ -121,29 +121,22 @@ Tool declarations are where v2 diverges most from v1. A tool catalog combines wh
 
 ```mlld
 search_contacts_by_name: {
-  kind: "read",
   mlld: @search_contacts_by_name,
   returns: @contact,
   labels: ["resolve:r", "known"],
-  semantics: "Search the user's contact book by name match."
+  description: "Search the user's contact book by name match."
 }
 ```
 
-**Write tool with operation declaration:**
+**Write tool with input record:**
 
 ```mlld
 send_email: {
-  kind: "write",
   mlld: @send_email,
-  operation: {
-    controlArgs: ["recipients"],
-    payloadArgs: ["subject", "body", "attachments", "cc", "bcc"],
-    exactPayloadArgs: ["subject"],
-    payloadRecord: @email_payload,
-    risk: ["exfil:send", "comm:w"],
-    can_authorize: true,
-    semantics: "Send an email. Recipients must be a resolved contact or verified known address."
-  }
+  inputs: @send_email_inputs,
+  labels: ["execute:w", "tool:w", "exfil:send", "comm:w"],
+  can_authorize: "role:planner",
+  description: "Send an email. Recipients must be a resolved contact or verified known address."
 }
 ```
 
@@ -154,12 +147,12 @@ Everything rig needs to compile state, auth, display projection, and phase routi
 **Stays (copy from v1 with minor updates):**
 - Record declarations — mostly unchanged, verify display modes use `role:planner` / `role:worker`
 - Tool `exe` definitions — unchanged
-- Payload records for writes (e.g., `email_payload`) — move into `records.mld`, referenced from tool operation declarations
+- Input records for writes — live in `records.mld`, referenced from tool `inputs:`
 
 **Goes:**
 - `shelf.mld` — deleted, rig manages state from records
-- `contracts.mld` as a standalone file — deleted; write payload records move to `records.mld`, read-side contract catalog deleted entirely (extract uses the target write's `payloadRecord` or an inline planner schema)
-- `contractDescriptions` — replaced by operation `semantics` strings that describe operation behavior, not task strategy
+- `contracts.mld` as a standalone file — deleted; write schemas live in `records.mld`, and extract uses the target write tool's `inputs` record or an inline planner schema
+- `contractDescriptions` — replaced by tool `description` / `instructions`
 - `policy.mld` — deleted unless genuine suite-specific overrides remain (likely none)
 - `toolsCollection` — merged into the single tool catalog
 - Per-suite shelf aliases, slot read/write declarations — rig-managed
@@ -177,7 +170,7 @@ Each suite exercises different rig primitives. Porting order matches the rig bui
 - Multi-step writes driven by user task text (e.g., user says "create a calendar event and add these participants" — distinct user-specified actions, not actions extracted from tainted content)
 - Extract for tainted content into typed *single-shape* payloads (email body → calendar event payload, file content → summary record) where the planner's next action is determined by the user task text, not by what the extract returned
 - Derive for computed answers over resolved collections (schedule gaps, file selection via selection refs)
-- Write payload records (email, calendar event, file content)
+- Write input records (email, calendar event, file content)
 - Multi-recipient writes (one execute per recipient when bodies differ; single execute with array recipients when the message is identical)
 
 **Explicitly not exercised:** tasks where the user asks the agent to follow instructions contained inside tainted content (e.g., "do the actions described in this email"). See "Explicitly out of scope" below.
@@ -189,10 +182,10 @@ Each suite exercises different rig primitives. Porting order matches the rig bui
 **Scope:** 16 user tasks around payments, scheduled transactions, profile updates.
 
 **Rig primitives exercised:**
-- Strict control/payload separation (id vs recipient vs amount)
-- `updateArgs` for modify-existing writes
-- `exactPayloadArgs` for password updates
-- `correlateControlArgs` for transaction mixing defense
+- Strict fact/data separation (id vs recipient vs amount)
+- top-level `update` sections for modify-existing writes
+- top-level `exact` sections for password updates
+- `correlate` for transaction mixing defense
 - Extract over file-based payment instructions
 - Derive for "pick the right transaction to refund" (selection ref)
 
@@ -255,7 +248,7 @@ Utility numbers exclude expected misses when reporting against success criteria.
 
 Attack tasks run the same agent with injected content in data fields. The defense stack should hold for control-arg fabrication, laundering through extract/derive, and cross-record mixing. The one gap is recommendation-hijack attacks (injected content reaching a recommendation evaluation path) — v2 does not defend against this. Those specific attack tasks are accepted misses; advice-gate defense is deferred.
 
-Attack configurations are declared in `src/run.py` args. The agent entrypoint is unchanged.
+Attack configurations are declared in `clean/src/run.py` args. The agent entrypoint is unchanged.
 
 ## Evaluation
 

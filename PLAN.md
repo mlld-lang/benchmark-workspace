@@ -296,10 +296,10 @@ Each step produces something runnable. Don't proceed to the next step until the 
 **Goal:** Workspace becomes the first fully verified clean suite on rig v2. The migration work is already done; this step is about removing residual bridge/workaround code, running the real harness path, and proving the clean shape holds end to end.
 
 **Python host (port from v1 with minimal changes):**
-- `bench/src/host.py` — MlldAgent class, task log, results output. Update rig import path. Add `phase_log_file` and `phase_state_file` allocation, paths passed via MCP env.
-- `bench/src/run.py` — CLI entry. Preserve AgentDojo timeshifting: load via `get_shifted_suite(...)`, not raw `get_suite(...)`.
-- `bench/src/mcp_server.py` — MCP wrapper. Unchanged from v1 unless phase attribution needs updates.
-- `bench/src/date_shift.py` — suite adapter. Unchanged from v1.
+- `src/host.py` — MlldAgent class, task log, results output. Update rig import path. Add `phase_log_file` and `phase_state_file` allocation, paths passed via MCP env.
+- `src/run.py` — CLI entry. Preserve AgentDojo timeshifting: load via `get_shifted_suite(...)`, not raw `get_suite(...)`.
+- `src/mcp_server.py` — MCP wrapper. Unchanged from v1 unless phase attribution needs updates.
+- `src/date_shift.py` — suite adapter. Unchanged from v1.
 
 **Phase lifecycle consumption in host:**
 - Read `phase_log_file` NDJSON events
@@ -556,7 +556,7 @@ Provider-native resume is not required for v2 — "persistent planner context" v
 
 ### Timeshifting is host behavior
 
-Benchmark date shifting remains required in v2. Preserve the existing `benchmarks/src/date_shift.py` behavior in the clean host so AgentDojo suites are loaded relative to the current day rather than the original fixture reference date. This is a runner concern, not a rig primitive and not app-level logic.
+Benchmark date shifting remains required in v2. Preserve the existing `clean/src/date_shift.py` behavior in the clean host so AgentDojo suites are loaded relative to the current day rather than the original fixture reference date. This is a runner concern, not a rig primitive and not app-level logic.
 
 ## Documentation
 

@@ -4,19 +4,18 @@ Benchmark runner and suite catalogs for rig v2.
 
 The host keeps the same high-level shape as v1:
 
-- `src/run.py` loads AgentDojo suites through the date-shift adapter
-- `src/host.py` launches the mlld agent and records lifecycle/session data
-- `src/mcp_server.py` exposes the per-task AgentDojo tools over MCP
+- `../src/run.py` loads AgentDojo suites through the date-shift adapter
+- `../src/host.py` launches the mlld agent and records lifecycle/session data
+- `../src/mcp_server.py` exposes the per-task AgentDojo tools over MCP
 
-`clean/bench` is its own `uv` project. Run bench commands from this
-directory so the runner gets the same Python dependency surface as the
-main `benchmarks/` project.
+`clean/bench` is its own `uv` project. Run bench commands with
+`uv run --project clean/bench ...` so the harness gets the same Python
+dependency surface every time.
 
 Default development run (pick any simple read-and-compose workspace task as a canary — do NOT use instruction-following tasks like `user_task_13` as canaries; see `ARCHITECTURE.md` "Explicitly out of scope"):
 
 ```sh
-cd clean/bench
-uv run python3 src/run.py \
+uv run --project clean/bench python3 clean/src/run.py \
   -s workspace \
   -d defended \
   -p 1 \
@@ -28,7 +27,7 @@ uv run python3 src/run.py \
 Attack run:
 
 ```sh
-uv run python3 clean/bench/src/run.py \
+uv run --project clean/bench python3 clean/src/run.py \
   -s slack \
   -d defended \
   -a important_instructions \

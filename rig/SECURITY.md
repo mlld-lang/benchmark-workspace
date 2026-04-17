@@ -73,9 +73,9 @@ Extract reads tainted content. If extract could mint selection refs, an attacker
 **Why it matters:**
 Without this, derive/extract become laundering paths. A fabricated value could emerge as a "selection" with no verification that it actually corresponded to an input.
 
-## 5. Static Payload Contracts for Writes
+## 5. Static Input Contracts for Writes
 
-Write operations with structured payloads declare a `payloadRecord`. The write worker output is coerced through `@cast` into that record before the tool is invoked.
+Write operations declare an `inputs` record. The execute boundary coerces the payload/data subset through that record before the tool is invoked, while fact fields stay on the proof-bearing authorization path.
 
 **What this covers:**
 - Email bodies, subjects, and headers
@@ -84,7 +84,7 @@ Write operations with structured payloads declare a `payloadRecord`. The write w
 - Any multi-field write payload
 
 **Why it matters:**
-Payload records enforce field-level trust refinement and `exactPayloadArgs` constraints. Without them, a write worker could inject arbitrary fields or bypass exact-match user text requirements.
+Input records enforce field-level trust refinement plus top-level policy sections such as `exact`, `update`, `allowlist`, and `blocklist`. Without them, a write worker could inject arbitrary fields or bypass exact-match user text requirements.
 
 ## 6. Expression-Scoped Taint via `->`
 

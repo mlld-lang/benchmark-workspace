@@ -72,6 +72,13 @@ exe @field(inputValue, key) = js {
   return inputValue?.[key] ?? null;
 }
 
+exe resolve:r, tool:r @search_day_events(query, day) = [
+  => {
+    value: @day,
+    kind: @query
+  }
+] => record @records.datetime_context
+
 exe @isBlank(value) = when [
   !@value.isDefined() => true
   @value == null => true
@@ -490,6 +497,36 @@ var @dispatchScalarResolveResult = @dispatchResolve(
     purpose: "ground one synthetic day context"
   },
   "What day is it?"
+)
+var tools @readArgFixtureTools = {
+  search_day_events: {
+    mlld: @search_day_events,
+    returns: @records.datetime_context,
+    labels: ["resolve:r"],
+    description: "Search one synthetic day context by query and day."
+  }
+}
+var @readArgFixtureAgent = @rigBuild({
+  suite: "fixture-read-args",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @readArgFixtureTools
+})
+var @readArgDoc = @renderToolDocs(@readArgFixtureTools)[0]
+var @dispatchReadArgResolveResult = @dispatchResolve(
+  @readArgFixtureAgent,
+  @emptyState(),
+  {
+    phase: "resolve",
+    tool: "search_day_events",
+    args: {
+      query: { source: "known", value: "lunch" },
+      day: { source: "known", value: "2026-04-21" }
+    },
+    purpose: "ground one synthetic day search result"
+  },
+  "Am I free for lunch at 12:00 on 2026-04-21?"
 )
 >> The execute regressions use one transparent local `var tools`
 >> catalog end-to-end. Planner metadata and runtime callability now
@@ -1140,44 +1177,56 @@ var @workspaceBenchCatalogOk =
   !@workspaceToolsText.includes('var tools @toolsCollection = {') &&
   @workspaceToolsText.includes('var tools @tools = {') &&
   @workspaceToolsText.includes('mlld: @search_emails') &&
+  @workspaceAgentText.includes('@rig.run({') &&
   @workspaceAgentText.includes('tools: @tools') &&
-  @workspaceAgentText.includes("routedTools: ") &&
-  @workspaceAgentText.includes('@routeToolCatalog') &&
-  @workspaceAgentText.includes('runtimeTools: null') &&
-  !@workspaceAgentText.includes('@mergePlannerCatalog')
+  !@workspaceAgentText.includes("routedTools: ") &&
+  !@workspaceAgentText.includes('@routeToolCatalog') &&
+  !@workspaceAgentText.includes('runtimeTools:') &&
+  !@workspaceAgentText.includes('@mergePlannerCatalog') &&
+  !@workspaceAgentText.includes('@synthesizedPolicy') &&
+  !@workspaceAgentText.includes('@runPhaseLoop')
 var @workspaceBenchCatalogDetail = `tools=@workspaceToolsText agent=@workspaceAgentText`
 
 var @bankingBenchCatalogOk =
   !@bankingToolsText.includes('var tools @toolsCollection = {') &&
   @bankingToolsText.includes('var tools @tools = {') &&
   @bankingToolsText.includes('mlld: @get_balance') &&
+  @bankingAgentText.includes('@rig.run({') &&
   @bankingAgentText.includes('tools: @tools') &&
-  @bankingAgentText.includes("routedTools: ") &&
-  @bankingAgentText.includes('@routeToolCatalog') &&
-  @bankingAgentText.includes('runtimeTools: null') &&
-  !@bankingAgentText.includes('@mergePlannerCatalog')
+  !@bankingAgentText.includes("routedTools: ") &&
+  !@bankingAgentText.includes('@routeToolCatalog') &&
+  !@bankingAgentText.includes('runtimeTools:') &&
+  !@bankingAgentText.includes('@mergePlannerCatalog') &&
+  !@bankingAgentText.includes('@synthesizedPolicy') &&
+  !@bankingAgentText.includes('@runPhaseLoop')
 var @bankingBenchCatalogDetail = `tools=@bankingToolsText agent=@bankingAgentText`
 
 var @slackBenchCatalogOk =
   !@slackToolsText.includes('var tools @toolsCollection = {') &&
   @slackToolsText.includes('var tools @tools = {') &&
   @slackToolsText.includes('mlld: @get_channels') &&
+  @slackAgentText.includes('@rig.run({') &&
   @slackAgentText.includes('tools: @tools') &&
-  @slackAgentText.includes("routedTools: ") &&
-  @slackAgentText.includes('@routeToolCatalog') &&
-  @slackAgentText.includes('runtimeTools: null') &&
-  !@slackAgentText.includes('@mergePlannerCatalog')
+  !@slackAgentText.includes("routedTools: ") &&
+  !@slackAgentText.includes('@routeToolCatalog') &&
+  !@slackAgentText.includes('runtimeTools:') &&
+  !@slackAgentText.includes('@mergePlannerCatalog') &&
+  !@slackAgentText.includes('@synthesizedPolicy') &&
+  !@slackAgentText.includes('@runPhaseLoop')
 var @slackBenchCatalogDetail = `tools=@slackToolsText agent=@slackAgentText`
 
 var @travelBenchCatalogOk =
   !@travelToolsText.includes('var tools @toolsCollection = {') &&
   @travelToolsText.includes('var tools @tools = {') &&
   @travelToolsText.includes('mlld: @get_user_information') &&
+  @travelAgentText.includes('@rig.run({') &&
   @travelAgentText.includes('tools: @tools') &&
-  @travelAgentText.includes("routedTools: ") &&
-  @travelAgentText.includes('@routeToolCatalog') &&
-  @travelAgentText.includes('runtimeTools: null') &&
-  !@travelAgentText.includes('@mergePlannerCatalog')
+  !@travelAgentText.includes("routedTools: ") &&
+  !@travelAgentText.includes('@routeToolCatalog') &&
+  !@travelAgentText.includes('runtimeTools:') &&
+  !@travelAgentText.includes('@mergePlannerCatalog') &&
+  !@travelAgentText.includes('@synthesizedPolicy') &&
+  !@travelAgentText.includes('@runPhaseLoop')
 var @travelBenchCatalogDetail = `tools=@travelToolsText agent=@travelAgentText`
 
 var @collectionRoundtripOk = @collectionRoundtrip(@policyBuildToolCollection, @manualBasePolicy) == true
@@ -1250,6 +1299,17 @@ var @dispatchScalarResolveOk =
   @dispatchScalarResolveResult.result.status == "resolved" &&
   @dispatchScalarResolveResult.result.count == 1 &&
   @dispatchScalarResolveResult.result.record_type == "datetime_context"
+var @readArgDocPretty = @docSummary(@readArgDoc)
+var @readArgDocOk =
+  @field(@readArgDoc, "controlArgs").includes("query") &&
+  @field(@readArgDoc, "controlArgs").includes("day") &&
+  @field(@readArgDoc, "payloadArgs").length == 0
+var @dispatchReadArgResolvePretty = @dispatchSummary(@dispatchReadArgResolveResult)
+var @dispatchReadArgResolveOk =
+  @dispatchReadArgResolveResult["error"] == null &&
+  @dispatchReadArgResolveResult.result.status == "resolved" &&
+  @dispatchReadArgResolveResult.result.count == 1 &&
+  @dispatchReadArgResolveResult.result.record_type == "datetime_context"
 var @dispatchCreateNotePretty = @dispatchSummary(@dispatchCreateNoteResult)
 var @dispatchCreateNoteOk =
   @dispatchCreateNoteResult["error"] == null &&
@@ -1966,6 +2026,94 @@ var @namedStateLogOk = @namedStateLogEntries.length == 1 &&
   @field(@namedStateLogEntries[0], "tool") == "search_emails" &&
   @field(@namedStateLogEntries[0], "summary") == "resolved 1 email_msg record(s)"
 
+>> Array-shaped named payloads should surface item field names to the
+>> planner without leaking payload values. This keeps repeated derive /
+>> execute workflows structurally usable while preserving the no-payload
+>> planner summary invariant.
+var @arrayPayloadMarker = "ARRAY_PAYLOAD_SECRET_MARKER"
+var @arrayNamedState = {
+  resolved: {},
+  extracted: {},
+  derived: {
+    email_plan: {
+      provenance: "derived",
+      schema_name: "inline-schema",
+      preview_fields: [],
+      value: [{
+        email_address: "david.lee@bluesparrowtech.com",
+        subject: "Task assignment",
+        body: @arrayPayloadMarker
+      }]
+    }
+  },
+  execution_log: [],
+  planner_session_id: null,
+  phase_events: []
+}
+var @arrayPlannerSummary = @plannerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @arrayNamedState
+) | @pretty
+var @arrayWorkerSummary = @workerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @arrayNamedState
+) | @pretty
+var @arrayPreviewPretty = `planner=@arrayPlannerSummary`
+var @arrayPreviewOk = @arrayPlannerSummary.includes('"email_address"') &&
+  @arrayPlannerSummary.includes('"subject"') &&
+  @arrayPlannerSummary.includes('"body"') &&
+  !@arrayPlannerSummary.includes(@arrayPayloadMarker) &&
+  @arrayWorkerSummary.includes(@arrayPayloadMarker)
+
+var @wrappedArrayNamedState = {
+  resolved: {},
+  extracted: {},
+  derived: {
+    todo_items: {
+      provenance: "derived",
+      schema_name: "todo_items",
+      preview_fields: [],
+      value: {
+        items: [{
+          person_name: "David",
+          task: "Coordinate with the development team.",
+          deadline: "2026-04-22",
+          note: @arrayPayloadMarker
+        }]
+      }
+    }
+  },
+  execution_log: [],
+  planner_session_id: null,
+  phase_events: []
+}
+var @wrappedArrayPlannerSummary = @plannerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @wrappedArrayNamedState
+) | @pretty
+var @wrappedArrayWorkerSummary = @workerStateSummary(
+  {
+    suite: "fixtures",
+    records: {}
+  },
+  @wrappedArrayNamedState
+) | @pretty
+var @wrappedArrayPreviewPretty = `planner=@wrappedArrayPlannerSummary`
+var @wrappedArrayPreviewOk = @wrappedArrayPlannerSummary.includes('"person_name"') &&
+  @wrappedArrayPlannerSummary.includes('"task"') &&
+  @wrappedArrayPlannerSummary.includes('"deadline"') &&
+  !@wrappedArrayPlannerSummary.includes(@arrayPayloadMarker) &&
+  @wrappedArrayWorkerSummary.includes(@arrayPayloadMarker)
+
 >> Live planner/worker outputs carry runtime metadata, but execution-log
 >> entries are diagnostic-only state. Flatten just the appended log
 >> entry so later planner prompts and debug payloads keep the full log
@@ -2031,6 +2179,8 @@ exe @allChecks() = [
   @check("phase-tool-entry-preserves-callability", @phaseToolEntryDispatchOk, @phaseToolEntryDispatchPretty),
   @check("resolve-worker-success-path", @dispatchResolveOk, @dispatchResolvePretty),
   @check("resolve-worker-scalar-keyed-path", @dispatchScalarResolveOk, @dispatchScalarResolvePretty),
+  @check("read-tool-docs-classify-all-read-params-as-control", @readArgDocOk, @readArgDocPretty),
+  @check("resolve-worker-accepts-read-tool-params-without-legacy-controlArgs", @dispatchReadArgResolveOk, @dispatchReadArgResolvePretty),
   @check("execute-worker-zero-control-arg-policy", @dispatchCreateNoteOk, @dispatchCreateNotePretty),
   @check("execute-worker-optional-fact-omission", @dispatchOptionalMeetingOk, @dispatchOptionalMeetingPretty),
   @check("known-datetime-canonicalization", @dispatchNaturalDatetimeMeetingOk, @dispatchNaturalDatetimeMeetingPretty),
@@ -2073,6 +2223,8 @@ exe @allChecks() = [
   @check("record-backed-named-state-projects-display", @recordBackedDisplayOk, @recordBackedDisplayPretty),
   @check("named-state-retains-prior-results", @namedStateOk, `planner=@namedStatePlannerSummary worker=@namedStateWorkerSummary`),
   @check("named-state-retains-execution-log", @namedStateLogOk, @namedStateLogPretty),
+  @check("named-array-preview-fields", @arrayPreviewOk, @arrayPreviewPretty),
+  @check("wrapped-array-preview-fields", @wrappedArrayPreviewOk, @wrappedArrayPreviewPretty),
   @check("execution-log-flattens-diagnostic-wrappers", @wrappedLogOk, @wrappedLogPretty)
   ]
 ]

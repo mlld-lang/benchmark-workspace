@@ -4,46 +4,26 @@
 >> loop out. Routing, policy synthesis, and live dispatch all run
 >> directly from the same `@tools` catalog.
 
-import { @synthesizedPolicy, @runPhaseLoop } from "../../rig/orchestration.mld"
-import { @routeToolCatalog } from "../../rig/tooling.mld"
+import { @rig } from "../../rig/index.mld"
 import { @records } from "../domains/workspace/records.mld"
 import { @tools } from "../domains/workspace/tools.mld"
 import { @query, @model } from @payload
 
-var @defense = @payload.defense ?? "defended"
-var @basePolicy = when [
-  @defense == "defended" => @synthesizedPolicy(@tools, null)
-  * => null
-]
-
-var @agent = {
+var @result = @rig.run({
   suite: "workspace",
-  defense: @defense,
+  defense: @payload.defense ?? "defended",
   records: @records,
   tools: @tools,
-  routedTools: @routeToolCatalog(@tools),
-  runtimeTools: null,
   model: @model,
-  harness: @payload.harness ?? null,
-  basePolicy: @basePolicy,
-  overrides: {},
-  stub: {},
+  harness: @payload.harness,
   phaseLogFile: @payload.phase_log_file ?? null,
   phaseStateFile: @payload.phase_state_file ?? null,
   llmCallLogFile: @payload.llm_call_log_file ?? null,
   logLlmCalls: @payload.log_llm_calls ?? false,
   maxIterations: 40
-}
-
-var @result = @runPhaseLoop(@agent, @query)
-var @plannerIterations = for @event in @result.phase_events when @event.event == "planner_iteration" => @event
+}, @query)
 
 => {
-  content: @result.final.text,
-  debug: {
-    execution_log: @result.execution_log,
-    planner_iterations: @plannerIterations,
-    phase_events: @result.phase_events,
-    last_decision: @result.last_decision
-  }
+  content: @result.mx.text,
+  debug: @result.mx.debug
 }

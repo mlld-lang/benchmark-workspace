@@ -79,13 +79,13 @@ App developers should never need to know how any of this works to ship a working
 
 Extract and derive look similar from outside — both produce typed output. They are not interchangeable.
 
-**Extract reads tainted content.** An email body, a file, a webpage contains free-text that has to be turned into structured fields (a task list, a calendar event payload, an address change). The input is data with `untrusted` labels. Extract coerces through a schema — either the write tool's `payloadRecord` (for write-preparation extract) or an inline planner-declared schema (rare). The output carries extracted provenance.
+**Extract reads tainted content.** An email body, a file, a webpage contains free-text that has to be turned into structured fields (a task list, calendar-event inputs, an address change). The input is data with `untrusted` labels. Extract coerces through a schema — either the write tool's `inputs` record (for write preparation) or an inline planner-declared schema (rare). The output carries extracted provenance.
 
 **Derive reads already-typed values.** Resolved records, extracted payloads, other derived values, sometimes task literals. No tainted free-text. Derive computes: ranking, comparison, arithmetic, selection. The output carries derived provenance.
 
 They sit at different points in the security model. Extract crosses the tainted/typed boundary. Derive operates within the typed layer. Collapsing them would lose a meaningful distinction.
 
-What rig v2 does change: extract no longer depends on a suite-specific standalone contract catalog. The schema for extract comes from either the write tool's `payloadRecord` (for write preparation) or an inline planner-declared schema (for the rare cases where extract is producing typed data for reasoning rather than writing). See spike 41 for the proof that `payloadRecord` is enough schema authority.
+What rig v2 does change: extract no longer depends on a suite-specific standalone contract catalog. The schema for extract comes from either the write tool's `inputs` record (for write preparation) or an inline planner-declared schema (for the rare cases where extract is producing typed data for reasoning rather than writing).
 
 ## Derive and the Control-Arg Firewall
 

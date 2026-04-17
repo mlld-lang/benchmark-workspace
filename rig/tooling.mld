@@ -160,6 +160,20 @@ exe @toolExecutable(toolEntry) = [
   ]
 ]
 
+exe @toolDeclaredParamNames(toolEntry) = [
+  let @exe = @toolExecutable(@toolEntry)
+  let @params = when [
+    @typeof(@exe) == "executable" => @exe.mx.params ?? []
+    * => []
+  ]
+  => for @param in @params [
+    => when [
+      @typeof(@param.name) == "string" => `@param.name`
+      * => `@param`
+    ]
+  ]
+]
+
 exe @toolKind(toolEntry) = [
   => when [
     @toolLabels(@toolEntry).includes("execute:w") || @toolLabels(@toolEntry).includes("tool:w") => "write"
@@ -180,10 +194,16 @@ exe @toolLabels(toolEntry) = [
 
 exe @toolControlArgs(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
-  => when [
-    @toolInputFields(@toolEntry).length > 0 => @toolInputFieldNames(@toolEntry, "fact")
+  let @explicitControlArgs = when [
     @entry.mlld.mx.controlArgs.isDefined() => @stringArray(@entry.mlld.mx.controlArgs)
     @entry.mx.controlArgs.isDefined() => @stringArray(@entry.mx.controlArgs)
+    * => []
+  ]
+  let @declaredParamNames = @toolDeclaredParamNames(@toolEntry)
+  => when [
+    @toolInputFields(@toolEntry).length > 0 => @toolInputFieldNames(@toolEntry, "fact")
+    @toolKind(@toolEntry) == "read" => @uniqueValues(@stringArray(@explicitControlArgs.concat(@declaredParamNames)))
+    @explicitControlArgs.length > 0 => @explicitControlArgs
     * => []
   ]
 ]
@@ -203,25 +223,13 @@ exe @toolOptionalArgs(toolEntry) = [
 ]
 
 exe @toolParamNames(toolEntry) = [
-  let @exe = @toolExecutable(@toolEntry)
-  let @entry = @toolEntryObject(@toolEntry)
   let @inputFieldNames = when [
     @toolInputFields(@toolEntry).length > 0 => @toolInputFieldNames(@toolEntry, "fact").concat(@toolInputFieldNames(@toolEntry, "data"))
     * => []
   ]
   if @inputFieldNames.length > 0 [ => @inputFieldNames ]
-  let @params = when [
-    @typeof(@exe) == "executable" => @exe.mx.params ?? []
-    * => []
-  ]
-  if @params.length > 0 [
-    => for @param in @params [
-      => when [
-        @typeof(@param.name) == "string" => `@param.name`
-        * => `@param`
-      ]
-    ]
-  ]
+  let @declaredParamNames = @toolDeclaredParamNames(@toolEntry)
+  if @declaredParamNames.length > 0 [ => @declaredParamNames ]
   let @fallback = @toolControlArgs(@toolEntry).concat(@toolPayloadArgs(@toolEntry))
   => @uniqueValues(@fallback)
 ]

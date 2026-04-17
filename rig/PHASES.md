@@ -68,7 +68,7 @@ Resolve may produce multiple records per dispatch for collection-returning tools
 
 Input from planner:
 - `decision.source` — typed ref identifying the tainted content source (typically `{ source: "resolved", record: "email_msg", handle: "h_x", field: "body" }`)
-- `decision.schema` — either a record reference (usually the target write's `payloadRecord`) or an inline schema
+- `decision.schema` — either a record reference (usually the target write's `inputs`) or an inline schema
 - `decision.name` — name under which to store the extracted result
 - `decision.purpose`
 
@@ -84,7 +84,7 @@ Output:
 
 The extracted value is **not proof-bearing**. It can fill payload args on a subsequent execute, but it cannot fill control args. Extract **cannot produce selection refs** (spike 42) — that would create a laundering path where injected tainted content could "select" an arbitrary resolved instance. Selection refs are derive-only.
 
-If the schema is a write tool's `payloadRecord`, rig coerces only the payload-arg subset at the execute boundary via `@cast`. Control args and bind-default args are merged separately and are not part of the cast surface.
+If the schema is a write tool's `inputs`, rig coerces only the data-field subset at the execute boundary. Fact fields and bind-default args are merged separately and are not part of the cast surface.
 
 ## Derive Dispatch
 
@@ -161,7 +161,7 @@ After ref resolution, rig constructs bucketed intent internally (`{ resolved, kn
 
 - Box with `tools: [routed_execute_tools[<operation>]]`, `display: "role:worker"`, no shelf scope, `policy: compiled_policy`
 - Worker invokes the single authorized write tool with pre-resolved args
-- Payload coercion: `@cast` is applied only to the payload-arg subset against `operation.payloadRecord`. Control args and bind-default args are merged in after the cast (spike 41).
+- Payload coercion: record coercion is applied only to the data-field subset against the tool's `inputs` record. Fact fields and bind-default args are merged in after that step.
 - Worker returns `-> { status, tool, result_handles?, summary }`
 
 ### Output handling
@@ -291,7 +291,7 @@ var @synthesizedPolicy = {
   },
   authorizations: {
     deny: [tools with can_authorize: false],
-    authorizable: {
+    can_authorize: {
       "role:planner": [tools with can_authorize != false]
     }
   }

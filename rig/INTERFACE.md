@@ -35,7 +35,7 @@ In defended mode, `@rig.build` synthesizes the policy from the tool catalog — 
 
 - Default built-in rule set including `no-send-to-unknown`, `no-destroy-unknown`, `no-secret-exfil`, `no-untrusted-destructive`, `no-unknown-extraction-sources`, and `untrusted-llms-get-influenced`
 - `operations` reverse-mapping from `tool.operation.risk` labels across the catalog
-- `authorizations.authorizable["role:planner"]` populated from tools where `can_authorize` allows planner use
+- `authorizations.can_authorize["role:planner"]` populated from tools where `can_authorize` allows planner use
 - `authorizations.deny` populated from tools where `can_authorize: false` (hard rejection — cannot be authorized even with overrides)
 - `no-novel-urls` included conditionally when any tool declares URL-fetch risk
 
@@ -91,55 +91,44 @@ Apps declare records in `records.mld`. They do not declare derived or extracted 
 
 ## Tool Catalog
 
-A tool catalog declares what operations exist and their semantics.
+A tool catalog declares what operations exist and their planner/runtime contract.
 
 ```mlld
 var @toolCatalog = {
   // Read tools — resolve records
   search_contacts_by_name: {
-    kind: "read",
     mlld: @search_contacts_by_name,
     returns: @contact,             // record family produced
     labels: ["resolve:r", "known"],
-    semantics: "Search the user's contact book by name match."
+    description: "Search the user's contact book by name match."
   },
 
   // Write tools — perform side effects
   send_email: {
-    kind: "write",
     mlld: @send_email,
-    operation: {
-      controlArgs: ["recipients"],        // must have proof-bearing values
-      payloadArgs: ["subject", "body"],   // may come from derive/extract or literals
-      exactPayloadArgs: ["subject"],      // must appear verbatim in task text
-      payloadRecord: @email_payload,      // static payload schema
-      risk: ["exfil:send", "comm:w"],
-      can_authorize: true,
-      semantics: "Send an email message to a recipient."
-    }
+    inputs: @send_email_inputs,           // facts + data + policy sections
+    labels: ["execute:w", "tool:w", "exfil:send", "comm:w"],
+    can_authorize: "role:planner",
+    description: "Send an email message to a recipient."
   },
 
   create_calendar_event: {
-    kind: "write",
     mlld: @create_calendar_event,
-    operation: {
-      controlArgs: [],
-      payloadArgs: ["title", "start_time", "end_time", "description", "location"],
-      payloadRecord: @calendar_event_payload,
-      risk: ["calendar:w"],
-      can_authorize: true,
-      semantics: "Create a new calendar event."
-    },
+    inputs: @create_calendar_event_inputs,
+    labels: ["execute:w", "tool:w", "calendar:w"],
+    can_authorize: "role:planner",
+    description: "Create a new calendar event.",
     bind: { participants: [] }            // pre-bound default args
   }
 }
 ```
 
-Operation semantics strings describe what the operation does — creates vs updates vs deletes, whether a grounded target is required. These get surfaced to the planner as tool docs. They must describe operation semantics, not task strategy. "Modify an existing scheduled payment identified by id" is fine. "Prefer this for rent updates" is not.
+Descriptions describe what the tool does, not task strategy. "Modify an existing scheduled payment identified by id" is fine. "Prefer this for rent updates" is not.
 
-Tool kinds:
-- `read` — returns records. Resolves entities. No side effects.
-- `write` — performs side effects. Requires an operation declaration. Subject to compiled authorization.
+Routing is label-driven:
+- `resolve:r` / `extract:r` / `tool:r` identify read tools
+- `execute:w` / `tool:w` identify write tools
+- domain/risk labels such as `calendar:w` or `exfil:send` drive policy synthesis
 
 ## Source Class Refs
 
@@ -181,7 +170,7 @@ Structured ref objects for all phase inputs except compose sources (see below).
 { source: "selection", backing: { record: "hotel", handle: "h_abc" } }
 ```
 
-**Tool-level unconstrained (only for tools with no controlArgs):**
+**Tool-level unconstrained (only for tools with no fact fields / control args):**
 ```
 { source: "allow" }
 ```
@@ -209,7 +198,7 @@ Compose may also use structured refs in sources for precise selection. Prefer st
 - `known` values are verified against the query text by `@policy.build`.
 - `extracted` and `derived` refs provide typed values for payload args only. Cannot fill control args directly.
 - `selection` refs are the only path from derive to control-arg proof. Selection is derive-only as a producer. Rig validates the backing ref against the derive source phase's input set.
-- `allow` is only valid for tools with no controlArgs. Tools with controlArgs require structured arg refs — the planner cannot bypass per-arg source-class discipline by emitting `allow`. Note: the lower-level `@policy.build` primitive (see `~/mlld/benchmarks/labels-policies-guards.md` §6) accepts `allow: { tool: true }` unconditionally; rig v2's planner-facing contract narrows this. Suites needing unconditional authorization on a controlArgs tool can use `overrides.policy` with the flat form — that's explicit app-level escape, not planner intent.
+- `allow` is only valid for tools with no fact fields / control args. Tools with control args require structured arg refs — the planner cannot bypass per-arg source-class discipline by emitting `allow`. Note: the lower-level `@policy.build` primitive (see `~/mlld/benchmarks/labels-policies-guards.md` §6) accepts `allow: { tool: true }` unconditionally; rig v2's planner-facing contract narrows this. Suites needing unconditional authorization on a control-arg tool can use `overrides.policy` with the flat form — that's explicit app-level escape, not planner intent.
 
 ## Planner Intent Shape
 
@@ -228,7 +217,7 @@ Every planner decision is one of:
 {
   phase: "extract",
   source: { source: "resolved", record: "email_msg", handle: "h_email123", field: "body" },
-  schema: @calendar_event_payload,   // record; typically the write tool's payloadRecord
+  schema: @create_calendar_event_inputs,   // record; typically the target write tool's inputs
   name: "event_details",              // name under which the extracted value is stored
   purpose: "extract the event time and location from a meeting invite email"
 }

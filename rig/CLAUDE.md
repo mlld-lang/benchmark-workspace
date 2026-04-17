@@ -80,7 +80,7 @@ See `ARCHITECTURE.md`, `INTERFACE.md`, `PHASES.md`, `SECURITY.md` for the archit
 
 ### Schema and contract authority
 
-**Write-payload schemas live with the write tool.** `tool.operation.payloadRecord` is the schema authority for write-preparation extract. No standalone contract catalog.
+**Write-input schemas live with the write tool.** `tool.inputs` is the schema authority for write preparation and execute-boundary coercion. No standalone contract catalog.
 
 **Apps declare records + tools.** No shelf authoring, no policy wiring, no standalone contracts file. If a suite seems to need these, rig is missing a primitive — file a rig issue.
 

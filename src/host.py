@@ -2,7 +2,7 @@
 
 Python does four things:
   1. Builds the MCP server command for the per-suite AgentDojo state
-  2. Calls the per-suite mlld agent entrypoint under `agents/`
+  2. Calls the per-suite mlld agent entrypoint under `bench/agents/`
   3. Reads back the modified env from the MCP server's state file
   4. Formats the result for AgentDojo
 
@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
 if LOCAL_AGENTDOJO_SRC.exists():
     sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
@@ -41,8 +41,8 @@ from mlld import Client
 
 SRC_DIR = Path(__file__).parent
 ROOT_DIR = SRC_DIR.parent
-AGENT_DIR = ROOT_DIR / "agents"
-BENCHMARK_PROJECT_DIR = ROOT_DIR.parent.parent / "benchmarks"
+AGENT_DIR = ROOT_DIR / "bench" / "agents"
+CLEAN_BENCH_PROJECT_DIR = ROOT_DIR / "bench"
 
 
 def _agent_entrypoint(env_name: str = "workspace") -> str:
@@ -68,7 +68,7 @@ def _build_local_mcp_command(config: dict[str, Any]) -> str:
     behavior, and phase-state attribution hooks.
     """
     b64 = base64.b64encode(json.dumps(config).encode()).decode()
-    project_dir = shlex.quote(str(BENCHMARK_PROJECT_DIR))
+    project_dir = shlex.quote(str(CLEAN_BENCH_PROJECT_DIR))
     script_path = shlex.quote(str(SRC_DIR / "mcp_server.py"))
     return f"uv run --project {project_dir} python3 {script_path} {b64}"
 
@@ -348,6 +348,31 @@ def _unwrap_content_object(value: str) -> str:
     return content
 
 
+def _is_provider_auth_error(content: str | None) -> bool:
+    if not isinstance(content, str):
+        return False
+    lowered = content.lower()
+    return (
+        "not logged in" in lowered
+        or "please run /login" in lowered
+        or "login required" in lowered
+        or "authentication required" in lowered
+        or "not authenticated" in lowered
+    )
+
+
+def _provider_auth_error_from_llm_calls(entries: list[dict] | None) -> str | None:
+    if not isinstance(entries, list):
+        return None
+    for entry in reversed(entries):
+        if not isinstance(entry, dict):
+            continue
+        for candidate in (entry.get("raw"), entry.get("parsed")):
+            if _is_provider_auth_error(candidate):
+                return str(candidate)
+    return None
+
+
 @contextmanager
 def _locked_log_path(log_path: Path):
     lock_path = log_path.with_name(f"{log_path.name}.lock")
@@ -420,6 +445,7 @@ class MlldAgent:
             runner_mcp_config["log_file"] = mcp_log_file
 
         runner_mcp_config.setdefault("suite_name", self._env_name)
+        runner_mcp_config.setdefault("env_name", self._env_name)
         runner_mcp_config.setdefault("benchmark_version", "v1.1.1")
 
         phase_fd, phase_log_file = tempfile.mkstemp(suffix=".jsonl", prefix="phase_log_")
@@ -577,6 +603,40 @@ class MlldAgent:
             raise MlldInfrastructureError(
                 f"mlld agent did not run (no MCP/LLM calls, no output): "
                 f"{execute_error_str[:500]}"
+            )
+
+        provider_auth_error = None
+        if _is_provider_auth_error(execute_error_str):
+            provider_auth_error = execute_error_str
+        elif _is_provider_auth_error(raw_output):
+            provider_auth_error = raw_output
+        else:
+            provider_auth_error = _provider_auth_error_from_llm_calls(llm_call_entries)
+
+        if provider_auth_error:
+            task_log["execute_error"] = str(provider_auth_error)[:2000]
+            task_log["outcome"] = "infrastructure_error"
+            task_log["final_output"] = None
+            task_log["utility"] = None
+            task_log["security"] = None
+            self._last_task_log = task_log
+            self._last_log_entry_id = task_log["log_entry_id"]
+            if self._run_log_path:
+                log_path = self._run_log_path
+            else:
+                log_dir = AGENT_DIR.parent / "results" / self._model / self._env_name
+                log_dir.mkdir(parents=True, exist_ok=True)
+                suffix = self._defense
+                if self._attack:
+                    suffix = f"{self._defense}.atk_{self._attack}"
+                log_path = log_dir / f"{suffix}.jsonl"
+            self._last_log_path = log_path
+            with _locked_log_path(log_path):
+                with open(log_path, "a") as f:
+                    f.write(json.dumps(task_log, default=str) + "\n")
+            raise MlldInfrastructureError(
+                f"Provider authentication failed before the agent could run cleanly: "
+                f"{str(provider_auth_error)[:500]}"
             )
 
         content = "Task completed."

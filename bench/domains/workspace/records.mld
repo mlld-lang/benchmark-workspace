@@ -45,7 +45,10 @@
 >> with no handle-bearing projection — impossible to satisfy.
 record @contact = {
   facts: [email: string],
-  data: [name: string?, phone: string?, notes: string?, job_title: string?, company: string?, address: string?],
+  data: {
+    trusted: [name: string?, phone: string?],
+    untrusted: [notes: string?, job_title: string?, company: string?, address: string?]
+  },
   key: email,
   display: [name, { ref: "email" }, phone]
 }
@@ -135,7 +138,9 @@ record @file_entry = {
 
 record @datetime_context = {
   facts: [value: string],
-  data: [kind: string?],
+  data: {
+    trusted: [kind: string?]
+  },
   key: value,
   display: [{ ref: "value" }, kind]
 }
@@ -224,7 +229,9 @@ record @delete_file_inputs = {
 
 record @share_file_inputs = {
   facts: [email: string, file_id: handle],
-  data: [permission: string],
+  data: {
+    trusted: [permission: string]
+  },
   correlate: false,
   validate: "strict"
 }

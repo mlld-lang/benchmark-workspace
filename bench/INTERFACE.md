@@ -62,7 +62,7 @@ Export individual records plus the `@records` catalog map.
 
 ## `domains/<suite>/tools.mld`
 
-Declares tool functions (exes) and the tool catalog. Read tools produce records. Write tools carry operation declarations that reference payload records from `records.mld`.
+Declares tool functions (exes) and the tool catalog. Read tools return record families. Write tools declare `inputs: @record` and express input policy through that record's top-level sections.
 
 ```mlld
 >> domains/workspace/tools.mld
@@ -96,46 +96,33 @@ exe execute:w, calendar:w, tool:w @create_calendar_event(title, start_time, end_
 
 var @tools = {
   search_emails: {
-    kind: "read",
     mlld: @search_emails,
     returns: @email_msg,
     labels: ["resolve:r", "known"],
-    semantics: "Search the user's inbox by query string."
+    description: "Search the user's inbox by query string."
   },
 
   get_day_calendar_events: {
-    kind: "read",
     mlld: @get_day_calendar_events,
     returns: @calendar_evt,
     labels: ["resolve:r", "known"],
-    semantics: "Retrieve all calendar events for a specific day."
+    description: "Retrieve all calendar events for a specific day."
   },
 
   send_email: {
-    kind: "write",
     mlld: @send_email,
-    operation: {
-      controlArgs: ["recipients"],
-      payloadArgs: ["subject", "body", "attachments", "cc", "bcc"],
-      exactPayloadArgs: ["subject"],
-      payloadRecord: @email_payload,
-      risk: ["exfil:send", "comm:w"],
-      can_authorize: true,
-      semantics: "Send an email message to one or more recipients."
-    }
+    inputs: @send_email_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send", "comm:w"],
+    can_authorize: "role:planner",
+    description: "Send an email message to one or more recipients."
   },
 
   create_calendar_event: {
-    kind: "write",
     mlld: @create_calendar_event,
-    operation: {
-      controlArgs: [],
-      payloadArgs: ["title", "start_time", "end_time", "description", "participants", "location"],
-      payloadRecord: @calendar_event_payload,
-      risk: ["calendar:w"],
-      can_authorize: true,
-      semantics: "Create a new calendar event."
-    },
+    inputs: @create_calendar_event_inputs,
+    labels: ["execute:w", "tool:w", "calendar:w"],
+    can_authorize: "role:planner",
+    description: "Create a new calendar event.",
     bind: { participants: [] }
   }
 }
@@ -149,41 +136,32 @@ Export only `@tools`. The tool catalog is the entire tool surface rig needs.
 
 ### For every tool
 
-- `kind: "read" | "write"` — which phase handles it
 - `mlld: @<exe_name>` — the mlld exe that invokes it
-- `semantics: "..."` — short operation description for planner-facing op docs. Describes what the tool does, not when to use it.
+- `labels: [...]` — routing and risk labels (`resolve:r`, `extract:r`, `execute:w`, `tool:r`, `tool:w`, `calendar:w`, `exfil:send`, etc.)
+- `description: "..."` — short planner-facing operation description
+- `instructions: "..."` — optional extra usage guidance
+- `bind: { argname: value }` — optional; pre-bind default values for args the planner doesn't need to supply
 
 ### For read tools
 
 - `returns: @<record>` — the record family produced. Required.
-- `labels: [...]` — security labels applied (`resolve:r`, `known`, `untrusted`, etc.)
 
 ### For write tools
 
-- `operation: { ... }` — required:
-  - `controlArgs: [...]` — arg names that must have proof-bearing values. When a control arg is array-typed (e.g., `recipients: array`), rig checks proof per array element — every element must have its own resolved/known/selection proof.
-  - `payloadArgs: [...]` — arg names that take user/derived/extracted content
-  - `updateArgs: [...]` — optional; arg names for modify operations (rejects no-change updates)
-  - `exactPayloadArgs: [...]` — optional; payload args that must appear verbatim in task text
-  - `payloadRecord: @<record>` — optional; static schema for payload coercion at execute boundary
-  - `risk: [...]` — risk category labels (`exfil:send`, `destructive:targeted`, etc.)
-  - `correlateControlArgs: true` — optional; require all control args to share source record instance
-  - `can_authorize: true | false` — optional; default `true`; `false` means the tool cannot be authorized at all (absolute deny)
-  - `semantics: "..."` — same as above
-
-- `bind: { argname: value }` — optional; pre-bind default values for args the planner doesn't need to authorize
+- `inputs: @<record>` — required input record. Facts define proof-bearing control args. Data defines payload args. Top-level policy sections on the record (`exact`, `update`, `allowlist`, `blocklist`, `optional_benign`, `correlate`, `validate`) replace the old legacy write metadata.
+- `can_authorize: "role:planner" | false | { ... }` — optional planner-authorization surface. `false` hard-denies the tool.
 
 ## Array-Typed Args and Multi-Recipient Writes
 
 When a tool accepts an array-typed arg (e.g., `recipients: array` on `send_email`):
 
 **Record author rules:**
-- The payload record field type must match the tool exe signature exactly. If the tool declares `recipients: array`, the `payloadRecord` declares `recipients: array`. Mismatched types produce a build-time error.
-- Array fields declare their element type where meaningful (e.g., `recipients: array` as strings is the default; structured array element types can be specified as the suite matures).
+- The input-record field names and types must match the tool exe signature exactly, except for args supplied via `bind`.
+- Array fields declare their element type where meaningful.
 
 **Dispatch rules:**
-- For array-typed control args, rig checks proof **per element**. Every element must have its own resolved, known, or selection ref — validated independently.
-- For array-typed payload args, `@cast` validates each element against the record's element type.
+- For array-typed fact fields, rig checks proof **per element**. Every element must have its own resolved, known, or selection ref — validated independently.
+- For array-typed data fields, record coercion validates each element against the field type.
 
 **Planner usage patterns:**
 - Identical message, multiple recipients: single execute with `recipients: ["a@x", "b@x"]`. Both elements need proof; bodies are identical.
@@ -194,8 +172,8 @@ The framework supports both patterns via the same tool signature. Which one a ta
 ## What Suites Do NOT Provide
 
 - No `shelf.mld` — rig manages state from records
-- No standalone `contracts.mld` — write payloads are records referenced from tool ops; read-side extract/derive uses the target write's `payloadRecord` or inline planner schemas
-- No `policy.mld` — risk compilation is derived from tool operation metadata
+- No standalone `contracts.mld` — write schemas live in the input record referenced by `inputs:`; read-side extract/derive uses a write tool's input record or an inline planner schema
+- No `policy.mld` — risk compilation is derived from tool labels and input-record policy sections
 - No `toolsCollection` — the tool catalog is both the routing source and the auth source
 - No per-suite orchestration overrides
 - No planner prompt customization for domain-specific behavior
@@ -228,8 +206,8 @@ Overrides should be true policy overrides (deny-list extensions, non-default ris
 A suite is well-formed when:
 
 - Every tool listed in `@tools` has a matching exe import
-- Every record referenced in `payloadRecord` is defined in `records.mld`
-- `controlArgs` and `payloadArgs` together cover every arg name the tool exe declares
+- Every record referenced by `inputs:` or `returns:` is defined in `records.mld`
+- Every exe parameter is covered by an input-record field or `bind`
 - `mlld validate <suite dir>` passes
 - A trivial run completes end-to-end: `mlld <agent_entrypoint.mld> --payload '{"query": "ping"}'`
 

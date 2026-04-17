@@ -1,10 +1,10 @@
 """CLI runner for mlld AgentDojo agent.
 
 Usage:
-    uv run python3 src/run.py -s workspace -t user_task_0 --debug
-    uv run python3 src/run.py -s workspace -p 20
-    uv run python3 src/run.py -s workspace -d defended -p 20
-    uv run python3 src/run.py -s workspace -d defended -a important_instructions -p 20
+    uv run --project clean/bench python3 clean/src/run.py -s workspace -t user_task_0 --debug
+    uv run --project clean/bench python3 clean/src/run.py -s workspace -p 20
+    uv run --project clean/bench python3 clean/src/run.py -s workspace -d defended -p 20
+    uv run --project clean/bench python3 clean/src/run.py -s workspace -d defended -a important_instructions -p 20
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
 if LOCAL_AGENTDOJO_SRC.exists():
     sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
@@ -322,13 +322,11 @@ def main():
     parser.add_argument("-s", "--suite", choices=SUITES, default="workspace")
     parser.add_argument("-t", "--task", nargs="+", help="Run specific user task(s)")
     parser.add_argument("--injection-task", nargs="+", help="Run specific injection task(s) when using --attack")
-    # Default model is Haiku 4.5 — confirmed to drive the rig architecture
-    # cleanly (resolve→extract→compose) and dramatically cheaper/faster than
-    # Sonnet 4. Sonnet 4 is the CaMeL comparison target — swap by uncommenting.
-    parser.add_argument("--model", default="claude-haiku-4-5-20251001")
-    # parser.add_argument("--model", default="claude-sonnet-4-20250514")
+    # Default dev model is GLM 5.1 via OpenRouter. clean/rig/runtime.mld
+    # routes openrouter/* models through the opencode harness by default.
+    parser.add_argument("--model", default="openrouter/z-ai/glm-5.1")
     parser.add_argument("--harness", choices=["claude", "opencode"],
-                        help="LLM harness: claude (default) or opencode")
+                        help="LLM harness override; if omitted, runtime picks from --model")
     parser.add_argument("-p", "--parallel", type=int, default=20)
     parser.add_argument("-d", "--defense", default="undefended",
                         help="Defense level: undefended (default) or defended (authorization bundles)")

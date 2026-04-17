@@ -17,7 +17,7 @@ can read back side effects (sent emails, created files, etc.) for
 AgentDojo's evaluation.
 
 Usage (by mlld):
-  import tools from mcp "uv run python3 src/mcp_server.py <config_b64>"
+  import tools from mcp "uv run --project clean/bench python3 clean/src/mcp_server.py <config_b64>"
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
 if LOCAL_AGENTDOJO_SRC.exists():
     sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
@@ -431,7 +431,10 @@ async def main():
         env_type = _resolve_type(config["env_type"])
         env = env_type.model_validate_json(config["env_json"])
     else:
-        env_name = config["env_name"]
+        env_name = config.get("env_name") or config.get("suite_name")
+        if not env_name:
+            print("env_name or suite_name required when not using env_json mode", file=sys.stderr)
+            sys.exit(1)
         suite = get_shifted_suite(benchmark_version, env_name) if get_shifted_suite else get_suite(benchmark_version, env_name)
 
         task_id = config.get("task_id")
