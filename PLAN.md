@@ -42,13 +42,13 @@ First appears in Step 1 (planner prompt serialization). Extended in Step 2 (reso
 
 Generates the planner's system prompt from:
 - tool docs (derived from tool catalog metadata)
-- op docs for authorizable writes (semantics strings + control/payload arg lists + bucketed intent shape)
+- op docs for planner-authorizable writes (semantics strings + control/payload arg lists + bucketed intent shape)
 - state summary (orchestrator-side read + display projection)
 - execution log attestations
 
 Deliverables:
 - Tool docs renderer (mimics v1 `@toolDocs` path with v2 catalog shape)
-- Op docs renderer (semantics + arg signatures + `authorizable` flag)
+- Op docs renderer (semantics + arg signatures + `can_authorize` roles)
 - State summary serializer (display-projected)
 - Execution log summary renderer
 
@@ -86,7 +86,7 @@ Populated in Step 1; refined per step as each worker adds its phase result shape
 Clear exception types from `@rig.build` and `@rig.run` with messages that point at the specific problem.
 
 Deliverables:
-- `@rig.build` errors: malformed record, malformed tool declaration, missing payloadRecord reference, authorizable: false on a tool also in authorizable list, ref to an undefined record
+- `@rig.build` errors: malformed record, malformed tool declaration, missing payloadRecord reference, can_authorize: false on a tool also in the planner-authorizable list, ref to an undefined record
 - `@rig.run` errors: maxIterations exhaustion, planner schema validation failure after retry, compiled policy rejects all options, phase worker threw unhandled, host integration file path not writable
 - Error messages include the offending name (tool key, record name, arg name) not just the category
 
@@ -201,9 +201,99 @@ Each step produces something runnable. Don't proceed to the next step until the 
 
 **Exit:** `mlld rig/tests/flows/guards.mld` simulates bad planner decisions and verifies each guard fires with the expected retry hint.
 
-### Step 7: First benchmark suite (workspace)
+### Step 7: Pin policy sections and the transparent catalog surface
 
-**Goal:** Workspace benchmark runs end-to-end on rig v2.
+**Goal:** Now that mlld ships the v2 input-record policy sections and the catalog/runtime P0s are fixed, lock rig and bench onto the final shipped surface before any more suite verification. This is the point where the plan stops tolerating deprecated schema shape, split planner/runtime catalogs, or compatibility wording as anything other than deletion debt.
+
+**New upstream surface to adopt immediately:**
+- Top-level input-record policy sections:
+  - `exact`
+  - `update`
+  - `allowlist`
+  - `blocklist`
+  - `optional_benign`
+- Tool-catalog auth field:
+  - `can_authorize`
+- Transparent `var tools` behavior:
+  - keyed access preserves authored metadata
+  - runtime dispatch uses the same catalog object the planner sees
+- Existing field syntax only:
+  - `name: type`
+  - `name: type?`
+- No field-level attr bags, no `name[?]: type` shorthand, no parallel compatibility surface in clean code
+
+**Add in rig immediately after upstream lands:**
+- Direct readers for the new policy sections in rig helpers that inspect tool inputs
+- Direct reads of `can_authorize` from the authored tool entry; no legacy planner-surface alias
+- Removal of planner/runtime catalog split workarounds that existed only because `var tools` was not transparent
+- Declare-time validation tests for bad section targets and malformed section values
+- Runtime enforcement tests in spec order:
+  - `allowlist`
+  - `blocklist`
+  - `exact`
+  - `update`
+
+**Regression suite additions (zero-LLM unless otherwise noted):**
+- Migration shape:
+  - `IR-1`: migrated tools reject legacy schema reintroduction
+  - `IR-2`: control/payload derivation comes from input records, not duplicate legacy keys
+  - `IR-3`: migrated tools do not re-declare schema in `@toolsCollection`
+  - `MIG-1`: every migrated tool has an input record
+  - `MIG-2`: no tool mixes `inputs:` with legacy `operation:`
+  - `MIG-3`: every exe parameter is covered by `facts`, `data`, or `bind`
+  - `MIG-4`: record field names match exe parameter names
+- Policy sections:
+  - `POL-ALLOW-*`: allowlisted values pass; non-allowlisted values fail
+  - `POL-BLOCK-*`: blocked values fail with the right error; non-blocked values pass
+  - `POL-EXACT-*`: exact fields only accept task-supported literals/verbatim values
+  - `POL-UPDATE-*`: update fields require an actual update-set, not an empty dispatch
+  - `POL-OPT-*`: `optional_benign` is accepted only on valid optional input fields
+- Catalog/runtime cohesion:
+  - transparent `var tools` readback preserves `inputs`, `can_authorize`, and other authored metadata
+  - builder-produced allowlist/blocklist authorizations round-trip through invocation unchanged
+  - no separate plain-object planner catalog exists for migrated suites
+  - `can_authorize` round-trips through build/policy synthesis/routing with the authored roles preserved
+  - built agents can execute through the same catalog object the planner docs were derived from
+  - direct keyed access and `mx.entries` agree on tool-entry metadata for migrated tools
+- Existing invariants to pin now because later cleanup depends on them:
+  - `CORR-*`
+  - `SEM-*`
+  - `TR-*`
+  - `WR-*`
+  - `DK-2`
+  - `SHIM-*`
+
+**Additional regression coverage to add in this step because of the recent fixes:**
+- `CAT-1`: transparent `var tools` preserves input-record identity on keyed readback
+- `CAT-2`: transparent `var tools` preserves `can_authorize`, `bind`, labels, and prompt-doc metadata on keyed readback
+- `CAT-3`: `mx.entries` and direct keyed access return equivalent tool-entry metadata for migrated tools
+- `CAT-4`: a built agent can use the same authored catalog for planner docs and runtime dispatch with no shadow planner catalog
+- `AUTH-1`: `can_authorize: false` lands in synthesized deny policy and the tool is absent from planner-authorizable operations
+- `AUTH-2`: string and array `can_authorize` role declarations synthesize the expected planner-authorizable role map
+- `AUTH-3`: no clean authored tool entry uses the legacy `authorizable` key
+- `POL-ROUNDTRIP-1`: builder-produced allowlist authorization accepts a matching dispatched value at invocation time
+- `POL-ROUNDTRIP-2`: builder-produced allowlist authorization rejects a non-matching dispatched value at invocation time
+- `POL-ROUNDTRIP-3`: builder-produced blocklist authorization rejects a blocked dispatched value at invocation time
+- `POL-ROUNDTRIP-4`: builder-produced exact/update constraints survive invocation unchanged after policy synthesis
+- `BENCH-CAT-1`: no clean suite domain/agent keeps a planner/runtime split catalog once the transparent surface is available
+
+**Rule for this step:**
+- Do not preserve deprecated input-policy functionality defensively.
+- Do not preserve the planner-catalog/runtime-catalog split once the transparent `var tools` surface exists.
+- Do not use `authorizable` as an authored tool-catalog key in clean code.
+- If a new top-level section replaces an old field, the old field becomes deletion debt, not a compatibility target.
+- The only explicitly deferred input-record feature remains `supply:`.
+
+**Exit:**
+- Rig tests explicitly cover each top-level policy section and the migration invariants
+- Rig tests explicitly cover the transparent single-catalog tool surface and builder/enforcement agreement for allowlist/blocklist constraints
+- No clean suite keeps a shadow planner catalog or a companion runtime bridge solely to preserve metadata/readback
+- No clean-code examples use field attr bags or `name[?]: type`
+- The plan for migrated tools is now unambiguous: input record is the schema source; top-level policy sections are the policy source; the tool catalog is the single authored source for both planner and runtime metadata
+
+### Step 8: Workspace end-to-end verification and cleanup
+
+**Goal:** Workspace becomes the first fully verified clean suite on rig v2. The migration work is already done; this step is about removing residual bridge/workaround code, running the real harness path, and proving the clean shape holds end to end.
 
 **Python host (port from v1 with minimal changes):**
 - `bench/src/host.py` — MlldAgent class, task log, results output. Update rig import path. Add `phase_log_file` and `phase_state_file` allocation, paths passed via MCP env.
@@ -224,55 +314,156 @@ Each step produces something runnable. Don't proceed to the next step until the 
 - Verify records correctly label injected data fields as `untrusted`
 - Verify `untrusted-llms-get-influenced` rule fires on influenced data paths
 
-**Workspace domain:**
-- `bench/domains/workspace/records.mld` — port email, calendar, contact, file, datetime records from v1. Include payload records (`email_payload`, `calendar_event_payload`, `file_create_payload`, etc.).
-- `bench/domains/workspace/tools.mld` — combine v1's `tools.mld` + write payload references + risk labels into one catalog.
-- `bench/agents/workspace.mld` — ~20-line entrypoint (see bench/INTERFACE.md example).
+**Workspace domain migration:**
+- `bench/domains/workspace/records.mld`
+  - Keep the shipped input-record shape only
+  - Express input policy through top-level sections, not legacy fields
+  - Harden trust/display/handle choices where they are now load-bearing
+- `bench/domains/workspace/tools.mld`
+  - Keep every workspace tool on `inputs: @record`
+  - Use `can_authorize`, not legacy auth keys
+  - Delete any remaining duplicated schema metadata or runtime-only bridge structure that only survived the earlier `var tools` bug
+- `bench/agents/workspace.mld`
+  - Keep the agent entrypoint small and unchanged in role
+  - Collapse any planner/runtime catalog duplication now that the same catalog can serve both purposes
 
 **Reference:** existing v1 suite at `~/mlld/benchmarks/llm/domains/workspace/`.
 
 **Exit:**
 - A simple lookup-and-answer task passes on the dev harness without framework errors (pick a workspace task that reads a single record and composes from it; do not use `user_task_13` or any instruction-following task as the canary — see "Explicitly out of scope" below)
-- Host using date-shift adapter for suite loading
+- Host uses the date-shift adapter for suite loading
 - Results JSONL includes `session_id`, `execution_log`, and `phase_events` populated (non-empty)
+- Workspace contains no duplicated tool-catalog surface across planner/runtime paths
+- Workspace uses top-level policy sections wherever they apply; no `updateArgs` / `exactPayloadArgs` remain in workspace once those sections are live
+- Workspace has deterministic regression coverage proving the clean agent entrypoint does not need a shadow planner catalog or runtime bridge catalog
 - Full 40-task workspace suite on the dev harness/model confirms the framework path is clean (no framework-level failures; task-level utility numbers are informational on the cheap model)
 - Final measurement run: full 40-task workspace suite on Sonnet 4 (`--harness claude --model claude-sonnet-4-20250514`). 0% ASR on injection tasks. Utility target set after the run — do not pre-commit a percentage that pressures accommodation of excluded tasks.
 
-### Step 8: Remaining suites
+### Step 9: Remaining suites verification and cleanup
 
-Port banking, slack, travel in that order. Each is independent once workspace validates the interface.
+Banking, slack, and travel are already migrated onto the new surface. This step is to finish the same cleanup and real-run verification that workspace goes through, in that order.
 
 **Banking specifics:**
 - Strict control/payload separation (id vs recipient vs amount)
-- `correlateControlArgs: true` on `update_scheduled_transaction` and similar — attack class is cross-record mixing
-- `exactPayloadArgs` on `update_password` — payload must appear verbatim in task text
-- `update_password` should be `authorizable: false` (hard-deny in synthesized policy)
-- Per-task target utility: 14/16 (v1 best was 13/16)
+- `correlate: true` where cross-record mixing is the attack class (`update_scheduled_transaction` and similar)
+- Express verbatim payload requirements through the top-level `exact` section, not `exactPayloadArgs`
+- Express partial-update requirements through the top-level `update` section, not `updateArgs`
+- `update_password` should be `can_authorize: false` (hard-deny in synthesized policy)
 
 **Slack specifics:**
 - Literal-source extract — webpage fetch must work as a first-phase extract without requiring prior resolve
 - Derive for ranking (most active user, largest channel) with selection refs into write args
 - Target-carry bugs to avoid: `External_0` (not `external_channel`), `Eve` (not `eve`)
-- Per-task target utility: 18/21
 
 **Travel specifics:**
 - Multi-domain derive (hotels + restaurants + cars in one task) — biggest stress test for derive generality
 - Booking operations in their own policy category (not `destructive`) — structural decision from prior iteration
 - Recommendation-hijack tasks accepted as misses (advice phase out of v2 scope)
-- Per-task target utility: 15/20 (recommendation tasks count against the ceiling)
+
+**Suite-wide migration rule:**
+- Input records are the single schema source
+- Top-level policy sections are the single input-policy source
+- The tool catalog is the single authored source for planner and runtime metadata
+- No suite adds defensive wrappers, bridge catalogs, or mixed-shape helpers to preserve old metadata once the new surface is available
 
 **Exit:**
 - All 4 suites run end-to-end on the dev harness (`--harness opencode --model openrouter/z-ai/glm-5.1`) with no framework failures
 - Per-suite dev-harness runs confirm the framework path is clean (utility numbers will be lower on the cheap model — that's expected; the measurement is that the flow runs)
+- All 4 suites express exact/update-style policy through the new top-level sections, not legacy fields
+- All 4 suites use a single authored tool catalog shape with no planner/runtime bridge duplication
+- Per-suite deterministic checks prove the clean single-catalog shape remains in place after migration
 - Final measurement pass on Sonnet 4: 0% ASR on all injection tasks
 - Utility targets are set after the first clean Sonnet 4 run, excluding tasks that require instruction-following over tainted content or recommendation evaluation against influenced content (see "Explicitly out of scope"). Do not pre-commit numeric targets that pressure accommodation of excluded tasks.
 
-### Step 9: Cutover
+### Step 10: Make rig read the new shape directly
 
-**Goal:** Replace v1 with v2.
+**Goal:** Remove the "new shape translated back into fake legacy operation objects" architecture. This is where the implementation becomes clean rather than merely migrated.
+
+**Files:**
+- `rig/tooling.mld`
+- `rig/intent.mld`
+- `rig/runtime.mld`
+
+**Add / change:**
+- Read `facts`, `data`, `bind`, `correlate`, and the top-level policy sections directly from input records
+- Make `@toolSemantics` render `description` and `instructions` as separate structured sections
+- Simplify `@mergedToolEntry` so it disappears as a compatibility shim and leaves one direct tool-entry path
+- Remove synthetic legacy schema translation for tools that already have `inputs: @record`
+- Remove runtime lookup paths that assume a separate planner catalog and `toolsCollection` bridge
+- Read `can_authorize` directly throughout the rig surface; legacy authored `authorizable` does not survive in clean code
+
+**Rule for this step:**
+- Do not keep fallback branches for replaced schema fields "just in case"
+- If a suite is migrated, rig reads the migrated shape directly
+- No wrapper/normalize layer that strips structured values or hides the real contract
+- No planner/runtime catalog merge layer once both sides already share the same authored entry
+
+**Exit:**
+- Rig no longer conceptually depends on legacy operation schema for migrated tools
+- Rig no longer conceptually depends on a separate runtime bridge catalog for migrated tools
+- Description and instructions remain structurally separate in planner-facing docs
+- Policy compilation clearly uses the new top-level sections, not compatibility translation
+
+### Step 11: Record hardening and sample-quality pass
+
+**Goal:** Make the migrated sample app exemplary, not merely functional.
+
+**Files:**
+- All suite `records.mld`
+- `rig/EXAMPLE.mld`
+
+**Tasks:**
+- Split `data:` into `{ trusted, untrusted }` where meaningful
+- Convert proof-bearing worker-return ids to `handle`
+- Make `correlate:` explicit on semantically important records instead of relying on defaults everywhere
+- Verify display-key behavior with `DK-1` / `DK-2`
+- If `role:*` display keys are the real canonical form, standardize on them in one sweep
+- Ensure examples and records use only the existing mlld optional syntax: `name: type?`
+
+**Exit:**
+- Records express trust, proof, and correlation intentionally
+- Example and suite records reflect the best version of the feature set, not a half-migrated compromise
+
+### Step 12: Final cleanup and deletion of replaced surfaces
+
+**Goal:** Delete every deprecated surface that now has a real replacement. The target here is a clean implementation, not defensive coexistence.
+
+**Delete after Steps 8-11 are complete:**
+- Synthetic legacy `@toolOperation` path
+- Mixed-shape branches in `@mergedToolEntry` that only exist for migrated tools
+- Shadow plain-object planner catalogs introduced as a workaround for broken `var tools` metadata readback
+- Companion runtime `var tools` bridge catalogs introduced only to preserve dispatch semantics during the P0 bug window
+- Legacy fallback reads for:
+  - `controlArgs`
+  - `payloadArgs`
+  - `sourceArgs`
+  - `expose`
+  - `optional`
+  where `inputs: @record` already replaces them
+- Legacy authored tool key `authorizable`
+- Legacy input-policy fields replaced by top-level sections:
+  - `updateArgs`
+  - `exactPayloadArgs`
+
+**Also in this step:**
+- Extract the framework label schema from inline rig code into a declarative schema file
+- Add `LS-*` tests for unknown/conflicting/missing framework labels
+
+**Explicit non-goal of this step:**
+- Do not preserve deprecated functionality or old cruft defensively
+- Do not invent interim substitutes for `supply:`
+
+**Exit:**
+- Deprecated replaced surfaces are gone, not merely unused
+- Remaining compatibility debt is explicit and limited to truly deferred features, chiefly `supply:`
+- Rig and bench present a single coherent modern shape
+
+### Step 13: Cutover
+
+**Goal:** Replace v1 with v2 after the clean migration and deletion work is finished.
 
 **Steps:**
-1. Verify v2 passes all 4 suites at baseline
+1. Verify v2 passes all 4 suites at baseline with the clean migrated shape
 2. `mv ~/mlld/rig ~/mlld/rig-v1-archive`
 3. `mv ~/mlld/clean/rig ~/mlld/rig`
 4. `mv ~/mlld/benchmarks ~/mlld/benchmarks-v1-archive`
@@ -299,6 +490,8 @@ Every step produces a runnable test. Don't proceed without passing the test. If 
 
 v2 files don't reference v1 files. v2 tests don't run against v1 code. The only v1 artifact that matters is the spike directory, and that's read-only reference material.
 
+Where a shipped v2 surface replaces an old field or helper, delete the old surface after migration. Do not keep deprecated input-policy fields, duplicate schema metadata, or mixed-shape helper branches around defensively.
+
 ### Keep it small
 
 The full rig v2 framework target: ~1200 lines of mlld. Each benchmark suite: ~400 lines. Full bench Python host: ~700 lines (mostly unchanged from v1). Total: ~4000 lines. If any one file grows past 400 lines, it's probably doing too much.
@@ -314,6 +507,7 @@ Coverage must include at least:
 - `.mx.params`, `.mx.controlArgs`, `.mx.factsources` accessible on exes
 - Cross-module exe `.mx.labels` round-trip
 - `@toolDocs` renders control-arg annotations correctly
+- Top-level policy sections round-trip from record declaration into rig enforcement (`allowlist`, `blocklist`, `exact`, `update`, `optional_benign`)
 - Thin-arrow strict mode: exe with only `->` does not leak tool-slot value
 - Selection ref lowering returns the expected resolved ref
 - Provenance firewall: `{ source: "derived", ... }` in control-arg position is rejected at compile
@@ -331,7 +525,7 @@ Three test kinds, each with a distinct purpose:
 
 1. **Invariant tests** (`rig/tests/index.mld`) — zero-LLM deterministic assertions on individual primitives. Fast. Run on every change. Described above.
 2. **Flow tests** (`rig/tests/flows/<phase>.mld`) — stub LLM, run phase cycle, verify end state. Run per implementation step as listed in Step 1-6 exit criteria. Catch integration bugs across phases.
-3. **Benchmark runs** (`bench/...`) — real LLM, real evaluation. Run at Step 7+ to measure utility and security against AgentDojo.
+3. **Benchmark runs** (`bench/...`) — real LLM, real evaluation. Run at Step 8+ to measure utility and security against AgentDojo.
 
 The first two require no network and no credentials. A failing rig change should be caught by (1) or (2), not discovered in (3).
 
@@ -354,7 +548,7 @@ Spike 43 proved the no-tool protocol works on opencode (session IDs, malformed o
 Sonnet 4 (`--harness claude --model claude-sonnet-4-20250514`) is the measurement harness — used for:
 - Final per-step exit verification when cheap harness passes
 - Benchmark numbers that compare against CaMeL and v1 results
-- Suite-completion verification at Step 7 and Step 8
+- Suite-completion verification at Step 8 and Step 9
 
 The rule: develop on opencode/glm, measure on Claude/Sonnet. Cheap iteration without burning Claude credits. Sonnet runs only happen when the cheap harness is clean.
 
@@ -384,6 +578,7 @@ Explicit decisions to defer, not oversights:
 - **Advice phase / recommendation-hijack defense.** Recommendation-class tasks run through normal derive → compose. Influenced-content-past-evaluation attacks are accepted misses. Revisit after v2 shape is settled.
 - **Planner session corruption recovery.** Persistent planner context is the supported mechanism; session corruption terminates the run cleanly. No mid-run reset/reconstruction.
 - **Provider-native resume.** Persistent context via conversation history is sufficient.
+- **`supply:`.** Contributor-role constraints remain deferred. Do not invent interim substitutes or preserve deprecated provenance defaults defensively; adopt `supply:` when it ships and delete the temporary assumptions then.
 - **Rigloop on v2.** Iteration orchestration adapts to v2 after v2 benchmarks at baseline. Criteria for when rigloop comes back: v2 has benchmarked at baseline on Sonnet 4 AND v2 has a week of stability with no framework-level bugs surfacing in per-suite runs.
 - **mlld runtime docs updates.** See Documentation section.
 
@@ -403,6 +598,7 @@ The plan is successful when:
 - Dev-harness runs (`--harness opencode --model openrouter/z-ai/glm-5.1`) complete end-to-end on every suite with no framework failures
 - Measurement run on Sonnet 4 hits 0% ASR across all 4 suites
 - Utility numbers are recorded and reported, not pre-committed as acceptance criteria. Tasks in "Explicitly out of scope" are expected misses and do not factor into success.
+- Deprecated input-policy fields replaced by top-level sections have been deleted, not left in compatibility mode
 - Security invariants from `SECURITY.md` have assertions in `rig/tests/index.mld`
 - Every spike referenced in `SPIKES.md` has corresponding v2 coverage (either in invariants or flow tests)
 - Phase lifecycle events fire from Step 1 onward

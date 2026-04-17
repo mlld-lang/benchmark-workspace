@@ -19,7 +19,9 @@
 >> backend. body is the primary injection surface and stays data.
 record @slack_msg = {
   facts: [sender: string?, recipient: string?],
-  data: [body: string?],
+  data: {
+    untrusted: [body: string?]
+  },
   display: {
     default: [{ mask: "sender" }, { mask: "recipient" }, body],
     worker: [{ mask: "sender" }, { mask: "recipient" }, body],
@@ -49,7 +51,9 @@ record @slack_channel = {
 >> prose returned by get_webpage.
 record @webpage_content = {
   facts: [url: string],
-  data: [content: string?],
+  data: {
+    untrusted: [content: string?]
+  },
   display: {
     default: [{ ref: "url" }, content],
     worker: [{ ref: "url" }, content],
@@ -57,25 +61,50 @@ record @webpage_content = {
   }
 }
 
->> Write payload records. These schemas carry only free-form body
->> content. Destinations such as `channel`, `recipient`, and `url` stay
->> in controlArgs and are grounded separately.
-record @channel_message_payload = {
-  facts: [],
-  data: [body: string],
-  validate: "demote"
+>> Write input records. Fact fields carry grounded target identities;
+>> data fields carry the free-form content to send.
+record @send_channel_message_inputs = {
+  facts: [channel: string],
+  data: {
+    untrusted: [body: string]
+  },
+  validate: "strict"
 }
 
-record @direct_message_payload = {
-  facts: [],
-  data: [body: string],
-  validate: "demote"
+record @send_direct_message_inputs = {
+  facts: [recipient: string],
+  data: {
+    untrusted: [body: string]
+  },
+  validate: "strict"
 }
 
-record @webpage_post_payload = {
-  facts: [],
-  data: [content: string],
-  validate: "demote"
+record @invite_user_to_slack_inputs = {
+  facts: [user: string, user_email: string],
+  data: [],
+  correlate: false,
+  validate: "strict"
+}
+
+record @add_user_to_channel_inputs = {
+  facts: [user: string, channel: string],
+  data: [],
+  correlate: false,
+  validate: "strict"
+}
+
+record @remove_user_from_slack_inputs = {
+  facts: [user: string],
+  data: [],
+  validate: "strict"
+}
+
+record @post_webpage_inputs = {
+  facts: [url: string],
+  data: {
+    untrusted: [content: string]
+  },
+  validate: "strict"
 }
 
 var @records = {
@@ -83,9 +112,12 @@ var @records = {
   slack_user: @slack_user,
   slack_channel: @slack_channel,
   webpage_content: @webpage_content,
-  channel_message_payload: @channel_message_payload,
-  direct_message_payload: @direct_message_payload,
-  webpage_post_payload: @webpage_post_payload
+  send_channel_message_inputs: @send_channel_message_inputs,
+  send_direct_message_inputs: @send_direct_message_inputs,
+  invite_user_to_slack_inputs: @invite_user_to_slack_inputs,
+  add_user_to_channel_inputs: @add_user_to_channel_inputs,
+  remove_user_from_slack_inputs: @remove_user_from_slack_inputs,
+  post_webpage_inputs: @post_webpage_inputs
 }
 
 export {
@@ -93,8 +125,11 @@ export {
   @slack_user,
   @slack_channel,
   @webpage_content,
-  @channel_message_payload,
-  @direct_message_payload,
-  @webpage_post_payload,
+  @send_channel_message_inputs,
+  @send_direct_message_inputs,
+  @invite_user_to_slack_inputs,
+  @add_user_to_channel_inputs,
+  @remove_user_from_slack_inputs,
+  @post_webpage_inputs,
   @records
 }

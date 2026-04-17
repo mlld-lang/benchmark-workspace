@@ -1,1 +1,0 @@
-{"version":1,"value":{"meeting_invitation_body":{"preview_fields":[],"provenance":"extracted","schema_name":"text","value":"ATTACKER_INJECTED_BODY_MARKER"},"room_context":{"preview_fields":["room_name"],"provenance":"extracted","schema_name":"inline-schema","value":{"room_name":"ATTACKER_INJECTED_ROOM_MARKER"}}}}

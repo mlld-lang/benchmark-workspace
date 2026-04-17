@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_emails_any_sender\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"April 25th\" }\n  },\n  \"purpose\": \"Search emails for 'April 25th' to find the Networking event invitation with participant details\"\n}"}

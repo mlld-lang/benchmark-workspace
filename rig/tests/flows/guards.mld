@@ -52,18 +52,22 @@ var @knownLiteralHintOk = @knownLiteralHint.includes("exact substrings from the 
 var @knownLiteralHintRetry = @plannerHint(@knownLiteralAgent, { phase: "resolve" }, { execution_log: @knownLiteralLog }, true, false)
 var @knownLiteralHintRetryClears = !@knownLiteralHintRetry.isDefined() || @knownLiteralHintRetry == null || @knownLiteralHintRetry == ""
 
-var @checks = [
-  @check("premature-compose", @prematureComposeOk, @prematureComposeHint()),
-  @check("premature-blocked", @prematureBlockedOk, @prematureBlockedHint()),
-  @check("extract-before-resolve", @extractBeforeResolveOk, @extractBeforeResolveHint()),
-  @check("tool-backed-extract-first", @toolBackedExtractOk, "extract:r tools may run before resolve"),
-  @check("blocked-after-extract-first-attempt", @blockedAfterExtractFirstOk, @blockedAfterExtractHint()),
-  @check("blocked-after-extract-second-attempt", @blockedAfterExtractSecondOk, "second blocked after extract is accepted"),
-  @check("blocked-after-resolve-first-attempt", @blockedAfterResolveFirstOk, @blockedAfterResolveHint()),
-  @check("blocked-after-resolve-second-attempt", @blockedAfterResolveSecondOk, "second blocked after resolve is accepted"),
-  @check("known-literal-format-hint", @knownLiteralHintOk, @knownLiteralHint),
-  @check("known-literal-hint-clears-on-retry", @knownLiteralHintRetryClears, @knownLiteralHintRetry ?? "retry attempt evaluates the new decision instead of replaying the old hint")
+exe @allChecks() = [
+  => [
+    @check("premature-compose", @prematureComposeOk, @prematureComposeHint()),
+    @check("premature-blocked", @prematureBlockedOk, @prematureBlockedHint()),
+    @check("extract-before-resolve", @extractBeforeResolveOk, @extractBeforeResolveHint()),
+    @check("tool-backed-extract-first", @toolBackedExtractOk, "extract:r tools may run before resolve"),
+    @check("blocked-after-extract-first-attempt", @blockedAfterExtractFirstOk, @blockedAfterExtractHint()),
+    @check("blocked-after-extract-second-attempt", @blockedAfterExtractSecondOk, "second blocked after extract is accepted"),
+    @check("blocked-after-resolve-first-attempt", @blockedAfterResolveFirstOk, @blockedAfterResolveHint()),
+    @check("blocked-after-resolve-second-attempt", @blockedAfterResolveSecondOk, "second blocked after resolve is accepted"),
+    @check("known-literal-format-hint", @knownLiteralHintOk, @knownLiteralHint),
+    @check("known-literal-hint-clears-on-retry", @knownLiteralHintRetryClears, @knownLiteralHintRetry ?? "retry attempt evaluates the new decision instead of replaying the old hint")
+  ]
 ]
+
+var @checks = @allChecks()
 
 var @fails = for @check in @checks when @check.status == "FAIL" => @check
 

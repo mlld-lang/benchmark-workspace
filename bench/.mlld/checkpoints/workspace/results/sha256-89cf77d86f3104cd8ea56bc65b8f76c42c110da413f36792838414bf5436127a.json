@@ -1,1 +1,0 @@
-{"version":1,"value":"```json\n{\n  \"status\": \"derived\",\n  \"schema_name\": \"end_time\",\n  \"name\": \"followup_end_time\",\n  \"provenance\": \"derived\",\n  \"selection_refs\": [],\n  \"payload\": {\n    \"end_time\": \"2026-04-15 11:00\"\n  }\n}\n```"}

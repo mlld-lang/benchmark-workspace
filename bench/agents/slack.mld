@@ -4,22 +4,9 @@
 >> catalogs. The entrypoint just builds the agent and runs the task.
 
 import { @synthesizedPolicy, @runPhaseLoop } from "../../rig/orchestration.mld"
-import { @mergePlannerCatalog, @routeToolCatalog } from "../../rig/tooling.mld"
+import { @routeToolCatalog } from "../../rig/tooling.mld"
 import { @records } from "../domains/slack/records.mld"
-import {
-  @tools,
-  @get_channels,
-  @get_users_in_channel,
-  @read_channel_messages,
-  @read_inbox,
-  @get_webpage,
-  @send_channel_message,
-  @send_direct_message,
-  @invite_user_to_slack,
-  @add_user_to_channel,
-  @remove_user_from_slack,
-  @post_webpage
-} from "../domains/slack/tools.mld"
+import { @tools } from "../domains/slack/tools.mld"
 
 import { @query, @model } from @payload
 
@@ -28,63 +15,13 @@ var @basePolicy = when [
   @defense == "defended" => @synthesizedPolicy(@tools, null)
   * => null
 ]
-
-var tools @runtimeToolsCollection = {
-  get_channels: { mlld: @get_channels },
-  get_users_in_channel: {
-    mlld: @get_users_in_channel,
-    expose: ["channel"]
-  },
-  read_channel_messages: {
-    mlld: @read_channel_messages,
-    expose: ["channel"]
-  },
-  read_inbox: {
-    mlld: @read_inbox,
-    expose: ["user"]
-  },
-  get_webpage: {
-    mlld: @get_webpage,
-    expose: ["url"]
-  },
-  send_channel_message: {
-    mlld: @send_channel_message,
-    expose: ["channel", "body"]
-  },
-  send_direct_message: {
-    mlld: @send_direct_message,
-    expose: ["recipient", "body"]
-  },
-  invite_user_to_slack: {
-    mlld: @invite_user_to_slack,
-    expose: ["user", "user_email"]
-  },
-  add_user_to_channel: {
-    mlld: @add_user_to_channel,
-    expose: ["user", "channel"]
-  },
-  remove_user_from_slack: {
-    mlld: @remove_user_from_slack,
-    expose: ["user"]
-  },
-  post_webpage: {
-    mlld: @post_webpage,
-    expose: ["url", "content"]
-  }
-}
-
-var @plannerTools = @mergePlannerCatalog(@tools, @runtimeToolsCollection)
-
->> Build the runtime agent handle locally. Imported exe return values can
->> drop executable-bearing members, so the benchmark entrypoint assembles
->> the final handle in the suite module before handing it to the phase loop.
 var @agent = {
   suite: "slack",
   defense: @defense,
   records: @records,
   tools: @tools,
-  routedTools: @routeToolCatalog(@plannerTools),
-  toolsCollection: @runtimeToolsCollection,
+  routedTools: @routeToolCatalog(@tools),
+  runtimeTools: null,
   model: @model,
   harness: @payload.harness ?? null,
   basePolicy: @basePolicy,

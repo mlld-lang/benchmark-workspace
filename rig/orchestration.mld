@@ -1,5 +1,4 @@
 import {
-  @mergePlannerCatalog,
   @toolCatalogObject,
   @toolKind,
   @toolNames,
@@ -103,7 +102,7 @@ exe @validateToolCatalog(tools) = [
   let @issues = for @name, @tool in @catalog => when [
     !@toolKind(@tool).isDefined() => { tool: @name, error: "tool_missing_kind" }
     @toolKind(@tool) == "read" && !@tool.returns.isDefined() => { tool: @name, error: "read_tool_missing_returns_record" }
-    @toolKind(@tool) == "write" && !@tool.operation.isDefined() && !@tool.inputs.isDefined() => { tool: @name, error: "write_tool_missing_operation" }
+    @toolKind(@tool) == "write" && !@tool.inputs.isDefined() => { tool: @name, error: "write_tool_missing_inputs" }
     * => null
   ]
   let @realIssues = for @issue in @issues when @issue => @issue
@@ -123,19 +122,10 @@ exe @validateConfig(config) = [
   let @defense = @config.defense ?? "defended"
   let @overrides = @config.overrides ?? {}
   let @runtimeCollection = @config.toolsCollection ?? @config.tools
-  let @runtimeOverrides = @config.runtimeTools ?? {}
-  let @plannerTools = @mergePlannerCatalog(
-    @mergePlannerCatalog(@config.tools, @runtimeCollection),
-    @runtimeOverrides
-  )
   let @basePolicy = when [
     @defense == "defended" => @synthesizedPolicy(@config.tools, @overrides.policy)
     * => null
   ]
-  >> Keep the merged planner catalog on `agent.tools`. Plain write-tool
-  >> metadata already lives there, and read tools need the runtime
-  >> collection's `expose`/`controlArgs` copied onto the same stable
-  >> surface so imported handles do not lose them.
   => {
     ok: true,
     suite: @config.suite,
@@ -143,8 +133,8 @@ exe @validateConfig(config) = [
     model: @config.model,
     harness: @config.harness ?? @defaultHarness(@config.model),
     records: @config.records,
-    tools: @plannerTools,
-    routedTools: @routeToolCatalog(@plannerTools),
+    tools: @config.tools,
+    routedTools: @routeToolCatalog(@config.tools),
     toolsCollection: @runtimeCollection,
     runtimeTools: @config.runtimeTools ?? null,
     basePolicy: @basePolicy,
@@ -180,7 +170,7 @@ exe @recoverablePhaseError(errorName) = when [
   @errorName == "unknown_resolve_tool" => true
   @errorName == "unknown_extract_tool" => true
   @errorName == "tool_runtime_error" => true
-  @errorName == "update_args_missing_values" => true
+  @errorName == "no_update_fields" => true
   * => false
 ]
 

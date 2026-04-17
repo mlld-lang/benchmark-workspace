@@ -4,6 +4,7 @@ import { @opencode } from "@mlld/opencode"
 import {
   @mxEntry,
   @pairsToObject,
+  @toolCatalogObject,
   @toolParamNames,
   @toolOptionalArgs,
   @phaseToolNames
@@ -553,6 +554,8 @@ exe @appendPhaseEvents(state, events) = [
 
 exe @isStructuredRef(inputValue) = when [
   @typeof(@inputValue) == "object" && @inputValue.source.isDefined() => true
+  @typeof(@inputValue) == "object" && @inputValue.data.source.isDefined() => true
+  @typeof(@inputValue) == "object" && @inputValue.mx.data.source.isDefined() => true
   * => false
 ]
 
@@ -646,8 +649,10 @@ exe @validateToolCallArgs(entry, args) = [
 ]
 
 exe @lookupRuntimeTool(toolEntry, toolsCollection, toolName, runtimeTools) = [
+  let @toolKey = `@toolName`
+  let @collectionCatalog = @toolCatalogObject(@toolsCollection)
   let @runtimeOverride = when [
-    @runtimeTools.isDefined() && @runtimeTools[@toolName].isDefined() => @runtimeTools[@toolName]
+    @runtimeTools.isDefined() && @runtimeTools[@toolKey].isDefined() => @runtimeTools[@toolKey]
     * => null
   ]
   >> `@rig.build` already merges the planner catalog with runtime hints.
@@ -661,13 +666,20 @@ exe @lookupRuntimeTool(toolEntry, toolsCollection, toolName, runtimeTools) = [
     @typeof(@toolEntry) == "executable" => @toolEntry
     @typeof(@toolEntry.mlld) == "executable" => @toolEntry
     @runtimeOverride.isDefined() => @runtimeOverride
-    @toolsCollection.mx.entries.isDefined() && @mxEntry(@toolsCollection.mx.entries, @toolName).isDefined() => @mxEntry(@toolsCollection.mx.entries, @toolName)
-    @toolsCollection[@toolName].isDefined() => @toolsCollection[@toolName]
+    @collectionCatalog[@toolKey].isDefined() => @collectionCatalog[@toolKey]
+    @toolsCollection.mx.entries.isDefined() && @mxEntry(@toolsCollection.mx.entries, @toolKey).isDefined() => @mxEntry(@toolsCollection.mx.entries, @toolKey)
+    @toolsCollection[@toolKey].isDefined() => @toolsCollection[@toolKey]
     * => @toolEntry
   ]
 ]
 
 exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, policyValue, runtimeTools) = [
+  let @toolKey = `@toolName`
+  let @collectionCatalog = @toolCatalogObject(@toolsCollection)
+  let @callableCollection = when [
+    @collectionCatalog[@toolKey].isDefined() => @collectionCatalog
+    * => @toolsCollection
+  ]
   let @runtimeEntry = @lookupRuntimeTool(@toolEntry, @toolsCollection, @toolName, @runtimeTools)
   let @entry = when [
     @runtimeEntry.isDefined() => @runtimeEntry
@@ -675,17 +687,22 @@ exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, poli
   ]
   >> Runtime dispatch can source its executable from one catalog entry
   >> and its param docs from another. Keep metadata lookup separate from
-  >> executable lookup so argument validation still sees `expose` or
-  >> control-arg names even when the callable binding is bare.
+  >> executable lookup so argument validation stays on the surfaced tool
+  >> entry even when direct execution needs the bare executable.
   let @entryParamNames = @toolParamNames(@entry)
   let @toolEntryParamNames = @toolParamNames(@toolEntry)
   let @metadataEntry = when [
+    >> New-shape planner catalog entries carry the canonical input
+    >> record. Prefer that contract so policy-bearing dispatch stays on
+    >> the surfaced collection binder instead of reconstructing metadata
+    >> on a sidecar object.
+    @toolEntry.inputs.isDefined() => @toolEntry
     @entryParamNames.length > 0 => @entry
     @toolEntryParamNames.length > 0 => @toolEntry
     * => @entry
   ]
   let @argCheck = @validateToolCallArgs(@metadataEntry, @args)
-  if !@argCheck.ok [ => { error: @argCheck.error, summary: @argCheck.summary, tool: @toolName } ]
+  if !@argCheck.ok [ => { error: @argCheck.error, summary: @argCheck.summary, tool: @toolKey } ]
   let @preferDirect = (@entry.direct ?? false) == true || (@toolEntry.direct ?? false) == true
   let @paramNames = @toolParamNames(@metadataEntry)
   let @argKeys = when [
@@ -701,6 +718,15 @@ exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, poli
     @typeof(@args) == "object" && @singleArgName.isDefined() => @args[@singleArgName]
     * => @args
   ]
+  let @collectionEntry = when [
+    @callableCollection[@toolKey].isDefined() => @callableCollection[@toolKey]
+    * => null
+  ]
+  let @collectionExe = when [
+    @typeof(@collectionEntry) == "executable" => @collectionEntry
+    @typeof(@collectionEntry.mlld) == "executable" => @collectionEntry.mlld
+    * => null
+  ]
   >> Direct single-parameter reads expect a scalar positional argument.
   >> Without a policy boundary, passing a structured text wrapper here
   >> causes mlld to coerce it as an object. Bridge only this narrow case
@@ -711,11 +737,28 @@ exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, poli
     @typeof(@entry.mlld) == "executable" => @entry.mlld
     * => null
   ]
-  >> Policy-bearing dispatch prefers the concrete executable when we
-  >> already have one. The `var tools` proxy is still useful for arg
-  >> metadata and as a fallback callable, but routing policy-bearing
-  >> writes through the collection can over-aggregate labels from the
-  >> whole bridge and trip unrelated guards on zero-control-arg tools.
+  >> Policy-bearing dispatch usually prefers the named `var tools`
+  >> collection entry when it exists. The collection call preserves the
+  >> actual tool name and control-arg metadata at the policy boundary.
+  >> When a runtime override explicitly opts into `direct: true`, honor
+  >> that first so the caller can keep policy on a local object-shaped
+  >> wrapper instead of re-entering the collection proxy.
+  if @policyValue.isDefined() && @preferDirect && @typeof(@exe) == "executable" [
+    => when [
+      @paramNames.length == 0 => @exe() with { policy: @policyValue }
+      @paramNames.length == 1 => @exe(@singleArg) with { policy: @policyValue }
+      * => @exe(@args) with { policy: @policyValue }
+    ]
+  ]
+  if @policyValue.isDefined() &&
+    @metadataEntry.inputs.isDefined() &&
+    @collectionEntry.isDefined() [
+    => when [
+      @argKeys.length == 0 => @callableCollection[@toolKey]() with { policy: @policyValue }
+      @paramNames.length == 1 => @callableCollection[@toolKey](@singleArg) with { policy: @policyValue }
+      * => @callableCollection[@toolKey](@args) with { policy: @policyValue }
+    ]
+  ]
   if @policyValue.isDefined() && @typeof(@exe) == "executable" [
     => when [
       @paramNames.length == 0 => @exe() with { policy: @policyValue }
@@ -725,27 +768,20 @@ exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, poli
       * => @exe(@args) with { policy: @policyValue }
     ]
   ]
-  if @policyValue.isDefined() && @toolsCollection.mx.entries.isDefined() && @toolsCollection[@toolName].isDefined() [
-    => when [
-      @argKeys.length == 0 => @toolsCollection[@toolName]() with { policy: @policyValue }
-      @paramNames.length == 1 => @toolsCollection[@toolName](@singleArg) with { policy: @policyValue }
-      * => @toolsCollection[@toolName](@args) with { policy: @policyValue }
-    ]
-  ]
   >> The benchmark agents intentionally build a local `var tools`
   >> collection in the same file that runs the phase loop. That bridge is
   >> the primary non-policy dispatch surface: it preserves same-file call
   >> binding and native mlld coercion for imported tools. Bare executable
   >> refs remain the fallback, and `direct: true` is the explicit escape
   >> hatch for wrappers that must bypass the collection proxy.
-  if !@preferDirect && @toolsCollection.mx.entries.isDefined() && @toolsCollection[@toolName].isDefined() [
+  if !@preferDirect && @collectionEntry.isDefined() [
     => when [
-      @argKeys.length == 0 => @toolsCollection[@toolName]()
-      @paramNames.length == 1 => @toolsCollection[@toolName](@singleArg)
-      * => @toolsCollection[@toolName](@args)
+      @argKeys.length == 0 => @callableCollection[@toolKey]()
+      @paramNames.length == 1 => @callableCollection[@toolKey](@singleArg)
+      * => @callableCollection[@toolKey](@args)
     ]
   ]
-  if @typeof(@exe) != "executable" [ => { error: "tool_missing_executable", tool: @toolName } ]
+  if @typeof(@exe) != "executable" [ => { error: "tool_missing_executable", tool: @toolKey } ]
   >> Direct executable calls keep the native mlld value for single-arg
   >> tools. Do not unwrap through `.data` or `.text` here: those bridges
   >> lose the runtime's own typed/coerced behavior and are exactly where

@@ -17,7 +17,13 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
+if LOCAL_AGENTDOJO_SRC.exists():
+    sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
+
 from agentdojo.attacks import load_attack
+from agentdojo.runner import run_task as run_agentdojo_task
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -107,8 +113,9 @@ def _run_task(suite_name, task, model, debug, defense, run_log_path, harness=Non
     agent._current_task_id = task.ID
     suite = get_shifted_suite(BENCHMARK_VERSION, suite_name)
     try:
-        utility, security = suite.run_task_with_pipeline(
-            agent, task, injection_task=None, injections={}
+        utility, security, _result = run_agentdojo_task(
+            suite, agent, task, injection_task=None, injections={},
+            benchmark_version=BENCHMARK_VERSION,
         )
         agent.update_verdict(utility, security)
         return task.ID, utility, security, None
@@ -139,8 +146,9 @@ def _run_attack_task(suite_name, user_task, injection_task, model, debug, defens
         injections = {}
 
     try:
-        utility, security = suite.run_task_with_pipeline(
-            agent, user_task, injection_task=injection_task, injections=injections
+        utility, security, _result = run_agentdojo_task(
+            suite, agent, user_task, injection_task=injection_task, injections=injections,
+            benchmark_version=BENCHMARK_VERSION,
         )
         agent.update_verdict(utility, security)
         return case_id, user_task.ID, injection_task.ID, utility, security, None
@@ -350,8 +358,9 @@ def main():
                 f" {task.PROMPT[:80]}..."
             )
             try:
-                utility, security = suite.run_task_with_pipeline(
-                    agent, task, injection_task=None, injections={}
+                utility, security, _result = run_agentdojo_task(
+                    suite, agent, task, injection_task=None, injections={},
+                    benchmark_version=BENCHMARK_VERSION,
                 )
             except MlldInfrastructureError as e:
                 # No agent run happened — refuse to claim a verdict. b-e8e4.

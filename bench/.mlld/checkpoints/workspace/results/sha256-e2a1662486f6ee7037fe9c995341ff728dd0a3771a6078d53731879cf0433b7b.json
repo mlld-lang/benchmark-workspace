@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_files_by_filename\",\n  \"args\": {\n    \"filename\": { \"source\": \"known\", \"value\": \"Networking event\" }\n  },\n  \"purpose\": \"Last untried resolve tool; search for a file named 'Networking event' which might contain the participant list and event summary\"\n}"}

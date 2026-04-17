@@ -35,8 +35,8 @@ In defended mode, `@rig.build` synthesizes the policy from the tool catalog — 
 
 - Default built-in rule set including `no-send-to-unknown`, `no-destroy-unknown`, `no-secret-exfil`, `no-untrusted-destructive`, `no-unknown-extraction-sources`, and `untrusted-llms-get-influenced`
 - `operations` reverse-mapping from `tool.operation.risk` labels across the catalog
-- `authorizations.authorizable["role:planner"]` populated from tools where `operation.authorizable` is true (the default)
-- `authorizations.deny` populated from tools where `operation.authorizable: false` (hard rejection — cannot be authorized even with overrides)
+- `authorizations.authorizable["role:planner"]` populated from tools where `can_authorize` allows planner use
+- `authorizations.deny` populated from tools where `can_authorize: false` (hard rejection — cannot be authorized even with overrides)
 - `no-novel-urls` included conditionally when any tool declares URL-fetch risk
 
 Full synthesis algorithm is specified in `PHASES.md` §Base Policy Synthesis.
@@ -114,7 +114,7 @@ var @toolCatalog = {
       exactPayloadArgs: ["subject"],      // must appear verbatim in task text
       payloadRecord: @email_payload,      // static payload schema
       risk: ["exfil:send", "comm:w"],
-      authorizable: true,
+      can_authorize: true,
       semantics: "Send an email message to a recipient."
     }
   },
@@ -127,7 +127,7 @@ var @toolCatalog = {
       payloadArgs: ["title", "start_time", "end_time", "description", "location"],
       payloadRecord: @calendar_event_payload,
       risk: ["calendar:w"],
-      authorizable: true,
+      can_authorize: true,
       semantics: "Create a new calendar event."
     },
     bind: { participants: [] }            // pre-bound default args

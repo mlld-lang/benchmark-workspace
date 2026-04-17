@@ -1,1 +1,0 @@
-{"version":1,"value":{"direct":true,"expose":["file_id"],"kind":"write","mlld":{"language":null,"template":"","type":"command"},"operation":{"authorizable":true,"controlArgs":["file_id"],"payloadArgs":"","risk":["destructive:targeted"],"semantics":"Delete a cloud file by id."}}}

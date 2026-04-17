@@ -1,1 +1,0 @@
-{"version":1,"value":"{\"phase\":\"extract\",\"source\":{\"source\":\"resolved\",\"record\":\"email_msg\",\"handle\":\"r_email_msg_27\",\"field\":\"body\"},\"schema\":\"string\",\"name\":\"email_27_body\",\"purpose\":\"Extract body of email 27 to find Networking event participants and summary details\"}"}

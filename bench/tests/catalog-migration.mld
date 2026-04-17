@@ -1,0 +1,184 @@
+>> Cross-suite migration regression checks for the new input-record
+>> catalog shape. These pin the bulk rewrite so legacy write metadata
+>> does not creep back into the non-v1 suites.
+
+var @workspaceToolsText = run sh {
+  cat /Users/adam/mlld/clean/bench/domains/workspace/tools.mld
+}
+var @bankingToolsText = run sh {
+  cat /Users/adam/mlld/clean/bench/domains/banking/tools.mld
+}
+var @slackToolsText = run sh {
+  cat /Users/adam/mlld/clean/bench/domains/slack/tools.mld
+}
+var @travelToolsText = run sh {
+  cat /Users/adam/mlld/clean/bench/domains/travel/tools.mld
+}
+
+var @workspaceAgentText = run sh {
+  cat /Users/adam/mlld/clean/bench/agents/workspace.mld
+}
+var @bankingAgentText = run sh {
+  cat /Users/adam/mlld/clean/bench/agents/banking.mld
+}
+var @slackAgentText = run sh {
+  cat /Users/adam/mlld/clean/bench/agents/slack.mld
+}
+var @travelAgentText = run sh {
+  cat /Users/adam/mlld/clean/bench/agents/travel.mld
+}
+
+exe @status(ok) = when [
+  @ok => "PASS"
+  * => "FAIL"
+]
+
+exe @check(id, ok, detail) = [
+  => {
+    id: @id,
+    status: @status(@ok),
+    detail: @detail
+  }
+]
+
+var @noLegacyWriteShapeOk =
+  !@workspaceToolsText.includes("operation: {") &&
+  !@bankingToolsText.includes("operation: {") &&
+  !@slackToolsText.includes("operation: {") &&
+  !@travelToolsText.includes("operation: {") &&
+  !@workspaceToolsText.includes("payloadRecord:") &&
+  !@bankingToolsText.includes("payloadRecord:") &&
+  !@slackToolsText.includes("payloadRecord:") &&
+  !@travelToolsText.includes("payloadRecord:") &&
+  !@workspaceToolsText.includes("exactPayloadArgs:") &&
+  !@bankingToolsText.includes("exactPayloadArgs:") &&
+  !@slackToolsText.includes("exactPayloadArgs:") &&
+  !@travelToolsText.includes("exactPayloadArgs:") &&
+  !@workspaceToolsText.includes("updateArgs:") &&
+  !@bankingToolsText.includes("updateArgs:") &&
+  !@slackToolsText.includes("updateArgs:") &&
+  !@travelToolsText.includes("updateArgs:") &&
+  !@workspaceToolsText.includes('kind: "read"') &&
+  !@workspaceToolsText.includes('kind: "write"') &&
+  !@bankingToolsText.includes('kind: "read"') &&
+  !@bankingToolsText.includes('kind: "write"') &&
+  !@slackToolsText.includes('kind: "read"') &&
+  !@slackToolsText.includes('kind: "write"') &&
+  !@travelToolsText.includes('kind: "read"') &&
+  !@travelToolsText.includes('kind: "write"') &&
+  !@workspaceToolsText.includes("semantics:") &&
+  !@bankingToolsText.includes("semantics:") &&
+  !@slackToolsText.includes("semantics:") &&
+  !@travelToolsText.includes("semantics:") &&
+  !@workspaceToolsText.includes("expose:") &&
+  !@bankingToolsText.includes("expose:") &&
+  !@slackToolsText.includes("expose:") &&
+  !@travelToolsText.includes("expose:") &&
+  !@workspaceToolsText.includes("optional:") &&
+  !@bankingToolsText.includes("optional:") &&
+  !@slackToolsText.includes("optional:") &&
+  !@travelToolsText.includes("optional:") &&
+  !@workspaceToolsText.includes("risk:") &&
+  !@bankingToolsText.includes("risk:") &&
+  !@slackToolsText.includes("risk:") &&
+  !@travelToolsText.includes("risk:")
+
+var @bankingInputsOk =
+  @bankingToolsText.includes("inputs: @send_money_inputs") &&
+  @bankingToolsText.includes("inputs: @update_scheduled_transaction_inputs") &&
+  @bankingToolsText.includes("inputs: @update_password_inputs")
+
+var @slackInputsOk =
+  @slackToolsText.includes("inputs: @send_channel_message_inputs") &&
+  @slackToolsText.includes("inputs: @invite_user_to_slack_inputs") &&
+  @slackToolsText.includes("inputs: @post_webpage_inputs")
+
+var @travelInputsOk =
+  @travelToolsText.includes("inputs: @create_calendar_event_inputs") &&
+  @travelToolsText.includes("inputs: @cancel_calendar_event_inputs") &&
+  @travelToolsText.includes("inputs: @send_email_inputs")
+
+var @travelNoDateNormalizationOk =
+  !@travelToolsText.includes('exe @isoDate') &&
+  !@travelToolsText.includes('@isoDate(')
+
+var @workspaceRuntimeStillCleanOk =
+  @workspaceAgentText.includes("tools: @tools") &&
+  !@workspaceAgentText.includes("toolsCollection: @toolsCollection") &&
+  @workspaceAgentText.includes("runtimeTools: null") &&
+  !@workspaceAgentText.includes("@runtimeToolOverrides") &&
+  !@workspaceAgentText.includes("@mergePlannerCatalog")
+
+var @singleCatalogToolsOk =
+  @workspaceToolsText.includes('var tools @tools = {') &&
+  @bankingToolsText.includes('var tools @tools = {') &&
+  @slackToolsText.includes('var tools @tools = {') &&
+  @travelToolsText.includes('var tools @tools = {') &&
+  !@workspaceToolsText.includes('var tools @toolsCollection = {') &&
+  !@bankingToolsText.includes('var tools @toolsCollection = {') &&
+  !@slackToolsText.includes('var tools @toolsCollection = {') &&
+  !@travelToolsText.includes('var tools @toolsCollection = {') &&
+  @workspaceToolsText.includes('mlld: @search_emails') &&
+  @bankingToolsText.includes('mlld: @get_balance') &&
+  @slackToolsText.includes('mlld: @get_channels') &&
+  @travelToolsText.includes('mlld: @get_user_information')
+
+var @bankingThinAgentOk =
+  @bankingAgentText.includes("tools: @tools") &&
+  @bankingAgentText.includes("routedTools: ") &&
+  @bankingAgentText.includes("@routeToolCatalog") &&
+  !@bankingAgentText.includes("toolsCollection: @toolsCollection") &&
+  @bankingAgentText.includes("runtimeTools: null") &&
+  !@bankingAgentText.includes("@mergePlannerCatalog") &&
+  !@bankingAgentText.includes("@runtimeToolsCollection")
+
+var @slackThinAgentOk =
+  @slackAgentText.includes("tools: @tools") &&
+  @slackAgentText.includes("routedTools: ") &&
+  @slackAgentText.includes("@routeToolCatalog") &&
+  !@slackAgentText.includes("toolsCollection: @toolsCollection") &&
+  @slackAgentText.includes("runtimeTools: null") &&
+  !@slackAgentText.includes("@mergePlannerCatalog") &&
+  !@slackAgentText.includes("@runtimeToolsCollection")
+
+var @travelThinAgentOk =
+  @travelAgentText.includes("tools: @tools") &&
+  @travelAgentText.includes("routedTools: ") &&
+  @travelAgentText.includes("@routeToolCatalog") &&
+  !@travelAgentText.includes("toolsCollection: @toolsCollection") &&
+  @travelAgentText.includes("runtimeTools: null") &&
+  !@travelAgentText.includes("@mergePlannerCatalog") &&
+  !@travelAgentText.includes("@runtimeToolsCollection")
+
+exe @allChecks() = [
+  => [
+    @check("no-legacy-write-shape", @noLegacyWriteShapeOk, "non-v1 suite catalogs no longer declare operation/payloadRecord/updateArgs/exactPayloadArgs/kind/semantics/expose/optional/risk"),
+    @check("single-catalog-tools", @singleCatalogToolsOk, "non-v1 suite catalogs dispatch directly from the authored @tools surface"),
+    @check("banking-input-records", @bankingInputsOk, "banking write tools use input records"),
+    @check("slack-input-records", @slackInputsOk, "slack write tools use input records"),
+    @check("travel-input-records", @travelInputsOk, "travel write tools use input records"),
+    @check("travel-no-date-normalization", @travelNoDateNormalizationOk, "travel no longer silently rewrites date literals inside the tool adapter"),
+    @check("workspace-runtime-clean", @workspaceRuntimeStillCleanOk, "workspace now routes and dispatches directly from @tools"),
+    @check("banking-runtime-clean", @bankingThinAgentOk, "banking now routes and dispatches directly from @tools"),
+    @check("slack-runtime-clean", @slackThinAgentOk, "slack now routes and dispatches directly from @tools"),
+    @check("travel-runtime-clean", @travelThinAgentOk, "travel now routes and dispatches directly from @tools")
+  ]
+]
+
+var @checks = @allChecks()
+
+var @failures = for @check in @checks when @check.status == "FAIL" => @check
+var @passCount = @checks.length - @failures.length
+
+show `Catalog migration regressions`
+show ""
+for @check in @checks => show `[@check.status] @check.id  @check.detail`
+show ""
+
+show `summary: @passCount pass / @failures.length fail`
+
+if @failures.length > 0 [
+  run sh {
+    exit 1
+  }
+]

@@ -1,1 +1,0 @@
-{"version":1,"value":"```json\n{\n  \"status\": \"derived\",\n  \"schema_name\": \"inline-schema\",\n  \"name\": \"dinner_location\",\n  \"provenance\": \"derived\",\n  \"selection_refs\": [],\n  \"payload\": {\n    \"location\": \"The Gourmet Restaurant\"\n  }\n}\n```"}

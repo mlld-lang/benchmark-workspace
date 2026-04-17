@@ -23,12 +23,14 @@
 
 exe @decisionPhase(decision) = when [
   !@decision.isDefined() => null
+  @typeof(@decision) != "object" => null
   @decision.phase.isDefined() => @decision.phase
   * => @decision.worker
 ]
 
 exe @logPhase(entry) = when [
   !@entry.isDefined() => null
+  @typeof(@entry) != "object" => null
   @entry.phase.isDefined() => @entry.phase
   * => @entry.worker
 ]
@@ -166,10 +168,8 @@ exe @plannerExtractBeforeResolve(decision, executionLog) = [
   if @decision.tool.isDefined() [ => false ]
   if !@executionLog.isDefined() [ => true ]
   if @executionLog.length == 0 [ => true ]
-  for @e in @executionLog [
-    if @logPhase(@e) == "resolve" [ => false ]
-  ]
-  => true
+  let @resolveHits = for @e in @executionLog when @logPhase(@e) == "resolve" => true
+  => @resolveHits.length == 0
 ]
 
 >> Retry hint for the extract-before-resolve case. Tells the planner to
@@ -196,10 +196,8 @@ exe @plannerDoneAfterExecute(decision, executionLog) = [
   if @decisionPhase(@decision) != "done" [ => false ]
   if !@executionLog.isDefined() [ => false ]
   if @executionLog.length == 0 [ => false ]
-  for @e in @executionLog [
-    if @logPhase(@e) == "execute" [ => true ]
-  ]
-  => false
+  let @executeHits = for @e in @executionLog when @logPhase(@e) == "execute" => true
+  => @executeHits.length > 0
 ]
 
 >> Retry hint for the done-after-execute case. Tells the planner to use
@@ -230,10 +228,8 @@ exe @plannerBlockedAfterExtract(decision, executionLog, attempt) = [
   if @decisionPhase(@decision) != "blocked" [ => false ]
   if !@executionLog.isDefined() [ => false ]
   if @executionLog.length == 0 [ => false ]
-  for @e in @executionLog [
-    if @logPhase(@e) == "extract" [ => true ]
-  ]
-  => false
+  let @extractHits = for @e in @executionLog when @logPhase(@e) == "extract" => true
+  => @extractHits.length > 0
 ]
 
 >> Retry hint for the blocked-after-extract case. Nudges the planner to
@@ -265,10 +261,8 @@ exe @plannerBlockedAfterResolve(decision, executionLog, attempt) = [
   if @decisionPhase(@decision) != "blocked" [ => false ]
   if !@executionLog.isDefined() [ => false ]
   if @executionLog.length == 0 [ => false ]
-  for @e in @executionLog [
-    if @logPhase(@e) == "resolve" [ => true ]
-  ]
-  => false
+  let @resolveHits = for @e in @executionLog when @logPhase(@e) == "resolve" => true
+  => @resolveHits.length > 0
 ]
 
 >> Retry hint for the blocked-after-resolve case. Tells the planner to

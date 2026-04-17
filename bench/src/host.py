@@ -27,20 +27,14 @@ from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Any
 
-from agentdojo.agent_pipeline.base_pipeline_element import BasePipelineElement
-from agentdojo.functions_runtime import Env, FunctionsRuntime
-from agentdojo.task_suite.task_suite import model_output_from_messages
-from agentdojo.types import (
-    ChatAssistantMessage,
-    ChatMessage,
-    ChatToolResultMessage,
-    ChatUserMessage,
-    FunctionCall,
-    get_text_content_as_str,
-    text_content_block_from_string,
-)
+REPO_ROOT = Path(__file__).resolve().parents[3]
+LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
+if LOCAL_AGENTDOJO_SRC.exists():
+    sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
+
+from agentdojo.results import AgentResult, ToolCallRecord
 
 import mlld as mlld_sdk
 from mlld import Client
@@ -65,31 +59,31 @@ class MlldInfrastructureError(RuntimeError):
     """
 
 
-def _build_mcp_command(env_name: str, task_id: str, state_file: str,
-                       phase_state_file: str | None = None,
-                       attack: str | None = None,
-                       injection_task_id: str | None = None,
-                       log_file: str | None = None) -> str:
-    """Build the MCP server command with base64-encoded config."""
-    config = {
-        "env_name": env_name,
-        "task_id": task_id,
-        "benchmark_version": "v1.1.1",
-        "state_file": state_file,
-    }
-    if attack:
-        config["attack"] = attack
-    if injection_task_id:
-        config["injection_task_id"] = injection_task_id
-    if log_file:
-        config["log_file"] = log_file
-    if phase_state_file:
-        config["phase_state_file"] = phase_state_file
+def _build_local_mcp_command(config: dict[str, Any]) -> str:
+    """Launch the local MCP bridge with an explicit JSON config blob.
 
+    AgentDojo's current runner hands the agent an `agentdojo.mcp_server`
+    command in env-json mode. We rewrite that onto the local benchmark MCP
+    bridge so mlld still gets the extra workspace helper tools, date-shift
+    behavior, and phase-state attribution hooks.
+    """
     b64 = base64.b64encode(json.dumps(config).encode()).decode()
     project_dir = shlex.quote(str(BENCHMARK_PROJECT_DIR))
     script_path = shlex.quote(str(SRC_DIR / "mcp_server.py"))
     return f"uv run --project {project_dir} python3 {script_path} {b64}"
+
+
+def _decode_runner_mcp_command(mcp_server_cmd: str) -> dict[str, Any] | None:
+    """Extract AgentDojo's base64 config payload from the runner command."""
+    try:
+        parts = shlex.split(mcp_server_cmd)
+        if not parts:
+            return None
+        payload = parts[-1]
+        data = json.loads(base64.b64decode(payload))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -366,7 +360,7 @@ def _locked_log_path(log_path: Path):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-class MlldAgent(BasePipelineElement):
+class MlldAgent:
     """AgentDojo agent backed by mlld. Full loop in mlld via MCP tools."""
 
     name = "claude-3-5-sonnet-20241022"
@@ -405,50 +399,39 @@ class MlldAgent(BasePipelineElement):
         self._run_log_path = Path(run_log_path).expanduser() if run_log_path else None
         self._client = Client(timeout=self._timeout, working_dir=self._working_dir)
 
-    def query(
+    def run(
         self,
         query: str,
-        runtime: FunctionsRuntime,
-        env: Env = None,
-        messages: Sequence[ChatMessage] = [],
-        extra_args: dict = {},
-    ) -> tuple[str, FunctionsRuntime, Env, Sequence[ChatMessage], dict]:
-        messages = list(messages)
+        mcp_server_cmd: str,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AgentResult:
+        runner_mcp_config = _decode_runner_mcp_command(mcp_server_cmd) or {}
 
-        if not messages or messages[-1].get("role") != "user":
-            messages.append(ChatUserMessage(
-                role="user",
-                content=[text_content_block_from_string(query)],
-            ))
+        state_file = runner_mcp_config.get("state_file")
+        if not isinstance(state_file, str) or not state_file:
+            state_fd, state_file = tempfile.mkstemp(suffix=".json", prefix="mcp_env_")
+            os.close(state_fd)
+            runner_mcp_config["state_file"] = state_file
 
-        # Create state file for env round-tripping and MCP log
-        state_fd, state_file = tempfile.mkstemp(suffix=".json", prefix="mcp_env_")
-        os.close(state_fd)
-        log_fd, mcp_log_file = tempfile.mkstemp(suffix=".jsonl", prefix="mcp_log_")
-        os.close(log_fd)
+        mcp_log_file = runner_mcp_config.get("log_file")
+        if not isinstance(mcp_log_file, str) or not mcp_log_file:
+            log_fd, mcp_log_file = tempfile.mkstemp(suffix=".jsonl", prefix="mcp_log_")
+            os.close(log_fd)
+            runner_mcp_config["log_file"] = mcp_log_file
+
+        runner_mcp_config.setdefault("suite_name", self._env_name)
+        runner_mcp_config.setdefault("benchmark_version", "v1.1.1")
+
         phase_fd, phase_log_file = tempfile.mkstemp(suffix=".jsonl", prefix="phase_log_")
         os.close(phase_fd)
         llm_log_fd, llm_call_log_file = tempfile.mkstemp(suffix=".jsonl", prefix="llm_call_log_")
         os.close(llm_log_fd)
         phase_state_fd, phase_state_file = tempfile.mkstemp(suffix=".json", prefix="phase_state_")
         os.close(phase_state_fd)
-
-        # Seed the MCP bridge with the exact current environment so retries,
-        # combined tasks, and init_environment mutations all start from the
-        # same state the Python host is grading against.
-        Path(state_file).write_text(env.model_dump_json())
+        runner_mcp_config["phase_state_file"] = phase_state_file
 
         task_id = getattr(self, "_current_task_id", "user_task_0")
-
-        mcp_command = _build_mcp_command(
-            self._env_name,
-            task_id,
-            state_file,
-            phase_state_file=phase_state_file,
-            attack=self._attack,
-            injection_task_id=self._injection_task_id,
-            log_file=mcp_log_file,
-        )
+        mcp_command = _build_local_mcp_command(runner_mcp_config)
 
         payload = {
             "query": query,
@@ -462,6 +445,8 @@ class MlldAgent(BasePipelineElement):
         }
         if self._harness:
             payload["harness"] = self._harness
+        if tools is not None:
+            payload["tool_count"] = len(tools)
 
         if self._debug:
             print(
@@ -484,9 +469,6 @@ class MlldAgent(BasePipelineElement):
         }
 
         execute_error_str: str | None = None
-        # Optional runtime tracing — enabled by env vars so callers can turn it
-        # on per-run without code changes. MLLD_TRACE selects level
-        # (off|effects|handle|verbose); MLLD_TRACE_FILE is the JSONL output path.
         trace_level = os.environ.get("MLLD_TRACE")
         trace_file_path = os.environ.get("MLLD_TRACE_FILE")
         try:
@@ -530,29 +512,6 @@ class MlldAgent(BasePipelineElement):
                 for d in denials:
                     print(f"[mlld] DENIAL: {d}", file=sys.stderr)
 
-        # Read back modified env from MCP server state file
-        try:
-            state_path = Path(state_file)
-            if state_path.exists() and state_path.stat().st_size > 0:
-                env_json = state_path.read_text()
-                env_type = type(env)
-                restored_env = env_type.model_validate_json(env_json)
-                # Snapshot contact_list before overwrite — the Pydantic
-                # @model_validator _create_contact_list adds phantom contacts
-                # from email addresses in initial_emails during deserialization.
-                pre_contacts = None
-                if hasattr(env, 'inbox') and hasattr(env.inbox, 'contact_list'):
-                    pre_contacts = list(env.inbox.contact_list)
-                if pre_contacts is not None:
-                    restored_env.inbox.contact_list = pre_contacts
-                env = restored_env
-                if self._debug:
-                    print(f"[mlld] restored env from state file ({len(env_json)} bytes)", file=sys.stderr)
-        except Exception as e:
-            if self._debug:
-                print(f"[mlld] failed to restore env: {e}", file=sys.stderr)
-
-        # Read MCP tool call log and reconstruct messages for AgentDojo
         mcp_log_entries = []
         phase_events = []
         llm_call_entries = []
@@ -577,14 +536,6 @@ class MlldAgent(BasePipelineElement):
             pass
         finally:
             try:
-                os.unlink(state_file)
-            except OSError:
-                pass
-            try:
-                os.unlink(mcp_log_file)
-            except OSError:
-                pass
-            try:
                 os.unlink(phase_log_file)
             except OSError:
                 pass
@@ -597,10 +548,6 @@ class MlldAgent(BasePipelineElement):
             except OSError:
                 pass
 
-        # Infrastructure-failure detection: if mlld raised AND nothing fired,
-        # this is not a run — it's an infrastructure crash. Surface it instead
-        # of synthesizing an empty "Task completed." that grades as security=True.
-        # See ticket b-e8e4 for the false-green class this closes.
         nothing_fired = (
             not raw_output
             and not mcp_log_entries
@@ -632,7 +579,6 @@ class MlldAgent(BasePipelineElement):
                 f"{execute_error_str[:500]}"
             )
 
-        # Parse output
         content = "Task completed."
         output = None
         try:
@@ -675,45 +621,6 @@ class MlldAgent(BasePipelineElement):
         task_log["policy_denials"] = len(denials) if denials else 0
         task_log["total_steps"] = len(mcp_log_entries)
         task_log["metrics"] = _build_phase_metrics(task_log.get("debug"), phase_events, mcp_log_entries, content)
-
-        # Reconstruct tool call messages from MCP log for AgentDojo evaluation
-        for entry in mcp_log_entries:
-            tc_id = str(uuid.uuid4())
-            fn = entry.get("tool", "")
-            args = entry.get("args", {})
-            result_text = str(entry.get("result", "(executed)"))
-            fc = FunctionCall(function=fn, args=args, id=tc_id)
-            messages.append(ChatAssistantMessage(
-                role="assistant",
-                content=None,
-                tool_calls=[fc],
-            ))
-            messages.append(ChatToolResultMessage(
-                role="tool",
-                content=[text_content_block_from_string(result_text)],
-                tool_call_id=tc_id,
-                tool_call=fc,
-                error=None,
-            ))
-
-        messages.append(ChatAssistantMessage(
-            role="assistant",
-            content=[text_content_block_from_string(content)],
-            tool_calls=None,
-        ))
-
-        # Mirror AgentDojo's final-output extraction path in the task log so
-        # utility mismatches can distinguish env/state issues from message
-        # reconstruction issues.
-        try:
-            extracted_blocks = model_output_from_messages(messages) if messages else None
-            extracted_output = get_text_content_as_str(extracted_blocks or [])
-            task_log["evaluator_output"] = extracted_output[:2000]
-            task_log["evaluator_output_matches_final_output"] = extracted_output == content
-        except Exception as e:
-            task_log["evaluator_output_error"] = str(e)[:500]
-
-        # Write task log (verdict added later by update_verdict)
         if self._run_log_path:
             log_path = self._run_log_path
         else:
@@ -730,7 +637,21 @@ class MlldAgent(BasePipelineElement):
             with open(log_path, "a") as f:
                 f.write(json.dumps(task_log, default=str) + "\n")
 
-        return query, runtime, env, messages, extra_args
+        tool_calls = [
+            ToolCallRecord(
+                function=str(entry.get("tool", "")),
+                args=entry.get("args", {}) if isinstance(entry.get("args"), dict) else {},
+                result=str(entry.get("result", ""))[:500] or None,
+                error=str(entry.get("result", ""))[:500] if entry.get("error") else None,
+            )
+            for entry in mcp_log_entries
+        ]
+
+        return AgentResult(
+            content=content,
+            tool_calls=tool_calls,
+            metadata=task_log,
+        )
 
     def update_verdict(self, utility: bool, security: bool) -> None:
         """Patch the last JSONL log entry with utility/security verdicts.

@@ -1,1 +1,0 @@
-{"version":1,"value":"```json\n{\"phase\":\"resolve\",\"tool\":\"search_calendar_events\",\"args\":{\"query\":{\"source\":\"known\",\"value\":\"Dental check-up\"}},\"purpose\":\"Find the existing Dental check-up calendar event so we can reschedule it\"}\n```"}

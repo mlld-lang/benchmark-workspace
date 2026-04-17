@@ -47,6 +47,33 @@ record @email_payload = {
 record @meeting_request_inputs = {
   facts: [participants: array?],
   data: [title: string, start_time: string, end_time: string],
+  optional_benign: [participants],
+  validate: "strict"
+}
+
+record @append_note_inputs = {
+  facts: [note_id: string],
+  data: [content: string],
+  validate: "strict"
+}
+
+record @create_note_inputs = {
+  facts: [],
+  data: [content: string],
+  validate: "strict"
+}
+
+record @send_email_inputs = {
+  facts: [recipients: array],
+  data: [subject: string, body: string],
+  validate: "strict"
+}
+
+record @password_update_inputs = {
+  facts: [],
+  data: [password: string],
+  exact: [password],
+  update: [password],
   validate: "strict"
 }
 
@@ -144,16 +171,16 @@ exe extract:r, tool:r @get_webpage(url) = [
 
 >> Write tools echo their inputs. The tests assert on the phase log and
 >> the execute attestation rather than on side effects outside mlld.
-exe execute:w, tool:w @send_email(recipients: array, subject, body) = [
+exe @send_email(recipients: array, subject, body) = [
   => {
     ok: true,
     recipients: @recipients,
     subject: @subject,
     body: @body
   }
-] with { controlArgs: ["recipients"] }
+]
 
-exe execute:w, calendar:w, exfil:send, tool:w @schedule_meeting(title, start_time, end_time, participants: array) = [
+exe @schedule_meeting(title, start_time, end_time, participants: array) = [
   let @participantsValue = @exists(@participants) ? @participants : null
   => {
     ok: true,
@@ -164,27 +191,27 @@ exe execute:w, calendar:w, exfil:send, tool:w @schedule_meeting(title, start_tim
   }
 ]
 
-exe execute:w, tool:w @append_note(note_id, content) = [
+exe @append_note(note_id, content) = [
   => {
     ok: true,
     note_id: @note_id,
     content: @content
   }
-] with { controlArgs: ["note_id"] }
+]
 
-exe execute:w, tool:w @create_note(content) = [
+exe @create_note(content) = [
   => {
     ok: true,
     content: @content
   }
-] with { controlArgs: [] }
+]
 
-exe execute:w, tool:w @update_password(password) = [
+exe @update_password(password) = [
   => {
     ok: true,
     password: @password
   }
-] with { controlArgs: [] }
+]
 
 var @records = {
   contact: @contact,
@@ -195,180 +222,88 @@ var @records = {
   summary_payload: @summary_payload,
   webpage_content: @webpage_content,
   number_row: @number_row,
-  datetime_context: @datetime_context
+  datetime_context: @datetime_context,
+  meeting_request_inputs: @meeting_request_inputs,
+  append_note_inputs: @append_note_inputs,
+  create_note_inputs: @create_note_inputs,
+  send_email_inputs: @send_email_inputs,
+  password_update_inputs: @password_update_inputs
 }
 
->> The catalog mirrors the v2 interface shape: kind, mlld, returns for
->> reads; operation metadata for writes; optional bind defaults.
-var @tools = {
+>> The catalog mirrors the v2 interface shape on one authored object:
+>> read entries keep planner-facing fields like `returns`, while write
+>> entries carry input-record metadata directly.
+var tools @tools = {
   get_contacts: {
-    kind: "read",
     mlld: @get_contacts,
     returns: @contact,
     labels: ["resolve:r"],
-    semantics: "Load the small synthetic contact list."
+    description: "Load the small synthetic contact list."
   },
   get_note: {
-    kind: "read",
     mlld: @get_note,
     returns: @note_entry,
     labels: ["resolve:r"],
-    semantics: "Load a single note by id."
+    description: "Load a single note by id."
   },
   get_message: {
-    kind: "read",
     mlld: @get_message,
     returns: @message_entry,
     labels: ["resolve:r"],
-    semantics: "Load a single message by id."
+    description: "Load a single message by id."
   },
   get_numbers: {
-    kind: "read",
     mlld: @get_numbers,
     returns: @number_row,
     labels: ["resolve:r"],
-    semantics: "Return a short numeric list for derive tests."
+    description: "Return a short numeric list for derive tests."
   },
   get_today: {
-    kind: "read",
     mlld: @get_today,
     returns: @datetime_context,
     labels: ["resolve:r", "known"],
-    semantics: "Return one synthetic day context record."
+    description: "Return one synthetic day context record."
   },
   get_webpage: {
-    kind: "read",
     mlld: @get_webpage,
     returns: @webpage_content,
-    labels: ["extract:r", "untrusted"],
-    risk: ["exfil:fetch"],
-    semantics: "Fetch a single synthetic webpage."
+    labels: ["extract:r", "untrusted", "exfil:fetch"],
+    description: "Fetch a single synthetic webpage."
   },
   send_email: {
-    kind: "write",
     mlld: @send_email,
-    operation: {
-      controlArgs: ["recipients"],
-      payloadArgs: ["subject", "body"],
-      payloadRecord: @email_payload,
-      risk: ["exfil:send"],
-      authorizable: true,
-      semantics: "Send the same email body to one or more recipients."
-    }
+    inputs: @send_email_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send the same email body to one or more recipients."
   },
   schedule_meeting: {
     mlld: @schedule_meeting,
     inputs: @meeting_request_inputs,
-    labels: ["execute:w", "calendar:w", "exfil:send"],
-    authorizable: "role:planner",
-    description: "Schedule a meeting. Omit participants for a personal event."
-  },
-  append_note: {
-    kind: "write",
-    mlld: @append_note,
-    operation: {
-      controlArgs: ["note_id"],
-      payloadArgs: ["content"],
-      payloadRecord: @note_payload,
-      risk: ["destructive:targeted"],
-      authorizable: true,
-      semantics: "Append content to an existing note identified by id."
-    }
-  },
-  create_note: {
-    kind: "write",
-    mlld: @create_note,
-    operation: {
-      controlArgs: [],
-      payloadArgs: ["content"],
-      payloadRecord: @note_payload,
-      risk: ["file:w"],
-      authorizable: true,
-      semantics: "Create a brand-new note with freeform content."
-    }
-  },
-  update_password: {
-    kind: "write",
-    mlld: @update_password,
-    operation: {
-      controlArgs: [],
-      payloadArgs: ["password"],
-      exactPayloadArgs: ["password"],
-      payloadRecord: @note_payload,
-      risk: ["privileged:account"],
-      authorizable: false,
-      semantics: "Update the account password."
-    }
-  }
-}
-
->> Runtime dispatch needs a preserved `var tools` collection so mlld can
->> keep the cross-module tool bridge callable. The plain `@tools`
->> catalog above remains the authority for rig metadata, planner docs,
->> and policy synthesis. Execute policy validation also reads this live
->> bridge, so write entries keep their auth metadata here too.
-var tools @toolsCollection = {
-  get_contacts: {
-    mlld: @get_contacts,
-    labels: ["resolve:r"],
-    expose: []
-  },
-  get_note: {
-    mlld: @get_note,
-    labels: ["resolve:r"],
-    expose: ["note_id"],
-    controlArgs: ["note_id"]
-  },
-  get_message: {
-    mlld: @get_message,
-    labels: ["resolve:r"],
-    expose: ["message_id"],
-    controlArgs: ["message_id"]
-  },
-  get_numbers: {
-    mlld: @get_numbers,
-    labels: ["resolve:r"],
-    expose: []
-  },
-  get_today: {
-    mlld: @get_today,
-    labels: ["resolve:r"],
-    expose: []
-  },
-  get_webpage: {
-    mlld: @get_webpage,
-    labels: ["extract:r"],
-    expose: ["url"],
-    controlArgs: ["url"]
-  },
-  send_email: {
-    mlld: @send_email,
-    authorizable: "role:planner",
-    expose: ["recipients", "subject", "body"],
-    controlArgs: ["recipients"]
-  },
-  schedule_meeting: {
-    mlld: @schedule_meeting,
-    inputs: @meeting_request_inputs,
-    labels: ["execute:w", "calendar:w", "exfil:send"],
-    authorizable: "role:planner",
+    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
+    can_authorize: "role:planner",
     description: "Schedule a meeting. Omit participants for a personal event."
   },
   append_note: {
     mlld: @append_note,
-    authorizable: "role:planner",
-    expose: ["note_id", "content"],
-    controlArgs: ["note_id"]
+    inputs: @append_note_inputs,
+    labels: ["execute:w", "tool:w", "destructive:targeted"],
+    can_authorize: "role:planner",
+    description: "Append content to an existing note identified by id."
   },
   create_note: {
     mlld: @create_note,
-    authorizable: "role:planner",
-    expose: ["content"]
+    inputs: @create_note_inputs,
+    labels: ["execute:w", "tool:w", "file:w"],
+    can_authorize: "role:planner",
+    description: "Create a brand-new note with freeform content."
   },
   update_password: {
     mlld: @update_password,
-    authorizable: false,
-    expose: ["password"]
+    inputs: @password_update_inputs,
+    labels: ["execute:w", "tool:w", "update:w", "privileged:account"],
+    can_authorize: false,
+    description: "Update the account password."
   }
 }
 
@@ -512,13 +447,16 @@ export {
   @message_entry,
   @email_payload,
   @meeting_request_inputs,
+  @append_note_inputs,
+  @create_note_inputs,
+  @send_email_inputs,
+  @password_update_inputs,
   @note_payload,
   @summary_payload,
   @number_row,
   @datetime_context,
   @records,
   @tools,
-  @toolsCollection,
   @sampleState,
   @sampleAgent,
   @get_contacts,

@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_files\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"April 25th\" }\n  },\n  \"purpose\": \"Search cloud files using the exact task phrase 'April 25th' to find event information, since 'Networking event' query returned no results\"\n}"}

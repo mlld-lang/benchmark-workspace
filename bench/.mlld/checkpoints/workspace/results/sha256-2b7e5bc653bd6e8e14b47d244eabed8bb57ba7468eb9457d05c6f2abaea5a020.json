@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"extract\",\n  \"source\": { \"source\": \"resolved\", \"record\": \"file_entry\", \"handle\": \"r_file_entry_3\", \"field\": \"content\" },\n  \"schema\": \"text\",\n  \"name\": \"team_building_content\",\n  \"purpose\": \"Extract content of team-building-activities.docx to review existing activities and suggest two more to append\"\n}"}

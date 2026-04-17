@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"extract\",\n  \"source\": { \"source\": \"resolved\", \"record\": \"email_msg\", \"handle\": \"r_email_msg_2\", \"field\": \"body\" },\n  \"schema\": \"text\",\n  \"name\": \"david_email_2_body\",\n  \"purpose\": \"Extract body of first email from david.smith@bluesparrowtech.com to check if it has subject 'TODOs for the week'\"\n}"}

@@ -1,9 +1,8 @@
 import {
   @pairsToObject,
-  @toolOperation,
   @toolControlArgs,
   @toolPayloadArgs,
-  @toolExactPayloadArgs,
+  @toolExactArgs,
   @toolBind
 } from "./tooling.mld"
 
@@ -39,8 +38,8 @@ exe @roleForArg(tool, argName) = [
   ]
 ]
 
-exe @isExactPayloadArg(tool, argName) = [
-  => @toolExactPayloadArgs(@tool).includes(@argName)
+exe @isExactArg(tool, argName) = [
+  => @toolExactArgs(@tool).includes(@argName)
 ]
 
 exe @bucketObject(bucketValue) = when [
@@ -354,16 +353,40 @@ exe @resolveRefValue(state, ref) = [
   ]
 ]
 
-exe @knownInTask(query, literalValue) = [
-  if !@literalValue.isDefined() [ => false ]
-  => @query.includes(@name(@literalValue))
-]
+>> `known` stays strict by default: literal values should appear verbatim in
+>> the user task. The one deliberate relaxation is canonical datetimes for
+>> trusted task text. Workspace-style write tools expect `YYYY-MM-DD HH:MM`,
+>> while users naturally write phrases like "12:00 on 2026-04-18". Accept
+>> that narrow normalization without weakening `known` into a general
+>> paraphrase channel.
+exe @knownInTask(query, literalValue) = js {
+  if (literalValue == null) return false;
+
+  const queryText = String(query ?? "");
+  const literal = String(literalValue ?? "");
+  if (!literal) return false;
+  if (queryText.includes(literal)) return true;
+
+  const datetimeMatch = literal.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})$/);
+  if (!datetimeMatch) return false;
+
+  const [, datePart, timePart] = datetimeMatch;
+  const normalizedQuery = queryText.toLowerCase().replace(/\s+/g, " ");
+  const patterns = [
+    `${timePart} on ${datePart}`,
+    `${timePart} at ${datePart}`,
+    `${datePart} at ${timePart}`,
+    `${datePart} ${timePart}`,
+  ];
+
+  return patterns.some((pattern) => normalizedQuery.includes(pattern));
+}
 
 exe @compileScalarRef(state, tool, argName, ref, query) = [
   let @role = @roleForArg(@tool, @argName)
   if @role == "unknown" [ => { ok: false, arg: @argName, error: "unknown_tool_arg" } ]
 
-  let @exactPayload = @isExactPayloadArg(@tool, @argName)
+  let @exactArg = @isExactArg(@tool, @argName)
   let @controlResolved = when [
     @role != "control" => null
     @refSource(@ref) == "selection" => @resolveControlRefValue(@state, @ref)
@@ -416,7 +439,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
       }
     ]
     => when [
-      @role == "control" || @exactPayload => {
+      @role == "control" || @exactArg => {
         ok: true,
         arg: @argName,
         role: @role,
@@ -435,7 +458,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
         source_class: "known",
         value: @resolved.value,
         backing_refs: [],
-        flat_eq: null,
+        flat_eq: @constraintEqValue(@resolved.value),
         flat_attestations: []
       }
     ]
@@ -450,7 +473,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
         source_class: "resolved"
       }
     ]
-    if @exactPayload [
+    if @exactArg [
       => {
         ok: false,
         arg: @argName,
@@ -482,7 +505,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
         source_class: "resolved",
         value: @resolved.value,
         backing_refs: [],
-        flat_eq: null,
+        flat_eq: @constraintEqValue(@resolved.value),
         flat_attestations: []
       }
     ]
@@ -497,7 +520,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
         source_class: @resolved.source
       }
     ]
-    if @exactPayload [
+    if @exactArg [
       => {
         ok: false,
         arg: @argName,
@@ -512,7 +535,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
       source_class: @resolved.source,
       value: @resolved.value,
       backing_refs: [],
-      flat_eq: null,
+      flat_eq: @constraintEqValue(@resolved.value),
       flat_attestations: []
     }
   ]
@@ -560,6 +583,17 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
     let @values = for @entry in @compiled => @entry.value
     let @authValues = for @entry in @compiled when @entry.auth_value.isDefined() => @entry.auth_value
     let @flatEqs = for @entry in @compiled when @entry.flat_eq.isDefined() => @entry.flat_eq
+    >> `@policy.build` treats an array-valued `known` arg as one known
+    >> field whose elements are raw literals. Do not forward the scalar
+    >> `{ value, source: "task" }` wrappers here: that shape is valid
+    >> for scalar `known` args, but on arrays it compiles into
+    >> `eq: [{ value, source }]` instead of `eq: ["literal"]`, and the
+    >> downstream policy check then rejects the call despite the planner
+    >> having cited the value from the task text correctly.
+    let @bucketAuthValue = when [
+      @first.auth_bucket == "known" => @values
+      * => @authValues
+    ]
     => {
       ok: true,
       arg: @argName,
@@ -567,7 +601,7 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
       source_class: @first.source_class,
       value: @values,
       auth_bucket: @first.auth_bucket,
-      auth_value: @authValues,
+      auth_value: @bucketAuthValue,
       backing_refs: @backingRefs,
       flat_eq: @flatEqs,
       flat_attestations: @flatAttestations
@@ -621,10 +655,19 @@ exe @builderConstraint(eqValue, attestations) = [
   ]
 ]
 
+exe @policyIntentValue(compiledEntry) = [
+  let @constraint = @builderConstraint(@compiledEntry.flat_eq, @compiledEntry.flat_attestations)
+  => when [
+    @constraint.isDefined() => @constraint
+    @compiledEntry.flat_eq.isDefined() => @compiledEntry.flat_eq
+    * => null
+  ]
+]
+
 exe @flatPolicyIntent(operationName, compiledEntries) = [
-  let @pairs = for @entry in @compiledEntries when @entry.auth_bucket.isDefined() && @entry.auth_bucket != "allow" => {
+  let @pairs = for @entry in @compiledEntries when @entry.arg.isDefined() && @entry.auth_bucket != "allow" => {
     key: @entry.arg,
-    value: @builderConstraint(@entry.flat_eq, @entry.flat_attestations)
+    value: @policyIntentValue(@entry)
   }
   let @validPairs = for @pair in @pairs when @pair.value.isDefined() => @pair
   let @flatArgs = @pairsToObject(@validPairs)
@@ -654,7 +697,6 @@ exe @compileExecuteIntent(state, tools, decision, query) = [
   => {
     ok: true,
     tool: @tool,
-    operation: @toolOperation(@tool),
     compiled_args: @payloadEntries(@compiledEntries),
     compiled_entries: @compiledEntries,
     bind_args: @toolBind(@tool),

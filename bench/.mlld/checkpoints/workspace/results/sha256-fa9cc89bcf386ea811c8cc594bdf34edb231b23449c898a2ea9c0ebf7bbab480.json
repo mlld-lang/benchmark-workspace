@@ -1,1 +1,0 @@
-{"version":1,"value":"```json\n{\n  \"status\": \"not_found\",\n  \"schema_name\": \"string\",\n  \"name\": \"dinner_email_body_8\",\n  \"provenance\": \"extracted\",\n  \"preview_fields\": [],\n  \"payload\": {},\n  \"reason\": \"Source email discusses project timeline, budget, and next steps only. No dinner location details are present in this email.\"\n}\n```"}

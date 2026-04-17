@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_sent_emails\",\n  \"args\": {},\n  \"purpose\": \"Try loading sent emails to find information about the Networking event, since inbox/unread searches failed\"\n}"}

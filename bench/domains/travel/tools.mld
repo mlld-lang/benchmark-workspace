@@ -17,11 +17,12 @@ import {
   @user_info,
   @flight_info,
   @calendar_evt,
-  @calendar_event_payload,
-  @email_payload,
-  @hotel_reservation_payload,
-  @car_rental_payload,
-  @restaurant_reservation_payload
+  @create_calendar_event_inputs,
+  @cancel_calendar_event_inputs,
+  @send_email_inputs,
+  @reserve_hotel_inputs,
+  @reserve_car_rental_inputs,
+  @reserve_restaurant_inputs
 } from "./records.mld"
 
 exe @namesInCity(raw, prefix, city) = [
@@ -39,41 +40,6 @@ exe @ratingFromReviewBlob(reviewBlob) = [
     ? @ratingLine.replace("Rating: ", "").trim() * 1
     : null
 ]
-
->> Calendar read tools take user-facing date phrases, while AgentDojo's
->> backend expects strict ISO dates. Normalize that formatting at the
->> adapter boundary so the planner can keep citing the task literal.
-exe @isoDate(inputValue) = js {
-  if (inputValue == null) return null;
-  const raw = String(inputValue).trim();
-  if (!raw) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-
-  const match = raw.match(/^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,\s*(\d{4}))?$/);
-  if (!match) return raw;
-
-  const months = {
-    january: "01",
-    february: "02",
-    march: "03",
-    april: "04",
-    may: "05",
-    june: "06",
-    july: "07",
-    august: "08",
-    september: "09",
-    october: "10",
-    november: "11",
-    december: "12"
-  };
-
-  const month = months[match[1].toLowerCase()];
-  if (!month) return raw;
-
-  const day = String(parseInt(match[2], 10)).padStart(2, "0");
-  const year = match[3] || String(new Date().getFullYear());
-  return `${year}-${month}-${day}`;
-}
 
 >> AgentDojo returns many travel lookups as `{ name: value }` maps. Keep
 >> this conversion in native mlld so the entry values stay intact and the
@@ -263,12 +229,12 @@ exe resolve:r, known, tool:r @get_car_price_per_day(company_name: array) = [
 ] => record @car_company with { controlArgs: ["company_name"] }
 
 exe resolve:r, untrusted, tool:r @search_calendar_events(query, date) = [
-  let @dateFilter = @exists(@date) ? @isoDate(@date) : null
+  let @dateFilter = @exists(@date) ? @date : null
   => @mcp.searchCalendarEvents(@query, @dateFilter)
 ] => record @calendar_evt
 
 exe resolve:r, untrusted, tool:r @get_day_calendar_events(day) = [
-  => @mcp.getDayCalendarEvents(@isoDate(@day))
+  => @mcp.getDayCalendarEvents(@day)
 ] => record @calendar_evt
 
 exe resolve:r, known, tool:r @get_flight_information(departure_city, arrival_city) = [
@@ -278,331 +244,216 @@ exe resolve:r, known, tool:r @get_flight_information(departure_city, arrival_cit
 
 >> Write tools
 
->> Travel's calendar creation path keeps AgentDojo's optional participant
->> field nullable. These tasks are about personal planning, not sending
->> invitations.
-exe execute:w, calendar:w, tool:w @create_calendar_event(title, start_time, end_time, description, participants: array, location) = [
+exe @create_calendar_event(title, start_time, end_time, description, participants: array, location) = [
   let @descriptionValue = @exists(@description) ? @description : ""
   let @participantsValue = @exists(@participants) ? @participants : null
   let @locationValue = @exists(@location) ? @location : null
   => @mcp.createCalendarEvent(@title, @start_time, @end_time, @descriptionValue, @participantsValue, @locationValue)
-] with { controlArgs: [] }
+]
 
-exe execute:w, destructive:targeted, tool:w @cancel_calendar_event(event_id) = [
+exe @cancel_calendar_event(event_id) = [
   => @mcp.cancelCalendarEvent(@event_id)
-] with { controlArgs: ["event_id"] }
+]
 
-exe execute:w, booking:w, tool:w @reserve_hotel(hotel, start_day, end_day) = [
+exe @reserve_hotel(hotel, start_day, end_day) = [
   => @mcp.reserveHotel(@hotel, @start_day, @end_day)
-] with { controlArgs: ["hotel"] }
+]
 
-exe execute:w, booking:w, tool:w @reserve_car_rental(company, start_time, end_time) = [
+exe @reserve_car_rental(company, start_time, end_time) = [
   => @mcp.reserveCarRental(@company, @start_time, @end_time)
-] with { controlArgs: ["company"] }
+]
 
-exe execute:w, booking:w, tool:w @reserve_restaurant(restaurant, start_time) = [
+exe @reserve_restaurant(restaurant, start_time) = [
   => @mcp.reserveRestaurant(@restaurant, @start_time)
-] with { controlArgs: ["restaurant"] }
+]
 
-exe execute:w, comm:w, exfil:send, tool:w @send_email(recipients: array, subject, body, attachments: array, cc: array, bcc: array) = [
+exe @send_email(recipients: array, subject, body, attachments: array, cc: array, bcc: array) = [
   let @attachmentsValue = @exists(@attachments) ? @attachments : null
   let @ccValue = @exists(@cc) ? @cc : null
   let @bccValue = @exists(@bcc) ? @bcc : null
   => @mcp.sendEmail(@recipients, @subject, @body, @attachmentsValue, @ccValue, @bccValue)
-] with { controlArgs: ["recipients", "cc", "bcc"] }
+]
 
-var @tools = {
+var tools @tools = {
   get_user_information: {
-    kind: "read",
     mlld: @get_user_information,
     returns: @user_info,
     labels: ["resolve:r", "known"],
-    semantics: "Return the user's travel profile information."
+    description: "Return the user's travel profile information."
   },
   get_all_hotels_in_city: {
-    kind: "read",
     mlld: @get_all_hotels_in_city,
     returns: @hotel,
     labels: ["resolve:r", "known"],
-    semantics: "List hotels in one city."
+    description: "List hotels in one city."
   },
   get_hotels_prices: {
-    kind: "read",
     mlld: @get_hotels_prices,
     returns: @hotel,
     labels: ["resolve:r", "known"],
-    semantics: "Load hotel price ranges for a set of hotel names."
+    description: "Load hotel price ranges for a set of hotel names."
   },
   get_rating_reviews_for_hotels: {
-    kind: "read",
     mlld: @get_rating_reviews_for_hotels,
     returns: @hotel_review,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Load hotel ratings and review text."
+    description: "Load hotel ratings and review text."
   },
   get_hotels_address: {
-    kind: "read",
     mlld: @get_hotels_address,
     returns: @hotel,
     labels: ["resolve:r", "known"],
-    semantics: "Load hotel addresses."
+    description: "Load hotel addresses."
   },
   get_all_restaurants_in_city: {
-    kind: "read",
     mlld: @get_all_restaurants_in_city,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    semantics: "List restaurants in one city."
+    description: "List restaurants in one city."
   },
   get_cuisine_type_for_restaurants: {
-    kind: "read",
     mlld: @get_cuisine_type_for_restaurants,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    semantics: "Load cuisine types for restaurants."
+    description: "Load cuisine types for restaurants."
   },
   get_restaurants_address: {
-    kind: "read",
     mlld: @get_restaurants_address,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    semantics: "Load restaurant addresses."
+    description: "Load restaurant addresses."
   },
   get_rating_reviews_for_restaurants: {
-    kind: "read",
     mlld: @get_rating_reviews_for_restaurants,
     returns: @restaurant_review,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Load restaurant ratings and review text."
+    description: "Load restaurant ratings and review text."
   },
   get_dietary_restrictions_for_all_restaurants: {
-    kind: "read",
     mlld: @get_dietary_restrictions_for_all_restaurants,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    semantics: "Load dietary restriction support for restaurants."
+    description: "Load dietary restriction support for restaurants."
   },
   get_contact_information_for_restaurants: {
-    kind: "read",
     mlld: @get_contact_information_for_restaurants,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    semantics: "Load restaurant contact information."
+    description: "Load restaurant contact information."
   },
   get_price_for_restaurants: {
-    kind: "read",
     mlld: @get_price_for_restaurants,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    semantics: "Load restaurant pricing."
+    description: "Load restaurant pricing."
   },
   check_restaurant_opening_hours: {
-    kind: "read",
     mlld: @check_restaurant_opening_hours,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    semantics: "Load restaurant opening hours."
+    description: "Load restaurant opening hours."
   },
   get_all_car_rental_companies_in_city: {
-    kind: "read",
     mlld: @get_all_car_rental_companies_in_city,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    semantics: "List car rental companies in one city."
+    description: "List car rental companies in one city."
   },
   get_car_types_available: {
-    kind: "read",
     mlld: @get_car_types_available,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    semantics: "Load available car types for one or more companies."
+    description: "Load available car types for one or more companies."
   },
   get_rating_reviews_for_car_rental: {
-    kind: "read",
     mlld: @get_rating_reviews_for_car_rental,
     returns: @car_company_review,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Load car rental ratings and review text."
+    description: "Load car rental ratings and review text."
   },
   get_car_fuel_options: {
-    kind: "read",
     mlld: @get_car_fuel_options,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    semantics: "Load fuel options for rental companies."
+    description: "Load fuel options for rental companies."
   },
   get_car_rental_address: {
-    kind: "read",
     mlld: @get_car_rental_address,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    semantics: "Load rental company addresses."
+    description: "Load rental company addresses."
   },
   get_car_price_per_day: {
-    kind: "read",
     mlld: @get_car_price_per_day,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    semantics: "Load car rental daily pricing."
+    description: "Load car rental daily pricing."
   },
   search_calendar_events: {
-    kind: "read",
     mlld: @search_calendar_events,
     returns: @calendar_evt,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Search calendar events by query and optional date filter. If `date` is provided, it must use YYYY-MM-DD."
+    description: "Search calendar events by query and optional date filter. If `date` is provided, it must use YYYY-MM-DD."
   },
   get_day_calendar_events: {
-    kind: "read",
     mlld: @get_day_calendar_events,
     returns: @calendar_evt,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Load calendar events for one day. `day` must use YYYY-MM-DD."
+    description: "Load calendar events for one day. `day` must use YYYY-MM-DD."
   },
   get_flight_information: {
-    kind: "read",
     mlld: @get_flight_information,
     returns: @flight_info,
     labels: ["resolve:r", "known"],
-    semantics: "Return flight information between two cities."
+    description: "Return flight information between two cities."
   },
   create_calendar_event: {
-    kind: "write",
     mlld: @create_calendar_event,
-    operation: {
-      controlArgs: [],
-      payloadArgs: ["title", "start_time", "end_time", "description", "location"],
-      payloadRecord: @calendar_event_payload,
-      risk: ["calendar:w"],
-      authorizable: true,
-      semantics: "Create a personal calendar event. `start_time` and `end_time` must use YYYY-MM-DD HH:MM."
-    },
-    bind: { participants: [] }
-  },
-  cancel_calendar_event: {
-    kind: "write",
-    mlld: @cancel_calendar_event,
-    operation: {
-      controlArgs: ["event_id"],
-      payloadArgs: [],
-      risk: ["destructive:targeted"],
-      authorizable: true,
-      semantics: "Cancel one existing calendar event."
-    }
-  },
-  reserve_hotel: {
-    kind: "write",
-    mlld: @reserve_hotel,
-    operation: {
-      controlArgs: ["hotel"],
-      payloadArgs: ["start_day", "end_day"],
-      payloadRecord: @hotel_reservation_payload,
-      risk: ["booking:w"],
-      authorizable: true,
-      semantics: "Reserve one hotel for a date range."
-    }
-  },
-  reserve_car_rental: {
-    kind: "write",
-    mlld: @reserve_car_rental,
-    operation: {
-      controlArgs: ["company"],
-      payloadArgs: ["start_time", "end_time"],
-      payloadRecord: @car_rental_payload,
-      risk: ["booking:w"],
-      authorizable: true,
-      semantics: "Reserve one car rental company for a time range."
-    }
-  },
-  reserve_restaurant: {
-    kind: "write",
-    mlld: @reserve_restaurant,
-    operation: {
-      controlArgs: ["restaurant"],
-      payloadArgs: ["start_time"],
-      payloadRecord: @restaurant_reservation_payload,
-      risk: ["booking:w"],
-      authorizable: true,
-      semantics: "Reserve one restaurant at a specific time."
-    }
-  },
-  send_email: {
-    kind: "write",
-    mlld: @send_email,
-    operation: {
-      controlArgs: ["recipients", "cc", "bcc"],
-      payloadArgs: ["subject", "body", "attachments"],
-      payloadRecord: @email_payload,
-      risk: ["comm:w", "exfil:send"],
-      authorizable: true,
-      semantics: "Send one email to one or more recipients."
-    },
-    bind: { attachments: [], cc: [], bcc: [] }
-  }
-}
-
->> The plain catalog is the framework authority for docs, routing, and
->> synthesized policy. Runtime dispatch uses the companion `var tools`
->> bridge so multi-arg calls keep mlld's named-arg behavior. Execute
->> policy validation runs against this live collection, so write entries
->> repeat their auth metadata here.
-var tools @toolsCollection = {
-  get_user_information: { mlld: @get_user_information },
-  get_all_hotels_in_city: { mlld: @get_all_hotels_in_city },
-  get_hotels_prices: { mlld: @get_hotels_prices },
-  get_rating_reviews_for_hotels: { mlld: @get_rating_reviews_for_hotels },
-  get_hotels_address: { mlld: @get_hotels_address },
-  get_all_restaurants_in_city: { mlld: @get_all_restaurants_in_city },
-  get_cuisine_type_for_restaurants: { mlld: @get_cuisine_type_for_restaurants },
-  get_restaurants_address: { mlld: @get_restaurants_address },
-  get_rating_reviews_for_restaurants: { mlld: @get_rating_reviews_for_restaurants },
-  get_dietary_restrictions_for_all_restaurants: { mlld: @get_dietary_restrictions_for_all_restaurants },
-  get_contact_information_for_restaurants: { mlld: @get_contact_information_for_restaurants },
-  get_price_for_restaurants: { mlld: @get_price_for_restaurants },
-  check_restaurant_opening_hours: { mlld: @check_restaurant_opening_hours },
-  get_all_car_rental_companies_in_city: { mlld: @get_all_car_rental_companies_in_city },
-  get_car_types_available: { mlld: @get_car_types_available },
-  get_rating_reviews_for_car_rental: { mlld: @get_rating_reviews_for_car_rental },
-  get_car_fuel_options: { mlld: @get_car_fuel_options },
-  get_car_rental_address: { mlld: @get_car_rental_address },
-  get_car_price_per_day: { mlld: @get_car_price_per_day },
-  search_calendar_events: { mlld: @search_calendar_events },
-  get_day_calendar_events: { mlld: @get_day_calendar_events },
-  get_flight_information: { mlld: @get_flight_information },
-  create_calendar_event: {
-    mlld: @create_calendar_event,
-    authorizable: "role:planner"
+    inputs: @create_calendar_event_inputs,
+    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Create a calendar event.",
+    instructions: "`start_time` and `end_time` must use YYYY-MM-DD HH:MM."
   },
   cancel_calendar_event: {
     mlld: @cancel_calendar_event,
-    authorizable: "role:planner",
-    controlArgs: ["event_id"]
+    inputs: @cancel_calendar_event_inputs,
+    labels: ["execute:w", "tool:w", "destructive:targeted"],
+    can_authorize: "role:planner",
+    description: "Cancel one existing calendar event."
   },
   reserve_hotel: {
     mlld: @reserve_hotel,
-    authorizable: "role:planner",
-    controlArgs: ["hotel"]
+    inputs: @reserve_hotel_inputs,
+    labels: ["execute:w", "tool:w", "booking:w"],
+    can_authorize: "role:planner",
+    description: "Reserve one hotel for a date range."
   },
   reserve_car_rental: {
     mlld: @reserve_car_rental,
-    authorizable: "role:planner",
-    controlArgs: ["company"]
+    inputs: @reserve_car_rental_inputs,
+    labels: ["execute:w", "tool:w", "booking:w"],
+    can_authorize: "role:planner",
+    description: "Reserve one car rental company for a time range."
   },
   reserve_restaurant: {
     mlld: @reserve_restaurant,
-    authorizable: "role:planner",
-    controlArgs: ["restaurant"]
+    inputs: @reserve_restaurant_inputs,
+    labels: ["execute:w", "tool:w", "booking:w"],
+    can_authorize: "role:planner",
+    description: "Reserve one restaurant at a specific time."
   },
   send_email: {
     mlld: @send_email,
-    authorizable: "role:planner",
-    controlArgs: ["recipients", "cc", "bcc"]
+    inputs: @send_email_inputs,
+    labels: ["execute:w", "tool:w", "comm:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send one email to one or more recipients."
   }
 }
 
 export {
   @tools,
-  @toolsCollection,
   @get_user_information,
   @get_all_hotels_in_city,
   @get_hotels_prices,

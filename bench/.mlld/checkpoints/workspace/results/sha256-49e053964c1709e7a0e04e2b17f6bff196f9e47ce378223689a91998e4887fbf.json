@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_emails_any_sender\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"Dinner with Blue Sparrow Tech\" }\n  },\n  \"purpose\": \"Search for emails about the dinner since the resolved calendar event does not include a location field\"\n}"}

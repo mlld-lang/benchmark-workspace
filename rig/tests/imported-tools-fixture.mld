@@ -1,0 +1,49 @@
+>> Regression fixture for imported `var tools` param metadata.
+>>
+>> These tools stay deliberately simple so the invariant isolates the
+>> module-boundary + helper-chain behavior without benchmark-specific
+>> wrappers in the way.
+
+exe resolve:r, tool:r @search_alpha(query, sender) = [
+  => {
+    ok: true,
+    query: @query,
+    sender: @sender
+  }
+]
+
+exe resolve:r, tool:r @get_day(day) = [
+  => {
+    ok: true,
+    day: @day
+  }
+]
+
+exe execute:w, tool:w @send_alpha(recipient, subject, body) = [
+  => {
+    ok: true,
+    recipient: @recipient,
+    subject: @subject,
+    body: @body
+  }
+]
+
+var tools @imported_tools = {
+  search_alpha: {
+    mlld: @search_alpha,
+    labels: ["resolve:r"],
+    description: "Search alpha by query and sender."
+  },
+  get_day: {
+    mlld: @get_day,
+    labels: ["resolve:r"],
+    description: "Get one day."
+  },
+  send_alpha: {
+    mlld: @send_alpha,
+    labels: ["execute:w", "tool:w"],
+    description: "Send alpha content."
+  }
+}
+
+export { @imported_tools }

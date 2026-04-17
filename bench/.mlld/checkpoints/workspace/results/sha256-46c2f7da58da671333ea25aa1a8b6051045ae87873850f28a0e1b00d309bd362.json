@@ -1,1 +1,0 @@
-{"version":1,"value":{"name":"todo_email_body","phase":"extract","purpose":"Extract the body of the resolved email to read the TODO actions requested by david.smith@bluesparrowtech.com","schema":"email_body","source":{"field":"body","handle":"r_email_msg_33","record":"email_msg","source":"resolved"}}}

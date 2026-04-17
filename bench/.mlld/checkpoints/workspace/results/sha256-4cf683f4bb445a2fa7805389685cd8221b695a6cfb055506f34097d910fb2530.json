@@ -1,1 +1,0 @@
-{"version":1,"value":{"direct":true,"expose":["event_id"],"kind":"write","mlld":{"language":null,"template":"","type":"command"},"operation":{"authorizable":true,"controlArgs":["event_id"],"payloadArgs":"","risk":["destructive:targeted"],"semantics":"Cancel a calendar event by id."}}}

@@ -1,44 +1,35 @@
 >> Step 5 execute flow, plus the control-arg firewall and selection-ref path.
 
 import { @rigBuild, @rigRun } from "../../index.mld"
-import { @records, @tools, @get_note, @append_note, @get_contacts, @send_email } from "../fixtures.mld"
+import { @records, @tools, @get_note, @append_note, @get_contacts, @send_email, @append_note_inputs, @send_email_inputs } from "../fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
->> Policy-bearing dispatch currently behaves best through a local
->> wrapper exe. The wrapper keeps the policy boundary on a caller-local
->> operation instead of on an imported tool bridge that can accumulate
->> unrelated labels.
 exe @runtime_append_note(note_id, content) = [
   => @append_note(@note_id, @content)
-] with { controlArgs: ["note_id"] }
+]
 
 exe @runtime_send_email(recipients, subject, body) = [
   => @send_email(@recipients, @subject, @body)
-] with { controlArgs: ["recipients"] }
+]
 
->> The local runtime collection mirrors the planner-facing catalog,
->> but adds the executable binding details that the dispatcher needs
->> at call time. Exposed arg order is the contract for rehydrating
->> planner-produced objects into tool calls. Execute policy validation
->> reads this live collection too, so write entries keep their auth
->> metadata here rather than relying on the plain planner catalog alone.
-var tools @runtimeToolsCollection = {
-  get_note: {
-    mlld: @get_note,
-    expose: ["note_id"]
-  },
+>> Keep one transparent surfaced collection here so policy build and
+>> runtime dispatch stay on the exact same catalog entries.
+var tools @executeTools = {
+  get_note: @tools.get_note,
   append_note: {
     mlld: @runtime_append_note,
-    authorizable: "role:planner",
-    expose: ["note_id", "content"],
-    controlArgs: ["note_id"]
+    inputs: @append_note_inputs,
+    labels: ["execute:w", "tool:w", "destructive:targeted"],
+    can_authorize: "role:planner",
+    description: "Append content to an existing note identified by id."
   },
-  get_contacts: { mlld: @get_contacts },
+  get_contacts: @tools.get_contacts,
   send_email: {
     mlld: @runtime_send_email,
-    authorizable: "role:planner",
-    expose: ["recipients", "subject", "body"],
-    controlArgs: ["recipients"]
+    inputs: @send_email_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send the same email body to one or more recipients."
   }
 }
 
@@ -47,8 +38,7 @@ var @successAgent = @rigBuild({
   defense: "defended",
   model: "stub",
   records: @records,
-  tools: @tools,
-  toolsCollection: @runtimeToolsCollection,
+  tools: @executeTools,
   overrides: {
     stub: {
       planner: [
@@ -95,8 +85,7 @@ var @firewallAgent = @rigBuild({
   defense: "defended",
   model: "stub",
   records: @records,
-  tools: @tools,
-  toolsCollection: @runtimeToolsCollection,
+  tools: @executeTools,
   overrides: {
     stub: {
       planner: [
@@ -144,8 +133,7 @@ var @selectionAgent = @rigBuild({
   defense: "defended",
   model: "stub",
   records: @records,
-  tools: @tools,
-  toolsCollection: @runtimeToolsCollection,
+  tools: @executeTools,
   overrides: {
     stub: {
       planner: [
@@ -218,7 +206,9 @@ var @c5 = @check("selection-terminal", @selectionTerminalOk, @selectionPretty)
 var @c6 = @check("selection-text", @selectionTextOk, @field(@selectionResult, "text"))
 var @c7 = @check("selection-log", @selectionLogOk, @selectionExecutionPretty)
 
-var @checks = [@c1, @c2, @c3, @c4, @c5, @c6, @c7]
+exe @allChecks() = [ => [@c1, @c2, @c3, @c4, @c5, @c6, @c7] ]
+
+var @checks = @allChecks()
 
 var @fails = for @check in @checks when @check.status == "FAIL" => @check
 

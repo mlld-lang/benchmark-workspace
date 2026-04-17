@@ -1,1 +1,0 @@
-{"version":1,"value":"```json\n{\n  \"status\": \"derived\",\n  \"schema_name\": \"inline-schema\",\n  \"name\": \"event_times\",\n  \"provenance\": \"derived\",\n  \"selection_refs\": [],\n  \"payload\": {\n    \"start_time\": \"2026-04-18 16:00\",\n    \"end_time\": \"2026-04-18 17:00\"\n  }\n}\n```"}

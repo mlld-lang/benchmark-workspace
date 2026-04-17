@@ -1,0 +1,14 @@
+[project]
+name = "mlld-clean-bench"
+version = "0.1.0"
+description = "AgentDojo benchmark runner"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "agentdojo>=0.1.35",
+    "mcp>=1.26.0",
+    "mlld-sdk",
+]
+
+[tool.uv.sources]
+mlld-sdk = { path = "../../mlld/sdk/python", editable = true }

@@ -1,0 +1,25 @@
+{
+  "lockfileVersion": 1,
+  "modules": {
+    "@mlld/claude": {
+      "version": "latest",
+      "resolved": "7dbf35be5331d9959eb73feaf93d3edb081b8bffd9ccd0c61eed6ca33c35b89a",
+      "source": "registry://@mlld/claude@3.3.3",
+      "integrity": "sha256:7dbf35be5331d9959eb73feaf93d3edb081b8bffd9ccd0c61eed6ca33c35b89a",
+      "fetchedAt": "2026-04-15T01:25:38.254Z",
+      "registryVersion": "3.3.3"
+    },
+    "@mlld/opencode": {
+      "version": "latest",
+      "resolved": "5e8bdfc096b1e1a07df35680fd0014cf6b730c9cfe0057e5bcddd0da4cf8cb53",
+      "source": "registry://@mlld/opencode@1.0.0",
+      "integrity": "sha256:5e8bdfc096b1e1a07df35680fd0014cf6b730c9cfe0057e5bcddd0da4cf8cb53",
+      "fetchedAt": "2026-04-15T01:25:38.529Z",
+      "registryVersion": "1.0.0"
+    }
+  },
+  "metadata": {
+    "createdAt": "2026-04-15T01:25:37.838Z",
+    "updatedAt": "2026-04-15T01:25:38.529Z"
+  }
+}

@@ -1,1 +1,0 @@
-{"version":1,"value":"```json\n{\n  \"status\": \"derived\",\n  \"schema_name\": \"networking_event_details\",\n  \"name\": \"networking_event_details\",\n  \"provenance\": \"derived\",\n  \"selection_refs\": [],\n  \"payload\": {\n    \"participants\": \"\",\n    \"summary\": \"\"\n  }\n}\n```"}

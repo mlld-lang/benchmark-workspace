@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"compose\",\n  \"sources\": [\"resolved.calendar_evt\", \"execution_log\"],\n  \"purpose\": \"Report the count of appointments on April 14th, 2026 (3) and summarize each based on available resolved fields (times, participants). Note that description fields were not returned by the calendar adapter.\"\n}"}

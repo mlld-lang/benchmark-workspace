@@ -141,7 +141,7 @@ send_email: {
     exactPayloadArgs: ["subject"],
     payloadRecord: @email_payload,
     risk: ["exfil:send", "comm:w"],
-    authorizable: true,
+    can_authorize: true,
     semantics: "Send an email. Recipients must be a resolved contact or verified known address."
   }
 }

@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import base64
+import importlib
 import json
 import re
 import signal
@@ -34,9 +35,15 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from agentdojo.agent_pipeline.tool_execution import tool_result_to_str
-from agentdojo.benchmark import get_suite
-from agentdojo.functions_runtime import FunctionsRuntime
+from pydantic import BaseModel
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
+if LOCAL_AGENTDOJO_SRC.exists():
+    sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
+
+from agentdojo.functions_runtime import FunctionReturnType, FunctionsRuntime
+from agentdojo.task_suite import get_suite
 from date_shift import REFERENCE_DATE, compute_offset
 from mcp import types
 from mcp.server import Server
@@ -70,6 +77,34 @@ def _prepare_for_yaml(data: Any) -> Any:
 
 def _yaml_dump(data: Any) -> str:
     return yaml.safe_dump(_prepare_for_yaml(data), default_flow_style=False)
+
+
+def tool_result_to_str(tool_result: FunctionReturnType, dump_fn=_yaml_dump) -> str:
+    """Format an AgentDojo tool result using the local YAML dumper."""
+    if isinstance(tool_result, BaseModel):
+        return dump_fn(tool_result.model_dump()).strip()
+
+    if isinstance(tool_result, list):
+        rendered: list[Any] = []
+        for item in tool_result:
+            if type(item) in [str, int, float, bool] or item is None:
+                rendered.append(item)
+            elif isinstance(item, BaseModel):
+                rendered.append(item.model_dump())
+            else:
+                raise TypeError(f"Not valid type for item tool result: {type(item)}")
+        return dump_fn(rendered).strip()
+
+    if isinstance(tool_result, dict):
+        return dump_fn(tool_result).strip()
+
+    return str(tool_result)
+
+
+def _resolve_type(qualified_name: str) -> type:
+    module_path, class_name = qualified_name.rsplit(".", 1)
+    module = importlib.import_module(module_path)
+    return getattr(module, class_name)
 
 
 def _coerce_tool_args(runtime: FunctionsRuntime, tool_name: str, tool_args: dict) -> dict:
@@ -370,54 +405,70 @@ async def main():
         sys.exit(1)
 
     config = json.loads(base64.b64decode(sys.argv[1]))
-    env_name = config["env_name"]
     benchmark_version = config.get("benchmark_version", "v1.1.1")
     state_file = config.get("state_file")
+    suite_name = config.get("suite_name") or config.get("env_name")
 
     sys.path.insert(0, str(Path(__file__).parent))
+    get_shifted_suite = None
     try:
-        from date_shift import get_shifted_suite
-        suite = get_shifted_suite(benchmark_version, env_name)
+        from date_shift import get_shifted_suite as _get_shifted_suite
+        get_shifted_suite = _get_shifted_suite
     except ImportError:
-        suite = get_suite(benchmark_version, env_name)
+        pass
 
-    task_id = config.get("task_id")
-    attack_name = config.get("attack")
-    injection_task_id = config.get("injection_task_id")
-
-    task = suite.user_tasks.get(task_id)
-    if task is None:
-        print(f"Task {task_id} not found", file=sys.stderr)
-        sys.exit(1)
-
-    runtime = FunctionsRuntime(suite.tools)
-
-    env_type = suite.environment_type
-
+    suite = None
+    runtime = None
+    env_type = None
     env = None
-    if state_file:
-        state_path = Path(state_file)
-        if state_path.exists() and state_path.stat().st_size > 0:
-            try:
-                env = env_type.model_validate_json(state_path.read_text())
-            except Exception as e:
-                print(f"Failed to load seeded state from {state_file}: {e}", file=sys.stderr)
 
-    if env is None:
-        if attack_name and injection_task_id:
-            from agentdojo.attacks import load_attack
+    if "env_json" in config:
+        if not suite_name:
+            print("suite_name required when using env_json mode", file=sys.stderr)
+            sys.exit(1)
+        suite = get_shifted_suite(benchmark_version, suite_name) if get_shifted_suite else get_suite(benchmark_version, suite_name)
+        runtime = FunctionsRuntime(suite.tools)
+        env_type = _resolve_type(config["env_type"])
+        env = env_type.model_validate_json(config["env_json"])
+    else:
+        env_name = config["env_name"]
+        suite = get_shifted_suite(benchmark_version, env_name) if get_shifted_suite else get_suite(benchmark_version, env_name)
 
-            class _FakeAgent:
-                name = "mcp-server"
-            attack = load_attack(attack_name, suite, _FakeAgent())
-            injection_task = suite.injection_tasks.get(injection_task_id)
-            if injection_task:
-                injections = attack.attack(task, injection_task)
+        task_id = config.get("task_id")
+        attack_name = config.get("attack")
+        injection_task_id = config.get("injection_task_id")
+
+        task = suite.user_tasks.get(task_id)
+        if task is None:
+            print(f"Task {task_id} not found", file=sys.stderr)
+            sys.exit(1)
+
+        runtime = FunctionsRuntime(suite.tools)
+        env_type = suite.environment_type
+
+        if state_file:
+            state_path = Path(state_file)
+            if state_path.exists() and state_path.stat().st_size > 0:
+                try:
+                    env = env_type.model_validate_json(state_path.read_text())
+                except Exception as e:
+                    print(f"Failed to load seeded state from {state_file}: {e}", file=sys.stderr)
+
+        if env is None:
+            if attack_name and injection_task_id:
+                from agentdojo.attacks import load_attack
+
+                class _FakeAgent:
+                    name = "mcp-server"
+                attack = load_attack(attack_name, suite, _FakeAgent())
+                injection_task = suite.injection_tasks.get(injection_task_id)
+                if injection_task:
+                    injections = attack.attack(task, injection_task)
+                else:
+                    injections = {}
+                env = suite.load_and_inject_default_environment(injections)
             else:
-                injections = {}
-            env = suite.load_and_inject_default_environment(injections)
-        else:
-            env = suite.load_and_inject_default_environment({})
+                env = suite.load_and_inject_default_environment({})
 
     log_file = config.get("log_file")
     phase_state_file = config.get("phase_state_file")

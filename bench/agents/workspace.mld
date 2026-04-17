@@ -1,303 +1,28 @@
 >> Workspace benchmark entrypoint on rig v2.
 >>
->> The agent file stays intentionally thin. All workflow, security, and
->> lifecycle behavior lives in rig; the suite only supplies its record
->> catalog, tool catalog, and the per-run payload values the Python host
->> passes in.
+>> Keep the suite surface thin: one authored domain catalog in, phase
+>> loop out. Routing, policy synthesis, and live dispatch all run
+>> directly from the same `@tools` catalog.
 
 import { @synthesizedPolicy, @runPhaseLoop } from "../../rig/orchestration.mld"
-import { @mergePlannerCatalog } from "../../rig/tooling.mld"
+import { @routeToolCatalog } from "../../rig/tooling.mld"
 import { @records } from "../domains/workspace/records.mld"
-import tools from mcp "tools" as @workspaceMcp
-import {
-  @tools,
-  @get_unread_emails,
-  @get_sent_emails,
-  @get_received_emails,
-  @get_draft_emails,
-  @search_emails,
-  @search_emails_any_sender,
-  @get_email_by_id,
-  @search_contacts_by_name,
-  @search_contacts_by_email,
-  @get_current_day,
-  @get_current_datetime,
-  @search_calendar_events,
-  @get_day_calendar_events,
-  @search_files_by_filename,
-  @list_files,
-  @search_files,
-  @get_file_by_id,
-  @send_email,
-  @delete_email,
-  @create_calendar_event,
-  @cancel_calendar_event,
-  @reschedule_calendar_event,
-  @add_calendar_event_participants,
-  @append_to_file,
-  @create_file,
-  @delete_file,
-  @share_file
-} from "../domains/workspace/tools.mld"
-
+import { @tools } from "../domains/workspace/tools.mld"
 import { @query, @model } from @payload
 
 var @defense = @payload.defense ?? "defended"
-
->> Debug-only startup markers. The workspace entrypoint does a fair
->> amount of catalog assembly before the phase loop starts, and these
->> markers make it obvious which top-level step is hot without changing
->> the runtime behavior of normal benchmark runs.
-exe @startupDebug(label) = [
-  if !(@payload.log_llm_calls ?? false) [ => null ]
-  run sh {
-    printf '[workspace-agent] %s\n' "$label" >> /tmp/workspace-agent-debug.log
-    printf '[workspace-agent] %s\n' "$label" >&2
-  }
-  => null
-]
-@startupDebug("startupDebug")
-
->> AgentDojo surfaces several workspace ids as numeric scalars even
->> though the tool bodies and MCP adapter schemas ultimately expect
->> strings. The planner/runtime catalog remains typed by the domain
->> tools, but the live dispatch bridge benefits from a local shim: bind
->> the named args into an untyped local exe first, normalize id-like
->> params once, then forward them to the imported tool body.
-exe @runtimeId(inputValue) = js {
-  if (inputValue == null) return "";
-  return String(inputValue);
-}
-
-exe @runtime_get_email_by_id(email_id) = [
-  => @workspaceMcp.getEmailById(@runtimeId(@email_id))
-]
-
-exe @runtime_get_file_by_id(file_id) = [
-  => @workspaceMcp.getFileById(@runtimeId(@file_id))
-]
-
-exe @runtime_delete_email(email_id) = [
-  => @workspaceMcp.deleteEmail(@runtimeId(@email_id))
-]
-
-exe @runtime_cancel_calendar_event(event_id) = [
-  => @workspaceMcp.cancelCalendarEvent(@runtimeId(@event_id))
-]
-
-exe @runtime_reschedule_calendar_event(event_id, new_start_time, new_end_time) = [
-  >> Preserve AgentDojo's `null` default for `new_end_time` so the suite can
-  >> keep the original duration when the planner omits the field.
-  let @endTimeValue = @exists(@new_end_time) ? @new_end_time : null
-  => @workspaceMcp.rescheduleCalendarEvent(@runtimeId(@event_id), @new_start_time, @endTimeValue)
-]
-
-exe @runtime_add_calendar_event_participants(participants, event_id) = [
-  => @workspaceMcp.addCalendarEventParticipants(@participants, @runtimeId(@event_id))
-]
-
-exe @runtime_append_to_file(file_id, content) = [
-  => @workspaceMcp.appendToFile(@runtimeId(@file_id), @content)
-]
-
-exe @runtime_delete_file(file_id) = [
-  => @workspaceMcp.deleteFile(@runtimeId(@file_id))
-]
-
-exe @runtime_share_file(email, file_id, permission) = [
-  => @workspaceMcp.shareFile(@email, @runtimeId(@file_id), @permission)
-]
-
->> The local `var tools` bridge keeps mlld's named-arg dispatch behavior
->> in the same file that invokes the phase loop. Imported collection
->> objects can lose that call binding even when the underlying exe refs
->> survive individually.
->> `var tools` intentionally strips unknown entry metadata. Keep a small
->> raw sidecar for wrappers that need runtime-only dispatch hints such as
->> `direct: true`; rig reads that sidecar when choosing between the
->> collection bridge and the underlying adapter executable.
->> Single-id read wrappers are the sharpest edge in AgentDojo's
->> workspace adapter: checkpoint restores can surface numeric ids, and
->> the generic collection binder may validate that named arg object
->> before the local shim exe gets a chance to stringify it. Mark these
->> as direct runtime dispatch so rig calls the wrapper exe itself.
-var @runtimeToolOverrides = {
-  get_email_by_id: {
-    mlld: @runtime_get_email_by_id,
-    expose: ["email_id"],
-    direct: true
-  },
-  get_file_by_id: {
-    mlld: @runtime_get_file_by_id,
-    expose: ["file_id"],
-    direct: true
-  },
-  delete_email: {
-    mlld: @runtime_delete_email,
-    expose: ["email_id"],
-    direct: true
-  },
-  cancel_calendar_event: {
-    mlld: @runtime_cancel_calendar_event,
-    expose: ["event_id"],
-    direct: true
-  },
-  delete_file: {
-    mlld: @runtime_delete_file,
-    expose: ["file_id"],
-    direct: true
-  }
-}
-@startupDebug("runtimeToolOverrides")
-
->> The planner-facing catalog carries the richer `inputs` metadata. The
->> local `var tools` bridge stays in the older runtime-binder shape:
->> explicit `expose`/`optional` keys plus write auth metadata. mlld does
->> not currently allow `inputs` to coexist with those binder fields on a
->> `var tools` entry.
-var tools @runtimeToolsCollection = {
-  get_unread_emails: { mlld: @get_unread_emails },
-  get_sent_emails: { mlld: @get_sent_emails },
-  get_received_emails: { mlld: @get_received_emails },
-  get_draft_emails: { mlld: @get_draft_emails },
-  search_emails: {
-    mlld: @search_emails,
-    expose: ["query", "sender"],
-    optional: ["sender"]
-  },
-  search_emails_any_sender: {
-    mlld: @search_emails_any_sender,
-    expose: ["query"]
-  },
-  get_email_by_id: {
-    mlld: @runtime_get_email_by_id,
-    expose: ["email_id"]
-  },
-  search_contacts_by_name: {
-    mlld: @search_contacts_by_name,
-    expose: ["query"]
-  },
-  search_contacts_by_email: {
-    mlld: @search_contacts_by_email,
-    expose: ["query"]
-  },
-  get_current_day: { mlld: @get_current_day },
-  get_current_datetime: { mlld: @get_current_datetime },
-  search_calendar_events: {
-    mlld: @search_calendar_events,
-    expose: ["query", "date"],
-    optional: ["date"]
-  },
-  get_day_calendar_events: {
-    mlld: @get_day_calendar_events,
-    expose: ["day"]
-  },
-  search_files_by_filename: {
-    mlld: @search_files_by_filename,
-    expose: ["filename"]
-  },
-  list_files: { mlld: @list_files },
-  search_files: {
-    mlld: @search_files,
-    expose: ["query"]
-  },
-  get_file_by_id: {
-    mlld: @runtime_get_file_by_id,
-    expose: ["file_id"]
-  },
-  send_email: {
-    mlld: @send_email,
-    authorizable: "role:planner",
-    expose: ["recipients", "subject", "body", "attachments", "cc", "bcc"],
-    optional: ["attachments", "cc", "bcc"],
-    controlArgs: ["recipients", "cc", "bcc"]
-  },
-  delete_email: {
-    mlld: @runtime_delete_email,
-    authorizable: "role:planner",
-    expose: ["email_id"],
-    controlArgs: ["email_id"]
-  },
-  create_calendar_event: {
-    mlld: @create_calendar_event,
-    authorizable: "role:planner",
-    expose: ["title", "start_time", "end_time", "description", "participants", "location"],
-    optional: ["description", "location", "participants"],
-    controlArgs: ["participants"]
-  },
-  cancel_calendar_event: {
-    mlld: @runtime_cancel_calendar_event,
-    authorizable: "role:planner",
-    expose: ["event_id"],
-    controlArgs: ["event_id"]
-  },
-  reschedule_calendar_event: {
-    mlld: @runtime_reschedule_calendar_event,
-    authorizable: "role:planner",
-    expose: ["event_id", "new_start_time", "new_end_time"],
-    optional: ["new_end_time"],
-    controlArgs: ["event_id"]
-  },
-  add_calendar_event_participants: {
-    mlld: @runtime_add_calendar_event_participants,
-    authorizable: "role:planner",
-    expose: ["participants", "event_id"],
-    controlArgs: ["participants", "event_id"]
-  },
-  append_to_file: {
-    mlld: @runtime_append_to_file,
-    authorizable: "role:planner",
-    expose: ["file_id", "content"],
-    controlArgs: ["file_id"]
-  },
-  create_file: {
-    mlld: @create_file,
-    authorizable: "role:planner",
-    expose: ["filename", "content"],
-    controlArgs: []
-  },
-  delete_file: {
-    mlld: @runtime_delete_file,
-    authorizable: "role:planner",
-    expose: ["file_id"],
-    controlArgs: ["file_id"]
-  },
-  share_file: {
-    mlld: @runtime_share_file,
-    authorizable: "role:planner",
-    expose: ["email", "file_id", "permission"],
-    controlArgs: ["email", "file_id"]
-  }
-}
-@startupDebug("runtimeToolsCollection")
-
-var @plannerTools = @mergePlannerCatalog(
-  @mergePlannerCatalog(@tools, @runtimeToolsCollection),
-  @runtimeToolOverrides
-)
-@startupDebug("plannerTools")
-
->> Rig's policy synthesis and planner-visible tool surface should both
->> operate on the merged planner catalog, not the executable-bearing raw
->> domain collection. That keeps bench entrypoints aligned with
->> `@validateConfig` and avoids re-walking the heavy runtime tool graph.
 var @basePolicy = when [
-  @defense == "defended" => @synthesizedPolicy(@plannerTools, null)
+  @defense == "defended" => @synthesizedPolicy(@tools, null)
   * => null
 ]
-@startupDebug("basePolicy")
 
->> Build the runtime agent handle locally. Imported exe return values can
->> drop executable-bearing members like records and tool collections, so
->> the benchmark entrypoint assembles the validated handle shape here and
->> then passes it straight into the phase loop.
 var @agent = {
   suite: "workspace",
   defense: @defense,
   records: @records,
-  tools: @plannerTools,
-  toolsCollection: @runtimeToolsCollection,
-  runtimeTools: @runtimeToolOverrides,
+  tools: @tools,
+  routedTools: @routeToolCatalog(@tools),
+  runtimeTools: null,
   model: @model,
   harness: @payload.harness ?? null,
   basePolicy: @basePolicy,
@@ -309,11 +34,8 @@ var @agent = {
   logLlmCalls: @payload.log_llm_calls ?? false,
   maxIterations: 40
 }
-@startupDebug("agent")
 
-@startupDebug("runPhaseLoop:start")
 var @result = @runPhaseLoop(@agent, @query)
-@startupDebug("runPhaseLoop:end")
 var @plannerIterations = for @event in @result.phase_events when @event.event == "planner_iteration" => @event
 
 => {

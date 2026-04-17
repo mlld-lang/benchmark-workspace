@@ -1,24 +1,14 @@
 >> Step 2 resolve flow: resolve -> compose over a synthetic contact list.
 
 import { @rigBuild, @rigRun } from "../../index.mld"
-import { @records, @tools, @get_contacts, @get_note } from "../fixtures.mld"
+import { @records, @tools } from "../fixtures.mld"
 import { @check, @field, @firstByPhase, @mktempPath, @readFile, @removeFile } from "../helpers.mld"
 
->> The runtime tool bridge for imported read tools is keyed off the
->> explicit dispatch surface. Keep the control arg spelled out here so
->> this flow stays focused on repeated resolve-state retention.
-var tools @runtimeToolsCollection = {
-  get_contacts: {
-    mlld: @get_contacts,
-    labels: ["resolve:r"],
-    expose: []
-  },
-  get_note: {
-    mlld: @get_note,
-    labels: ["resolve:r"],
-    expose: ["note_id"],
-    controlArgs: ["note_id"]
-  }
+>> Keep the flow scoped to the two read tools it actually exercises, but
+>> keep the runtime collection minimal and object-shaped.
+var tools @resolveTools = {
+  get_contacts: { mlld: @tools.get_contacts.mlld },
+  get_note: { mlld: @tools.get_note.mlld }
 }
 
 var @agent = @rigBuild({
@@ -27,7 +17,7 @@ var @agent = @rigBuild({
   model: "stub",
   records: @records,
   tools: @tools,
-  toolsCollection: @runtimeToolsCollection,
+  toolsCollection: @resolveTools,
   overrides: {
     stub: {
       planner: [
@@ -78,7 +68,7 @@ var @repeatResolveAgent = @rigBuild({
   model: "stub",
   records: @records,
   tools: @tools,
-  toolsCollection: @runtimeToolsCollection,
+  toolsCollection: @resolveTools,
   llmCallLogFile: @repeatResolveLlmLogFile,
   logLlmCalls: true,
   overrides: {
@@ -133,7 +123,9 @@ var @c3 = @check("resolve-log", @resolveLogOk, @executionPretty)
 var @c4 = @check("planner-steps", @plannerStepsOk, @plannerIterationsPretty)
 var @c5 = @check("repeat-resolve-same-family", @repeatResolveExecutionOk && @repeatResolvePromptOk, @repeatResolveLlmLog)
 
-var @checks = [@c1, @c2, @c3, @c4, @c5]
+exe @allChecks() = [ => [@c1, @c2, @c3, @c4, @c5] ]
+
+var @checks = @allChecks()
 
 var @fails = for @check in @checks when @check.status == "FAIL" => @check
 

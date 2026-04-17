@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_emails_any_sender\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"family reunion\" }\n  },\n  \"purpose\": \"Find emails mentioning the family reunion to determine its date and time\"\n}"}

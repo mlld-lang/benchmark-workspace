@@ -1,1 +1,0 @@
-{"version":1,"value":{"args":{"query":"TODOs for the week","sender":{"source":"known","value":"david.smith@bluesparrowtech.com"}},"phase":"resolve","purpose":"Find the email from david.smith@bluesparrowtech.com with subject 'TODOs for the week' to read its instructions","tool":"search_emails"}}

@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_files\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"April 25th\" }\n  },\n  \"purpose\": \"Try a different search query using the date from the task text, which may appear in a file about the event\"\n}"}

@@ -43,13 +43,17 @@ var @phaseLogOk = @phaseLog.includes("\"event\":\"planner_iteration\"") &&
   @phaseLog.includes("\"event\":\"phase_end\"")
 var @phaseStateOk = @phaseState.includes("\"phase\":\"between\"")
 
-var @checks = [
-  @check("terminal", @resultTerminal == "complete", @resultPretty),
-  @check("text", @resultText == "No tools were available.", @resultText),
-  @check("planner-iterations", @plannerIterations.length == 1, @debugPretty),
-  @check("phase-log-events", @phaseLogOk, @phaseLog),
-  @check("phase-state-between", @phaseStateOk, @phaseState)
+exe @allChecks() = [
+  => [
+    @check("terminal", @resultTerminal == "complete", @resultPretty),
+    @check("text", @resultText == "No tools were available.", @resultText),
+    @check("planner-iterations", @plannerIterations.length == 1, @debugPretty),
+    @check("phase-log-events", @phaseLogOk, @phaseLog),
+    @check("phase-state-between", @phaseStateOk, @phaseState)
+  ]
 ]
+
+var @checks = @allChecks()
 
 var @fails = for @check in @checks when @check.status == "FAIL" => @check
 

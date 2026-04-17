@@ -1,13 +1,13 @@
 >> Regression flow for state retention across a later resolve step.
 
 import { @rigBuild, @rigRun } from "../../index.mld"
-import { @records, @tools, @get_message, @get_note, @get_webpage } from "../fixtures.mld"
+import { @records, @tools } from "../fixtures.mld"
 import { @check, @field, @mktempPath, @readFile, @removeFile } from "../helpers.mld"
 
-var tools @runtimeToolsCollection = {
-  get_message: { mlld: @get_message, expose: ["message_id"] },
-  get_note: { mlld: @get_note, expose: ["note_id"] },
-  get_webpage: { mlld: @get_webpage, expose: ["url"] }
+var tools @extractTools = {
+  get_message: { mlld: @tools.get_message.mlld },
+  get_note: { mlld: @tools.get_note.mlld },
+  get_webpage: { mlld: @tools.get_webpage.mlld }
 }
 
 var @llmLogFile = @mktempPath("rig-llm-log", ".jsonl")
@@ -54,7 +54,7 @@ var @agent = @rigBuild({
   model: "stub",
   records: @records,
   tools: @tools,
-  toolsCollection: @runtimeToolsCollection,
+  toolsCollection: @extractTools,
   llmCallLogFile: @llmLogFile,
   logLlmCalls: true,
   overrides: {

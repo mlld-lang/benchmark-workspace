@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_day_calendar_events\",\n  \"args\": {\n    \"day\": { \"source\": \"known\", \"value\": \"2026-04-18\" }\n  },\n  \"purpose\": \"Check if 10:00 on 2026-04-18 is already occupied to decide between 10:00 and 16:00 start time\"\n}"}

@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"compose\",\n  \"sources\": [\"resolved.*\", \"derived.*\", \"extracted.*\", \"execution_log\"],\n  \"purpose\": \"Confirm to the user that they are free at 12:00 on 2026-04-18 and that the Lunch event with Sarah has been created\"\n}"}

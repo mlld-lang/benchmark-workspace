@@ -5,22 +5,9 @@
 >> lives in rig.
 
 import { @synthesizedPolicy, @runPhaseLoop } from "../../rig/orchestration.mld"
-import { @mergePlannerCatalog, @routeToolCatalog } from "../../rig/tooling.mld"
+import { @routeToolCatalog } from "../../rig/tooling.mld"
 import { @records } from "../domains/banking/records.mld"
-import {
-  @tools,
-  @get_iban,
-  @get_balance,
-  @get_user_info,
-  @get_most_recent_transactions,
-  @get_scheduled_transactions,
-  @read_file,
-  @send_money,
-  @schedule_transaction,
-  @update_scheduled_transaction,
-  @update_user_info,
-  @update_password
-} from "../domains/banking/tools.mld"
+import { @tools } from "../domains/banking/tools.mld"
 
 import { @query, @model } from @payload
 
@@ -29,57 +16,13 @@ var @basePolicy = when [
   @defense == "defended" => @synthesizedPolicy(@tools, null)
   * => null
 ]
-
-var tools @runtimeToolsCollection = {
-  get_iban: { mlld: @get_iban },
-  get_balance: { mlld: @get_balance },
-  get_user_info: { mlld: @get_user_info },
-  get_most_recent_transactions: {
-    mlld: @get_most_recent_transactions,
-    expose: ["n"]
-  },
-  get_scheduled_transactions: { mlld: @get_scheduled_transactions },
-  read_file: {
-    mlld: @read_file,
-    expose: ["file_path"]
-  },
-  send_money: {
-    mlld: @send_money,
-    expose: ["recipient", "amount", "subject", "date"]
-  },
-  schedule_transaction: {
-    mlld: @schedule_transaction,
-    expose: ["recipient", "amount", "subject", "date", "recurring"]
-  },
-  update_scheduled_transaction: {
-    mlld: @update_scheduled_transaction,
-    expose: ["id", "recipient", "amount", "subject", "date", "recurring"],
-    optional: ["amount", "subject", "date", "recurring"]
-  },
-  update_user_info: {
-    mlld: @update_user_info,
-    expose: ["first_name", "last_name", "street", "city"],
-    optional: ["first_name", "last_name", "street", "city"]
-  },
-  update_password: {
-    mlld: @update_password,
-    expose: ["password"]
-  }
-}
-
-var @plannerTools = @mergePlannerCatalog(@tools, @runtimeToolsCollection)
-
->> Build the runtime agent handle locally. Imported exe return values can
->> lose executable-bearing members like records and tool collections, so
->> the suite entrypoint assembles the final handle shape here before it
->> enters the phase loop.
 var @agent = {
   suite: "banking",
   defense: @defense,
   records: @records,
   tools: @tools,
-  routedTools: @routeToolCatalog(@plannerTools),
-  toolsCollection: @runtimeToolsCollection,
+  routedTools: @routeToolCatalog(@tools),
+  runtimeTools: null,
   model: @model,
   harness: @payload.harness ?? null,
   basePolicy: @basePolicy,

@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"search_calendar_events\",\n  \"args\": {\n    \"query\": { \"source\": \"known\", \"value\": \"April 14th, 2026\" }\n  },\n  \"purpose\": \"Search calendar events using the verbatim date text from the task, since the formatted YYYY-MM-DD date cannot be used as a known value\"\n}"}

@@ -1,8 +1,8 @@
 >> Workspace adapter regression tests.
 >>
->> These stay intentionally small and local: they pin the boundary
->> helpers that translate planner-facing literals into AgentDojo's
->> stricter runtime shapes, without requiring a live MCP server.
+>> Pin the cleaned-up suite shape: one authored domain catalog, one thin
+>> agent that routes and dispatches through that same catalog, and no
+>> runtime sidecar rebuilds.
 
 import { @isoDate, @asString } from "../domains/workspace/bridge.mld"
 
@@ -22,82 +22,119 @@ exe @check(id, ok, detail) = [
 var @normalizedNaturalDate = @isoDate("April 18th, 2026")
 var @normalizedIsoDate = @isoDate("2026-04-18")
 var @normalizedNumericId = @asString(33)
+
 var @workspaceRecordsValidated = run sh {
-  mlld validate /Users/adam/mlld/clean/bench/domains/workspace/records.mld >/dev/null
-  echo ok
-}
-var @workspaceToolsValidated = run sh {
-  mlld validate /Users/adam/mlld/clean/bench/domains/workspace/tools.mld >/dev/null
-  echo ok
+  node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs validate /Users/adam/mlld/clean/bench/domains/workspace/records.mld >/dev/null && echo ok
 }
 var @workspaceAgentValidated = run sh {
-  mlld validate /Users/adam/mlld/clean/bench/agents/workspace.mld >/dev/null
-  echo ok
+  node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs validate /Users/adam/mlld/clean/bench/agents/workspace.mld >/dev/null && echo ok
+}
+
+var @workspaceToolsText = run sh {
+  cat /Users/adam/mlld/clean/bench/domains/workspace/tools.mld
+}
+var @workspaceAgentText = run sh {
+  cat /Users/adam/mlld/clean/bench/agents/workspace.mld
+}
+var @workspaceRecordsText = run sh {
+  cat /Users/adam/mlld/clean/bench/domains/workspace/records.mld
+}
+
+var @searchEmailsCatalogBlock = run sh {
+  sed -n '/  search_emails: {/,/  },/p' /Users/adam/mlld/clean/bench/domains/workspace/tools.mld
+}
+var @getEmailByIdCatalogBlock = run sh {
+  sed -n '/  get_email_by_id: {/,/  },/p' /Users/adam/mlld/clean/bench/domains/workspace/tools.mld
 }
 var @createCalendarCatalogBlock = run sh {
   sed -n '/  create_calendar_event: {/,/  },/p' /Users/adam/mlld/clean/bench/domains/workspace/tools.mld
 }
-var @agentSendEmailBlock = run sh {
-  sed -n '/  send_email: {/,/  },/p' /Users/adam/mlld/clean/bench/agents/workspace.mld
+var @rescheduleCalendarCatalogBlock = run sh {
+  sed -n '/  reschedule_calendar_event: {/,/  },/p' /Users/adam/mlld/clean/bench/domains/workspace/tools.mld
 }
-var @agentCreateCalendarBlock = run sh {
-  sed -n '/  create_calendar_event: {/,/  },/p' /Users/adam/mlld/clean/bench/agents/workspace.mld
+var @shareFileCatalogBlock = run sh {
+  sed -n '/  share_file: {/,/  },/p' /Users/adam/mlld/clean/bench/domains/workspace/tools.mld
 }
-var @agentCreateFileBlock = run sh {
-  sed -n '/  create_file: {/,/  },/p' /Users/adam/mlld/clean/bench/agents/workspace.mld
-}
-var @calendarInputRecordOk = @workspaceRecordsValidated == "ok" &&
-  @workspaceToolsValidated == "ok" &&
-  @createCalendarCatalogBlock.includes('inputs: @create_calendar_event_inputs') &&
-  @createCalendarCatalogBlock.includes('labels: ["execute:w", "calendar:w", "exfil:send"]') &&
-  @createCalendarCatalogBlock.includes('authorizable: "role:planner"') &&
-  @createCalendarCatalogBlock.includes('description: "Create a calendar event.') &&
-  @createCalendarCatalogBlock.includes('instructions: "`start_time` and `end_time` must use YYYY-MM-DD HH:MM."') &&
-  !@createCalendarCatalogBlock.includes('operation: {')
-var @calendarInputRecordDetail = @createCalendarCatalogBlock
-var @agentRuntimeWriteAuthOk = @workspaceAgentValidated == "ok" &&
-  @agentSendEmailBlock.includes('authorizable: "role:planner"') &&
-  @agentSendEmailBlock.includes('controlArgs: ["recipients", "cc", "bcc"]') &&
-  @agentCreateCalendarBlock.includes('authorizable: "role:planner"') &&
-  @agentCreateCalendarBlock.includes('controlArgs: ["participants"]')
-var @agentRuntimeWriteAuthDetail = `send_email:\n@agentSendEmailBlock\ncreate_calendar_event:\n@agentCreateCalendarBlock`
-var @agentZeroControlWriteOk = @workspaceAgentValidated == "ok" &&
-  @agentCreateFileBlock.includes('authorizable: "role:planner"') &&
-  @agentCreateFileBlock.includes('controlArgs: []')
-var @agentZeroControlWriteDetail = @agentCreateFileBlock
 
-var @checks = [
-  @check(
-    "workspace-iso-date-natural-language",
-    @normalizedNaturalDate == "2026-04-18",
-    `got=@normalizedNaturalDate`
-  ),
-  @check(
-    "workspace-iso-date-pass-through",
-    @normalizedIsoDate == "2026-04-18",
-    `got=@normalizedIsoDate`
-  ),
-  @check(
-    "workspace-id-stringification",
-    @normalizedNumericId == "33",
-    `got=@normalizedNumericId`
-  ),
-  @check(
-    "workspace-create-calendar-input-record",
-    @calendarInputRecordOk,
-    @calendarInputRecordDetail
-  ),
-  @check(
-    "workspace-agent-runtime-write-auth",
-    @agentRuntimeWriteAuthOk,
-    @agentRuntimeWriteAuthDetail
-  ),
-  @check(
-    "workspace-agent-runtime-zero-control-write",
-    @agentZeroControlWriteOk,
-    @agentZeroControlWriteDetail
-  )
+var @calendarInputRecordOk =
+  @workspaceRecordsValidated == "ok" &&
+  @workspaceRecordsText.includes('optional_benign: [cc, bcc]') &&
+  @workspaceRecordsText.includes('optional_benign: [participants]') &&
+  @workspaceRecordsText.includes('update: [new_start_time, new_end_time]') &&
+  @createCalendarCatalogBlock.includes('inputs: @create_calendar_event_inputs') &&
+  @createCalendarCatalogBlock.includes('labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"]') &&
+  @createCalendarCatalogBlock.includes('can_authorize: "role:planner"') &&
+  !@createCalendarCatalogBlock.includes('operation: {') &&
+  @rescheduleCalendarCatalogBlock.includes('inputs: @calendar_reschedule_inputs') &&
+  @rescheduleCalendarCatalogBlock.includes('labels: ["execute:w", "tool:w", "calendar:w", "update:w"]') &&
+  !@rescheduleCalendarCatalogBlock.includes('operation: {') &&
+  @shareFileCatalogBlock.includes('inputs: @share_file_inputs') &&
+  @shareFileCatalogBlock.includes('labels: ["execute:w", "tool:w", "exfil:send", "comm:w"]') &&
+  !@shareFileCatalogBlock.includes('operation: {')
+var @calendarInputRecordDetail = `records=@workspaceRecordsText\n\ncreate=@createCalendarCatalogBlock\n\nreschedule=@rescheduleCalendarCatalogBlock\n\nshare=@shareFileCatalogBlock`
+
+var @workspaceSingleCatalogOk =
+  @workspaceToolsText.includes('var tools @tools = {') &&
+  !@workspaceToolsText.includes('var tools @toolsCollection = {') &&
+  @workspaceToolsText.includes('mlld: @search_emails') &&
+  @workspaceToolsText.includes('mlld: @get_email_by_id') &&
+  @workspaceToolsText.includes('mlld: @get_current_day') &&
+  @workspaceToolsText.includes('mlld: @get_file_by_id') &&
+  !@workspaceToolsText.includes('kind: "read"') &&
+  !@workspaceToolsText.includes('kind: "write"') &&
+  !@workspaceToolsText.includes('semantics:') &&
+  !@workspaceToolsText.includes('expose:') &&
+  !@workspaceToolsText.includes('optional:')
+var @workspaceSingleCatalogDetail = @workspaceToolsText
+
+var @workspaceThinAgentOk =
+  @workspaceAgentValidated == "ok" &&
+  @workspaceAgentText.includes('tools: @tools') &&
+  @workspaceAgentText.includes('routedTools: @routeToolCatalog(@tools)') &&
+  !@workspaceAgentText.includes('toolsCollection: @toolsCollection') &&
+  @workspaceAgentText.includes('runtimeTools: null') &&
+  !@workspaceAgentText.includes('@mergePlannerCatalog') &&
+  !@workspaceAgentText.includes('@runtimeToolOverrides') &&
+  !@workspaceAgentText.includes('@workspaceMcp') &&
+  !@workspaceAgentText.includes('exe @runtime_')
+var @workspaceThinAgentDetail = @workspaceAgentText
+
+exe @allChecks() = [
+  => [
+    @check(
+      "workspace-iso-date-natural-language",
+      @normalizedNaturalDate == "2026-04-18",
+      `got=@normalizedNaturalDate`
+    ),
+    @check(
+      "workspace-iso-date-pass-through",
+      @normalizedIsoDate == "2026-04-18",
+      `got=@normalizedIsoDate`
+    ),
+    @check(
+      "workspace-id-stringification",
+      @normalizedNumericId == "33",
+      `got=@normalizedNumericId`
+    ),
+    @check(
+      "workspace-create-calendar-input-record",
+      @calendarInputRecordOk,
+      @calendarInputRecordDetail
+    ),
+    @check(
+      "BENCH-CAT-1",
+      @workspaceSingleCatalogOk,
+      @workspaceSingleCatalogDetail
+    ),
+    @check(
+      "workspace-thin-agent",
+      @workspaceThinAgentOk,
+      @workspaceThinAgentDetail
+    )
+  ]
 ]
+
+var @checks = @allChecks()
 
 var @passes = for @check in @checks when @check.status == "PASS" => @check
 var @fails = for @check in @checks when @check.status == "FAIL" => @check

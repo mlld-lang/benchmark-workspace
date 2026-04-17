@@ -1,1 +1,0 @@
-{"version":1,"value":{"kind":"named","modes":{"role:planner":[{"field":"id_","kind":"ref"},{"field":"value","kind":"bare"}],"role:worker":[{"field":"id_","kind":"ref"},{"field":"value","kind":"bare"}]}}}

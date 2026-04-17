@@ -3,8 +3,8 @@
 >> The MCP calls themselves are unchanged from the benchmark reference
 >> suite. This file is the v2 adapter layer: read tools declare their
 >> returned record family, write tools declare control/payload/update
->> surfaces, and the single exported `var tools @tools` object doubles as
->> both the planner catalog and the executable dispatch collection.
+>> surfaces, and the single exported `@tools` object is the only suite
+>> catalog the agent routes and dispatches through.
 
 import tools from mcp "tools" as @mcp
 import { @asString, @isoDate } from "./bridge.mld"
@@ -15,13 +15,16 @@ import {
   @calendar_evt,
   @file_entry,
   @datetime_context,
-  @email_payload,
+  @send_email_inputs,
+  @delete_email_inputs,
   @create_calendar_event_inputs,
-  @calendar_event_payload,
-  @calendar_reschedule_payload,
-  @file_append_payload,
-  @file_create_payload,
-  @share_file_payload
+  @cancel_calendar_event_inputs,
+  @calendar_reschedule_inputs,
+  @add_calendar_event_participants_inputs,
+  @file_append_inputs,
+  @file_create_inputs,
+  @delete_file_inputs,
+  @share_file_inputs
 } from "./records.mld"
 
 >> Read tools
@@ -107,7 +110,7 @@ exe extract:r, untrusted, tool:r @get_file_by_id(file_id) = [
 
 >> Write tools
 
-exe execute:w, comm:w, exfil:send, tool:w @send_email(recipients: array, subject, body, attachments: array, cc: array, bcc: array) = [
+exe @send_email(recipients: array, subject, body, attachments: array, cc: array, bcc: array) = [
   >> Optional payload fields keep the MCP schema defaults (`null` means no
   >> attachments or side-recipient lists) instead of forcing planner-visible
   >> placeholders upstream.
@@ -115,391 +118,236 @@ exe execute:w, comm:w, exfil:send, tool:w @send_email(recipients: array, subject
   let @ccValue = @exists(@cc) ? @cc : null
   let @bccValue = @exists(@bcc) ? @bcc : null
   => @mcp.sendEmail(@recipients, @subject, @body, @attachmentsValue, @ccValue, @bccValue)
-] with { controlArgs: ["recipients", "cc", "bcc"] }
+] 
 
-exe execute:w, destructive:targeted, tool:w @delete_email(email_id) = [
+exe @delete_email(email_id) = [
   => @mcp.deleteEmail(@asString(@email_id))
-] with { controlArgs: ["email_id"] }
+]
 
 >> Calendar events notify participants, so the participant array is a
 >> control surface even though the rest of the event body is payload.
-exe execute:w, calendar:w, exfil:send, tool:w @create_calendar_event(title, start_time, end_time, description, participants: array, location) = [
+exe @create_calendar_event(title, start_time, end_time, description, participants: array, location) = [
   let @descriptionValue = @exists(@description) ? @description : ""
   let @participantsValue = @exists(@participants) ? @participants : null
   let @locationValue = @exists(@location) ? @location : null
   => @mcp.createCalendarEvent(@title, @start_time, @end_time, @descriptionValue, @participantsValue, @locationValue)
-] with { controlArgs: ["participants"] }
+]
 
-exe execute:w, destructive:targeted, tool:w @cancel_calendar_event(event_id) = [
+exe @cancel_calendar_event(event_id) = [
   => @mcp.cancelCalendarEvent(@asString(@event_id))
-] with { controlArgs: ["event_id"] }
+]
 
-exe execute:w, calendar:w, tool:w @reschedule_calendar_event(event_id, new_start_time, new_end_time) = [
+exe @reschedule_calendar_event(event_id, new_start_time, new_end_time) = [
   => @mcp.rescheduleCalendarEvent(@asString(@event_id), @new_start_time, @new_end_time)
-] with {
-  controlArgs: ["event_id"],
-  updateArgs: ["new_start_time", "new_end_time"]
-}
+]
 
-exe execute:w, calendar:w, exfil:send, tool:w @add_calendar_event_participants(participants: array, event_id) = [
+exe @add_calendar_event_participants(participants: array, event_id) = [
   => @mcp.addCalendarEventParticipants(@participants, @asString(@event_id))
-] with { controlArgs: ["participants", "event_id"] }
+]
 
-exe execute:w, file:w, tool:w @append_to_file(file_id, content) = [
+exe @append_to_file(file_id, content) = [
   => @mcp.appendToFile(@asString(@file_id), @content)
-] with { controlArgs: ["file_id"] }
+]
 
-exe execute:w, file:w, tool:w @create_file(filename, content) = [
+exe @create_file(filename, content) = [
   => @mcp.createFile(@filename, @content)
-] with { controlArgs: [] }
+]
 
-exe execute:w, destructive:targeted, tool:w @delete_file(file_id) = [
+exe @delete_file(file_id) = [
   => @mcp.deleteFile(@asString(@file_id))
-] with { controlArgs: ["file_id"] }
+]
 
-exe execute:w, comm:w, exfil:send, tool:w @share_file(email, file_id, permission) = [
+exe @share_file(email, file_id, permission) = [
   => @mcp.shareFile(@email, @asString(@file_id), @permission)
-] with { controlArgs: ["email", "file_id"] }
+]
 
->> Single v2 export surface: one plain catalog object. Each entry keeps
+>> Single v2 export surface: one tools catalog object. Each entry keeps
 >> the underlying `mlld: @exe` reference, so rig can route, authorize,
 >> and dispatch directly from the documented suite interface.
->> Calendar tool semantics intentionally tell the planner to cite the
+>> Calendar tool descriptions intentionally tell the planner to cite the
 >> exact user-facing date phrase from the task text. The adapter
 >> normalizes those phrases internally, so planner docs must not teach
 >> the planner to invent a new ISO literal for authorization.
-var @tools = {
+var tools @tools = {
   get_unread_emails: {
-    kind: "read",
     mlld: @get_unread_emails,
     returns: @email_msg,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Load unread inbox messages."
+    description: "Load unread inbox messages."
   },
   get_sent_emails: {
-    kind: "read",
     mlld: @get_sent_emails,
     returns: @email_msg,
     labels: ["resolve:r"],
-    semantics: "Load sent email messages."
+    description: "Load sent email messages."
   },
   get_received_emails: {
-    kind: "read",
     mlld: @get_received_emails,
     returns: @email_msg,
     labels: ["resolve:r"],
-    semantics: "Load received email messages."
+    description: "Load received email messages."
   },
   get_draft_emails: {
-    kind: "read",
     mlld: @get_draft_emails,
     returns: @email_msg,
     labels: ["resolve:r"],
-    semantics: "Load draft email messages."
+    description: "Load draft email messages."
   },
   search_emails: {
-    kind: "read",
     mlld: @search_emails,
     returns: @email_msg,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Search email by query string and optional sender filter. Returned email_msg records already include the body field, so later extract steps can read that resolved field directly by handle."
+    description: "Search email by query string and optional sender filter. Returned email_msg records already include the body field, so later extract steps can read that resolved field directly by handle."
   },
   search_emails_any_sender: {
-    kind: "read",
     mlld: @search_emails_any_sender,
     returns: @email_msg,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Search email content without pinning the sender. Returned email_msg records already include the body field, so later extract steps can read that resolved field directly by handle."
+    description: "Search email content without pinning the sender. Returned email_msg records already include the body field, so later extract steps can read that resolved field directly by handle."
   },
   get_email_by_id: {
-    kind: "read",
     mlld: @get_email_by_id,
     returns: @email_msg,
     labels: ["extract:r", "untrusted"],
-    semantics: "Fetch one email by id with full body content."
+    description: "Fetch one email by id with full body content."
   },
   search_contacts_by_name: {
-    kind: "read",
     mlld: @search_contacts_by_name,
     returns: @contact,
     labels: ["resolve:r", "known"],
-    semantics: "Search contacts by display name."
+    description: "Search contacts by display name."
   },
   search_contacts_by_email: {
-    kind: "read",
     mlld: @search_contacts_by_email,
     returns: @contact,
     labels: ["resolve:r", "known"],
-    semantics: "Search contacts by email address."
+    description: "Search contacts by email address."
   },
   get_current_day: {
-    kind: "read",
     mlld: @get_current_day,
     returns: @datetime_context,
     labels: ["resolve:r", "known"],
-    semantics: "Return the current local day."
+    description: "Return the current local day."
   },
   get_current_datetime: {
-    kind: "read",
     mlld: @get_current_datetime,
     returns: @datetime_context,
     labels: ["resolve:r", "known"],
-    semantics: "Return the current local datetime."
+    description: "Return the current local datetime."
   },
   search_calendar_events: {
-    kind: "read",
     mlld: @search_calendar_events,
     returns: @calendar_evt,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Search calendar events by query and optional date filter. If `date` is provided, prefer the exact date phrase from the user task (for example, `May 15th, 2024`); the adapter normalizes it internally."
+    description: "Search calendar events by query and optional date filter. If `date` is provided, prefer the exact date phrase from the user task (for example, `May 15th, 2024`); the adapter normalizes it internally."
   },
   get_day_calendar_events: {
-    kind: "read",
     mlld: @get_day_calendar_events,
     returns: @calendar_evt,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Load all calendar events for one day. Prefer the exact date phrase from the user task (for example, `May 15th, 2024`); the adapter normalizes it internally."
+    description: "Load all calendar events for one day. Prefer the exact date phrase from the user task (for example, `May 15th, 2024`); the adapter normalizes it internally."
   },
   search_files_by_filename: {
-    kind: "read",
     mlld: @search_files_by_filename,
     returns: @file_entry,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Search cloud files by filename. Returned file_entry records include the content field when available, so later extract steps can read that resolved field directly by handle."
+    description: "Search cloud files by filename. Returned file_entry records include the content field when available, so later extract steps can read that resolved field directly by handle."
   },
   list_files: {
-    kind: "read",
     mlld: @list_files,
     returns: @file_entry,
     labels: ["resolve:r", "untrusted"],
-    semantics: "List cloud files. Returned file_entry records include the content field when available, so later extract steps can read that resolved field directly by handle."
+    description: "List cloud files. Returned file_entry records include the content field when available, so later extract steps can read that resolved field directly by handle."
   },
   search_files: {
-    kind: "read",
     mlld: @search_files,
     returns: @file_entry,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Search cloud files by free-text query. Returned file_entry records include the content field when available, so later extract steps can read that resolved field directly by handle."
+    description: "Search cloud files by free-text query. Returned file_entry records include the content field when available, so later extract steps can read that resolved field directly by handle."
   },
   get_file_by_id: {
-    kind: "read",
     mlld: @get_file_by_id,
     returns: @file_entry,
     labels: ["extract:r", "untrusted"],
-    semantics: "Fetch one file by id with content."
+    description: "Fetch one file by id with content."
   },
   send_email: {
-    kind: "write",
     mlld: @send_email,
-    operation: {
-      controlArgs: ["recipients", "cc", "bcc"],
-      payloadArgs: ["subject", "body", "attachments"],
-      payloadRecord: @email_payload,
-      risk: ["exfil:send", "comm:w"],
-      authorizable: true,
-      semantics: "Send an email message to one or more recipients."
-    },
-    bind: { attachments: [], cc: [], bcc: [] }
+    inputs: @send_email_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send", "comm:w"],
+    can_authorize: "role:planner",
+    description: "Send an email message to one or more recipients.",
+    instructions: "Use exact user-provided recipients for recipient fields, and omit optional cc/bcc lists unless the user names them."
   },
   delete_email: {
-    kind: "write",
     mlld: @delete_email,
-    operation: {
-      controlArgs: ["email_id"],
-      payloadArgs: [],
-      risk: ["destructive:targeted"],
-      authorizable: true,
-      semantics: "Delete an existing email by id."
-    }
+    inputs: @delete_email_inputs,
+    labels: ["execute:w", "tool:w", "destructive:targeted"],
+    can_authorize: "role:planner",
+    description: "Delete an existing email by id."
   },
   create_calendar_event: {
     mlld: @create_calendar_event,
     inputs: @create_calendar_event_inputs,
-    labels: ["execute:w", "calendar:w", "exfil:send"],
-    authorizable: "role:planner",
+    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
+    can_authorize: "role:planner",
     description: "Create a calendar event. Omit participants for a personal event; include participants only when the user names people to notify.",
     instructions: "`start_time` and `end_time` must use YYYY-MM-DD HH:MM."
   },
   cancel_calendar_event: {
-    kind: "write",
     mlld: @cancel_calendar_event,
-    operation: {
-      controlArgs: ["event_id"],
-      payloadArgs: [],
-      risk: ["destructive:targeted"],
-      authorizable: true,
-      semantics: "Cancel a calendar event by id."
-    }
-  },
-  reschedule_calendar_event: {
-    kind: "write",
-    mlld: @reschedule_calendar_event,
-    operation: {
-      controlArgs: ["event_id"],
-      payloadArgs: ["new_start_time", "new_end_time"],
-      updateArgs: ["new_start_time", "new_end_time"],
-      payloadRecord: @calendar_reschedule_payload,
-      risk: ["calendar:w"],
-      authorizable: true,
-      semantics: "Reschedule an existing calendar event. `new_start_time` and `new_end_time` must use YYYY-MM-DD HH:MM."
-    }
-  },
-  add_calendar_event_participants: {
-    kind: "write",
-    mlld: @add_calendar_event_participants,
-    operation: {
-      controlArgs: ["participants", "event_id"],
-      payloadArgs: [],
-      risk: ["calendar:w", "exfil:send"],
-      authorizable: true,
-      semantics: "Add participants to an existing calendar event."
-    }
-  },
-  append_to_file: {
-    kind: "write",
-    mlld: @append_to_file,
-    operation: {
-      controlArgs: ["file_id"],
-      payloadArgs: ["content"],
-      payloadRecord: @file_append_payload,
-      risk: ["file:w"],
-      authorizable: true,
-      semantics: "Append content to an existing file."
-    }
-  },
-  create_file: {
-    kind: "write",
-    mlld: @create_file,
-    operation: {
-      controlArgs: [],
-      payloadArgs: ["filename", "content"],
-      payloadRecord: @file_create_payload,
-      risk: ["file:w"],
-      authorizable: true,
-      semantics: "Create a new cloud file."
-    }
-  },
-  delete_file: {
-    kind: "write",
-    mlld: @delete_file,
-    operation: {
-      controlArgs: ["file_id"],
-      payloadArgs: [],
-      risk: ["destructive:targeted"],
-      authorizable: true,
-      semantics: "Delete a cloud file by id."
-    }
-  },
-  share_file: {
-    kind: "write",
-    mlld: @share_file,
-    operation: {
-      controlArgs: ["email", "file_id"],
-      payloadArgs: ["permission"],
-      payloadRecord: @share_file_payload,
-      risk: ["exfil:send", "comm:w"],
-      authorizable: true,
-      semantics: "Share a file with one recipient and a permission level."
-    }
-  }
-}
-
->> The plain catalog above is the planner/auth source. The runtime call
->> path still needs mlld's `var tools` bridge so named args bind to the
->> underlying exe signature when rig dispatches a tool by string name.
->> Policy-bearing execute dispatch also validates against this live
->> collection, so write entries repeat their auth metadata here instead
->> of relying on the plain planner catalog alone. Keep this export
->> internal to the benchmark harness; apps still author against `@tools`.
-var tools @toolsCollection = {
-  get_unread_emails: { mlld: @get_unread_emails },
-  get_sent_emails: { mlld: @get_sent_emails },
-  get_received_emails: { mlld: @get_received_emails },
-  get_draft_emails: { mlld: @get_draft_emails },
-  search_emails: {
-    mlld: @search_emails,
-    expose: ["query", "sender"],
-    optional: ["sender"]
-  },
-  search_emails_any_sender: { mlld: @search_emails_any_sender },
-  get_email_by_id: { mlld: @get_email_by_id },
-  search_contacts_by_name: { mlld: @search_contacts_by_name },
-  search_contacts_by_email: { mlld: @search_contacts_by_email },
-  get_current_day: { mlld: @get_current_day },
-  get_current_datetime: { mlld: @get_current_datetime },
-  search_calendar_events: {
-    mlld: @search_calendar_events,
-    expose: ["query", "date"],
-    optional: ["date"]
-  },
-  get_day_calendar_events: { mlld: @get_day_calendar_events },
-  search_files_by_filename: { mlld: @search_files_by_filename },
-  list_files: { mlld: @list_files },
-  search_files: { mlld: @search_files },
-  get_file_by_id: { mlld: @get_file_by_id },
-  send_email: {
-    mlld: @send_email,
-    authorizable: "role:planner",
-    expose: ["recipients", "subject", "body", "attachments", "cc", "bcc"],
-    optional: ["attachments", "cc", "bcc"],
-    controlArgs: ["recipients", "cc", "bcc"]
-  },
-  delete_email: {
-    mlld: @delete_email,
-    authorizable: "role:planner",
-    controlArgs: ["email_id"]
-  },
-  create_calendar_event: {
-    mlld: @create_calendar_event,
-    authorizable: "role:planner",
-    expose: ["title", "start_time", "end_time", "description", "participants", "location"],
-    optional: ["description", "location", "participants"]
-  },
-  cancel_calendar_event: {
-    mlld: @cancel_calendar_event,
-    authorizable: "role:planner",
-    controlArgs: ["event_id"]
+    inputs: @cancel_calendar_event_inputs,
+    labels: ["execute:w", "tool:w", "destructive:targeted"],
+    can_authorize: "role:planner",
+    description: "Cancel a calendar event by id."
   },
   reschedule_calendar_event: {
     mlld: @reschedule_calendar_event,
-    authorizable: "role:planner",
-    expose: ["event_id", "new_start_time", "new_end_time"],
-    optional: ["new_end_time"],
-    controlArgs: ["event_id"]
+    inputs: @calendar_reschedule_inputs,
+    labels: ["execute:w", "tool:w", "calendar:w", "update:w"],
+    can_authorize: "role:planner",
+    description: "Reschedule an existing calendar event.",
+    instructions: "`new_start_time` and `new_end_time` must use YYYY-MM-DD HH:MM."
   },
   add_calendar_event_participants: {
     mlld: @add_calendar_event_participants,
-    authorizable: "role:planner",
-    expose: ["participants", "event_id"],
-    controlArgs: ["participants", "event_id"]
+    inputs: @add_calendar_event_participants_inputs,
+    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Add participants to an existing calendar event."
   },
   append_to_file: {
     mlld: @append_to_file,
-    authorizable: "role:planner",
-    expose: ["file_id", "content"],
-    controlArgs: ["file_id"]
+    inputs: @file_append_inputs,
+    labels: ["execute:w", "tool:w", "file:w"],
+    can_authorize: "role:planner",
+    description: "Append content to an existing file."
   },
   create_file: {
     mlld: @create_file,
-    authorizable: "role:planner",
-    expose: ["filename", "content"]
+    inputs: @file_create_inputs,
+    labels: ["execute:w", "tool:w", "file:w"],
+    can_authorize: "role:planner",
+    description: "Create a new cloud file."
   },
   delete_file: {
     mlld: @delete_file,
-    authorizable: "role:planner",
-    controlArgs: ["file_id"]
+    inputs: @delete_file_inputs,
+    labels: ["execute:w", "tool:w", "destructive:targeted"],
+    can_authorize: "role:planner",
+    description: "Delete a cloud file by id."
   },
   share_file: {
     mlld: @share_file,
-    authorizable: "role:planner",
-    expose: ["email", "file_id", "permission"],
-    controlArgs: ["email", "file_id"]
+    inputs: @share_file_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send", "comm:w"],
+    can_authorize: "role:planner",
+    description: "Share a file with one recipient and a permission level."
   }
 }
 
 export {
   @tools,
-  @toolsCollection,
   @get_unread_emails,
   @get_sent_emails,
   @get_received_emails,

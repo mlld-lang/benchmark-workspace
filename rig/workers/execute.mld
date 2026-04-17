@@ -62,6 +62,22 @@ exe @mergeArgSources(values) = [
   => @pairsToObject(@pairs)
 ]
 
+exe @omittedOptionalControlIntent(operationName, controlArgs) = [
+  let @argPairs = for @argName in (@controlArgs ?? []) => {
+    key: @argName,
+    value: {
+      value: null,
+      source: "optional control arg omitted"
+    }
+  }
+  let @toolArgs = @pairsToObject(@argPairs)
+  => {
+    known: {
+      [@operationName]: @toolArgs
+    }
+  }
+]
+
 >> Optional fact omission is a dispatched-tool contract, not planner
 >> intent. When every control arg on a write tool is optional and absent,
 >> the new input-record spec says the omission is benign and the runtime
@@ -86,6 +102,7 @@ exe @omitUnknownTargetRules(basePolicy) = [
       unlabeled: @defaults.unlabeled ?? null,
       rules: @filteredRules
     },
+    capabilities: @basePolicy.capabilities ?? {},
     operations: @basePolicy.operations ?? {},
     labels: @basePolicy.labels ?? {},
     authorizations: @basePolicy.authorizations ?? {}
@@ -100,7 +117,7 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   let @controlArgs = @toolControlArgs(@tool)
   let @optionalArgs = @toolOptionalArgs(@tool)
   let @payloadArgs = @toolPayloadArgs(@tool)
-  let @updateArgs = @toolUpdateArgs(@tool)
+  let @updateFields = @toolUpdateArgs(@tool)
   let @controlValues = @controlArgValues(@compiled.compiled_entries, @controlArgs)
   let @presentControlArgNames = @presentControlArgs(@compiled.compiled_entries, @controlArgs)
   let @payloadPairs = for @argName in @payloadArgs when @compiled.compiled_args[@argName].isDefined() => {
@@ -108,12 +125,13 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
     value: @compiled.compiled_args[@argName]
   }
   let @payloadValues = @pairsToObject(@payloadPairs)
-  let @typedPayload = when [
-    @compiled.operation.payloadRecord.isDefined() => @cast(@payloadValues, @compiled.operation.payloadRecord)
-    * => @payloadValues
-  ]
-  if @updateArgs.length > 0 && !@hasNonNullFieldValue(@typedPayload, @updateArgs) [
-    => { error: "update_args_missing_values", summary: @updateArgs | @pretty }
+  let @inputValues = @mergeArgSources([@controlValues, @payloadValues])
+  >> Input records are an authorization/dispatch contract, not a cast
+  >> surface. `@cast` rejects them upstream, and the live tool bridge
+  >> already validates shape against `inputs:` at call time.
+  let @preparedArgs = @inputValues
+  if @updateFields.length > 0 && !@hasNonNullFieldValue(@preparedArgs, @updateFields) [
+    => { error: "no_update_fields", summary: @updateFields | @pretty }
   ]
   if @toolCorrelateControlArgs(@tool) [
     let @correlated = @correlatedControlArgsCheck(@compiled.compiled_entries, @controlArgs)
@@ -124,35 +142,32 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
     @allControlArgsOptional(@controlArgs, @optionalArgs) &&
     !@compiled.policy_intent[@operationName].isDefined()
   let @policyIntent = when [
-    @controlArgs.length == 0 && !@compiled.policy_intent[@operationName].isDefined() => { [@operationName]: true }
-    @optionalControlArgsOmitted => { [@operationName]: true }
+    @controlArgs.length == 0 && !@compiled.policy_intent[@operationName].isDefined() => { allow: [@operationName] }
+    @optionalControlArgsOmitted => @omittedOptionalControlIntent(@operationName, @controlArgs)
     * => @compiled.policy_intent
   ]
-  >> Two execute shapes currently need the same workaround:
-  >> 1. true zero-control-arg writes
-  >> 2. input-record writes where every control fact is optional and all
-  >>    of them were omitted
-  >> In both cases rig still validates the planner intent through
-  >> `@policy.build`, but skips the runtime `with { policy }` hop because
-  >> mlld currently over-attributes labels on that hop for these
-  >> no-destination dispatches.
-  let @skipRuntimePolicy = @optionalControlArgsOmitted || @controlArgs.length == 0
   let @dispatchBasePolicy = when [
     @optionalControlArgsOmitted => @omitUnknownTargetRules(@agent.basePolicy)
     * => @agent.basePolicy
   ]
   let @built = when [
-    @agent.defense == "defended" && !@skipRuntimePolicy => @policy.build(
+    @agent.defense == "defended" => @policy.build(
       @policyIntent,
-      @agent.toolsCollection,
+      @agent.tools,
       { task: @query, basePolicy: @dispatchBasePolicy }
     )
     * => { valid: true, policy: null, issues: [] }
   ]
   if !@built.valid [ => { error: "policy_build_invalid", summary: @built.issues | @pretty } ]
-  let @finalArgs = @mergeArgSources([@controlValues, @typedPayload, @compiled.bind_args])
+  let @finalArgs = @mergeArgSources([@preparedArgs, @compiled.bind_args])
+  >> `@policy.build(..., { basePolicy })` already returns the compiled
+  >> task policy layered onto the active base policy. Re-merging
+  >> `@dispatchBasePolicy` at dispatch time is redundant, and mlld's
+  >> current array-policy merge path drops the compiled proof for
+  >> input-record fact args. Dispatch the built policy directly so the
+  >> worker sees the exact authorization envelope the builder validated.
   let @raw = when [
-    @agent.defense == "defended" && !@skipRuntimePolicy => @callToolWithPolicy(@tool, @agent.toolsCollection, @operationName, @finalArgs, [@dispatchBasePolicy, @built.policy], @agent.runtimeTools ?? null)
+    @agent.defense == "defended" => @callToolWithPolicy(@tool, @agent.toolsCollection, @operationName, @finalArgs, @built.policy, @agent.runtimeTools ?? null)
     * => @callTool(@tool, @agent.toolsCollection, @operationName, @finalArgs, @agent.runtimeTools ?? null)
   ]
   let @toolError = @toolCallError(@raw)

@@ -1,1 +1,0 @@
-{"version":1,"value":[{"field":"id_","kind":"ref"},{"field":"sender","kind":"ref"},{"field":"recipients","kind":"mask"},{"field":"cc","kind":"mask"},{"field":"bcc","kind":"mask"},{"field":"timestamp","kind":"bare"},{"field":"read","kind":"bare"}]}

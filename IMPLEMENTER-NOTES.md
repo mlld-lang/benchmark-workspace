@@ -107,9 +107,9 @@ Synthesis:
     influenced: { deny: ["destructive", "exfil"] }
   },
   authorizations: {
-    deny: [tool keys with operation.authorizable: false],
+    deny: [tool keys with can_authorize: false],
     authorizable: {
-      "role:planner": [tool keys with operation.authorizable != false]
+      "role:planner": [tool keys with can_authorize != false]
     }
   }
 }

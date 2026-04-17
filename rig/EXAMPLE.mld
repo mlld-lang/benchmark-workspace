@@ -11,7 +11,7 @@
 >> ==== Records ====
 
 record @file_entry = {
-  facts: [id_: string, owner: string],
+  facts: [id_: handle, owner: string],
   data: {
     trusted: [filename: string, size: number, last_modified: string],
     untrusted: [content: string]
@@ -51,20 +51,18 @@ exe resolve:r, tool:r @read_file(file_id) = [
 >> Note: no shelf.mld, no contracts.mld, no policy.mld. The tool catalog
 >> carries the metadata rig needs to compile state, auth, and routing.
 
-var @tools = {
+var tools @tools = {
   list_files: {
-    kind: "read",
     mlld: @list_files,
     returns: @file_entry,
     labels: ["resolve:r", "known"],
-    semantics: "List all files accessible to the user."
+    description: "List all files accessible to the user."
   },
   read_file: {
-    kind: "read",
     mlld: @read_file,
     returns: @file_entry,
     labels: ["resolve:r"],
-    semantics: "Read the content of a specific file by id."
+    description: "Read the content of a specific file by id."
   }
 }
 

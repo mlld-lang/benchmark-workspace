@@ -14,11 +14,11 @@ import {
   @iban_value,
   @balance_value,
   @file_text,
-  @send_money_payload,
-  @schedule_transaction_payload,
-  @update_scheduled_transaction_payload,
-  @update_user_info_payload,
-  @password_payload
+  @send_money_inputs,
+  @schedule_transaction_inputs,
+  @update_scheduled_transaction_inputs,
+  @update_user_info_inputs,
+  @update_password_inputs
 } from "./records.mld"
 
 >> Read tools
@@ -55,18 +55,18 @@ exe resolve:r, untrusted, tool:r @read_file(file_path) = [
 
 >> Write tools
 
-exe execute:w, exfil:send, tool:w @send_money(recipient, amount, subject, date) = [
+exe @send_money(recipient, amount, subject, date) = [
   => @mcp.sendMoney(@recipient, @amount, @subject, @date)
-] with { controlArgs: ["recipient"] }
+]
 
-exe execute:w, exfil:send, tool:w @schedule_transaction(recipient, amount, subject, date, recurring) = [
+exe @schedule_transaction(recipient, amount, subject, date, recurring) = [
   => @mcp.scheduleTransaction(@recipient, @amount, @subject, @date, @recurring)
-] with { controlArgs: ["recipient"] }
+]
 
 >> update_scheduled_transaction is the cross-record-mixing defense case.
 >> The recipient and id must both come from the same resolved scheduled
 >> transaction instance, and at least one update field must be present.
-exe execute:w, exfil:send, tool:w @update_scheduled_transaction(id, recipient, amount, subject, date, recurring) = [
+exe @update_scheduled_transaction(id, recipient, amount, subject, date, recurring) = [
   >> The update surface is sparse by design. Missing fields stay `null` so the
   >> benchmark runtime can apply partial updates without synthetic filler.
   let @amountValue = @exists(@amount) ? @amount : null
@@ -74,178 +74,99 @@ exe execute:w, exfil:send, tool:w @update_scheduled_transaction(id, recipient, a
   let @dateValue = @exists(@date) ? @date : null
   let @recurringValue = @exists(@recurring) ? @recurring : null
   => @mcp.updateScheduledTransaction(@id, @recipient, @amountValue, @subjectValue, @dateValue, @recurringValue)
-] with {
-  controlArgs: ["id", "recipient"],
-  updateArgs: ["amount", "subject", "date", "recurring"]
-}
+]
 
-exe execute:w, profile:w, tool:w @update_user_info(first_name, last_name, street, city) = [
+exe @update_user_info(first_name, last_name, street, city) = [
   let @firstNameValue = @exists(@first_name) ? @first_name : null
   let @lastNameValue = @exists(@last_name) ? @last_name : null
   let @streetValue = @exists(@street) ? @street : null
   let @cityValue = @exists(@city) ? @city : null
   => @mcp.updateUserInfo(@firstNameValue, @lastNameValue, @streetValue, @cityValue)
-] with {
-  controlArgs: [],
-  updateArgs: ["first_name", "last_name", "street", "city"]
-}
+]
 
-exe execute:w, privileged, tool:w @update_password(password) = [
+exe @update_password(password) = [
   => @mcp.updatePassword(@password)
-] with { controlArgs: [] }
+]
 
 >> Single v2 catalog surface. Declaring it as `var tools` keeps the
 >> imported collection callable, so rig can use the same object for
 >> planner docs, policy synthesis, and live dispatch.
-var @tools = {
+var tools @tools = {
   get_iban: {
-    kind: "read",
     mlld: @get_iban,
     returns: @iban_value,
     labels: ["resolve:r", "known"],
-    semantics: "Return the user's own IBAN."
+    description: "Return the user's own IBAN."
   },
   get_balance: {
-    kind: "read",
     mlld: @get_balance,
     returns: @balance_value,
     labels: ["resolve:r", "known"],
-    semantics: "Return the current account balance."
+    description: "Return the current account balance."
   },
   get_user_info: {
-    kind: "read",
     mlld: @get_user_info,
     returns: @user_account,
     labels: ["resolve:r", "known"],
-    semantics: "Return the current profile fields for the user."
+    description: "Return the current profile fields for the user."
   },
   get_most_recent_transactions: {
-    kind: "read",
     mlld: @get_most_recent_transactions,
     returns: @transaction,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Load recent completed transactions."
+    description: "Load recent completed transactions."
   },
   get_scheduled_transactions: {
-    kind: "read",
     mlld: @get_scheduled_transactions,
     returns: @scheduled_transaction,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Load scheduled and recurring transactions."
+    description: "Load scheduled and recurring transactions."
   },
   read_file: {
-    kind: "read",
     mlld: @read_file,
     returns: @file_text,
     labels: ["resolve:r", "untrusted"],
-    semantics: "Read one known banking file by path."
+    description: "Read one known banking file by path."
   },
   send_money: {
-    kind: "write",
     mlld: @send_money,
-    operation: {
-      controlArgs: ["recipient"],
-      payloadArgs: ["amount", "subject", "date"],
-      payloadRecord: @send_money_payload,
-      risk: ["exfil:send"],
-      authorizable: true,
-      semantics: "Send a one-time payment to one grounded recipient."
-    }
-  },
-  schedule_transaction: {
-    kind: "write",
-    mlld: @schedule_transaction,
-    operation: {
-      controlArgs: ["recipient"],
-      payloadArgs: ["amount", "subject", "date", "recurring"],
-      payloadRecord: @schedule_transaction_payload,
-      risk: ["exfil:send"],
-      authorizable: true,
-      semantics: "Create a new scheduled or recurring payment."
-    }
-  },
-  update_scheduled_transaction: {
-    kind: "write",
-    mlld: @update_scheduled_transaction,
-    operation: {
-      controlArgs: ["id", "recipient"],
-      payloadArgs: ["amount", "subject", "date", "recurring"],
-      updateArgs: ["amount", "subject", "date", "recurring"],
-      correlateControlArgs: true,
-      payloadRecord: @update_scheduled_transaction_payload,
-      risk: ["exfil:send"],
-      authorizable: true,
-      semantics: "Modify one existing scheduled payment identified by id and recipient."
-    }
-  },
-  update_user_info: {
-    kind: "write",
-    mlld: @update_user_info,
-    operation: {
-      controlArgs: [],
-      payloadArgs: ["first_name", "last_name", "street", "city"],
-      updateArgs: ["first_name", "last_name", "street", "city"],
-      payloadRecord: @update_user_info_payload,
-      risk: ["profile:w"],
-      authorizable: true,
-      semantics: "Update one or more user profile fields."
-    }
-  },
-  update_password: {
-    kind: "write",
-    mlld: @update_password,
-    operation: {
-      controlArgs: [],
-      payloadArgs: ["password"],
-      exactPayloadArgs: ["password"],
-      payloadRecord: @password_payload,
-      risk: ["privileged"],
-      authorizable: false,
-      semantics: "Update the account password. This tool is hard-denied in defended mode."
-    }
-  }
-}
-
->> The plain `@tools` catalog is the planner-facing authority. Runtime
->> dispatch uses a companion `var tools` bridge so multi-arg calls keep
->> mlld's named-arg binding across module boundaries. Execute policy
->> validation runs against this live collection, so write entries repeat
->> their auth metadata here.
-var tools @toolsCollection = {
-  get_iban: { mlld: @get_iban },
-  get_balance: { mlld: @get_balance },
-  get_user_info: { mlld: @get_user_info },
-  get_most_recent_transactions: { mlld: @get_most_recent_transactions },
-  get_scheduled_transactions: { mlld: @get_scheduled_transactions },
-  read_file: { mlld: @read_file },
-  send_money: {
-    mlld: @send_money,
-    authorizable: "role:planner",
-    controlArgs: ["recipient"]
+    inputs: @send_money_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send a one-time payment to one grounded recipient."
   },
   schedule_transaction: {
     mlld: @schedule_transaction,
-    authorizable: "role:planner",
-    controlArgs: ["recipient"]
+    inputs: @schedule_transaction_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Create a new scheduled or recurring payment."
   },
   update_scheduled_transaction: {
     mlld: @update_scheduled_transaction,
-    authorizable: "role:planner",
-    controlArgs: ["id", "recipient"]
+    inputs: @update_scheduled_transaction_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send", "update:w"],
+    can_authorize: "role:planner",
+    description: "Modify one existing scheduled payment identified by id and recipient."
   },
   update_user_info: {
     mlld: @update_user_info,
-    authorizable: "role:planner"
+    inputs: @update_user_info_inputs,
+    labels: ["execute:w", "tool:w", "profile:w", "update:w"],
+    can_authorize: "role:planner",
+    description: "Update one or more user profile fields."
   },
   update_password: {
     mlld: @update_password,
-    authorizable: false
+    inputs: @update_password_inputs,
+    labels: ["execute:w", "tool:w", "privileged:account"],
+    can_authorize: false,
+    description: "Update the account password. This tool is hard-denied in defended mode."
   }
 }
 
 export {
   @tools,
-  @toolsCollection,
   @get_iban,
   @get_balance,
   @get_user_info,

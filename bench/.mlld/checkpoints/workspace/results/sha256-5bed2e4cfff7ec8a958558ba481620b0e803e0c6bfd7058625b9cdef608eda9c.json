@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"resolve\",\n  \"tool\": \"get_sent_emails\",\n  \"args\": {},\n  \"purpose\": \"All previous resolve attempts have failed; try loading sent emails which may contain invitations or details about the Networking event\"\n}"}

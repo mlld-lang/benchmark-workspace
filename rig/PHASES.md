@@ -290,9 +290,9 @@ var @synthesizedPolicy = {
     influenced: { deny: ["destructive", "exfil"] }
   },
   authorizations: {
-    deny: [tools with authorizable: false],
+    deny: [tools with can_authorize: false],
     authorizable: {
-      "role:planner": [tools with authorizable != false]
+      "role:planner": [tools with can_authorize != false]
     }
   }
 }

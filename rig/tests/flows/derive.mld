@@ -1,12 +1,12 @@
 >> Step 4 derive flow, including a validated selection ref.
 
 import { @rigBuild, @rigRun } from "../../index.mld"
-import { @records, @tools, @get_numbers, @get_contacts } from "../fixtures.mld"
+import { @records, @tools } from "../fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
-var tools @runtimeToolsCollection = {
-  get_numbers: { mlld: @get_numbers },
-  get_contacts: { mlld: @get_contacts }
+var tools @deriveTools = {
+  get_numbers: { mlld: @tools.get_numbers.mlld },
+  get_contacts: { mlld: @tools.get_contacts.mlld }
 }
 
 var @maxAgent = @rigBuild({
@@ -15,7 +15,7 @@ var @maxAgent = @rigBuild({
   model: "stub",
   records: @records,
   tools: @tools,
-  toolsCollection: @runtimeToolsCollection,
+  toolsCollection: @deriveTools,
   overrides: {
     stub: {
       planner: [
@@ -65,7 +65,7 @@ var @selectionAgent = @rigBuild({
   model: "stub",
   records: @records,
   tools: @tools,
-  toolsCollection: @runtimeToolsCollection,
+  toolsCollection: @deriveTools,
   overrides: {
     stub: {
       planner: [
@@ -124,7 +124,9 @@ var @c4 = @check("selection-terminal", @selectionTerminalOk, @selectionPretty)
 var @c5 = @check("selection-text", @selectionTextOk, @field(@selectionResult, "text"))
 var @c6 = @check("selection-log", @selectionLogOk, @selectionExecutionPretty)
 
-var @checks = [@c1, @c2, @c3, @c4, @c5, @c6]
+exe @allChecks() = [ => [@c1, @c2, @c3, @c4, @c5, @c6] ]
+
+var @checks = @allChecks()
 
 var @fails = for @check in @checks when @check.status == "FAIL" => @check
 

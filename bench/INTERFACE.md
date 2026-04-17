@@ -120,7 +120,7 @@ var @tools = {
       exactPayloadArgs: ["subject"],
       payloadRecord: @email_payload,
       risk: ["exfil:send", "comm:w"],
-      authorizable: true,
+      can_authorize: true,
       semantics: "Send an email message to one or more recipients."
     }
   },
@@ -133,7 +133,7 @@ var @tools = {
       payloadArgs: ["title", "start_time", "end_time", "description", "participants", "location"],
       payloadRecord: @calendar_event_payload,
       risk: ["calendar:w"],
-      authorizable: true,
+      can_authorize: true,
       semantics: "Create a new calendar event."
     },
     bind: { participants: [] }
@@ -168,7 +168,7 @@ Export only `@tools`. The tool catalog is the entire tool surface rig needs.
   - `payloadRecord: @<record>` — optional; static schema for payload coercion at execute boundary
   - `risk: [...]` — risk category labels (`exfil:send`, `destructive:targeted`, etc.)
   - `correlateControlArgs: true` — optional; require all control args to share source record instance
-  - `authorizable: true | false` — optional; default `true`; `false` means the tool cannot be authorized at all (absolute deny)
+  - `can_authorize: true | false` — optional; default `true`; `false` means the tool cannot be authorized at all (absolute deny)
   - `semantics: "..."` — same as above
 
 - `bind: { argname: value }` — optional; pre-bind default values for args the planner doesn't need to authorize

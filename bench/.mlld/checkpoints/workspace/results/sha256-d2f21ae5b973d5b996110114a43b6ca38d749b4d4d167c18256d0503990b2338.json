@@ -1,1 +1,0 @@
-{"version":1,"value":"{\n  \"phase\": \"compose\",\n  \"sources\": [\"resolved.*\", \"derived.*\", \"extracted.*\", \"execution_log\"],\n  \"purpose\": \"Confirm the Follow-up meeting was created on 2026-04-18 at 16:00 (since 10:00 was occupied) with the same participants as the Introductory meeting\"\n}"}
