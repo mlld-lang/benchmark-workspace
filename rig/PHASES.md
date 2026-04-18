@@ -1,43 +1,37 @@
-# Phase Loop and Worker Dispatch
+# Persistent Planner Session and Worker Dispatch
 
-How rig orchestrates a task. This is the implementation contract — it describes what each worker sees, what it produces, and how the framework compiles planner intent into runtime dispatch.
+How rig orchestrates a task. This is the implementation contract for the single persistent planner session: one planner LLM call owns the tool loop, rig-owned planner tools dispatch the workers, and lifecycle/state mutation happen inside those wrappers.
 
-## The Loop
+## The Session
 
 ```
-build_context(agent, query, execution_log, state)
+build_context(agent, query)
   → planner_prompt, planner_tools, planner_display
 
-planner_llm_call(planner_prompt) inside box(planner_display) → decision
+planner_llm_call(planner_prompt, tools: planner_tools) inside display(role:planner)
 
-emit planner_iteration event
+planner calls:
+  resolve  → dispatch_resolve(...)  → append lifecycle + state
+  extract  → dispatch_extract(...)  → append lifecycle + state
+  derive   → dispatch_derive(...)   → append lifecycle + state
+  execute  → dispatch_execute(...)  → append lifecycle + state
+  compose  → dispatch_compose(...)  → set terminal result
+  blocked  → set terminal result
 
-switch decision.phase:
-  resolve  → dispatch_resolve(decision)
-  extract  → dispatch_extract(decision)
-  derive   → dispatch_derive(decision)
-  execute  → dispatch_execute(decision)
-  compose  → dispatch_compose(decision)
-  blocked  → terminate with blocked
-
-emit phase_start event → run worker → emit phase_end event
-phase_result → compile_execution_log_entry → append
-
-repeat until compose returns, or blocked, or maxIterations
+planner emits one final text turn after compose/blocked
 ```
 
-The planner is a persistent LLM session — one call with conversation history — not a fresh call per iteration.
+The planner is one persistent LLM session. Rig does not rebuild planner context per turn and does not use planner resume as an orchestration primitive.
 
-## Planner Context Build
+## Planner Context
 
-At each iteration, rig builds context for the planner:
+Rig builds planner context once at run start:
 
-- **state summary** — read orchestrator-side and serialized into the prompt with record display projection applied. Resolved records project `role:planner` display. Extracted and derived values show their schema and attestation, not the underlying content unless explicitly marked planner-visible.
-- **execution log** with phase attestations (status, handles, counts — no tainted prose)
-- **tool docs** auto-generated from the tool catalog, filtered by phase relevance
-- **operation docs** auto-generated from write operation declarations, including `semantics` strings
+- **planner prompt** describing the task, canonical ref grammar, and tool-use discipline
+- **planner tools** (`resolve`, `extract`, `derive`, `execute`, `compose`, `blocked`)
+- **tool docs** for the available domain resolve/extract/execute tools, injected into the planner prompt
 
-The planner never reads raw worker prose. Everything it sees is either declared by the app (records, tools, ops) or attested by the framework (execution log entries).
+The planner's execution history is the conversation itself plus planner-visible tool results. Rig does not reconstruct planner state summaries or replay execution-log text into later planner prompts.
 
 ## Resolve Dispatch
 
@@ -205,7 +199,7 @@ This is an explicit scope decision, not a security oversight. The defense requir
 
 The planner may emit `{ phase: "blocked", reason }` when the task is genuinely impossible, requires clarification, or hits a policy deadlock. Rig terminates with `terminal: "blocked"`.
 
-Blocked is not the default. The planner must try resolve/extract/derive/execute paths first. A blocked decision in iteration 1 without exploration triggers a retry unless the rationale explicitly cites ambiguity or insufficient information.
+Blocked is not the default. The planner must try resolve / extract / derive / execute paths first. A premature blocked tool call is treated as an invalid planner tool call and counts against the invalid-call budget.
 
 ## Host Integration Files
 
@@ -218,15 +212,15 @@ Emission is part of the rig contract, not a diagnostic nice-to-have. Missing emi
 At each event boundary, rig appends NDJSON to the host-configured `phase_log_file`:
 
 ```json
-{ "event": "planner_iteration", "iteration": N, "decision_phase": "resolve", "planner_session_id": "..." }
-{ "event": "phase_start", "iteration": N, "worker": "resolve", "planner_session_id": "..." }
+{ "event": "planner_iteration", "iteration": N, "decision_phase": "resolve" }
+{ "event": "phase_start", "iteration": N, "worker": "resolve", "phase_id": "resolve:N" }
 { "event": "phase_end", "iteration": N, "worker": "resolve", "worker_session_id": "...", "outcome": "success", "summary": "..." }
 ```
 
 Event contract:
-- Every planner decision emits one `planner_iteration` event.
+- Every planner tool call emits one `planner_iteration` event.
 - Every worker dispatch emits `phase_start` before the worker runs and `phase_end` after it returns.
-- Session IDs come from `@raw.mx.sessionId` on the relevant planner/worker LLM call.
+- Worker session IDs come from `@raw.mx.sessionId` on worker LLM calls that have one.
 - Worker values: `resolve | extract | derive | execute | compose`.
 - Adding a new worker type does not require host-side changes — the host treats `worker` as a string.
 
@@ -242,13 +236,12 @@ Schema:
   "phase": "resolve",
   "phase_id": "uuid-for-this-dispatch",
   "iteration": 3,
-  "planner_session_id": "...",
   "worker_session_id": "..."
 }
 ```
 
 Rig writes this file (overwrite semantics — not append):
-- At each `phase_start`: write `{ phase, phase_id, iteration, planner_session_id, worker_session_id: null }`
+- At each `phase_start`: write `{ phase, phase_id, iteration, worker_session_id: null }`
 - When the worker LLM call returns a session ID: overwrite with `worker_session_id` populated
 - At `phase_end`: overwrite with the sentinel `{ "phase": "between" }`
 - At run termination: overwrite with `{ "phase": "between" }` so the host never sees a stale phase pointer
@@ -280,11 +273,11 @@ var @synthesizedPolicy = {
     unlabeled: "untrusted"
   },
   operations: {
-    // Reverse mapping from tool.operation.risk labels
-    "exfil:send": [tools with "exfil:send" in risk],
-    "destructive:targeted": [tools with "destructive:targeted" in risk],
-    destructive: [tools with any destructive* risk],
-    privileged: [tools with any privileged* risk]
+    // Reverse mapping from governed risk labels on each tool entry
+    "exfil:send": [tools with "exfil:send" label],
+    "destructive:targeted": [tools with "destructive:targeted" label],
+    destructive: [tools with any destructive* label],
+    privileged: [tools with any privileged* label]
   },
   labels: {
     influenced: { deny: ["destructive", "exfil"] }
@@ -317,34 +310,39 @@ Override composition:
 - Locked rules from synthesized policy cannot be overridden
 - Additional rules compose via `union()`
 
-## Retry and Guard Behavior
+## Planner Tool Errors and Budgets
 
-The planner gets one retry per decision when the decision fails structural validation:
-- schema validation failure → retry with schema error hint
-- `prematureBlocked` → retry with "you have not explored the task" hint
-- `prematureCompose` → retry with "produce typed state before composing" hint
-- `blockedAfterResolve` → retry with "you have resolved data; proceed to next phase" hint
+Rig does not run an outer planner retry loop.
 
-After one retry, a still-invalid decision terminates the run.
+The planner repairs inside the same session through planner-tool results:
+- invalid planner tool args return a structured planner-tool error
+- unknown phase tool names return a structured planner-tool error
+- policy denials and worker failures return structured planner-tool errors
 
-Guards are framework predicates in `rig/guards.mld`. They operate on planner decisions and execution state. No suite-specific logic.
+Rig owns the budgets:
+- `maxIterations` is interpreted as the total planner tool-call budget
+- a separate invalid-tool-call budget caps repeated malformed planner tool invocations
+
+When a budget is exhausted, rig sets terminal blocked state and subsequent planner tool calls are rejected. There is no second planner session, no prompt reconstruction retry, and no provider-native resume path in rig orchestration.
 
 ## State Lifecycle
 
-- Resolved records persist across iterations within a run.
-- Extracted values persist across iterations; overwritten if the planner dispatches another extract with the same name.
-- Derived values persist across iterations; overwritten similarly.
+- Resolved records persist across planner tool calls within a run.
+- Extracted values persist across planner tool calls; overwritten if the planner dispatches another extract with the same name.
+- Derived values persist across planner tool calls; overwritten similarly.
 - Execution log grows monotonically.
 - State does not persist across runs.
 
 ## Iteration Budget
 
-Rig enforces `maxIterations` (default 40). Hitting the budget terminates with `terminal: "max_iterations"`.
+Rig enforces `maxIterations` (default 40) as the planner tool-call budget. Hitting the budget terminates the run as `blocked` with reason `planner_tool_budget_exhausted`.
 
 ## What Rig Does Not Do
 
-- Rig does not let the planner dispatch multiple workers per iteration.
-- Rig does not loop within a phase.
+- Rig does not run an outer planner loop.
+- Rig does not reconstruct planner prompts from state summaries or execution-log text between planner turns.
+- Rig does not use planner resume as orchestration machinery.
+- Rig does not let the planner bypass the six rig-owned planner tools.
 - Rig does not re-resolve automatically.
-- Rig does not interpret prose. All planner output is structured JSON validated against the intent schema.
+- Rig does not interpret prose planner decisions outside tool-use. The planner acts by calling tools.
 - Rig does not allow the planner to relabel a derived ref as resolved.

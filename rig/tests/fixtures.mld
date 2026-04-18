@@ -432,7 +432,6 @@ var @sampleState = {
     }
   },
   execution_log: [],
-  planner_session_id: null,
   phase_events: []
 }
 

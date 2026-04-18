@@ -15,6 +15,7 @@ exe @name(inputValue) = when [
   @typeof(@inputValue) == "string" => @inputValue
   @typeof(@inputValue) == "number" || @typeof(@inputValue) == "boolean" => `@inputValue`
   @inputValue.mx.data.isDefined() => @inputValue.mx.data
+  @inputValue["mx"].data.isDefined() => @inputValue["mx"].data
   @inputValue.data.isDefined() => @inputValue.data
   @inputValue.text.isDefined() => @inputValue.text
   * => `@inputValue`
@@ -28,18 +29,23 @@ exe @lookupWriteTool(tools, toolName) = [
   ]
 ]
 
+exe @argNameList(values) = [
+  => for @value in (@values ?? []) => @name(@value)
+]
+
 exe @roleForArg(tool, argName) = [
-  let @controlArgs = @toolControlArgs(@tool)
-  let @payloadArgs = @toolPayloadArgs(@tool)
+  let @arg = @name(@argName)
+  let @controlArgs = @argNameList(@toolControlArgs(@tool))
+  let @payloadArgs = @argNameList(@toolPayloadArgs(@tool))
   => when [
-    @controlArgs.includes(@argName) => "control"
-    @payloadArgs.includes(@argName) => "payload"
+    @controlArgs.includes(@arg) => "control"
+    @payloadArgs.includes(@arg) => "payload"
     * => "unknown"
   ]
 ]
 
 exe @isExactArg(tool, argName) = [
-  => @toolExactArgs(@tool).includes(@argName)
+  => @argNameList(@toolExactArgs(@tool)).includes(@name(@argName))
 ]
 
 exe @bucketObject(bucketValue) = when [
@@ -383,10 +389,11 @@ exe @knownInTask(query, literalValue) = js {
 }
 
 exe @compileScalarRef(state, tool, argName, ref, query) = [
-  let @role = @roleForArg(@tool, @argName)
-  if @role == "unknown" [ => { ok: false, arg: @argName, error: "unknown_tool_arg" } ]
+  let @arg = @name(@argName)
+  let @role = @roleForArg(@tool, @arg)
+  if @role == "unknown" [ => { ok: false, arg: @arg, error: "unknown_tool_arg" } ]
 
-  let @exactArg = @isExactArg(@tool, @argName)
+  let @exactArg = @isExactArg(@tool, @arg)
   let @controlResolved = when [
     @role != "control" => null
     @refSource(@ref) == "selection" => @resolveControlRefValue(@state, @ref)
@@ -397,7 +404,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
     @controlResolved.isDefined() => @controlResolved
     * => @resolveRefValue(@state, @ref)
   ]
-  if !@resolved.ok [ => { ...@resolved, arg: @argName } ]
+  if !@resolved.ok [ => { ...@resolved, arg: @arg } ]
 
   let @resolvedRecord = when [
     @refSource(@ref) == "selection" => @ref.backing.record
@@ -413,11 +420,11 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
 
   if @resolved.source == "allow" [
     if @toolControlArgs(@tool).length > 0 [
-      => { ok: false, arg: @argName, error: "allow_requires_no_control_args" }
+      => { ok: false, arg: @arg, error: "allow_requires_no_control_args" }
     ]
     => {
       ok: true,
-      arg: @argName,
+      arg: @arg,
       role: @role,
       source_class: "allow",
       auth_bucket: "allow",
@@ -433,7 +440,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
     if !@knownInTask(@query, @resolved.value) [
       => {
         ok: false,
-        arg: @argName,
+        arg: @arg,
         error: "known_value_not_in_task_text",
         value: @resolved.value
       }
@@ -441,7 +448,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
     => when [
       @role == "control" || @exactArg => {
         ok: true,
-        arg: @argName,
+        arg: @arg,
         role: @role,
         source_class: "known",
         auth_bucket: "known",
@@ -453,7 +460,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
       }
       * => {
         ok: true,
-        arg: @argName,
+        arg: @arg,
         role: "payload",
         source_class: "known",
         value: @resolved.value,
@@ -468,7 +475,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
     if @role == "control" && !@ref.handle.isDefined() && @ref.source != "selection" [
       => {
         ok: false,
-        arg: @argName,
+        arg: @arg,
         error: "control_ref_requires_specific_instance",
         source_class: "resolved"
       }
@@ -476,7 +483,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
     if @exactArg [
       => {
         ok: false,
-        arg: @argName,
+        arg: @arg,
         error: "non_task_source_in_exact_payload_arg",
         source_class: "resolved"
       }
@@ -488,7 +495,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
     => when [
       @role == "control" => {
         ok: true,
-        arg: @argName,
+        arg: @arg,
         role: "control",
         source_class: "resolved",
         auth_bucket: "resolved",
@@ -500,7 +507,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
       }
       * => {
         ok: true,
-        arg: @argName,
+        arg: @arg,
         role: "payload",
         source_class: "resolved",
         value: @resolved.value,
@@ -515,7 +522,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
     if @role == "control" [
       => {
         ok: false,
-        arg: @argName,
+        arg: @arg,
         error: "payload_only_source_in_control_arg",
         source_class: @resolved.source
       }
@@ -523,14 +530,14 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
     if @exactArg [
       => {
         ok: false,
-        arg: @argName,
+        arg: @arg,
         error: "non_task_source_in_exact_payload_arg",
         source_class: @resolved.source
       }
     ]
     => {
       ok: true,
-      arg: @argName,
+      arg: @arg,
       role: "payload",
       source_class: @resolved.source,
       value: @resolved.value,
@@ -542,18 +549,19 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
 
   => {
     ok: false,
-    arg: @argName,
+    arg: @arg,
     error: "unsupported_source_class",
     source_class: @resolved.source
   }
 ]
 
 exe @compileArgRef(state, tool, argName, ref, query) = [
+  let @arg = @name(@argName)
   if @typeof(@ref) == "array" [
-    let @compiled = for @item in @ref => @compileScalarRef(@state, @tool, @argName, @item, @query)
+    let @compiled = for @item in @ref => @compileScalarRef(@state, @tool, @arg, @item, @query)
     let @errors = for @entry in @compiled when !@entry.ok => @entry
     if @errors.length > 0 [
-      => { ok: false, arg: @argName, error: "array_arg_element_invalid", issues: @errors }
+      => { ok: false, arg: @arg, error: "array_arg_element_invalid", issues: @errors }
     ]
     let @first = @compiled[0]
     let @backingRefs = loop(1000) [
@@ -596,7 +604,7 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
     ]
     => {
       ok: true,
-      arg: @argName,
+      arg: @arg,
       role: @first.role,
       source_class: @first.source_class,
       value: @values,
@@ -608,7 +616,7 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
     }
   ]
 
-  => @compileScalarRef(@state, @tool, @argName, @ref, @query)
+  => @compileScalarRef(@state, @tool, @arg, @ref, @query)
 ]
 
 >> Read-phase tool args still cross the same provenance boundary as write

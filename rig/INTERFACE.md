@@ -34,7 +34,7 @@ The agent handle is opaque to the app. It contains compiled routing, compiled po
 In defended mode, `@rig.build` synthesizes the policy from the tool catalog — apps do not provide `policy.mld`. Rules generated:
 
 - Default built-in rule set including `no-send-to-unknown`, `no-destroy-unknown`, `no-secret-exfil`, `no-untrusted-destructive`, `no-unknown-extraction-sources`, and `untrusted-llms-get-influenced`
-- `operations` reverse-mapping from `tool.operation.risk` labels across the catalog
+- `operations` reverse-mapping from governed risk labels across the catalog
 - `authorizations.can_authorize["role:planner"]` populated from tools where `can_authorize` allows planner use
 - `authorizations.deny` populated from tools where `can_authorize: false` (hard rejection — cannot be authorized even with overrides)
 - `no-novel-urls` included conditionally when any tool declares URL-fetch risk
@@ -54,10 +54,10 @@ Return shape:
 ```mlld
 {
   text: string,                  // user-facing final answer
-  terminal: "complete" | "blocked" | "max_iterations",
+  terminal: "complete" | "blocked",
   debug: {
     execution_log: [...],        // phase-by-phase log with session IDs
-    planner_iterations: [...],   // planner decisions (one entry per iteration)
+    planner_iterations: [...],   // host-derived view over planner tool invocations
     phase_events: [...],         // lifecycle events for host attribution
     last_decision: {...}
   }
@@ -129,6 +129,8 @@ Routing is label-driven:
 - `resolve:r` / `extract:r` / `tool:r` identify read tools
 - `execute:w` / `tool:w` identify write tools
 - domain/risk labels such as `calendar:w` or `exfil:send` drive policy synthesis
+
+The surfaced `var tools` catalog is the single authored tool surface. Rig reads planner metadata and dispatch executables from that same catalog object.
 
 ## Source Class Refs
 

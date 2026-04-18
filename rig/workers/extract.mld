@@ -76,7 +76,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
     if !@argsCheck.ok [ => @plannerValidationFailure(@argsCheck.error ?? "intent_compile_failed", @argsCheck, @argsCheck.issues) ]
     >> Keep the routed entry intact so dispatch sees the runtime arg docs
     >> instead of a planner-only catalog object that may have shed them.
-    let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, @argsCheck.args, @agent.runtimeTools ?? null)
+    let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, @argsCheck.args)
     let @toolError = @toolCallError(@raw)
     >> `toolCallError()` returns null on success. Compare explicitly so a
     >> defined local holding null does not trip the error path.

@@ -62,7 +62,6 @@ Both host integration files are part of the contract:
   "phase": "resolve",
   "phase_id": "uuid-for-this-dispatch",
   "iteration": 3,
-  "planner_session_id": "...",
   "worker_session_id": "..."
 }
 ```
@@ -97,8 +96,8 @@ Synthesis:
     unlabeled: "untrusted"
   },
   operations: {
-    // Reverse-mapping from tool.operation.risk labels
-    "exfil:send":           [tool keys with "exfil:send" in risk],
+    // Reverse-mapping from governed risk labels on the tool entry
+    "exfil:send":           [tool keys with "exfil:send" label],
     "destructive:targeted": [...],
     destructive:            [tool keys with any destructive* label],
     privileged:             [...]
@@ -108,7 +107,7 @@ Synthesis:
   },
   authorizations: {
     deny: [tool keys with can_authorize: false],
-    authorizable: {
+    can_authorize: {
       "role:planner": [tool keys with can_authorize != false]
     }
   }

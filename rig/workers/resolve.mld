@@ -43,7 +43,7 @@ exe @dispatchResolve(agent, state, decision, query) = [
   >> `expose` and `optional` survives. `@callTool` still resolves the
   >> concrete executable from the runtime bridge when needed.
   @resolveDebug(@agent, "dispatchResolve:beforeCallTool")
-  let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, @argsCheck.args, @agent.runtimeTools ?? null)
+  let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, @argsCheck.args)
   @resolveDebug(@agent, "dispatchResolve:afterCallTool")
   let @toolError = @toolCallError(@raw)
   >> Helper-return locals can be defined while still holding `null`.

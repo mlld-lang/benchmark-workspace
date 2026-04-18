@@ -33,7 +33,7 @@ import {
   @toolExactArgs,
   @toolOptionalBenign,
   @toolRisk,
-  @toolAuthorizableRoles,
+  @toolCanAuthorizeRoles,
   @toolInputRecord,
   @toolDescription,
   @phaseCatalog,
@@ -42,18 +42,20 @@ import {
 import { @rigBuild } from "../index.mld"
 import {
   @synthesizedPolicy,
-  @plannerStateSummary,
+  @plannerVisibleState,
   @workerStateSummary,
   @nonComposeDecisionArgIssues,
   @updateNamedState,
   @appendExecutionLog,
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
-import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue } from "../intent.mld"
+import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg } from "../intent.mld"
 import { @callTool, @toolCallError, @emptyState } from "../runtime.mld"
+import { @initializePlannerSession } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation } from "../workers/extract.mld"
+import { @plannerTools } from "../workers/planner.mld"
 
 exe @status(ok) = when [
   @ok => "PASS"
@@ -145,53 +147,6 @@ exe @runtime_create_note(content) = [
 >> Policy-bearing execute calls still need a wrapper whose declared
 >> parameters match the tool catalog metadata exactly.
 exe @runtime_schedule_meeting(title, start_time, end_time, participants: array) = [
-  let @participantsValue = @exists(@participants) ? @participants : null
-  >> Keep the local wrapper as the policy terminal. Re-entering the
-  >> fixture tool under the same policy hop would re-run mlld's tool
-  >> guards on the inner executable and hide the execute regression this
-  >> test is supposed to pin.
-  => {
-    ok: true,
-    title: @title,
-    start_time: @start_time,
-    end_time: @end_time,
-    participants: @participantsValue
-  }
-]
-
->> Direct execute overrides receive one native arg object from rig. Keep
->> a dedicated object-shaped wrapper for that path so the regression
->> stays on the native object bridge instead of the multi-arg binder.
-exe @runtime_schedule_meeting_direct(args) = [
-  let @participantsValue = @exists(@args.participants) ? @args.participants : null
-  => {
-    ok: true,
-    title: @args.title,
-    start_time: @args.start_time,
-    end_time: @args.end_time,
-    participants: @participantsValue
-  }
-]
-
->> Direct input-record collection entries are the preferred execute shape
->> once the runtime can validate `inputs:` natively. Keep one fixture on
->> that path so suite adapters do not regress back to wrapper-only
->> policy-bearing writes.
-exe @direct_schedule_meeting(title, start_time, end_time, participants: array) = [
-  let @participantsValue = @exists(@participants) ? @participants : null
-  => {
-    ok: true,
-    title: @title,
-    start_time: @start_time,
-    end_time: @end_time,
-    participants: @participantsValue
-  }
-]
-
->> Workspace now uses a plain local wrapper behind an input-record tool
->> entry. Keep that exact shape here so execute regressions cover the
->> live adapter pattern, not only labeled direct exes.
-exe @plain_input_record_schedule_meeting(title, start_time, end_time, participants: array) = [
   let @participantsValue = @exists(@participants) ? @participants : null
   => {
     ok: true,
@@ -434,8 +389,7 @@ var @fixtureReadDispatchResult = @callTool(
   @tools.get_contacts,
   @tools,
   "get_contacts",
-  {},
-  null
+  {}
 )
 var @builtFixtureAgent = @rigBuild({
   suite: "fixture-build",
@@ -448,8 +402,7 @@ var @builtFixtureReadDispatchResult = @callTool(
   @builtFixtureAgent.tools.get_contacts,
   @builtFixtureAgent.toolsCollection,
   "get_contacts",
-  {},
-  null
+  {}
 )
 >> Regression for the routed-catalog drift that left live workers with a
 >> phase catalog they could inspect but not actually dispatch through.
@@ -460,16 +413,14 @@ var @phaseCatalogDispatchResult = @callTool(
   @resolvePhaseCatalog.get_contacts,
   @builtFixtureAgent.toolsCollection,
   "get_contacts",
-  {},
-  null
+  {}
 )
 var @phaseToolEntryValue = @phaseToolEntry(@builtFixtureAgent, "resolve", "get_contacts")
 var @phaseToolEntryDispatchResult = @callTool(
   @phaseToolEntryValue,
   @builtFixtureAgent.toolsCollection,
   "get_contacts",
-  {},
-  null
+  {}
 )
 >> Regression for the null-check bug in phase workers. Successful read
 >> payloads must stay on the success path when dispatched through the
@@ -497,6 +448,17 @@ var @dispatchScalarResolveResult = @dispatchResolve(
     purpose: "ground one synthetic day context"
   },
   "What day is it?"
+)
+@initializePlannerSession(@builtFixtureAgent, "What day is it?")
+var @plannerResolveDispatchResult = @callTool(
+  @plannerTools.resolve,
+  @plannerTools,
+  "resolve",
+  {
+    tool: "get_today",
+    args: {},
+    purpose: "ground one synthetic day context"
+  }
 )
 var tools @readArgFixtureTools = {
   search_day_events: {
@@ -542,34 +504,6 @@ var tools @localExecuteRuntimeTools = {
   },
   schedule_meeting: {
     mlld: @runtime_schedule_meeting,
-    inputs: @local_meeting_request_inputs,
-    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
-    can_authorize: "role:planner",
-    description: "Schedule a meeting with optional participants."
-  }
-}
-var @localExecuteRuntimeOverrides = {
-  schedule_meeting: {
-    mlld: @runtime_schedule_meeting_direct,
-    inputs: @local_meeting_request_inputs,
-    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
-    can_authorize: "role:planner",
-    description: "Schedule a meeting with optional participants.",
-    direct: true
-  }
-}
-var tools @directExecuteRuntimeTools = {
-  schedule_meeting: {
-    mlld: @direct_schedule_meeting,
-    inputs: @local_meeting_request_inputs,
-    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
-    can_authorize: "role:planner",
-    description: "Schedule a meeting with optional participants."
-  }
-}
-var tools @plainInputRecordExecuteRuntimeTools = {
-  schedule_meeting: {
-    mlld: @plain_input_record_schedule_meeting,
     inputs: @local_meeting_request_inputs,
     labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
     can_authorize: "role:planner",
@@ -668,29 +602,7 @@ var @builtExecuteFixtureAgent = {
   defense: "defended",
   tools: @localExecuteRuntimeTools,
   toolsCollection: @localExecuteRuntimeTools,
-  runtimeTools: @localExecuteRuntimeOverrides,
   basePolicy: @synthesizedPolicy(@localExecuteRuntimeTools, null)
-}
-var @builtToolEntryPreferredExecuteFixtureAgent = {
-  defense: "defended",
-  tools: @localExecuteRuntimeTools,
-  toolsCollection: @localExecuteRuntimeTools,
-  runtimeTools: null,
-  basePolicy: @synthesizedPolicy(@localExecuteRuntimeTools, null)
-}
-var @builtDirectExecuteFixtureAgent = {
-  defense: "defended",
-  tools: @directExecuteRuntimeTools,
-  toolsCollection: @directExecuteRuntimeTools,
-  runtimeTools: null,
-  basePolicy: @synthesizedPolicy(@directExecuteRuntimeTools, null)
-}
-var @builtPlainInputRecordExecuteFixtureAgent = {
-  defense: "defended",
-  tools: @plainInputRecordExecuteRuntimeTools,
-  toolsCollection: @plainInputRecordExecuteRuntimeTools,
-  runtimeTools: null,
-  basePolicy: @synthesizedPolicy(@plainInputRecordExecuteRuntimeTools, null)
 }
 var @dispatchCreateNoteResult = @dispatchExecute(
   @builtExecuteFixtureAgent,
@@ -748,38 +660,8 @@ var @dispatchKnownParticipantMeetingResult = @dispatchExecute(
   },
   "Create Lunch with sarah.connor@gmail.com from 2026-04-14 12:00 to 2026-04-14 13:00."
 )
-var @dispatchKnownParticipantMeetingDirectResult = @dispatchExecute(
-  @builtDirectExecuteFixtureAgent,
-  @emptyState(),
-  {
-    phase: "execute",
-    operation: "schedule_meeting",
-    args: {
-      participants: [{ source: "known", value: "sarah.connor@gmail.com" }],
-      title: { source: "known", value: "Lunch" },
-      start_time: { source: "known", value: "2026-04-14 12:00" },
-      end_time: { source: "known", value: "2026-04-14 13:00" }
-    }
-  },
-  "Create Lunch with sarah.connor@gmail.com from 2026-04-14 12:00 to 2026-04-14 13:00."
-)
-var @dispatchKnownParticipantMeetingToolEntryResult = @dispatchExecute(
-  @builtToolEntryPreferredExecuteFixtureAgent,
-  @emptyState(),
-  {
-    phase: "execute",
-    operation: "schedule_meeting",
-    args: {
-      participants: [{ source: "known", value: "sarah.connor@gmail.com" }],
-      title: { source: "known", value: "Lunch" },
-      start_time: { source: "known", value: "2026-04-14 12:00" },
-      end_time: { source: "known", value: "2026-04-14 13:00" }
-    }
-  },
-  "Create Lunch with sarah.connor@gmail.com from 2026-04-14 12:00 to 2026-04-14 13:00."
-)
-var @dispatchKnownParticipantMeetingPlainInputRecordResult = @dispatchExecute(
-  @builtPlainInputRecordExecuteFixtureAgent,
+var @dispatchKnownParticipantMeetingCollectionResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
   @emptyState(),
   {
     phase: "execute",
@@ -808,8 +690,8 @@ var @availabilityDerivedState = @updateNamedState(
     selection_refs: []
   }
 )
-var @dispatchKnownParticipantMeetingPlainInputRecordDerivedPayloadResult = @dispatchExecute(
-  @builtPlainInputRecordExecuteFixtureAgent,
+var @dispatchKnownParticipantMeetingCollectionDerivedPayloadResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
   @availabilityDerivedState,
   {
     phase: "execute",
@@ -866,8 +748,7 @@ var @numericDispatchResult = @callTool(
   },
   @numericDispatchToolCollection,
   "get_numeric_note",
-  { note_id: @numericStringIdValue },
-  null
+  { note_id: @numericStringIdValue }
 )
 var @builtNumericDispatchAgent = @rigBuild({
   suite: "numeric-dispatch-build",
@@ -880,15 +761,13 @@ var @builtNumericDispatchResult = @callTool(
   @builtNumericDispatchAgent.tools.get_numeric_note,
   @builtNumericDispatchAgent.toolsCollection,
   "get_numeric_note",
-  { note_id: @numericStringIdValue },
-  null
+  { note_id: @numericStringIdValue }
 )
 var @wrappedToolNameDispatchResult = @callTool(
   @builtNumericDispatchAgent.tools.get_numeric_note,
   @builtNumericDispatchAgent.toolsCollection,
   @wrappedToolNameValue,
-  { note_id: @numericStringIdValue },
-  null
+  { note_id: @numericStringIdValue }
 )
 
 >> Synthesized policy coverage.
@@ -913,7 +792,7 @@ var @meetingPayloadArgs = @toolPayloadArgs(@tools.schedule_meeting)
 var @meetingOptionalArgs = @toolOptionalArgs(@tools.schedule_meeting)
 var @meetingOptionalBenign = @toolOptionalBenign(@tools.schedule_meeting)
 var @meetingRisk = @toolRisk(@tools.schedule_meeting)
-var @meetingAuthorizableRoles = @toolAuthorizableRoles(@tools.schedule_meeting)
+var @meetingCanAuthorizeRoles = @toolCanAuthorizeRoles(@tools.schedule_meeting)
 var @passwordUpdateArgs = @toolUpdateArgs(@tools.update_password)
 var @passwordExactArgs = @toolExactArgs(@tools.update_password)
 var @factValue = @get_contacts()[0].email
@@ -953,7 +832,7 @@ exe role:planner @buildOptionalMeetingPolicy() = [
 var @optionalMeetingPolicy = @buildOptionalMeetingPolicy()
 
 >> Display projection coverage.
-var @plannerSummary = @plannerStateSummary(@sampleAgent, @sampleState) | @pretty
+var @plannerSummary = @plannerVisibleState(@sampleAgent, @sampleState) | @pretty
 var @workerSummary = @workerStateSummary(@sampleAgent, @sampleState) | @pretty
 
 >> Intent compiler / source-class coverage.
@@ -1106,12 +985,12 @@ var @catalogTransparentInputRecordDetail =
 var @catalogTransparentMetadataOk =
   @field(@catalogSendEmailEntry, "can_authorize") == "role:planner" &&
   @field(@catalogAllowlistedEntry, "can_authorize") == "role:planner" &&
-  @toolAuthorizableRoles(@catalogSendEmailEntry).includes("role:planner") &&
-  @toolAuthorizableRoles(@catalogAllowlistedEntry).includes("role:planner") &&
+  @toolCanAuthorizeRoles(@catalogSendEmailEntry).includes("role:planner") &&
+  @toolCanAuthorizeRoles(@catalogAllowlistedEntry).includes("role:planner") &&
   @toolDescription(@catalogSendEmailEntry).includes("email body") &&
   @toolDescription(@catalogAllowlistedEntry).includes("approved recipients")
 var @catalogTransparentMetadataDetail =
-  `send_email roles=@toolAuthorizableRoles(@catalogSendEmailEntry) desc=@toolDescription(@catalogSendEmailEntry) allowlisted_send_email roles=@toolAuthorizableRoles(@catalogAllowlistedEntry) desc=@toolDescription(@catalogAllowlistedEntry)`
+  `send_email roles=@toolCanAuthorizeRoles(@catalogSendEmailEntry) desc=@toolDescription(@catalogSendEmailEntry) allowlisted_send_email roles=@toolCanAuthorizeRoles(@catalogAllowlistedEntry) desc=@toolDescription(@catalogAllowlistedEntry)`
 
 var @legacyAuthorizableScan = run sh {
   if rg -n 'kind:\\s*\"(read|write)\"|semantics:|authorizable:|expose:|optional:\\s*\\[|risk:\\s*\\[' /Users/adam/mlld/clean/bench/domains /Users/adam/mlld/clean/rig/tests/fixtures.mld /Users/adam/mlld/clean/rig/EXAMPLE.mld -g '*.mld' >/dev/null; then
@@ -1144,6 +1023,15 @@ var @travelToolsText = run sh {
 var @travelAgentText = run sh {
   cat /Users/adam/mlld/clean/bench/agents/travel.mld
 }
+var @plannerWorkerText = run sh {
+  cat /Users/adam/mlld/clean/rig/workers/planner.mld
+}
+var @orchestrationText = run sh {
+  cat /Users/adam/mlld/clean/rig/orchestration.mld
+}
+var @plannerPromptText = run sh {
+  cat /Users/adam/mlld/clean/rig/prompts/planner.att
+}
 var @policySectionRoundtrip = @buildAllowedToolPolicy(
   "allowlisted_send_email",
   @policySectionPlannerTools,
@@ -1161,11 +1049,11 @@ var @syntheticPolicyOk = @defaultRules.includes("no-send-to-unknown") &&
   @denyList.includes("update_password")
 var @syntheticPolicyDetail = `rules=@defaultRules deny=@denyList planner=@plannerAuth`
 
-var @authorizableSurfaceOk =
+var @canAuthorizeSurfaceOk =
   @plannerAuth.includes("send_email") &&
   @plannerAuth.includes("schedule_meeting") &&
   !@plannerAuth.includes("update_password")
-var @authorizableSurfaceDetail = `planner=@plannerAuth`
+var @canAuthorizeSurfaceDetail = `planner=@plannerAuth`
 
 var @hardDeniedSurfaceOk =
   @denyList.includes("update_password") &&
@@ -1229,11 +1117,35 @@ var @travelBenchCatalogOk =
   !@travelAgentText.includes('@runPhaseLoop')
 var @travelBenchCatalogDetail = `tools=@travelToolsText agent=@travelAgentText`
 
+var @singlePlannerArchitectureOk =
+  @plannerWorkerText.includes('var tools @plannerTools = {') &&
+  @plannerWorkerText.includes('@llmCall(@agent.harness, @prompt, {') &&
+  @plannerWorkerText.includes('tools: @plannerTools') &&
+  !@plannerWorkerText.includes('@dispatchPlanner') &&
+  !@plannerWorkerText.includes('resume:') &&
+  !@plannerPromptText.includes('<state_summary>') &&
+  !@plannerPromptText.includes('<execution_log>')
+var @singlePlannerArchitectureDetail = `planner=@plannerWorkerText prompt=@plannerPromptText`
+
+var @singlePlannerRunnerOk =
+  @orchestrationText.includes('@runPlannerSession(@agent, @query)') &&
+  !@orchestrationText.includes('loop(@loopLimit)') &&
+  !@orchestrationText.includes('@runPhaseLoop') &&
+  !@orchestrationText.includes('@dispatchPlanner')
+var @singlePlannerRunnerDetail = `orchestration=@orchestrationText`
+
 var @collectionRoundtripOk = @collectionRoundtrip(@policyBuildToolCollection, @manualBasePolicy) == true
 var @toolMetadataOk = @sendParams.length == 3 &&
   @sendControlArgs.includes("recipients") &&
   @crossModuleLabels.includes("execute:w")
 var @toolMetadataDetail = `params=@sendParams.length control=@sendControlArgs labels=@crossModuleLabels`
+
+var @wrappedArgNameRoleOk =
+  @roleForArg(@tools.get_note, "note_id") == "control" &&
+  @roleForArg(@tools.get_note, { data: "note_id" }) == "control" &&
+  @roleForArg(@tools.get_note, { mx: { data: "note_id" } }) == "control"
+var @wrappedArgNameRoleDetail =
+  `plain=@roleForArg(@tools.get_note, "note_id") data=@roleForArg(@tools.get_note, { data: "note_id" }) mx=@roleForArg(@tools.get_note, { mx: { data: "note_id" } })`
 
 var @factsourceOk = @factValue.mx.factsources.isDefined()
 var @factsourceDetail = `factsources=@factValue.mx.factsources`
@@ -1251,8 +1163,8 @@ var @inputRecordToolMetadataOk = @meetingParams.length == 4 &&
   @meetingOptionalBenign.includes("participants") &&
   @meetingRisk.includes("calendar:w") &&
   @meetingRisk.includes("exfil:send") &&
-  @meetingAuthorizableRoles.includes("role:planner")
-var @inputRecordToolMetadataDetail = `params=@meetingParams control=@meetingControlArgs payload=@meetingPayloadArgs optional=@meetingOptionalArgs optionalBenign=@meetingOptionalBenign risk=@meetingRisk roles=@meetingAuthorizableRoles`
+  @meetingCanAuthorizeRoles.includes("role:planner")
+var @inputRecordToolMetadataDetail = `params=@meetingParams control=@meetingControlArgs payload=@meetingPayloadArgs optional=@meetingOptionalArgs optionalBenign=@meetingOptionalBenign risk=@meetingRisk roles=@meetingCanAuthorizeRoles`
 
 var @inputRecordToolDocsOk = @field(@meetingDoc, "controlArgs").includes("participants") &&
   @field(@meetingDoc, "payloadArgs").includes("title") &&
@@ -1299,6 +1211,12 @@ var @dispatchScalarResolveOk =
   @dispatchScalarResolveResult.result.status == "resolved" &&
   @dispatchScalarResolveResult.result.count == 1 &&
   @dispatchScalarResolveResult.result.record_type == "datetime_context"
+var @plannerResolveDispatchPretty = @plannerResolveDispatchResult | @pretty
+var @plannerResolveDispatchOk =
+  @plannerResolveDispatchResult["error"] == null &&
+  @plannerResolveDispatchResult.status == "resolved" &&
+  @plannerResolveDispatchResult.count == 1 &&
+  @plannerResolveDispatchResult.record_type == "datetime_context"
 var @readArgDocPretty = @docSummary(@readArgDoc)
 var @readArgDocOk =
   @field(@readArgDoc, "controlArgs").includes("query") &&
@@ -1330,26 +1248,16 @@ var @dispatchKnownParticipantMeetingOk =
   @dispatchKnownParticipantMeetingResult["error"] == null &&
   @dispatchKnownParticipantMeetingResult.result.status == "sent" &&
   @dispatchKnownParticipantMeetingResult.state.execution_log.length == 1
-var @dispatchKnownParticipantMeetingDirectPretty = @dispatchSummary(@dispatchKnownParticipantMeetingDirectResult)
-var @dispatchKnownParticipantMeetingDirectOk =
-  @dispatchKnownParticipantMeetingDirectResult["error"] == null &&
-  @dispatchKnownParticipantMeetingDirectResult.result.status == "sent" &&
-  @dispatchKnownParticipantMeetingDirectResult.state.execution_log.length == 1
-var @dispatchKnownParticipantMeetingToolEntryPretty = @dispatchSummary(@dispatchKnownParticipantMeetingToolEntryResult)
-var @dispatchKnownParticipantMeetingToolEntryOk =
-  @dispatchKnownParticipantMeetingToolEntryResult["error"] == null &&
-  @dispatchKnownParticipantMeetingToolEntryResult.result.status == "sent" &&
-  @dispatchKnownParticipantMeetingToolEntryResult.state.execution_log.length == 1
-var @dispatchKnownParticipantMeetingPlainInputRecordPretty = @dispatchSummary(@dispatchKnownParticipantMeetingPlainInputRecordResult)
-var @dispatchKnownParticipantMeetingPlainInputRecordOk =
-  @dispatchKnownParticipantMeetingPlainInputRecordResult["error"] == null &&
-  @dispatchKnownParticipantMeetingPlainInputRecordResult.result.status == "sent" &&
-  @dispatchKnownParticipantMeetingPlainInputRecordResult.state.execution_log.length == 1
-var @dispatchKnownParticipantMeetingPlainInputRecordDerivedPayloadPretty = @dispatchSummary(@dispatchKnownParticipantMeetingPlainInputRecordDerivedPayloadResult)
-var @dispatchKnownParticipantMeetingPlainInputRecordDerivedPayloadOk =
-  @dispatchKnownParticipantMeetingPlainInputRecordDerivedPayloadResult["error"] == null &&
-  @dispatchKnownParticipantMeetingPlainInputRecordDerivedPayloadResult.result.status == "sent" &&
-  @dispatchKnownParticipantMeetingPlainInputRecordDerivedPayloadResult.state.execution_log.length == 1
+var @dispatchKnownParticipantMeetingCollectionPretty = @dispatchSummary(@dispatchKnownParticipantMeetingCollectionResult)
+var @dispatchKnownParticipantMeetingCollectionOk =
+  @dispatchKnownParticipantMeetingCollectionResult["error"] == null &&
+  @dispatchKnownParticipantMeetingCollectionResult.result.status == "sent" &&
+  @dispatchKnownParticipantMeetingCollectionResult.state.execution_log.length == 1
+var @dispatchKnownParticipantMeetingCollectionDerivedPayloadPretty = @dispatchSummary(@dispatchKnownParticipantMeetingCollectionDerivedPayloadResult)
+var @dispatchKnownParticipantMeetingCollectionDerivedPayloadOk =
+  @dispatchKnownParticipantMeetingCollectionDerivedPayloadResult["error"] == null &&
+  @dispatchKnownParticipantMeetingCollectionDerivedPayloadResult.result.status == "sent" &&
+  @dispatchKnownParticipantMeetingCollectionDerivedPayloadResult.state.execution_log.length == 1
 var @dispatchAllowlistAllowedPretty = `error=@field(@dispatchAllowlistAllowedResult, "error") recipient=@field(@dispatchAllowlistAllowedResult, "recipient") subject=@field(@dispatchAllowlistAllowedResult, "subject")`
 var @dispatchAllowlistAllowedOk =
   @isBlank(@field(@dispatchAllowlistAllowedResult, "error")) &&
@@ -1402,7 +1310,7 @@ var @flatDisplayRecord = {
   name: "Carol",
   notes: "plain-display"
 } as record @flat_display_contact
-var @flatDisplaySummary = @plannerStateSummary(
+var @flatDisplaySummary = @plannerVisibleState(
   {
     suite: "fixtures",
     records: { flat_display_contact: @flat_display_contact }
@@ -1423,7 +1331,6 @@ var @flatDisplaySummary = @plannerStateSummary(
     extracted: {},
     derived: {},
     execution_log: [],
-    planner_session_id: null,
     phase_events: []
   }
 ) | @pretty
@@ -1436,7 +1343,7 @@ var @plainModeRecord = {
   subject: "Project kickoff agenda",
   body: "planner-must-not-see-this"
 } as record @plain_mode_message
-var @plainModePlannerSummary = @plannerStateSummary(
+var @plainModePlannerSummary = @plannerVisibleState(
   {
     suite: "fixtures",
     records: { plain_mode_message: @plain_mode_message }
@@ -1458,7 +1365,6 @@ var @plainModePlannerSummary = @plannerStateSummary(
     extracted: {},
     derived: {},
     execution_log: [],
-    planner_session_id: null,
     phase_events: []
   }
 ) | @pretty
@@ -1484,7 +1390,6 @@ var @plainModeWorkerSummary = @workerStateSummary(
     extracted: {},
     derived: {},
     execution_log: [],
-    planner_session_id: null,
     phase_events: []
   }
 ) | @pretty
@@ -1527,10 +1432,9 @@ var @checkpointRestoredState = {
   extracted: {},
   derived: {},
   execution_log: [],
-  planner_session_id: null,
   phase_events: []
 }
-var @checkpointRestoredSummary = @plannerStateSummary(
+var @checkpointRestoredSummary = @plannerVisibleState(
   {
     suite: "fixtures",
     records: { plain_mode_message: @plain_mode_message }
@@ -1614,7 +1518,6 @@ var @weakenedState = {
   extracted: {},
   derived: {},
   execution_log: [],
-  planner_session_id: null,
   phase_events: []
 }
 var @proofWeakenedControl = @resolveControlRefValue(@weakenedState, @proofChainRef)
@@ -1738,10 +1641,9 @@ var @scalarExtractState = {
   },
   derived: {},
   execution_log: [],
-  planner_session_id: null,
   phase_events: []
 }
-var @scalarExtractPlannerSummary = @plannerStateSummary(
+var @scalarExtractPlannerSummary = @plannerVisibleState(
   {
     suite: "fixtures",
     records: {}
@@ -1802,10 +1704,9 @@ var @stateWithTaintedNamedValues = {
     }
   },
   execution_log: [],
-  planner_session_id: null,
   phase_events: []
 }
-var @taintedPlannerSummary = @plannerStateSummary(
+var @taintedPlannerSummary = @plannerVisibleState(
   {
     suite: "fixtures",
     records: {}
@@ -1880,10 +1781,9 @@ line end @recordBackedMarker`,
   },
   derived: {},
   execution_log: [],
-  planner_session_id: null,
   phase_events: []
 }
-var @recordBackedPlannerSummary = @plannerStateSummary(
+var @recordBackedPlannerSummary = @plannerVisibleState(
   {
     suite: "fixtures",
     records: {
@@ -1927,7 +1827,6 @@ var @namedStateBase = {
   extracted: {},
   derived: {},
   execution_log: [],
-  planner_session_id: null,
   phase_events: []
 }
 var @namedStateAfterFirstExtract = @updateNamedState(
@@ -1969,7 +1868,7 @@ var @namedStateAfterSecondExtract = @updateNamedState(
     }
   }
 )
-var @namedStatePlannerSummary = @plannerStateSummary(
+var @namedStatePlannerSummary = @plannerVisibleState(
   {
     suite: "fixtures",
     records: {}
@@ -2008,7 +1907,6 @@ var @namedStateWithExecutionLog = {
       session_id: null
     }
   ],
-  planner_session_id: null,
   phase_events: []
 }
 var @namedStateLogRetained = @updateNamedState(
@@ -2047,10 +1945,9 @@ var @arrayNamedState = {
     }
   },
   execution_log: [],
-  planner_session_id: null,
   phase_events: []
 }
-var @arrayPlannerSummary = @plannerStateSummary(
+var @arrayPlannerSummary = @plannerVisibleState(
   {
     suite: "fixtures",
     records: {}
@@ -2090,10 +1987,9 @@ var @wrappedArrayNamedState = {
     }
   },
   execution_log: [],
-  planner_session_id: null,
   phase_events: []
 }
-var @wrappedArrayPlannerSummary = @plannerStateSummary(
+var @wrappedArrayPlannerSummary = @plannerVisibleState(
   {
     suite: "fixtures",
     records: {}
@@ -2130,7 +2026,6 @@ var @wrappedLogState = {
       session_id: null
     }
   ],
-  planner_session_id: null,
   phase_events: []
 }
 var @wrappedLogRetained = @appendExecutionLog(@wrappedLogState, {
@@ -2154,18 +2049,21 @@ exe @allChecks() = [
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
   @check("CAT-1", @catalogTransparentInputRecordOk, @catalogTransparentInputRecordDetail),
   @check("CAT-2", @catalogTransparentMetadataOk, @catalogTransparentMetadataDetail),
-  @check("AUTH-1", @authorizableSurfaceOk, @authorizableSurfaceDetail),
+  @check("AUTH-1", @canAuthorizeSurfaceOk, @canAuthorizeSurfaceDetail),
   @check("AUTH-2", @hardDeniedSurfaceOk, @hardDeniedSurfaceDetail),
   @check("AUTH-3", @legacyAuthorizableKeyOk, `scan=@legacyAuthorizableScan`),
   @check("BENCH-CAT-1", @workspaceBenchCatalogOk, @workspaceBenchCatalogDetail),
   @check("BENCH-CAT-2", @bankingBenchCatalogOk, @bankingBenchCatalogDetail),
   @check("BENCH-CAT-3", @slackBenchCatalogOk, @slackBenchCatalogDetail),
   @check("BENCH-CAT-4", @travelBenchCatalogOk, @travelBenchCatalogDetail),
+  @check("PLANNER-ARCH-1", @singlePlannerArchitectureOk, @singlePlannerArchitectureDetail),
+  @check("PLANNER-ARCH-2", @singlePlannerRunnerOk, @singlePlannerRunnerDetail),
   @check("POL-ROUNDTRIP-1", @collectionRoundtripOk, "policy.build succeeded inside a wrapper exe"),
   @check("POL-ROUNDTRIP-2", @policySectionRoundtripOk, @policySectionRoundtripDetail),
   @check("synthesized-policy-shape", @syntheticPolicyOk, @syntheticPolicyDetail),
   @check("collection-roundtrip", @collectionRoundtripOk, "policy.build succeeded inside a wrapper exe"),
   @check("tool-metadata-access", @toolMetadataOk, @toolMetadataDetail),
+  @check("wrapped-arg-name-role-classification", @wrappedArgNameRoleOk, @wrappedArgNameRoleDetail),
   @check("imported-var-tools-preserve-param-metadata", @importedToolParamRoundtripOk, @importedToolParamRoundtripDetail),
   @check("input-record-tool-metadata", @inputRecordToolMetadataOk, @inputRecordToolMetadataDetail),
   @check("factsource-roundtrip", @factsourceOk, @factsourceDetail),
@@ -2179,16 +2077,15 @@ exe @allChecks() = [
   @check("phase-tool-entry-preserves-callability", @phaseToolEntryDispatchOk, @phaseToolEntryDispatchPretty),
   @check("resolve-worker-success-path", @dispatchResolveOk, @dispatchResolvePretty),
   @check("resolve-worker-scalar-keyed-path", @dispatchScalarResolveOk, @dispatchScalarResolvePretty),
+  @check("planner-tool-collection-dispatch-does-not-recurse", @plannerResolveDispatchOk, @plannerResolveDispatchPretty),
   @check("read-tool-docs-classify-all-read-params-as-control", @readArgDocOk, @readArgDocPretty),
   @check("resolve-worker-accepts-read-tool-params-without-legacy-controlArgs", @dispatchReadArgResolveOk, @dispatchReadArgResolvePretty),
   @check("execute-worker-zero-control-arg-policy", @dispatchCreateNoteOk, @dispatchCreateNotePretty),
   @check("execute-worker-optional-fact-omission", @dispatchOptionalMeetingOk, @dispatchOptionalMeetingPretty),
   @check("known-datetime-canonicalization", @dispatchNaturalDatetimeMeetingOk, @dispatchNaturalDatetimeMeetingPretty),
   @check("execute-worker-known-control-arg-policy", @dispatchKnownParticipantMeetingOk, @dispatchKnownParticipantMeetingPretty),
-  @check("execute-worker-direct-input-record-policy", @dispatchKnownParticipantMeetingDirectOk, @dispatchKnownParticipantMeetingDirectPretty),
-  @check("execute-worker-prefers-tool-entry-inputs", @dispatchKnownParticipantMeetingToolEntryOk, @dispatchKnownParticipantMeetingToolEntryPretty),
-  @check("execute-worker-plain-wrapper-input-record-policy", @dispatchKnownParticipantMeetingPlainInputRecordOk, @dispatchKnownParticipantMeetingPlainInputRecordPretty),
-  @check("execute-worker-plain-wrapper-derived-payload-policy", @dispatchKnownParticipantMeetingPlainInputRecordDerivedPayloadOk, @dispatchKnownParticipantMeetingPlainInputRecordDerivedPayloadPretty),
+  @check("execute-worker-collection-input-record-policy", @dispatchKnownParticipantMeetingCollectionOk, @dispatchKnownParticipantMeetingCollectionPretty),
+  @check("execute-worker-collection-derived-payload-policy", @dispatchKnownParticipantMeetingCollectionDerivedPayloadOk, @dispatchKnownParticipantMeetingCollectionDerivedPayloadPretty),
   @check("input-record-allowlist-pass", @dispatchAllowlistAllowedOk, @dispatchAllowlistAllowedPretty),
   @check("input-record-allowlist-reject", @dispatchAllowlistRejectedOk, @dispatchAllowlistRejectedPretty),
   @check("input-record-blocklist-reject", @dispatchBlocklistRejectedOk, @dispatchBlocklistRejectedPretty),

@@ -279,7 +279,7 @@ exe @toolRisk(toolEntry) = [
   => @frameworkRiskLabels(@toolLabels(@toolEntry))
 ]
 
-exe @toolAuthorizableRoles(toolEntry) = [
+exe @toolCanAuthorizeRoles(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
   let @topLevelType = @typeof(@entry.can_authorize)
   => when [
@@ -298,8 +298,8 @@ exe @toolAuthorizableRoles(toolEntry) = [
   ]
 ]
 
-exe @toolAuthorizable(toolEntry) = [
-  => @toolAuthorizableRoles(@toolEntry).length > 0
+exe @toolCanAuthorize(toolEntry) = [
+  => @toolCanAuthorizeRoles(@toolEntry).length > 0
 ]
 
 exe @toolDescription(toolEntry) = [
@@ -473,8 +473,8 @@ exe @renderToolDoc(toolName, tool) = [
       blocklist: @toolBlocklist(@tool),
       optionalBenign: @toolOptionalBenign(@tool),
       risk: @toolRisk(@tool),
-      can_authorize: @toolAuthorizable(@tool),
-      authorizableRoles: @toolAuthorizableRoles(@tool),
+      can_authorize: @toolCanAuthorize(@tool),
+      canAuthorizeRoles: @toolCanAuthorizeRoles(@tool),
       description: @toolDescription(@tool),
       instructions: @toolInstructions(@tool),
       labels: @toolLabels(@tool)
@@ -524,9 +524,9 @@ exe @synthesizedOperations(tools) = [
 
 exe @synthesizedAuthorizations(tools) = [
   let @catalog = @toolCatalogObject(@tools)
-  let @deny = for @name, @tool in @catalog when !@toolAuthorizable(@tool) => @name
+  let @deny = for @name, @tool in @catalog when !@toolCanAuthorize(@tool) => @name
   let @rolePairsNested = for @name, @tool in @catalog [
-    let @roles = @toolAuthorizableRoles(@tool)
+    let @roles = @toolCanAuthorizeRoles(@tool)
     => for @role in @roles => {
       key: @role,
       value: @name
@@ -534,12 +534,12 @@ exe @synthesizedAuthorizations(tools) = [
   ]
   let @rolePairs = loop(1000) [
     let @ctx = when [
-      @input["_rig_cursor"] == "authorizableRolePairs" => @input
-      * => { _rig_cursor: "authorizableRolePairs", index: 0, pairs: [] }
+      @input["_rig_cursor"] == "canAuthorizeRolePairs" => @input
+      * => { _rig_cursor: "canAuthorizeRolePairs", index: 0, pairs: [] }
     ]
     if @ctx.index >= @rolePairsNested.length [ done @ctx.pairs ]
     continue {
-      _rig_cursor: "authorizableRolePairs",
+      _rig_cursor: "canAuthorizeRolePairs",
       index: @ctx.index + 1,
       pairs: @ctx.pairs.concat(@rolePairsNested[@ctx.index] ?? [])
     }
@@ -591,8 +591,8 @@ export {
   @toolOptionalBenign,
   @toolCorrelateControlArgs,
   @toolRisk,
-  @toolAuthorizableRoles,
-  @toolAuthorizable,
+  @toolCanAuthorizeRoles,
+  @toolCanAuthorize,
   @toolDescription,
   @toolInstructions,
   @toolReturnsRecord,

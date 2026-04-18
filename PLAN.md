@@ -15,7 +15,7 @@ When v2 benchmarks at baseline across all 4 suites, `mv ~/mlld/rig ~/mlld/rig-v1
 
 - `~/mlld/clean/rig/ARCHITECTURE.md` — why the system is structured this way
 - `~/mlld/clean/rig/INTERFACE.md` — public surface (frozen)
-- `~/mlld/clean/rig/PHASES.md` — phase loop implementation contract
+- `~/mlld/clean/rig/PHASES.md` — persistent planner tool-use implementation contract
 - `~/mlld/clean/rig/SECURITY.md` — invariants that must hold
 - `~/mlld/clean/rig/EXAMPLE.mld` — minimal toy agent end-to-end
 - `~/mlld/clean/bench/ARCHITECTURE.md` — how benchmark consumes rig
@@ -28,31 +28,33 @@ These deliverables don't fit a single step — they cut across the whole build. 
 
 ### Display projection
 
-Applies to every phase where state is serialized into an LLM prompt or a worker box dispatches.
+Applies to every planner-visible tool result and every worker box dispatch.
 
 Deliverables:
 - Helper that renders a record value through its `role:X` display mode
-- Orchestrator-side serialization that applies display projection when building prompts (planner and worker)
-- Box display config (`display: "role:planner"`, `display: "role:worker"`) set correctly per phase
-- Unit coverage in `rig/tests/index.mld` for at least: planner sees role:planner projection, worker sees role:worker projection, omitted fields are actually omitted
+- Planner tool wrappers that return only:
+  - `->` clean attestations, or
+  - `=> record` values that are projected through `role:planner`
+- Worker LLM calls inside boxes with `display: "role:worker"`
+- Unit coverage in `rig/tests/index.mld` for at least: planner sees role:planner projection, worker sees role:worker projection, omitted fields are actually omitted, and tainted tool-worker data does not leak back to the planner through a wrapper result
 
-First appears in Step 1 (planner prompt serialization). Extended in Step 2 (resolve worker display). Locked by Step 5 (execute worker with display on).
+First appears in Step 1 (persistent planner tool-use spike). Extended in Step 2-4 as each planner-facing wrapper is added. Locked by Step 5 when the old state-summary path is deleted.
 
-### Planner context builder
+### Planner prompt and tool surface
 
-Generates the planner's system prompt from:
+Generates the planner's initial system prompt and the planner-facing rig-owned tool surface from:
 - tool docs (derived from tool catalog metadata)
-- op docs for planner-authorizable writes (semantics strings + control/payload arg lists + bucketed intent shape)
-- state summary (orchestrator-side read + display projection)
-- execution log attestations
+- operation docs for planner-authorizable writes (`description`, `instructions`, arg signatures, `can_authorize` roles, policy sections)
+- source-class rules and tool-use discipline
+- terminal-tool rules for `compose` and `blocked`
 
 Deliverables:
-- Tool docs renderer (mimics v1 `@toolDocs` path with v2 catalog shape)
-- Op docs renderer (semantics + arg signatures + `can_authorize` roles)
-- State summary serializer (display-projected)
-- Execution log summary renderer
+- Tool docs renderer from the v2 catalog shape
+- Operation docs renderer from the v2 catalog shape
+- Planner prompt that assumes one continuous tool-use conversation, not per-turn reconstruction
+- Rig-owned planner tool wrappers for `resolve`, `extract`, `derive`, `execute`, `compose`, and `blocked`
 
-First appears in Step 1 (minimal — just tool names, no state yet). Expanded in Step 2+ as each phase type adds to what the planner sees.
+The planner does not receive a reconstructed per-turn state summary or execution-log prompt section. The conversation and tool results are the execution history.
 
 ### Policy synthesizer
 
@@ -66,16 +68,16 @@ Deliverables:
 
 Timing:
 - **Step 1 does NOT require the synthesizer.** The Step 1 invariant test "policy build" is a baseline assertion that `@policy.build` (the underlying mlld runtime primitive) accepts a hand-constructed minimal policy — verifying the runtime contract, not the rig synthesizer. This is the same assertion v1 spike 34 has; it catches runtime regressions in `@policy.build` itself.
-- **Step 5 is when the synthesizer becomes a real deliverable.** Execute dispatch needs a synthesized policy from the tool catalog to call `@policy.build` with real authorization intent. The Step 5 invariants ("known catalog input produces expected synthesized policy") verify the rig synthesizer specifically.
+- **Step 4 is when the synthesizer becomes a real deliverable.** Execute dispatch needs a synthesized policy from the tool catalog to call `@policy.build` with real authorization intent. The Step 4 invariants ("known catalog input produces expected synthesized policy") verify the rig synthesizer specifically.
 
-You can write the synthesizer earlier if convenient — it's pure transformation with no runtime dependencies — but the plan treats Step 1's "policy build" assertion and Step 5's "synthesizer" as distinct work items.
+You can write the synthesizer earlier if convenient — it's pure transformation with no runtime dependencies — but the plan treats Step 1's "policy build" assertion and Step 4's "synthesizer" as distinct work items.
 
 ### Framework-internal records
 
-Records that rig uses internally for its own typed data (planner decision, phase results, host integration). Not exposed to apps.
+Records that rig uses internally for its own typed data (tool wrapper results, phase attestations, host integration). Not exposed to apps.
 
 Deliverables:
-- Planner decision record (the typed intent shape from INTERFACE.md)
+- Planner tool result / terminal result records
 - Phase result record (attestation shape per worker)
 - Lifecycle event records (for NDJSON serialization)
 
@@ -87,91 +89,94 @@ Clear exception types from `@rig.build` and `@rig.run` with messages that point 
 
 Deliverables:
 - `@rig.build` errors: malformed record, malformed tool declaration, missing payloadRecord reference, can_authorize: false on a tool also in the planner-authorizable list, ref to an undefined record
-- `@rig.run` errors: maxIterations exhaustion, planner schema validation failure after retry, compiled policy rejects all options, phase worker threw unhandled, host integration file path not writable
+- `@rig.run` errors: planner tool-call budget exhaustion, repeated invalid tool-call budget exhaustion, terminal tool misuse after completion, compiled policy rejects all options, phase worker threw unhandled, host integration file path not writable
 - Error messages include the offending name (tool key, record name, arg name) not just the category
 
-Appears incrementally. Step 1 should produce clear build-time errors. Step 5 should produce clear compile-time authorization errors.
+Appears incrementally. Step 1 should produce clear build-time errors. Step 4 should produce clear compile-time authorization errors.
 
 ## Build Order
 
 Each step produces something runnable. Don't proceed to the next step until the current one works end-to-end for its scope.
 
-### Step 1: Rig core skeleton with lifecycle emission (runnable empty agent)
+### Step 1: Persistent planner skeleton with lifecycle emission
 
-**Goal:** `@rig.build(config)` + `@rig.run(agent, query)` work end-to-end for a trivial case. Planner → compose with "I have no tools" response. **Phase lifecycle emission works from day one.**
+**Goal:** `@rig.build(config)` + `@rig.run(agent, query)` work end-to-end for a trivial case using exactly one planner LLM session with provider tool use. No outer planner loop, no per-turn prompt reconstruction, no planner resume. **Phase lifecycle emission works from day one.**
 
 **Files:**
 - `rig/index.mld` — public surface, `@rig.build`, `@rig.run`
-- `rig/orchestration.mld` — minimal phase loop skeleton (planner + compose only)
-- `rig/workers/planner.mld` — planner dispatch with typed intent schema
-- `rig/workers/compose.mld` — compose with `tools: []`
-- `rig/prompts/planner.att` — planner prompt (minimal)
-- `rig/prompts/compose.att` — compose prompt (minimal)
-- `rig/records.mld` — framework-internal records (planner decision shape)
-- `rig/intent.mld` — placeholder that compiles empty decision shapes
+- `rig/orchestration.mld` — single-session runner
+- `rig/workers/planner.mld` — initial planner prompt + planner-facing tool surface
+- `rig/workers/compose.mld` — compose worker used behind the planner-facing `compose` tool
+- `rig/prompts/planner.att` — initial planner prompt for persistent tool use
+- `rig/prompts/compose.att` — compose prompt
+- `rig/records.mld` — framework-internal tool-result / terminal-result records
 - `rig/lifecycle.mld` — NDJSON event emission to host-configured `phase_log_file`; live pointer write to `phase_state_file`
 
-**Exit:** `mlld rig/tests/flows/smoke.mld` produces a `complete` terminal with compose output. `phase_log_file` contains valid `planner_iteration` and `phase_start`/`phase_end` events. `phase_state_file` reflects the current phase during execution and returns to the `between` sentinel at completion. `mlld rig/tests/index.mld` starts as a skeleton with at least the baseline assertions (mlld runtime `@policy.build` accepts a minimal hand-constructed policy, tool metadata access works, thin-arrow strict mode doesn't leak). **The rig policy synthesizer is not required in Step 1** — it's a Step 5 deliverable. The Step 1 "policy build" assertion verifies the underlying runtime primitive, not the synthesizer.
+**Add:**
+- Persistent planner call with `tools: @plannerTools`
+- Planner-facing `compose` and `blocked` tools
+- Terminal session state for `complete` and `blocked`
+- Lifecycle emission per planner tool invocation (`planner_iteration`, `phase_start`, `phase_end`)
+- Tool-call result contract: planner tool wrappers return only clean attestation or planner-projected record output
 
-### Step 2: Resolve phase
+**Exit:** `mlld rig/tests/flows/smoke.mld` produces a `complete` terminal through one planner session that calls `compose` and exits. `phase_log_file` contains valid `planner_iteration` and `phase_start`/`phase_end` events. `phase_state_file` reflects the current phase during execution and returns to the `between` sentinel at completion. `mlld rig/tests/index.mld` starts as a skeleton with at least the baseline assertions (mlld runtime `@policy.build` accepts a minimal hand-constructed policy, tool metadata access works, thin-arrow strict mode doesn't leak, planner tool wrappers do not leak tainted worker data back to the planner). **The rig policy synthesizer is not required in Step 1** — it's a Step 4 deliverable. The Step 1 "policy build" assertion verifies the underlying runtime primitive, not the synthesizer.
 
-**Goal:** The agent can resolve records via read tools. Resolved values are proof-bearing.
+### Step 2: Resolve as a planner-facing rig tool
+
+**Goal:** The persistent planner can ground records via the planner-facing `resolve` tool. Resolved values are proof-bearing, and the planner only sees clean results.
 
 **Add:**
 - `rig/workers/resolve.mld` — resolve dispatch
+- Planner-facing `resolve` wrapper in `rig/workers/planner.mld`
 - `rig/prompts/resolve.att` — resolve worker prompt
 - State storage for resolved records (rig-internal, keyed by handle/instance key)
-- Planner intent shape for `{ phase: "resolve", tool, args }`
 - Tool catalog validation in `@rig.build` for read tools
 - Ref resolution for `{ source: "resolved", record, handle, field }`
+- Planner-visible resolve result contract:
+  - `->` attestation by default
+  - planner-projected record output only when explicitly needed
 
-**Reference:** v1 resolve patterns at `~/mlld/rig/workers/resolve.mld` — note the display mode handling (worker sees tool results in `role:worker`; stored records project at read time).
+**Reference:** v1 resolve patterns at `~/mlld/rig/workers/resolve.mld` — keep the worker semantics, not the outer-loop structure.
 
-**Exit:** `mlld rig/tests/flows/resolve.mld` with a synthetic `get_contacts` tool completes resolve → compose. Compose cites the resolved contact by name via a `resolved` ref.
+**Exit:** `mlld rig/tests/flows/resolve.mld` with a synthetic `get_contacts` tool completes within one planner session as `resolve` → `compose`. Compose cites the resolved contact by name via a `resolved` ref. `rig/tests/index.mld` includes an invariant proving the planner-facing resolve tool result applies `role:planner` display and does not leak omitted fields.
 
-### Step 3: Extract phase
+### Step 3: Extract and derive as planner-facing rig tools
 
-**Goal:** The agent can coerce tainted content into typed payloads against a schema.
+**Goal:** The persistent planner can coerce tainted content into typed payloads and compute derived results over typed inputs, while the planner itself remains clean.
 
 **Add:**
 - `rig/workers/extract.mld` — extract dispatch, schema validation, `@cast` coercion, extracted provenance tagging
-- `rig/prompts/extract.att` — extract worker prompt
-- State storage for extracted results
-- Planner intent shape for `{ phase: "extract", source, schema, name }`
-- Ref resolution for `{ source: "extracted", name, field }` — payload-only
-- Source-scope enforcement: extract only reads the source named in the decision
-- **Schema authority from `payloadRecord`**: when the extract targets a subsequent write, the schema is the write tool's `operation.payloadRecord`. No standalone contract catalog (spike 41).
-- **Extract cannot produce selection refs** (spike 42). If the worker tries, rig rejects the output.
-
-**Reference:** v1 extract patterns at `~/mlld/rig/workers/extract.mld`. Note the contract-pinning mechanics via `@cast`. Spike 41 for schema authority. Spike 42 for the selection-ref boundary.
-
-**Exit:** `mlld rig/tests/flows/extract.mld` with a synthetic tainted-source record completes resolve → extract → compose. The extracted result is typed and carries extracted provenance. A second test verifies that an extract worker attempting to return a selection ref is rejected.
-
-### Step 4: Derive phase
-
-**Goal:** The agent can compute derived results over typed inputs (resolved, extracted, prior derived).
-
-**Add:**
 - `rig/workers/derive.mld` — derive dispatch, schema validation, provenance tagging
+- Planner-facing `extract` and `derive` wrappers in `rig/workers/planner.mld`
+- `rig/prompts/extract.att` — extract worker prompt
 - `rig/prompts/derive.att` — derive worker prompt
-- State storage for derived results
-- Planner intent shape for `{ phase: "derive", sources, goal, schema, name }`
-- Ref resolution for `{ source: "derived", name, field }` — payload-only
-- **Selection ref validation** — when derive returns a selection ref, rig validates the backing ref points to an instance in the derive input set with original proof
+- State storage for extracted and derived results
+- Ref resolution for `{ source: "extracted", name, field }` and `{ source: "derived", name, field }` — payload-only
+- Source-scope enforcement: extract only reads the source named in the tool call
+- **Extract cannot produce selection refs**. If the worker tries, rig rejects the output.
+- **Derive selection ref validation** — when derive returns a selection ref, rig validates the backing ref points to an instance in the derive input set with original proof
+- Planner-visible tool result discipline:
+  - extract returns attestation only
+  - derive returns attestation only
+  - neither may return raw extracted or derived payload content to the planner
 
-**Reference:** spike 35 (provenance firewall) and spike 36 (intent compiler).
+**Reference:** spike 35 (provenance firewall), spike 36 (intent compiler), spike 41 (schema authority), spike 42 (selection-ref boundary).
 
-**Exit:** `mlld rig/tests/flows/derive.mld` with a synthetic `get_numbers` tool + derive that picks the max completes resolve → derive → compose. Compose cites the derived max. A second test exercises selection refs: derive picks among resolved candidates, returns a validated selection ref, and compose references it.
+**Exit:** `mlld rig/tests/flows/extract.mld` and `mlld rig/tests/flows/derive.mld` complete within one planner session. `rig/tests/index.mld` includes explicit invariants proving:
+- an extract worker that processed tainted content does not leak that taint back to the planner through the planner-facing tool result
+- an extract worker attempting to emit a selection ref is rejected
+- derive can return validated selection refs without leaking payload content
 
-### Step 5: Execute phase with compiled authorization
+### Step 4: Execute as a planner-facing rig tool with compiled authorization
 
-**Goal:** The agent can perform writes with compiled per-step authorization from typed planner intent.
+**Goal:** The persistent planner can perform writes through the planner-facing `execute` tool with compiled per-step authorization from typed source-class refs.
 
 **Add:**
 - `rig/workers/execute.mld` — execute dispatch, single-write enforcement, compiled policy application
+- Planner-facing `execute` wrapper in `rig/workers/planner.mld`
 - `rig/prompts/execute.att` — execute worker prompt
 - `rig/intent.mld` (real implementation) — compiles typed source-class args into bucketed intent
-- Integration with `@policy.build`
+- Policy synthesizer integration with `@policy.build`
 - Write-tool operation declaration validation in `@rig.build`
 - Source class resolution at execute compile time:
   - `resolved` → include in `resolved` bucket with factsource
@@ -179,27 +184,60 @@ Each step produces something runnable. Don't proceed to the next step until the 
   - `extracted` → payload-only; reject for control args
   - `derived` → payload-only; reject for control args
   - `selection` → lowers to backing resolved instance; proof carried through; valid for both control and payload positions
-  - `allow` → only valid for tools with no controlArgs; reject on tools with controlArgs
+  - `allow` → only valid for tools with no control args; reject on tools with control args
 - Per-element control-arg checking for array-typed control args
-- Payload record coercion: `@cast` applied to payload-arg subset only; control args and bind-default args merged after cast (spike 41)
-- Selection ref lowering is a cross-phase primitive — any position that accepts a resolved instance ref may consume a selection ref. Implement this as a single rig utility used by resolve, extract, derive, execute, and compose arg resolution.
+- Payload record coercion: `@cast` applied to payload-arg subset only; control args and bind-default args merged after cast
+- Selection ref lowering as a cross-phase primitive shared by resolve, extract, derive, execute, and compose arg resolution
 
 **Reference:** spike 36 (intent compiler), spike 37 (records + ops surface).
 
-**Exit:** `mlld rig/tests/flows/execute.mld` with a synthetic `append_note` write tool completes resolve → execute → compose. A second test exercises the provenance firewall: an execute with `{ source: "derived", ... }` in a control arg position is rejected. A third test shows selection refs working correctly for derive → control-arg. `rig/tests/index.mld` now covers the firewall, selection ref lowering, and per-element array proof as dedicated assertions — these must pass zero-LLM.
+**Exit:** `mlld rig/tests/flows/execute.mld` with a synthetic `append_note` write tool completes within one planner session as `resolve` → `execute` → `compose`. A second test exercises the provenance firewall: an execute with `{ source: "derived", ... }` in a control arg position is rejected. A third test shows selection refs working correctly for derive → control arg. `rig/tests/index.mld` covers the firewall, selection ref lowering, and per-element array proof as dedicated assertions — these must pass zero-LLM.
 
-### Step 6: Guards and retry
+### Step 5: Delete the phase-loop planner architecture
 
-**Goal:** The planner gets structured retries when decisions fail validation.
+**Goal:** Remove the obsolete architecture once the persistent planner path is working. There is no supported outer planner loop after this step.
+
+**Delete / change:**
+- Per-turn planner decision schema and parser path
+- Planner retry prompt path and schema-failure-after-retry terminal
+- Planner prompt reconstruction from `state_summary` and `execution_log`
+- Planner `resume` threading and `planner_session_id` as correctness machinery
+- Loop-counter-based planner orchestration
+- Any helper whose only job was to rebuild planner context between planner turns
+
+**Files:**
+- `rig/orchestration.mld`
+- `rig/workers/planner.mld`
+- `rig/runtime.mld`
+- `rig/prompts/planner.att`
+- `rig/records.mld`
+
+**Exit:** The planner architecture in clean rig is unambiguously one persistent tool-use session. No clean rig code path can run the old outer-loop planner model. `rig/tests/index.mld` includes explicit assertions that the planner path does not pass `resume` and does not rely on a per-turn planner state-summary builder.
+
+### Step 6: Structured tool errors, budgets, and terminal-tool discipline
+
+**Goal:** The planner repairs itself in-session through structured planner-tool errors, while the framework enforces hard budgets and terminal semantics.
 
 **Add:**
-- `rig/guards.mld` — structural guards: schema validation, `prematureBlocked`, `prematureCompose`, `blockedAfterResolve`
-- Retry logic in `orchestration.mld` — one retry per decision with a hint prompt
-- Ambiguity exemption — blocked decisions citing explicit ambiguity are valid
+- Planner-tool error contract for invalid args, unknown tools, policy rejection, and worker failure
+- Total planner tool-call budget owned by rig (the existing `maxIterations` config is reinterpreted as a tool-call budget)
+- Consecutive invalid tool-call budget owned by rig
+- Terminal-tool discipline:
+  - `compose` is terminal
+  - `blocked` is terminal
+  - any subsequent planner tool call after terminal state is a framework error
 
-**Reference:** v1 guards at `~/mlld/rig/guards.mld` — these predicates are generic and can be ported largely unchanged.
+**Rule for this step:**
+- The planner repairs through tool results inside the same session
+- The framework owns the budgets and termination
+- There is no outer-loop retry path for planner decisions
 
-**Exit:** `mlld rig/tests/flows/guards.mld` simulates bad planner decisions and verifies each guard fires with the expected retry hint.
+**Exit:** `mlld rig/tests/flows/guards.mld` is replaced or rewritten as persistent-planner tool-error coverage. `rig/tests/index.mld` includes invariants for:
+- tool-call budget exhaustion
+- repeated invalid-tool-call exhaustion
+- `compose` terminal behavior
+- `blocked` terminal behavior
+- framework rejection of any planner tool call after terminal state
 
 ### Step 7: Pin policy sections and the transparent catalog surface
 
@@ -306,7 +344,7 @@ Each step produces something runnable. Don't proceed to the next step until the 
 - Read `phase_state_file` current pointer
 - Attribute MCP calls to the correct worker based on `phase_state_file` at call time
 - Surface `session_id` and `session_ids` as top-level JSONL fields (from execution log)
-- Results format: keep debug field shape compatible with v1 analysis scripts (`execution_log`, `planner_iterations`, `phase_events`, `last_decision`)
+- Results format: keep debug field shape compatible with v1 analysis scripts where practical, but do not reintroduce loop architecture to satisfy that compatibility. `execution_log` and `phase_events` are the source of truth; `planner_iterations` may exist only as a host-derived view over planner tool invocations.
 
 **Attack task support:**
 - Agent entrypoint is unchanged between benign and attack runs
@@ -336,6 +374,7 @@ Each step produces something runnable. Don't proceed to the next step until the 
 - Workspace contains no duplicated tool-catalog surface across planner/runtime paths
 - Workspace uses top-level policy sections wherever they apply; no `updateArgs` / `exactPayloadArgs` remain in workspace once those sections are live
 - Workspace has deterministic regression coverage proving the clean agent entrypoint does not need a shadow planner catalog or runtime bridge catalog
+- Workspace runs on the persistent planner tool-use path only; no clean workspace code path relies on planner resume or per-turn planner prompt reconstruction
 - Full 40-task workspace suite on the dev harness/model confirms the framework path is clean (no framework-level failures; task-level utility numbers are informational on the cheap model)
 - Final measurement run: full 40-task workspace suite on Sonnet 4 (`--harness claude --model claude-sonnet-4-20250514`). 0% ASR on injection tasks. Utility target set after the run — do not pre-commit a percentage that pressures accommodation of excluded tasks.
 
@@ -371,6 +410,7 @@ Banking, slack, and travel are already migrated onto the new surface. This step 
 - Per-suite dev-harness runs confirm the framework path is clean (utility numbers will be lower on the cheap model — that's expected; the measurement is that the flow runs)
 - All 4 suites express exact/update-style policy through the new top-level sections, not legacy fields
 - All 4 suites use a single authored tool catalog shape with no planner/runtime bridge duplication
+- All 4 suites run through the persistent planner tool-use architecture only
 - Per-suite deterministic checks prove the clean single-catalog shape remains in place after migration
 - Final measurement pass on Sonnet 4: 0% ASR on all injection tasks
 - Utility targets are set after the first clean Sonnet 4 run, excluding tasks that require instruction-following over tainted content or recommendation evaluation against influenced content (see "Explicitly out of scope"). Do not pre-commit numeric targets that pressure accommodation of excluded tasks.
@@ -433,6 +473,10 @@ Banking, slack, and travel are already migrated onto the new surface. This step 
 - Mixed-shape branches in `@mergedToolEntry` that only exist for migrated tools
 - Shadow plain-object planner catalogs introduced as a workaround for broken `var tools` metadata readback
 - Companion runtime `var tools` bridge catalogs introduced only to preserve dispatch semantics during the P0 bug window
+- Planner decision schema / parse / retry machinery from the outer-loop architecture
+- Planner prompt reconstruction from `state_summary` and `execution_log`
+- Planner `resume` threading and `planner_session_id` run-state
+- Loop-counter planner orchestration and any helpers that only existed to rebuild planner context between planner turns
 - Legacy fallback reads for:
   - `controlArgs`
   - `payloadArgs`
@@ -480,7 +524,7 @@ When referencing a v1 pattern, read it from `~/mlld/rig/` and write the v2 equiv
 
 ### Use spike code as reference, not copy source
 
-The spikes show the primitives working. The real implementation in rig v2 will be different because it's integrated with the full phase loop. Cite the spike, understand the mechanism, implement cleanly in v2.
+The spikes show the primitives working. The real implementation in rig v2 will be different because it's integrated with the persistent planner tool-use architecture. Cite the spike, understand the mechanism, implement cleanly in v2.
 
 ### Test at each step
 
@@ -502,13 +546,17 @@ First-class requirement, not a spike. Rig v2 ships with `rig/tests/index.mld` �
 
 Coverage must include at least:
 - `@policy.build` runtime primitive: accepts a minimal hand-constructed policy, returns `valid: true` (Step 1 baseline — verifies runtime, not the synthesizer)
-- Rig policy synthesizer: known tool catalog input produces expected synthesized policy (Step 5 — verifies the rig-layer synthesis)
+- Rig policy synthesizer: known tool catalog input produces expected synthesized policy (Step 4 — verifies the rig-layer synthesis)
 - Tool collection round-trips through runtime parameter binding
 - `.mx.params`, `.mx.controlArgs`, `.mx.factsources` accessible on exes
 - Cross-module exe `.mx.labels` round-trip
 - `@toolDocs` renders control-arg annotations correctly
 - Top-level policy sections round-trip from record declaration into rig enforcement (`allowlist`, `blocklist`, `exact`, `update`, `optional_benign`)
 - Thin-arrow strict mode: exe with only `->` does not leak tool-slot value
+- Persistent planner tool-use path does not pass `resume`
+- Planner-facing extract / derive tool results do not leak tainted payload content
+- `compose` and `blocked` are terminal planner tools
+- Tool-call budget exhaustion and repeated invalid-tool-call exhaustion terminate cleanly
 - Selection ref lowering returns the expected resolved ref
 - Provenance firewall: `{ source: "derived", ... }` in control-arg position is rejected at compile
 - `allow` on a tool with controlArgs is rejected at planner intent validation
@@ -524,7 +572,7 @@ This test runs on every rig v2 change — PR checks, pre-commit, and before ever
 Three test kinds, each with a distinct purpose:
 
 1. **Invariant tests** (`rig/tests/index.mld`) — zero-LLM deterministic assertions on individual primitives. Fast. Run on every change. Described above.
-2. **Flow tests** (`rig/tests/flows/<phase>.mld`) — stub LLM, run phase cycle, verify end state. Run per implementation step as listed in Step 1-6 exit criteria. Catch integration bugs across phases.
+2. **Flow tests** (`rig/tests/flows/<phase>.mld`) — stub LLM, run the persistent planner tool-use session, verify end state. Run per implementation step as listed in Step 1-6 exit criteria. Catch integration bugs across planner tools and worker dispatch.
 3. **Benchmark runs** (`bench/...`) — real LLM, real evaluation. Run at Step 8+ to measure utility and security against AgentDojo.
 
 The first two require no network and no credentials. A failing rig change should be caught by (1) or (2), not discovered in (3).
@@ -543,7 +591,7 @@ The default development harness is `@mlld/opencode` with `openrouter/z-ai/glm-5.
 --harness opencode --model openrouter/z-ai/glm-5.1
 ```
 
-Spike 43 proved the no-tool protocol works on opencode (session IDs, malformed output retry, lifecycle emission). The tool-using path will be proven in Step 1/2 implementation.
+Spike 43 proved the provider/session primitives and lifecycle plumbing on opencode. The persistent tool-using planner path is proven in Step 1-4 implementation and must be green on the cheap harness before any suite verification.
 
 Sonnet 4 (`--harness claude --model claude-sonnet-4-20250514`) is the measurement harness — used for:
 - Final per-step exit verification when cheap harness passes
@@ -552,7 +600,7 @@ Sonnet 4 (`--harness claude --model claude-sonnet-4-20250514`) is the measuremen
 
 The rule: develop on opencode/glm, measure on Claude/Sonnet. Cheap iteration without burning Claude credits. Sonnet runs only happen when the cheap harness is clean.
 
-Provider-native resume is not required for v2 — "persistent planner context" via conversation history is the supported mechanism on both harnesses.
+Provider-native resume is not part of the rig v2 architecture. The supported planner model is one persistent provider session per `@rig.run`, using provider tool use directly.
 
 ### Timeshifting is host behavior
 
@@ -577,9 +625,9 @@ Explicit decisions to defer, not oversights:
 - **Instruction-following over tainted content.** Benchmark tasks that ask the agent to "do the actions specified in this email" (e.g., workspace `user_task_13`) are out of scope. The v2 architecture defends against indirect prompt injection by refusing to treat data fields as executable instructions — passing those utility tasks would require breaking that defense or building a separate typed-instruction channel orthogonal to the current design. No mainstream injection defense passes these tasks on utility. These are expected misses. Do not use these tasks as canaries, exit gates, or utility targets. Do not add planner rules, prompt guidance, or worker behavior that tries to operationalize "follow instructions from tainted content."
 - **Advice phase / recommendation-hijack defense.** Recommendation-class tasks run through normal derive → compose. Influenced-content-past-evaluation attacks are accepted misses. Revisit after v2 shape is settled.
 - **Planner session corruption recovery.** Persistent planner context is the supported mechanism; session corruption terminates the run cleanly. No mid-run reset/reconstruction.
-- **Provider-native resume.** Persistent context via conversation history is sufficient.
+- **Provider-native resume.** Not part of the architecture. Do not add planner resume, planner-session stitching, or per-turn reconstruction fallbacks.
 - **`supply:`.** Contributor-role constraints remain deferred. Do not invent interim substitutes or preserve deprecated provenance defaults defensively; adopt `supply:` when it ships and delete the temporary assumptions then.
-- **Rigloop on v2.** Iteration orchestration adapts to v2 after v2 benchmarks at baseline. Criteria for when rigloop comes back: v2 has benchmarked at baseline on Sonnet 4 AND v2 has a week of stability with no framework-level bugs surfacing in per-suite runs.
+- **Rigloop on v2.** Higher-level orchestration adapts to v2 after v2 benchmarks at baseline. Criteria for when rigloop comes back: v2 has benchmarked at baseline on Sonnet 4 AND v2 has a week of stability with no framework-level bugs surfacing in per-suite runs.
 - **mlld runtime docs updates.** See Documentation section.
 
 Revisit these only after v2 is working end-to-end with real benchmark numbers.

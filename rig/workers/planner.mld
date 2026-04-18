@@ -238,12 +238,16 @@ exe @finishPlannerTool(ctx, nextState, nextRuntime, workerSessionId, outcome, su
   }
 ]
 
-exe @plannerResolve(tool, args, purpose) = [
+exe @plannerResolve(input) = [
+  let @coerced = @input ?? {}
+  let @tool = @coerced.tool
+  let @args = @coerced.args ?? {}
+  let @purpose = @coerced.purpose ?? null
   let @decision = {
     phase: "resolve",
     tool: @tool,
-    args: @args ?? {},
-    purpose: @purpose ?? null
+    args: @args,
+    purpose: @purpose
   }
   let @toolCtx = @plannerToolContext("resolve", @decision)
   if !@toolCtx.ok [
@@ -331,7 +335,15 @@ exe @plannerResolve(tool, args, purpose) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerExtract(tool, args, source, schema_name, schema, name, purpose) = [
+exe @plannerExtract(input) = [
+  let @coerced = @input ?? {}
+  let @tool = @coerced.tool ?? null
+  let @args = @coerced.args ?? {}
+  let @source = @coerced.source ?? null
+  let @schema_name = @coerced.schema_name ?? null
+  let @schema = @coerced.schema ?? null
+  let @name = @coerced.name
+  let @purpose = @coerced.purpose ?? null
   let @schemaValue = when [
     @schema_name.isDefined() => @schema_name
     * => @schema
@@ -463,7 +475,14 @@ exe @plannerExtract(tool, args, source, schema_name, schema, name, purpose) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerDerive(sources, goal, schema_name, schema, name, purpose) = [
+exe @plannerDerive(input) = [
+  let @coerced = @input ?? {}
+  let @sources = @coerced.sources ?? []
+  let @goal = @coerced.goal
+  let @schema_name = @coerced.schema_name ?? null
+  let @schema = @coerced.schema ?? null
+  let @name = @coerced.name
+  let @purpose = @coerced.purpose ?? null
   let @decision = {
     phase: "derive",
     sources: @sources,
@@ -551,12 +570,16 @@ exe @plannerDerive(sources, goal, schema_name, schema, name, purpose) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerExecute(operation, args, purpose) = [
+exe @plannerExecute(input) = [
+  let @coerced = @input ?? {}
+  let @operation = @coerced.operation
+  let @args = @coerced.args ?? {}
+  let @purpose = @coerced.purpose ?? null
   let @decision = {
     phase: "execute",
     operation: @operation,
-    args: @args ?? {},
-    purpose: @purpose ?? null
+    args: @args,
+    purpose: @purpose
   }
   let @toolCtx = @plannerToolContext("execute", @decision)
   if !@toolCtx.ok [
@@ -635,11 +658,14 @@ exe @plannerExecute(operation, args, purpose) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerCompose(sources, purpose) = [
+exe @plannerCompose(input) = [
+  let @coerced = @input ?? {}
+  let @sources = @coerced.sources ?? []
+  let @purpose = @coerced.purpose ?? null
   let @decision = {
     phase: "compose",
-    sources: @sources ?? [],
-    purpose: @purpose ?? null
+    sources: @sources,
+    purpose: @purpose
   }
   let @toolCtx = @plannerToolContext("compose", @decision)
   if !@toolCtx.ok [
@@ -682,7 +708,9 @@ exe @plannerCompose(sources, purpose) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerBlocked(reason) = [
+exe @plannerBlocked(input) = [
+  let @coerced = @input ?? {}
+  let @reason = @coerced.reason
   let @decision = {
     phase: "blocked",
     reason: @reason
@@ -722,94 +750,46 @@ exe @plannerBlocked(reason) = [
   }
   -> @result
   => @result
-] => record @planner_tool_result
-
->> Planner-facing tools are surfaced as object-input `var tools` entries.
->> Dispatching those entries back through the collection proxy recurses
->> into `@callTool`, so keep thin one-arg adapters here for direct calls.
-exe @plannerResolveTool(input) = [
-  let @coerced = @input ?? {}
-  => @plannerResolve(@coerced.tool, @coerced.args ?? {}, @coerced.purpose ?? null)
-]
-
-exe @plannerExtractTool(input) = [
-  let @coerced = @input ?? {}
-  => @plannerExtract(
-    @coerced.tool ?? null,
-    @coerced.args ?? {},
-    @coerced.source ?? null,
-    @coerced.schema_name ?? null,
-    @coerced.schema ?? null,
-    @coerced.name,
-    @coerced.purpose ?? null
-  )
-]
-
-exe @plannerDeriveTool(input) = [
-  let @coerced = @input ?? {}
-  => @plannerDerive(
-    @coerced.sources ?? [],
-    @coerced.goal,
-    @coerced.schema_name ?? null,
-    @coerced.schema ?? null,
-    @coerced.name,
-    @coerced.purpose ?? null
-  )
-]
-
-exe @plannerExecuteTool(input) = [
-  let @coerced = @input ?? {}
-  => @plannerExecute(@coerced.operation, @coerced.args ?? {}, @coerced.purpose ?? null)
-]
-
-exe @plannerComposeTool(input) = [
-  let @coerced = @input ?? {}
-  => @plannerCompose(@coerced.sources ?? null, @coerced.purpose ?? null)
-]
-
-exe @plannerBlockedTool(input) = [
-  let @coerced = @input ?? {}
-  => @plannerBlocked(@coerced.reason)
 ]
 
 var tools @plannerTools = {
   resolve: {
-    mlld: @plannerResolveTool,
+    mlld: @plannerResolve,
     inputs: @planner_resolve_inputs,
     direct: true,
     labels: ["tool:w"],
     description: "Ground records into planner-visible state with one resolve tool."
   },
   extract: {
-    mlld: @plannerExtractTool,
+    mlld: @plannerExtract,
     inputs: @planner_extract_inputs,
     direct: true,
     labels: ["tool:w"],
     description: "Fetch literal untrusted content or extract typed payload from grounded state."
   },
   derive: {
-    mlld: @plannerDeriveTool,
+    mlld: @plannerDerive,
     inputs: @planner_derive_inputs,
     direct: true,
     labels: ["tool:w"],
     description: "Compute a typed named result from grounded inputs."
   },
   execute: {
-    mlld: @plannerExecuteTool,
+    mlld: @plannerExecute,
     inputs: @planner_execute_inputs,
     direct: true,
     labels: ["tool:w"],
     description: "Perform one concrete write through the defended execute path."
   },
   compose: {
-    mlld: @plannerComposeTool,
+    mlld: @plannerCompose,
     inputs: @planner_compose_inputs,
     direct: true,
     labels: ["tool:w"],
     description: "Prepare the final answer and terminate the session."
   },
   blocked: {
-    mlld: @plannerBlockedTool,
+    mlld: @plannerBlocked,
     inputs: @planner_blocked_inputs,
     direct: true,
     labels: ["tool:w"],

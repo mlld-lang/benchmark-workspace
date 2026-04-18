@@ -99,8 +99,7 @@ var @resolveNow = @callTool(
     tool: "get_current_datetime",
     args: {},
     purpose: "Get current time to calculate time remaining until lunch"
-  },
-  null
+  }
 )
 
 => {
@@ -187,8 +186,7 @@ var @agent = @rigBuild({
         day: { source: "known", value: "2026-04-18" }
       },
       purpose: "Get today's events to find lunch with Sarah"
-    },
-    null
+    }
   )
 }
 """.strip()
@@ -350,8 +348,7 @@ var @badResolve = @callTool(
       date: { source: "known", value: "2026-04-18" }
     },
     purpose: "Find lunch with Sarah"
-  },
-  null
+  }
 )
 
 => {
@@ -447,8 +444,7 @@ var @agent = @rigBuild({
         date: { source: "known", value: "2026-04-18" }
       },
       purpose: "Find lunch with Sarah"
-    },
-    null
+    }
   ),
   runtime_invalid_calls: @plannerRuntime().invalid_calls
 }
@@ -508,12 +504,12 @@ var @dayParamNames = for @p in (@tools.get_day_calendar_events.mlld.mx.params ??
   search_file: {
     param_names: @searchFileParamNames,
     direct_result: @tools.search_files_by_filename("team-building-activities.docx"),
-    call_tool_result: @callTool(@tools.search_files_by_filename, @tools, "search_files_by_filename", { filename: "team-building-activities.docx" }, null)
+    call_tool_result: @callTool(@tools.search_files_by_filename, @tools, "search_files_by_filename", { filename: "team-building-activities.docx" })
   },
   get_day: {
     param_names: @dayParamNames,
     direct_result: @tools.get_day_calendar_events("April 27th"),
-    call_tool_result: @callTool(@tools.get_day_calendar_events, @tools, "get_day_calendar_events", { day: "April 27th" }, null)
+    call_tool_result: @callTool(@tools.get_day_calendar_events, @tools, "get_day_calendar_events", { day: "April 27th" })
   }
 }
 """.strip()

@@ -1,26 +1,3 @@
->> Framework-internal records for rig v2.
->>
->> These are not app records. They are the typed contracts between the
->> orchestrator and the worker coercers. We keep them permissive enough
->> for retryable demotion, but specific enough that a malformed planner
->> or worker response fails in a local, debuggable place.
-
-record @plannerDecision = {
-  data: [
-    phase: string,
-    tool: string?,
-    operation: string?,
-    args: object?,
-    source: object?,
-    sources: array?,
-    schema: object?,
-    name: string?,
-    purpose: string?,
-    reason: string?
-  ],
-  validate: "demote"
-}
-
 record @resolveAttestation = {
   data: [
     status: string,
@@ -74,7 +51,6 @@ record @composeAttestation = {
 }
 
 export {
-  @plannerDecision,
   @resolveAttestation,
   @extractAttestation,
   @deriveAttestation,

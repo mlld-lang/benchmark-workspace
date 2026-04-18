@@ -54,23 +54,21 @@ exe @truncatePhaseLog(phaseLogFile) = sh {
   fi
 }
 
-exe @plannerIterationEvent(iteration, phase, plannerSessionId) = [
+exe @plannerIterationEvent(iteration, phase) = [
   => {
     event: "planner_iteration",
     iteration: @iteration,
-    decision_phase: @phase,
-    planner_session_id: @plannerSessionId
+    decision_phase: @phase
   }
 ]
 
-exe @phaseStartEvent(iteration, phase, phaseId, plannerSessionId) = [
+exe @phaseStartEvent(iteration, phase, phaseId) = [
   => {
     event: "phase_start",
     iteration: @iteration,
     worker: @phase,
     phase: @phase,
-    phase_id: @phaseId,
-    planner_session_id: @plannerSessionId
+    phase_id: @phaseId
   }
 ]
 
@@ -87,12 +85,11 @@ exe @phaseEndEvent(iteration, phase, phaseId, workerSessionId, outcome, summary)
   }
 ]
 
-exe @phaseState(phase, phaseId, iteration, plannerSessionId, workerSessionId) = [
+exe @phaseState(phase, phaseId, iteration, workerSessionId) = [
   => {
     phase: @phase,
     phase_id: @phaseId,
     iteration: @iteration,
-    planner_session_id: @plannerSessionId,
     worker_session_id: @workerSessionId
   }
 ]

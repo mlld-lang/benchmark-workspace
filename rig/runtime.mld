@@ -4,7 +4,6 @@ import { @opencode } from "@mlld/opencode"
 import {
   @mxEntry,
   @pairsToObject,
-  @toolCatalogObject,
   @toolParamNames,
   @toolOptionalArgs,
   @phaseToolNames
@@ -687,60 +686,14 @@ exe @validateToolCallArgs(entry, args) = [
   ]
 ]
 
-exe @lookupRuntimeTool(toolEntry, toolsCollection, toolName, runtimeTools) = [
+exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, policyValue) = [
   let @toolKey = `@toolName`
-  let @collectionCatalog = @toolCatalogObject(@toolsCollection)
-  let @runtimeOverride = when [
-    @runtimeTools.isDefined() && @runtimeTools[@toolKey].isDefined() => @runtimeTools[@toolKey]
-    * => null
-  ]
-  >> `@rig.build` already merges the planner catalog with runtime hints.
-  >> Keep that merged entry as the primary dispatch target when it has a
-  >> real executable. Raw `var tools` collection entries can expose the
-  >> tool name string as `.mlld`, which is useful metadata but not a
-  >> callable binding.
-  => when [
-    @typeof(@runtimeOverride.mlld) == "executable" => @runtimeOverride
-    @typeof(@runtimeOverride) == "executable" => @runtimeOverride
-    @typeof(@toolEntry.mlld) == "executable" => @toolEntry
-    @typeof(@toolEntry) == "executable" => @toolEntry
-    @runtimeOverride.isDefined() => @runtimeOverride
-    @collectionCatalog[@toolKey].isDefined() => @collectionCatalog[@toolKey]
-    @toolsCollection.mx.entries.isDefined() && @mxEntry(@toolsCollection.mx.entries, @toolKey).isDefined() => @mxEntry(@toolsCollection.mx.entries, @toolKey)
-    @toolsCollection[@toolKey].isDefined() => @toolsCollection[@toolKey]
-    * => @toolEntry
-  ]
-]
-
-exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, policyValue, runtimeTools) = [
-  let @toolKey = `@toolName`
-  let @collectionCatalog = @toolCatalogObject(@toolsCollection)
   let @callableCollection = @toolsCollection
-  let @runtimeEntry = @lookupRuntimeTool(@toolEntry, @toolsCollection, @toolName, @runtimeTools)
-  let @entry = when [
-    @runtimeEntry.isDefined() => @runtimeEntry
-    * => @toolEntry
-  ]
-  >> Runtime dispatch can source its executable from one catalog entry
-  >> and its param docs from another. Keep metadata lookup separate from
-  >> executable lookup so argument validation stays on the surfaced tool
-  >> entry even when direct execution needs the bare executable.
-  let @entryParamNames = @toolParamNames(@entry)
-  let @toolEntryParamNames = @toolParamNames(@toolEntry)
-  let @metadataEntry = when [
-    >> New-shape planner catalog entries carry the canonical input
-    >> record. Prefer that contract so policy-bearing dispatch stays on
-    >> the surfaced collection binder instead of reconstructing metadata
-    >> on a sidecar object.
-    @toolEntry.inputs.isDefined() => @toolEntry
-    @entryParamNames.length > 0 => @entry
-    @toolEntryParamNames.length > 0 => @toolEntry
-    * => @entry
-  ]
-  let @argCheck = @validateToolCallArgs(@metadataEntry, @args)
+  let @entry = @toolEntry
+  let @argCheck = @validateToolCallArgs(@entry, @args)
   if !@argCheck.ok [ => { error: @argCheck.error, summary: @argCheck.summary, tool: @toolKey } ]
-  let @preferDirect = (@entry.direct ?? false) == true || (@toolEntry.direct ?? false) == true
-  let @paramNames = @toolParamNames(@metadataEntry)
+  let @preferDirect = (@entry.direct ?? false) == true
+  let @paramNames = @toolParamNames(@entry)
   let @argKeys = when [
     @typeof(@args) == "object" => @plainObjectKeys(@args)
     * => []
@@ -758,27 +711,11 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
     @callableCollection[@toolKey].isDefined() => @callableCollection[@toolKey]
     * => null
   ]
-  let @collectionEntry = when [
-    @collectionCatalog[@toolKey].isDefined() => @collectionCatalog[@toolKey]
-    @callableEntry.isDefined() => @callableEntry
-    * => null
-  ]
-  >> Direct single-parameter reads expect a scalar positional argument.
-  >> Without a policy boundary, passing a structured text wrapper here
-  >> causes mlld to coerce it as an object. Bridge only this narrow case
-  >> to the underlying scalar value and leave execute-with-policy calls
-  >> on the original native objects.
   let @exe = when [
     @typeof(@entry.mlld) == "executable" => @entry.mlld
     @typeof(@entry) == "executable" => @entry
     * => null
   ]
-  >> Policy-bearing dispatch usually prefers the named `var tools`
-  >> collection entry when it exists. The collection call preserves the
-  >> actual tool name and control-arg metadata at the policy boundary.
-  >> When a runtime override explicitly opts into `direct: true`, honor
-  >> that first so the caller can keep policy on a local object-shaped
-  >> wrapper instead of re-entering the collection proxy.
   if @policyValue.isDefined() && @preferDirect && @typeof(@exe) == "executable" [
     => when [
       @paramNames.length == 0 => @exe() with { policy: @policyValue }
@@ -786,9 +723,7 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
       * => @exe(@args) with { policy: @policyValue }
     ]
   ]
-  if @policyValue.isDefined() &&
-    @metadataEntry.inputs.isDefined() &&
-    @callableEntry.isDefined() [
+  if @policyValue.isDefined() && @callableEntry.isDefined() [
     => when [
       @argKeys.length == 0 => @callableCollection[@toolKey]() with { policy: @policyValue }
       @paramNames.length == 1 => @callableCollection[@toolKey](@singleArg) with { policy: @policyValue }
@@ -798,21 +733,18 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
   if @policyValue.isDefined() && @typeof(@exe) == "executable" [
     => when [
       @paramNames.length == 0 => @exe() with { policy: @policyValue }
-      >> Keep the native mlld value for single-arg policy dispatch too.
-      >> The executable boundary is responsible for consuming the value.
       @paramNames.length == 1 => @exe(@singleArg) with { policy: @policyValue }
       * => @exe(@args) with { policy: @policyValue }
     ]
   ]
-  >> The benchmark agents intentionally build a local `var tools`
-  >> collection in the same file that runs the phase loop. That bridge is
-  >> the primary non-policy dispatch surface: it preserves same-file call
-  >> binding and native mlld coercion for imported tools when the original
-  >> collection object still exposes the keyed callable surface. Bare
-  >> executable refs remain the fallback, and `direct: true` is the
-  >> explicit escape hatch for wrappers that must bypass the collection
-  >> proxy.
-  if !@preferDirect && @callableEntry.isDefined() [
+  if @preferDirect && @typeof(@exe) == "executable" [
+    => when [
+      @paramNames.length == 0 => @exe()
+      @paramNames.length == 1 => @exe(@singleArg)
+      * => @exe(@args)
+    ]
+  ]
+  if @callableEntry.isDefined() [
     => when [
       @argKeys.length == 0 => @callableCollection[@toolKey]()
       @paramNames.length == 1 => @callableCollection[@toolKey](@singleArg)
@@ -820,11 +752,6 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
     ]
   ]
   if @typeof(@exe) != "executable" [ => { error: "tool_missing_executable", tool: @toolKey } ]
-  >> Direct executable calls keep the native mlld value for single-arg
-  >> tools. Do not unwrap through `.data` or `.text` here: those bridges
-  >> lose the runtime's own typed/coerced behavior and are exactly where
-  >> wrapper bugs creep in. The executable boundary is responsible for
-  >> consuming the value.
   => when [
     @paramNames.length == 0 => @exe()
     @paramNames.length == 1 => @exe(@singleArg)
@@ -832,12 +759,12 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
   ]
 ]
 
-exe recursive @callTool(toolEntry, toolsCollection, toolName, args, runtimeTools) = [
-  => @callToolWithOptionalPolicy(@toolEntry, @toolsCollection, @toolName, @args, null, @runtimeTools)
+exe recursive @callTool(toolEntry, toolsCollection, toolName, args) = [
+  => @callToolWithOptionalPolicy(@toolEntry, @toolsCollection, @toolName, @args, null)
 ]
 
-exe recursive @callToolWithPolicy(toolEntry, toolsCollection, toolName, args, policyValue, runtimeTools) = [
-  => @callToolWithOptionalPolicy(@toolEntry, @toolsCollection, @toolName, @args, @policyValue, @runtimeTools)
+exe recursive @callToolWithPolicy(toolEntry, toolsCollection, toolName, args, policyValue) = [
+  => @callToolWithOptionalPolicy(@toolEntry, @toolsCollection, @toolName, @args, @policyValue)
 ]
 
 >> MCP-backed tools surface runtime failures as `ERROR: ...` strings. Turn

@@ -1,273 +1,179 @@
 # Rig v2 Status
 
-Snapshot date: 2026-04-17
+Snapshot date: 2026-04-18
 
-This file records where `clean/` stands against [PLAN.md](/Users/adam/mlld/clean/PLAN.md), what is verified right now, and what should happen next.
+This file records where `clean/` stands against [PLAN.md](/Users/adam/mlld/clean/PLAN.md) after the single-planner rewrite.
 
 ## Summary
 
-- Step 7 is green and pinned by the main rig gate.
-- The transparent `var tools` path is now the real path, not a workaround target:
-  - suite domain catalogs validate directly
-  - imported `var tools` entries preserve metadata and executables across module boundaries
-  - flow tests run end to end on the same surfaced catalog shape the bench agents use
-- The old planner/runtime split scaffolding is gone from the non-v1 bench agents.
-- Bench agents no longer carry the redundant `runtimeTools: null` placeholder.
-- The main interface/docs sweep is now aligned with the shipped v2 shape:
-  - `inputs` / `returns`
-  - `description` / `instructions`
-  - top-level policy sections on input records
-  - `authorizations.can_authorize` in synthesized policy
-- The old runtime blockers that forced defensive catalog handling are closed:
-  - var-bound catalog traversal OOM
-  - dispatch-time denial routing bypassing `denied =>`
-  - wrapped errors losing `originalError`
-  - imported `var tools` entries losing `mlld.mx.params`
-  - runtime serialization paths walking live `Environment` objects
-  - provider login failures masquerading as planner-schema failures in bench results
+- Clean rig now implements one persistent planner tool-use session per `@rig.run`.
+- The outer planner loop, planner resume path, and per-turn planner prompt reconstruction are removed from the clean rig implementation.
+- Planner actions now go only through the six rig-owned planner tools:
+  - `resolve`
+  - `extract`
+  - `derive`
+  - `execute`
+  - `compose`
+  - `blocked`
+- Planner-visible tool results are statically typed and returned through the planner-tool wrapper surface.
+- The clean authored tool surface remains one surfaced `var tools` catalog per suite.
+- The old rig-side workaround layer is gone:
+  - no `runtimeTools` sidecar on clean bench agents
+  - no thin planner adapter exes
+  - no runtime lookup hook for planner/runtime shadow catalogs
 
-So `clean/` is past the catalog/runtime cohesion cleanup. What remains is clean bench-path re-verification, then the final hardening audit and deletion sweep.
+## Single-Planner Status
 
-The current blocker is no longer provider auth. It is a live clean-path runtime failure on the real defended workspace bench path: a resolved `file_entry.id_` ref reaches extract dispatch as `25` instead of the string `"25"`, and the single-arg collection call rejects it before the tool body can normalize it.
+The architecture change itself is done.
+
+Landed:
+
+- one persistent planner session per run
+- rig-owned planner tools only
+- no outer planner loop
+- no planner `resume` in rig orchestration
+- no per-turn planner prompt reconstruction
+- framework-owned tool-call budgets
+- terminal `compose` / `blocked`
+
+What remains is verification and final trimming, not more architectural migration.
+
+- Re-run the real defended clean bench path on workspace, then challenge cases, then banking/slack/travel.
+- Treat remaining failures as planner/tool-contract, host wiring, or real mlld runtime issues.
+- Delete any last internal helper branch only if the live bench runs prove it unnecessary.
+
+The short remaining-work checklist now lives in [SINGLE-PLANNER.md](/Users/adam/mlld/clean/SINGLE-PLANNER.md).
 
 ## Verified Now
 
-These checks were re-run in this snapshot:
+These checks were re-run on the current clean rig code:
 
-- `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/rig/tests/index.mld`
-  - `summary: 75 pass / 0 fail`
-  - This is the authoritative Step 7 gate.
-  - It covers:
-    - `CAT-*`
-    - `AUTH-*`
-    - `POL-ROUNDTRIP-*`
-    - `BENCH-CAT-1` through `BENCH-CAT-4`
-    - the array-preview regressions that keep planner summaries structurally usable without leaking payload values
+- `mlld clean/rig/tests/index.mld`
+  - `summary: 77 pass / 0 fail`
+  - This is the main invariant gate.
+  - It includes the persistent-planner architectural assertions:
+    - no `@runPhaseLoop`
+    - no `@dispatchPlanner`
+    - no planner `resume:`
+    - no `<state_summary>` / `<execution_log>` planner prompt reconstruction
 
-- Rig flow suite:
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/rig/tests/flows/derive.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/rig/tests/flows/execute.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/rig/tests/flows/extract.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/rig/tests/flows/extract_reject.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/rig/tests/flows/extract_state_retention.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/rig/tests/flows/guards.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/rig/tests/flows/resolve.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/rig/tests/flows/smoke.mld`
-  - All pass.
-
-- Bench-side migration regressions:
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/bench/tests/catalog-migration.mld`
-  - `summary: 10 pass / 0 fail`
-
-- Clean benchmark host regressions:
-  - `uv run --project /Users/adam/mlld/clean/bench python3 -m unittest /Users/adam/mlld/clean/bench/tests/test_host.py`
-  - `Ran 5 tests in ...`
-  - `OK`
-  - Includes the auth-classification regressions so provider login failures become `infrastructure_error`, not fake planner/schema failures.
-
-- Workspace adapter regressions:
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs --new /Users/adam/mlld/clean/bench/tests/workspace-tools.mld`
-  - `summary: 6 pass / 0 fail`
-
-- Direct validate passes for the suite domain catalogs:
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs validate /Users/adam/mlld/clean/bench/domains/workspace/tools.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs validate /Users/adam/mlld/clean/bench/domains/banking/tools.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs validate /Users/adam/mlld/clean/bench/domains/slack/tools.mld`
-  - `node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs validate /Users/adam/mlld/clean/bench/domains/travel/tools.mld`
-
-- Benchmark host now lives under the clean tree and points at the clean agents:
-  - [host.py](/Users/adam/mlld/clean/src/host.py) dispatches to `clean/bench/agents/<suite>.mld`
-  - A real defended rerun now hits the clean path instead of the legacy `benchmarks/llm` path
-
-- Clean bench host now runs against the real provider path in `/Users/adam/mlld/clean/bench`:
-  - `opencode run --format json --dir /Users/adam/mlld/clean/bench -m openrouter/z-ai/glm-5.1 'Reply with exactly OK.'`
-  - returns `OK`
-  - So provider auth is no longer the blocker on the clean path.
-
-- Latest clean defended bench-path result:
-  - `uv run --project /Users/adam/mlld/clean/bench python3 /Users/adam/mlld/clean/src/run.py -s workspace -d defended -t user_task_25 --debug`
-  - Old `tool_entry` collision is gone.
-  - Old provider-auth failure is gone.
-  - Current blocker is a clean runtime failure during extract dispatch:
-    - planner resolves the target file with `search_files`
-    - planner then chooses `get_file_by_id` with
-      `{ "file_id": { "source": "resolved", "record": "file_entry", "handle": "r_file_entry_25", "field": "id_" } }`
-    - rig fails before the tool body runs with:
-      `Input validation error: 25 is not of type 'string'`
-      from [runtime.mld](/Users/adam/mlld/clean/rig/runtime.mld:795)
-      via [orchestration.mld](/Users/adam/mlld/clean/rig/orchestration.mld:276)
-  - This is a real runtime bug on the clean bench path, not a provider issue.
+- Direct validation passes:
+  - `mlld validate clean/rig/index.mld`
+  - `mlld validate clean/rig/orchestration.mld`
+  - `mlld validate clean/rig/runtime.mld`
+  - `mlld validate clean/rig/lifecycle.mld`
+  - `mlld validate clean/rig/session.mld`
+  - `mlld validate clean/rig/workers/planner.mld`
 
 ## Status Against PLAN
 
-### Steps 1-6
+### Steps 1-4
 
 Status: complete enough to build on
 
-- Core resolve / extract / derive / execute flow is in place.
-- Policy compilation, display projection, lifecycle logging, and retry guards are in place.
-- The main flow suite is green again after the runtime fixes.
+- Core resolve / extract / derive / execute / compose worker dispatch exists.
+- Input-record policy sections and surfaced catalog invariants are pinned in the rig test suite.
+- The transparent `var tools` path is the authored path in clean agents and suite catalogs.
 
-### Step 7: Pin policy sections and the transparent catalog surface
+### Step 5: Delete the phase-loop planner architecture
 
 Status: complete
 
 Done:
 
-- `rig/tests/index.mld` is green at `71 pass / 0 fail`.
-  - now `75 pass / 0 fail`
-- `can_authorize` is the authored tool key in clean code.
-- The `CAT-*`, `AUTH-*`, `POL-ROUNDTRIP-*`, and `BENCH-CAT-*` regression families are live in the main rig suite.
-- Suite domain catalogs validate directly against the v2 shape.
-- The flow suite now runs on transparent surfaced `var tools` entries instead of a defensive split-catalog shape.
-- Non-v1 bench agents route and dispatch directly from `@tools`.
-- The old `entry.operation.authorizable` compatibility read is gone from rig code.
+- `rig/orchestration.mld` no longer runs an outer planner loop.
+- `rig/workers/planner.mld` now owns one persistent planner session with provider tool use.
+- `rig/prompts/planner.att` is a single-session prompt, not a per-turn reconstructed prompt.
+- `rig/runtime.mld` and `rig/lifecycle.mld` no longer carry `planner_session_id` orchestration state.
+- `rig/records.mld` no longer defines the per-turn planner decision record.
 
-Still worth keeping:
+### Step 6: Structured tool errors, budgets, and terminal-tool discipline
 
-- The negative assertions that deleted helper paths and legacy authored surfaces do not reappear.
-
-### Step 8: Workspace verification and cleanup
-
-Status: structurally complete, bench-path verification still outstanding
+Status: complete at the framework layer
 
 Done:
 
-- Workspace write tools are record-backed.
-- Workspace adapter regressions are green.
-- Workspace agent is thin and dispatches directly from `@tools`.
-- Workspace no longer carries a local planner/runtime split catalog.
-- Workspace planner summaries now preserve item field names for array-shaped named results, including wrapped `{ items: [...] }` payloads. That regression is pinned in the main rig gate.
+- Planner-tool wrappers return structured status/error results.
+- `maxIterations` is now interpreted as a planner tool-call budget.
+- Repeated invalid planner tool calls are budgeted separately.
+- `compose` is terminal.
+- `blocked` is terminal.
+- Planner tool calls after terminal state are rejected.
 
 Still open:
 
-- Fix the clean runtime bug on resolved numeric-like file ids in extract dispatch, then re-run the real defended workspace bench path, including the documented challenge cases in `benchmarks/CHALLENGES.md`.
+- Exercise these paths more heavily under the real bench harness, not just the rig invariant suite.
 
-### Step 9: Remaining suites verification and cleanup
+### Steps 7-10: Final v2 surface and unified authored catalog
 
-Status: structurally complete, bench-path verification still outstanding
+Status: complete on the clean authored surface
 
 Done:
 
-- Banking, slack, and travel are on the same thin agent shape as workspace.
-- Their domain `tools.mld` files validate directly.
-- Their suite agents dispatch directly from `@tools`.
-- Suite-local merge scaffolding is gone.
-- Their authored agents also no longer carry the redundant `runtimeTools: null` placeholder.
+- Clean suite catalogs use the shipped v2 tool-entry fields:
+  - `mlld`
+  - `inputs`
+  - `returns`
+  - `labels`
+  - `can_authorize`
+  - `description`
+  - `instructions`
+  - `bind`
+- Clean authored agents no longer carry planner/runtime split catalogs.
+- The rig prompt/docs/tests assert the persistent single-planner model directly.
+- Runtime dispatch now reads the authored tool entry directly; the only remaining special case is the core-supported `direct: true` whole-object planner-tool path.
 
 Still open:
 
-- Re-run banking / slack / travel through the real defended bench path after the workspace extract-dispatch runtime bug is fixed.
-
-### Step 10: Make rig read the new shape directly
-
-Status: complete for the authored clean-code surface
-
-Done:
-
-- Rig reads tool metadata directly from the surfaced catalog shape.
-- The explicit merge-helper path is deleted.
-- Bench entrypoints no longer need `toolsCollection`.
-- Flow and invariant tests are green on the unified surfaced catalog.
-
-What remains here is not authored-surface compatibility debt, just optional runtime plumbing:
-
-- `toolsCollection` and `runtimeTools` still exist inside rig as optional execution hooks for local tests and special dispatch cases.
-- Those are no longer part of the authored bench-agent shape.
+- Nothing architecturally open here on the authored surface. Any remaining cleanup is internal bench verification and optional helper trimming after the live runs.
 
 ### Step 11: Record hardening and sample-quality pass
 
-Status: mostly complete, live bench confirmation still outstanding
+Status: mostly complete, needs live bench confirmation
 
 Done:
 
-- Input-record policy sections are live and exercised in the rig invariants.
-- Workspace, banking, slack, and travel records now use the v2 top-level section shape.
-- Trusted / untrusted splits are already present where they matter most for planner exposure and payload control.
-- Handle typing is already used on key grounded identifiers such as workspace/travel calendar ids, workspace file ids, workspace email ids, and banking scheduled transaction ids.
-- Explicit `correlate` choices are already authored on the places that matter most:
-  - banking scheduled-transaction update path
-  - participant / recipient arrays where omission or cross-record mixing needs to be explicit
-- The main clean-tree docs now describe the shipped v2 surface rather than the removed legacy catalog shape.
+- Input-record policy sections are live.
+- Handle typing, trusted/untrusted splits, and explicit `correlate` choices are authored across the migrated suite records.
+- Planner-tool results are statically typed so the planner-facing tool surface stays explicit.
 
 Still open:
 
-- Do one final audit pass for any remaining record that should use `handle`, `trusted` / `untrusted`, or explicit `correlate` but still relies on the looser default.
-- Finish verifying the hardening choices under the live clean bench path once the extract-dispatch runtime bug is fixed.
+- Run the full defended bench path and confirm the hardening choices behave correctly end to end.
 
 ### Step 12: Final cleanup and deletion
 
 Status: in progress
 
+Done:
+
+- The clean implementation now treats the single planner session as the only acceptable planner architecture.
+- `runtimeTools` sidecars and planner adapter wrappers are deleted from the clean rig path.
+- Generated compatibility noise from verification runs is not part of the retained surface.
+
 Still open:
 
-- Re-run canaries and then the broader defended bench suite once the extract-dispatch runtime bug is fixed.
-- Delete any remaining stale comments or TODOs that only existed to bridge now-fixed runtime bugs.
-- Decide whether any rig-internal optional dispatch hooks can be simplified further once bench re-verification is green.
+- Re-run the real clean bench path for workspace, banking, slack, and travel.
+- Delete any last internal helper branch that bench re-verification proves unnecessary.
+- Sync any remaining current docs outside the rig contract set if they still describe the removed loop.
 
-## Codebase Shape Now
+## What Is Left
 
-The intended clean shape is now:
+The remaining work is bench verification and final trimming, not another architectural rewrite:
 
-- Suite domain `@tools`
-  - authoritative planner, routing, policy, and runtime dispatch surface
-  - carries `mlld`, `inputs` / `returns`, `labels`, `can_authorize`, `description`, `instructions`
+1. Re-run the clean defended bench path on workspace.
+2. Re-run the documented challenge cases.
+3. Re-run banking, slack, and travel.
+4. Tune planner prompt/tool contracts only if the live harness reveals behavior gaps.
+5. Delete any last internal helper branch that is still optional but unused after the real bench runs are green.
+6. Do one final doc/status sync after the bench runs.
 
-- Bench agents
-  - thin wrappers over `records`, `tools`, `routeToolCatalog(@tools)`, and `synthesizedPolicy(@tools, null)`
-  - no suite-local runtime dispatch collection
+## Current Risk
 
-- Rig internals
-  - may still accept `toolsCollection` / `runtimeTools` as optional runtime plumbing
-  - but the authored clean-code path does not depend on them
+The main remaining uncertainty is not the rig architecture. It is end-to-end planner behavior on the live clean bench harness:
 
-The old broken variants are gone from the clean authored surface:
+- the persistent planner enters the new tool loop correctly
+- the invariant suite is green
+- full defended bench re-verification is still pending
 
-- no suite-local `runtimeToolsCollection`
-- no suite-local `@mergePlannerCatalog`
-- no rig-internal merge-helper path rebuilding planner metadata from runtime collections
-- no legacy `authorizable`, `kind`, `semantics`, `operation`, `controlArgs`, `payloadArgs`, `updateArgs`, `exactPayloadArgs`, `expose`, `optional`, or `risk` fields in non-v1 suite catalogs
-
-## Remaining Deletion Debt
-
-These are the main cleanup targets still worth deleting:
-
-- any local test-only scaffolding that became redundant once the transparent `var tools` path stabilized
-- any bench result snapshots or debugging notes that still point at fixed runtime regressions
-
-## Recommended Next Sequence
-
-### 1. Fix the current clean runtime blocker
-
-- resolved `file_entry.id_` refs used as single-arg extract-tool inputs must stay string-shaped all the way into the collection call boundary
-- add a zero-LLM regression for that path once the runtime fix lands:
-  - resolve a record with a numeric-looking id
-  - dispatch an extract/read tool with `{ source: "resolved", field: "id_" }`
-  - assert the tool receives `"25"`, not `25`
-
-### 2. Re-run the real defended bench path
-
-Do this next, in order:
-
-- workspace
-- banking
-- slack
-- travel
-
-And include the previously failing documented challenge cases from `benchmarks/CHALLENGES.md`.
-
-### 3. Use those bench runs to finish the hardening audit
-
-Specifically:
-
-- confirm the current trusted / untrusted splits are sufficient under real planner behavior
-- confirm handle-typed fact fields are covering every proof-bearing write target
-- make any last explicit `correlate` choices where the bench path shows ambiguity
-
-### 4. Then do the final deletion sweep
-
-Once the defended bench path is green:
-
-- remove stale migration commentary
-- remove any no-longer-needed optional local scaffolding
-- close the remaining cleanup phases in `PLAN.md`
+So the next step is straightforward: run the clean bench path, inspect failures as planner/tool-contract issues first, and only file runtime bugs if the failure is clearly below rig.

@@ -175,8 +175,8 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   >> input-record fact args. Dispatch the built policy directly so the
   >> worker sees the exact authorization envelope the builder validated.
   let @raw = when [
-    @agent.defense == "defended" => @callToolWithPolicy(@tool, @agent.toolsCollection, @operationName, @finalArgs, @built.policy, @agent.runtimeTools ?? null)
-    * => @callTool(@tool, @agent.toolsCollection, @operationName, @finalArgs, @agent.runtimeTools ?? null)
+    @agent.defense == "defended" => @callToolWithPolicy(@tool, @agent.toolsCollection, @operationName, @finalArgs, @built.policy)
+    * => @callTool(@tool, @agent.toolsCollection, @operationName, @finalArgs)
   ]
   let @toolError = @toolCallError(@raw)
   >> `toolCallError()` returns null on success. Compare explicitly so a
