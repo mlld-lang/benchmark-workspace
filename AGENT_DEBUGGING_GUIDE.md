@@ -1,0 +1,849 @@
+# AGENT_DEBUGGING_GUIDE.md
+
+Guide for agents investigating utility, security, or runtime regressions in this benchmark repo.
+
+This document is intentionally operational. It is not a design manifesto. It tells you how to debug the current rig-based system without wasting cycles on the wrong frontier.
+
+## Core Position
+
+Do not blame the base model.
+
+The same underlying model has hit substantially better utility on these suites in prior architectures. When current results are much worse, assume the regression is in:
+
+- benchmark orchestration (Python host bridge in `src/`)
+- rig framework dispatch (planner / resolve / extract / execute / compose phases)
+- runtime contract (mlld value boundaries, structured-value wrappers, label propagation)
+- tool exposure (input records, `var tools` catalog metadata, display projections)
+- per-step authorization (`@policy.build` output and the with-clause threading)
+- shelf state propagation (slot refs, cross-phase identity)
+- planner prompt or tool contracts (planner tool-call args, wrapper attestation shapes)
+- record coercion (=> record output, factsources, display projections)
+
+Treat this as a rig + runtime regression hunt, not a "the model is weak" story.
+
+The cardinal debugging rule from CLAUDE.md still applies: **before blaming model quality, check tool/runtime shape drift, handle/display projection loss, authorization control-arg mismatches, planner structured-output failures, compose/closeout formatting mismatches, shelf slot grounding or access-control gaps, and stale cached tool specs.**
+
+## Spike First. Sweep Last. (Read this twice.)
+
+**The single most expensive mistake an agent can make in this repo is using a sonnet 4 sweep to discover a question a $0 spike could have answered in five minutes.**
+
+A sonnet 4 sweep is an integration test. It is NOT a diagnostic tool. It will tell you "something is wrong" but it will not tell you what is wrong, and it will charge you several dollars and twenty minutes to do it. Then you will read transcripts, hypothesize, run another sweep, and discover a different thing is wrong. This is the failure pattern that consumed entire prior sessions.
+
+Spikes are a diagnostic tool. They cost zero LLM dollars when written against synthetic data. They run in seconds. They produce a deterministic matrix that decisively answers ONE question.
+
+The discipline:
+
+1. **Before any sonnet 4 run**, ask: "what specific question am I trying to answer, and could a synthetic probe answer it?" If yes, write the probe. Sonnet 4 is for verification AFTER the framework path is clean, not for discovering gaps in the framework path.
+
+2. **When a sweep produces a failure**, the next move is NOT "run the sweep again with logging." The next move is "what design question does this failure expose, and can I extract that question into a probe?" If the answer is yes, the probe is the next thing you write — not another sweep, not a hypothesis-driven prompt edit.
+
+3. **When you find yourself reading the third transcript trying to understand what the planner emitted**, stop. Build a probe that synthesizes the planner's intent and runs `@policy.build` directly. The transcripts are giving you symptoms; the probe gives you the contract.
+
+4. **A probe earns its keep by being decisive.** Bad probes confirm what you already suspected. Good probes return a matrix where the result rules out at least one hypothesis no matter how it lands. If your probe can only return "looks fine" or "still broken," you haven't actually formulated the question.
+
+### Canonical worked example: b-6ea2 (cross-phase shelf-derived bucket flow)
+
+Read this. It is the pattern.
+
+- **Symptom**: workspace UT13/14/25 = 0/3 on a sonnet 4 verification run that cost real money. Failure modes were inconsistent across the three tasks (one fabricated handle string, one looped on reads, one wrote bare literal in `resolved`).
+- **Initial hypothesis**: some structural cross-phase identity bug, possibly architectural.
+- **Push-back from prior session**: "before you call it architectural, write a probe."
+- **The probe** (`tmp/probe-cross-phase-bucket/probe.mld`): synthetic record with a fact field, fake search exe with `=> record` coercion, JSON-parse roundtrip to mimic what the planner emits, then `@policy.build` called with seven different `(bucket, value-origin, task-config)` combinations. Outputs a 7-row matrix.
+- **Result**: matrix decisively showed `known` accepts shelf-derived values without task-text validation. The fix turned out to be a ~5-line planner.att prompt change. No runtime change. No dispatcher change. No architectural redesign.
+- **Cost**: probe wrote in 10 minutes, ran in seconds, no LLM. The sweep that discovered the symptom cost ~$0.30 and 12 minutes. The probe was 50× cheaper to run and 100× more diagnostic.
+- **What the probe could rule out**: every conceivable wrong fix path. If it had landed differently, the fix could have been a runtime relaxation, a new bucket type, a dispatcher rewrite, or a display-projection re-architecture. Instead the matrix collapsed all of those to "change five lines of prompt."
+
+The spike's `SCIENCE.md` is a model for what spike documentation should look like: question, method, results table, conclusions, fix, what-this-does-NOT-fix. Steal that template.
+
+### When a spike is the right move (almost always)
+
+| Situation | Spike or sweep? |
+|---|---|
+| "The planner emits X but the dispatcher expects Y" | **Spike.** Synthesize X, call the dispatcher, read the error. |
+| "I think this value is losing factsources at the boundary" | **Spike.** Print `.mx.factsources` before and after. |
+| "Does `@policy.build` accept this shape?" | **Spike.** Call it directly with synthetic intent. |
+| "Will the auto-upgrade fire when no `task` config is passed?" | **Spike.** That's literally b-6ea2. |
+| "Does this guard fire on this op label?" | **Spike.** Synthetic exe + the guard, no LLM needed. |
+| "I changed the planner prompt — does the model emit the right shape now?" | **Sweep.** Single task. Can't synthesize this. |
+| "The framework path is clean; how does utility look on the full suite?" | **Sweep.** This is what sweeps are for. |
+| "I want to know if a class of failures has been resolved" | **Sweep**, but a small one (3-5 tasks), AFTER the spike-driven fix landed. |
+
+If the question is "what does the runtime do given this input?", the answer is always a spike. If the question is "what does the model produce given this prompt?", the answer is a small targeted run with verification. Sonnet 4 sweeps are reserved for "the framework path is clean; measure utility."
+
+### Check the agent transcript before writing anything
+
+When a benchmark run fails and the JSONL just says `blocked` or `utility: false`, the **agent transcript** has the full story — every planner tool call, every worker dispatch, every policy denial with the actual reason string. The transcript is the highest-signal diagnostic surface in this repo. Check it before hypothesizing.
+
+**Where transcripts live depends on the harness:**
+
+#### Opencode transcripts (primary harness for bench runs)
+
+Opencode stores rich session data in three places, from highest to lowest signal:
+
+**1. Session part storage** (`~/.local/share/opencode/storage/part/`): Every tool invocation gets its own JSON file with full input, output, timing, and metadata. These are the richest records — each `prt_*.json` shows exactly what tool was called, what args it received, and what came back.
+
+```bash
+# List recent session parts
+ls -lt ~/.local/share/opencode/storage/part/ | head -20
+
+# Read a specific part (tool call record)
+cat ~/.local/share/opencode/storage/part/<msg_id>/<part_file>.json | jq .
+```
+
+**2. Session database** (`~/.local/share/opencode/opencode.db`): Structured storage with message and part rows. Part types include `tool`, `text`, `reasoning`, `step-start`, `step-finish`. Use this when you need to query across sessions or find a specific session's tool call history.
+
+**3. Operational logs** (`~/.local/share/opencode/log/`): Timestamped log files. These are coarse — mostly HTTP/service/session tracing, no MCP tool names. Useful for diagnosing hangs, connection failures, and process lifecycle, but NOT for understanding what the agent decided or what tools it called.
+
+```bash
+# List recent log files
+ls -lt ~/.local/share/opencode/log/ | head -10
+
+# Search for session-level events
+grep -l "ses_<session_id>" ~/.local/share/opencode/log/*.log
+```
+
+**Finding the session ID:** The bench result JSONL includes the session ID. Also check the rig execution log and audit trail:
+
+```bash
+# From the audit trail
+jq -c 'select(.event | contains("session"))' clean/bench/.llm/sec/audit.jsonl | tail -5
+
+# From the result row
+jq -r '.session_id // .metrics.planner_session_id // empty' results/.../defended.jsonl | tail -1
+```
+
+#### Claude Code transcripts
+
+If the harness is `@claude` (native mlld Claude module), transcripts live at `~/.claude/projects/`. Use `spy` to look them up:
+
+```bash
+spy <session-id>
+spy <session-id> tail -50
+spy ls  # list recent sessions, correlate by timestamp
+```
+
+#### What to look for in any transcript
+
+- **Tool call sequence**: which rig tools did the planner call, in what order, with what args?
+- **Tool results**: what attestations came back? Were they clean (handles + status) or did tainted content leak?
+- **Policy denials**: rule name, matched label, which arg failed proof
+- **Planner reasoning**: did the planner understand the task? Did it ground contacts before trying to send? Did it attempt resolve before extract?
+- **Error budget exhaustion**: did the planner burn its invalid-tool-call budget? On what failure?
+- **Terminal behavior**: did compose/blocked fire correctly? Did the planner emit a final text turn after the terminal tool result?
+- **Missing tool calls**: did the planner skip an obvious resolve step? Did it try to derive what it should have resolved?
+
+Five seconds of transcript reading often resolves what would otherwise require a spike. The guidance above still applies — if the transcript shows a runtime/framework question, write a spike. But don't skip the transcript and go straight to probes. The transcript is the cheapest diagnostic surface you have.
+
+### The cost arithmetic
+
+A typical sonnet 4 workspace task: 30-90 seconds, ~$0.10. A 3-task verification: ~$0.30 + 5 minutes. A full workspace sweep: ~$2-3 + 20 minutes. A failed sweep cycle (sweep → read transcripts → hypothesize → fix → re-sweep) burns 30+ minutes and a few dollars per iteration.
+
+A typical synthetic probe: 0 seconds of LLM time, $0, 10-15 minutes to write the first version, seconds to run, re-runnable forever as a regression guard.
+
+Per session, the difference between spike-first and sweep-first discipline is the difference between four iteration cycles and twenty.
+
+### Runtime fixes need a smoke check
+
+m-6d5e and m-1e85 landed in the mlld runtime without any rig integration verification. Workspace UT14 went from `4 calls/PASS` to `17 calls/FAIL` between sessions because of it. **Runtime PRs that touch policy, shelf, handles, substrate exemption, tool dispatch, or factsources should not merge until they pass the rig smoke harness** (b-fefe). This is the third leg of the discipline alongside "spike before sweep" — without it, fixes cause regressions and no one notices until the next sweep.
+
+The smoke lives at `~/mlld/rig/spike/34-integration-smoke/`. Run it with:
+
+```bash
+mlld ~/mlld/rig/spike/34-integration-smoke/smoke.mld
+```
+
+It runs in under 1 second. Zero LLM API calls. 14 named assertions cover the m-* runtime regression classes (m-5b1c, m-d57b, m-9491, m-ef86, m-071b, m-e4ca, m-11d3, m-1e85), the thin-arrow strict-mode contract, and the stub-driven dispatch sequence. Each assertion is named after the originating ticket, so a failure points directly at the contract that regressed.
+
+**First action of any rig framework session: run the smoke. If it's red, fix that before touching anything else.** It is the cheapest signal in the repo.
+
+## Primary Rule
+
+If utility is bad even in `undefended` mode, the main blocker is not defended security policy.
+
+But: in the rig architecture there is currently no clean undefended mode (b-6e5d tracks adding one). Use the same principle differently:
+
+- If a single task fails on **any** model: investigate the rig dispatch path first
+- If a single task fails on the **default dev model** but progresses further on a comparison model: inspect the prompt, harness, and trace before assuming a model-quality problem
+- If a single task fails consistently across models: probably orchestration, prompts, or tool metadata
+
+## Anti-Goals
+
+Avoid these traps:
+
+- **Do not run sonnet 4 sweeps to discover design gaps.** Sweeps are integration tests, not diagnostic tools. If your sweep produces a failure that exposes a design question, the next move is a probe, not another sweep. See "Spike First. Sweep Last." above.
+- **Do not pipe shelf state through `| @pretty` (or any JSON serialization) into a prompt.** Serialization strips display projection, factsources, labels, and handles. The planner/worker downstream sees no proof. See "Serialization is a one-way trip" below.
+- **Do not use `@parse` output (or any JSON-parsed value) as if it carries proof.** JSON parse strips everything. Cross-phase identity must flow through value-keyed registry lookup (`known` bucket auto-upgrade), not through trusting parsed strings.
+- Do not add task-shaped prompt examples just because a single benchmark task is failing.
+- Do not "mind-read the checker" by adding exact instructions for one task id.
+- Do not assume a runtime bug until you have ruled out rig framework misuse and prompt/orchestration causes.
+- Do not trust the attack JSONL `security` field as the ASR verdict. Use the console attack summary first.
+- Do not assume dates. Read [README.md](/Users/adam/mlld/benchmarks/README.md) and [src/date_shift.py](/Users/adam/mlld/benchmarks/src/date_shift.py) before reasoning about temporal behavior.
+- Do not hand-roll authorization semantics in benchmark JS. Use `@policy.build(...)` and `@policy.validate(...)`.
+- Do not work around runtime bugs in rig/benchmark code without filing a runtime ticket. Workarounds accumulate into the exact compatibility layer mlld exists to replace.
+- Do not batch-edit tool wrappers, records, contracts, or shelves without re-running smoke tests after each change.
+- **Do not skip the rig smoke harness check on runtime fixes.** When a `m-*` ticket lands in `~/mlld/mlld`, run the b-fefe smoke harness (when it exists) before the next sweep. Untested runtime fixes cause regressions that look like model failures but aren't.
+
+## What Good Work Looks Like
+
+Good changes are:
+
+- generalizable across suites
+- structural rather than checker-shaped
+- deterministic when possible
+- validated by targeted reruns before full checkpoints
+- documented in tickets when they reveal a runtime gap
+
+Examples of good change classes:
+
+- runtime-side fixes that close a structuredvalue boundary gap (filed against `~/mlld/mlld/.tickets/`)
+- rig framework refinements that propagate substrate marking, tool context, or shelf identity through more code paths
+- structural planner schema constraints (b-d394 pattern: schema-level validators that catch over-cautious blocking before it costs an LLM call)
+- record-level display mode improvements (planner sees less; worker sees content with masked facts)
+- contract pinning for write workers (extract phase only emits the contract's declared fields)
+- shelf access scope tightening per box (workers receive typed inputs, not state)
+
+## Debugging Order
+
+Always debug in this order:
+
+1. Reproduce one failing task locally with a single deterministic command.
+2. Decide whether the failure is in `defended` mode (the only mode currently supported in rig).
+3. Inspect the JSONL log AND the verbose trace to determine whether the failure is:
+   - runtime bug (boundary, label propagation, substrate exemption)
+   - rig framework bug (dispatcher contract, schema validation, prompt shape)
+   - planner-quality (model's reasoning failure visible in trace)
+   - LLM-side execution failure (the model called a tool but with wrong args)
+   - host parsing failure (the model emitted text the host couldn't parse)
+4. Make the narrowest generalizable change.
+5. Rerun only the affected task or attack slice.
+6. Only then spend a full-suite checkpoint.
+
+## First Triage Split
+
+### A. Runtime / boundary failure
+
+Symptoms:
+- Task dies with `Operation denied / Rule: <something>` on `/exe "claude"` or a `cmd:*` allow rule
+- The error fires before the LLM has a chance to do anything substantive
+- The same failure reproduces deterministically
+
+This is usually:
+- A structuredvalue boundary gap (a value's wrapper shape isn't recognized by a runtime consumer)
+- A substrate exemption gap (some guard family doesn't honor the substrate marking)
+- A taint propagation issue (a label propagating where it shouldn't, or stripping where it should preserve)
+- A field access losing identity / metadata across parameter binding
+
+Debugging path: see `Minimal Repro Method` below.
+
+### B. Rig framework / wrapper bug
+
+Symptoms:
+- Planner calls a rig tool (resolve, extract, execute, etc.) correctly
+- The wrapper fails internally — shelf state shape mismatch, missing field, when-arm fall-through, wrong object passed to worker
+- The error references a line in `rig/workers/planner.mld`, `rig/orchestration.mld`, or `rig/runtime.mld`
+
+This is usually:
+- The wrapper assumed something about the planner's tool-call args that the planner didn't provide
+- A let-binding intermediate dropping wrapper metadata (the StructuredValue stripping family)
+- State not being passed correctly between wrapper invocations (wrong object aliasing — see m-5683 family)
+- The wrapper returning tainted content to the planner instead of clean attestation
+
+Debugging path: check the opencode transcript for the exact tool-call args the planner sent, compare to what the wrapper expected, fix the contract. If state is the issue, add `show` diagnostics inside the wrapper to verify what `state` and `query` actually are on each invocation.
+
+### C. Planner-quality failure
+
+Symptoms:
+- Planner calls `blocked` prematurely without attempting resolve
+- Planner calls `execute` with values it derived/inferred instead of grounding via `resolve` first
+- Planner calls `compose` without performing the expected writes
+- Planner burns its error budget by repeatedly calling tools with bad args
+- The transcript shows real tool calls happening (not just immediate denials)
+
+This is usually:
+- The planner not understanding the resolve-before-execute discipline
+- The planner inferring values from tainted content instead of grounding contacts/entities via resolve tools
+- The planner over-reading defense rule names in the prompt and pre-emptively blocking
+- Insufficient context in the planner prompt about source-class rules (resolved vs known vs derived)
+
+Typical fixes:
+- Tool-wrapper validation returning a structured error that guides the planner to the correct approach
+- Planner prompt clarification (general behavioral rule, not task-specific examples)
+- Move the constraint from prompt to code (wrapper enforces it, planner sees the error as a tool result)
+
+Avoid: task-id-specific prompt examples. The planner should learn from tool errors in-session, not from pre-loaded examples.
+
+### D. LLM-side execution failure
+
+Symptoms:
+- Planner correctly classifies the task
+- Resolve / extract dispatchers fire correctly
+- Execute dispatcher reaches @claude with valid auth
+- But the worker LLM calls the tool with wrong args (wrong recipient, wrong amount, wrong shape)
+
+This is usually:
+- Model arithmetic miss or hallucination
+- Worker LLM not recognizing handles in the input as references to use verbatim
+- Worker LLM being told to be helpful and overriding the structured-input contract
+
+Typical fixes:
+- Tighter contract enforcement at the extract phase
+- Clearer worker prompt about handle pass-through
+- Move from "worker reasons about state" to "worker dispatches one call with provided typed inputs"
+- Planner schema retry on detected shape errors (auth.valid check pattern)
+
+### E. Host / final-answer parsing failure
+
+Symptoms:
+- Tool calls happened correctly
+- Compose phase produced text
+- But `final_output` is the literal string `"Task completed."` (the host's fallback)
+- Or the host reports `outcome: unparseable`
+
+This is usually:
+- The compose phase emitted text that doesn't match the `{ "content": "..." }` shape the host expects
+- A non-JSON-wrapped string at the top of the agent's output
+- An exception in the agent's final return clause
+
+Typical fixes:
+- Compose phase should always wrap output as `=> { content: @result.final.text }`
+- Ensure no `show` / `output` directives in the agent file produce stdout that competes with the JSON return
+
+## Commands You Should Use
+
+### Validate the framework + benchmark
+
+```bash
+mlld validate bench/agents/workspace.mld
+mlld validate rig
+```
+
+### Run the rig test gate
+
+```bash
+mlld --new rig/tests/index.mld
+```
+
+### Run one benign task (defended mode, default GLM 5.1)
+
+```bash
+uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --debug
+```
+
+### Run multiple tasks in parallel
+
+```bash
+uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 user_task_1 user_task_6 -p 3
+```
+
+### Run with sonnet 4 (the comparison target)
+
+```bash
+uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --model claude-sonnet-4-20250514 --debug
+```
+
+### Run with full verbose tracing (essential for runtime debugging)
+
+```bash
+MLLD_TRACE=verbose MLLD_TRACE_FILE=tmp/workspace-ut0-trace.jsonl \
+  uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --debug
+```
+
+### Inspect latest result rows
+
+```bash
+ls -lt bench/results/openrouter/z-ai/glm-5.1/workspace | sed -n '1,12p'
+jq -c '. | {task: .task_id, util: .utility, err: ((.execute_error // "") | .[0:200])}' \
+  bench/results/openrouter/z-ai/glm-5.1/workspace/defended.jsonl
+```
+
+### Inspect opencode agent transcripts
+
+```bash
+# Recent opencode logs (coarse — connection/session tracing, not tool calls)
+ls -lt ~/.local/share/opencode/log/ | head -10
+
+# Rich per-tool-call part storage (highest signal)
+ls -lt ~/.local/share/opencode/storage/part/ | head -20
+
+# Read a specific tool call record
+cat ~/.local/share/opencode/storage/part/<msg_id>/*.json | jq .
+
+# Search opencode DB for a specific session's parts
+sqlite3 ~/.local/share/opencode/opencode.db \
+  "SELECT type, tool FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id = 'ses_...')"
+```
+
+### Filter trace events
+
+```bash
+jq -c 'select(.event == "guard.deny" or (.event == "guard.evaluate" and .data.decision == "deny")) | {ts, exe: .scope.exe, guard: .data.guard, reason: .data.reason}' \
+  tmp/banking-ut3-trace.jsonl
+
+jq -c 'select(.event == "policy.compile_drop")' tmp/banking-ut3-trace.jsonl
+
+jq -c 'select(.event == "llm.call" and .data.phase == "finish") | {ok: .data.ok, dur: .data.durationMs}' \
+  tmp/banking-ut3-trace.jsonl
+```
+
+Remember:
+- Starting a new run for the same suite/defense rotates the old log
+- Inspect the newest `*.jsonl` symlink target or the latest numbered file
+- Verbose traces can be 10MB+ for multi-iteration runs — use `jq | head` and `jq -c` aggressively
+
+## Where to Look in Logs
+
+For each failing row in `results/<model>/<suite>/defended.jsonl`, inspect:
+
+- `query`
+- `final_output`
+- `execute_error` (if mlld crashed)
+- `mcp_calls` — what the agent actually called
+- `policy_denials`
+- `metrics.planner_iterations`
+- `metrics.phase_counts`
+- `metrics.mcp_calls_by_phase`
+- `outcome` (response, unparseable, infrastructure-error)
+
+## Verbose Trace Events
+
+The `MLLD_TRACE=verbose` trace file is the most powerful debugging tool in this repo. Key event categories:
+
+- `category: "guard"` — guard chain decisions on every dispatched operation. Look for `guard.deny` events.
+- `category: "auth"` — authorization checks. Note: `auth.deny` events are sometimes cosmetic when followed by `guard.allow`. The real signal is the `guard.evaluate decision: "deny"` from a specific named guard.
+- `category: "policy"` — `policy.build`, `policy.compile_drop` (when entries are silently dropped from the bucketed intent), `policy.compile_repair`
+- `category: "shelf"` — shelf reads, writes, stale_read events
+- `category: "handle"` — handle.issued, handle.resolved, handle.released, handle.resolve_failed
+- `category: "llm"` — llm.call (start, finish, ok/error, duration), llm.tool_call, llm.tool_result
+
+Filtering tips:
+- Find all real denies: `jq -c 'select(.event == "guard.deny")'`
+- Find which guard fired the deny: filter by `.data.guard`
+- Find the surrounding scope: `.scope.exe` or `.scope.operation`
+- Find policy compilation issues: `jq -c 'select(.event == "policy.compile_drop")'`
+
+## Failure Classification Heuristics
+
+### Runtime Bug (rare, escalate to mlld)
+
+Suspect runtime when:
+- The trace shows a guard denying an operation that should be exempt (substrate operations like @claude / claudeResume / cmd:env in pipelines)
+- A value's wrapper shape isn't recognized by a runtime consumer (basePolicy resolver, shelf.read, policy.build) — the same data works in some contexts and not others
+- Field access through parameter binding produces a different shape than direct access
+- The error message includes "BoundaryViolation" or "must be a shelf slot reference" or "must be a tool collection"
+
+When you suspect runtime:
+1. Build a minimal reproduction outside the benchmark (see Minimal Repro Method below)
+2. Use mlld-native value inspection (`.mx.labels`, `.mx.type`, `.mx.factsources`) — NEVER use JS to inspect mlld values, JS auto-unwraps and strips wrapper metadata. `| @pretty` is fine for visual inspection but remember it produces a STRING with no `.mx` accessor — see "Serialization is a one-way trip" below
+3. File a focused ticket in `/Users/adam/mlld/mlld/.tickets/` with:
+   - Exact repro command
+   - Exact observed output
+   - Expected behavior
+   - Trace event sequence showing where it diverges
+4. Tag P0 if it blocks rig integration; P1 if it's an API improvement
+
+### Rig Framework Bug
+
+Suspect rig framework when:
+- The error references a line in `~/mlld/rig/orchestration.mld` or another rig file
+- The dispatcher's contract with the planner is mismatched (planner emits one shape, dispatcher expects another)
+- A let-binding or parameter pass loses metadata
+- Shelf access works in one dispatcher context but not another
+
+Typical fixes:
+- Update the dispatcher to handle the actual planner output shape
+- Add a guard or schema validator that catches the malformed input
+- File a ticket in `~/mlld/benchmarks/.tickets/` with `phase-d1` tag
+
+### Planning Failure (LLM-quality)
+
+Suspect planning when:
+- The task clearly needs read tools that never appear in the trace
+- The planner chooses the wrong write path
+- The planner widens into unrelated tools
+- The planner omits an obvious follow-up step
+- The planner returns `worker: "blocked"` after attempting a resolve, with reasoning that misclassifies a defended rule
+
+Typical fixes:
+- Schema-level constraint in `~/mlld/rig/guards.mld` (b-d394 pattern)
+- Planner prompt clarification — general behavioral rule, NOT task-shaped examples
+- Compare the same task on a second model only after the trace suggests the planner is the live variable
+- Consider whether the constraint should be moved into deterministic code instead of prompt discipline
+
+Avoid:
+- Task-id-specific prompt examples
+- "If task contains X, do Y" rules
+
+### State Persistence Failure Across Tool Calls
+
+Suspect state not surviving between planner tool invocations when:
+- Resolve succeeded (tool result shows handles), but the next extract/execute can't find the resolved handle
+- Budget counters appear to reset between tool calls
+- The wrapper receives the wrong object for `state` or `query` (aliased to `agent` or null)
+
+This is the single-planner equivalent of the old "context handoff" failure. In the persistent model, state is mutated inside each tool wrapper and must be visible to the next wrapper in the same session.
+
+Typical fixes:
+- Verify the shelf/state write was actually applied (check audit trail for successful write events)
+- Verify the next wrapper reads from the rig state object, not from the agent config object (the m-5683 aliasing bug family)
+- Check whether the MCP tool callback path is re-materializing captured variables incorrectly between invocations
+- If state is fine but the planner is referencing a handle that doesn't exist, check whether the resolve wrapper returned the handle in its attestation — the planner can only reference handles it saw in tool results
+
+### Execution Failure
+
+Suspect execution failure when:
+- Planner authorized the right tool
+- @policy.build returned valid:true
+- But the worker called the tool with wrong args (wrong recipient, wrong amount, wrong shape)
+
+Typical fixes:
+- Tighter contract pinning at extract phase
+- Worker prompt clarification about handle pass-through
+- Check whether the worker is paraphrasing values instead of using literals from input
+
+### Final Answer / Host Parsing Failure
+
+Suspect response-shape issues when:
+- The write succeeded
+- But utility is false because the answer is malformed, noisy, or `unparseable`
+- Or the host reports `outcome: unparseable`
+
+Typical fixes:
+- Verify the agent file's final return clause is `=> { content: @result.final.text }`
+- Check that no `show` / `output` directives compete with the JSON return
+- Verify compose phase is actually running (not falling through to a generic fallback)
+
+## Minimal Repro Method
+
+This is one of the highest-leverage debugging techniques in this repo.
+
+When a failure might involve a lossy boundary, do not keep guessing inside full benchmark runs. Build a small reproduction in `~/mlld/benchmarks/tmp/` (or `~/mlld/rig/spike/NN-<topic>/` for permanent regression guards) that mirrors only the relevant chain and prints the value at each boundary.
+
+The goal is to answer a concrete question like:
+
+- did the planner emit a valid bucketed intent?
+- did `@policy.build` produce a valid policy fragment?
+- did the runtime preserve the basePolicy rules through the merge?
+- did `@shelf.read` recognize the slot ref shape?
+- did substrate exemption fire on the guard for this operation?
+
+Build the repro incrementally:
+
+1. Start with local synthetic exes / fake fetch tools, not the full benchmark harness
+2. Mirror the exact display shape that matters
+3. Mirror the exact helper / wrapper chain that matters
+4. Print every intermediate object using mlld-native `.mx` accessors. `| @pretty` is OK for visual inspection but it strips metadata — never use it as part of the chain you're testing, only as a debug print at the boundaries
+5. NEVER use JS to inspect mlld values — JS auto-unwraps and strips wrapper metadata that runtime consumers actually check
+6. Only after that works, add one more layer of realism
+
+A useful pattern from this repo's history: `~/mlld/benchmarks/tmp/probe-d57b/` contains 10+ variants of @rigBuild + @dispatch shapes used to isolate the m-d57b boundary bug. The probe runs in <2 seconds with no real LLM calls. It became the canonical repro that GPT used to land the runtime fix.
+
+What good repros look like:
+- They isolate one boundary class
+- They use the smallest possible tool surface
+- They print intermediate state via mlld-native accessors
+- They avoid benchmark-only MCP dependencies when possible
+- They compare working vs failing variants side by side
+- They run in <10 seconds with no real LLM cost
+
+What to avoid:
+- Writing a "minimal repro" that still depends on the full benchmark harness
+- Using JS blocks to inspect mlld value shapes (`exe @inspect(v) = js {...}` strips the wrapper metadata you actually need)
+- Changing prompts first and only then trying to understand the boundary
+- Filing a runtime bug without a concrete local reproduction
+
+If the minimal repro passes but the benchmark still fails, that is valuable information. It means the remaining problem is in whatever extra layer the repro did not yet include.
+
+## Native mlld value inspection
+
+When you need to know what shape a value has, use mlld-native accessors:
+
+```mlld
+show "type:"
+show @typeof(@value)
+show "wrapper type:"
+show @value.mx.type
+show "labels:"
+show @value.mx.labels
+show "factsources:"
+show @value.mx.factsources
+show "sources:"
+show @value.mx.sources
+show "pretty (debug-only — see warning below):"
+show @value | @pretty
+```
+
+The `.mx.*` namespace exposes the StructuredValue wrapper metadata that runtime consumers actually check. JS auto-unwraps everything to plain data — useful for "is the underlying data correct?" questions but useless for "is the wrapper recognizable to consumer X?" questions.
+
+Common diagnostic pattern: compare two shapes side by side.
+
+```mlld
+let @direct = @agent.basePolicy
+let @spread = { ...@agent.basePolicy }
+show "direct labels:"
+show @direct.mx.labels
+show "spread labels:"
+show @spread.mx.labels
+```
+
+If they differ, the wrapper preservation is dropping something across the boundary.
+
+## Serialization is a one-way trip — never use `| @pretty` or JSON parse for prompt assembly
+
+`| @pretty` and JSON serialization in general are **debug-inspection accessors only**. They are NOT prompt-assembly tools. The moment a fact-bearing value passes through `| @pretty` (or any other JSON serialization), it becomes a flat JSON string. JSON has no slot for `.mx` wrapper metadata — no labels, no factsources, no taint marks, no display projections, no handles. Everything that the security model uses to ground a value is stripped at this boundary. Once stripped, it cannot be recovered: the resulting string is just text.
+
+The same is true in the other direction. Any value produced by `@parse` (or any JSON-parsing path, including the planner's JSON output reaching `@policy.build`) is a fresh primitive with **zero factsources, zero labels, zero proof**. The parsed value looks identical to the original (`"abc123"` is `"abc123"`) but the runtime treats it as untrusted, proofless, and unlabeled. The proof claims registry can sometimes recover proof for the value via value-keyed lookup (`known` bucket auto-upgrade — see b-6ea2 SCIENCE.md), but only if the same value was previously coerced through a `=> record` somewhere.
+
+This boundary is the most common proof-loss vector after JS interop. Watch for it.
+
+### What this looks like in code
+
+**Wrong** — strips display projection and turns shelf state into raw JSON the planner has to navigate without help:
+
+```mlld
+let @shelfStateText = @shelfState | @pretty       >> ✗ destroys handles, masks, omissions
+=> @template(@query, ..., @shelfStateText)
+```
+
+This is the bug at `~/mlld/rig/workers/planner.mld:73-76` that motivated b-a629. The planner sees a flat JSON dump of shelf state — no `display.planner` projection, no minted handles, no field omission. It then has no choice but to fabricate handle strings or pick wrong fields. The display projection layer is bypassed entirely.
+
+**Right** — interpolate via `@fyi.shelf.<alias>` inside a box scope, where display projection IS applied and handles ARE minted in the calling box's mint table:
+
+```mlld
+box @plannerBox with { shelf: { read: [@s.trusted_thing as trusted] } } [
+  => @claude(@plannerPrompt, { tools: @plannerTools })
+  >> The prompt template uses @fyi.shelf.trusted; projection runs
+  >> at template-render time, handles are minted in this box's
+  >> bridge mint table, the planner sees real handle-bearing values.
+]
+```
+
+(b-a629 tracks the rig-side fix.)
+
+### Why this matters for diagnosis
+
+If you're debugging a "the planner can't find a handle" symptom, the first question is: **how does shelf state reach the planner's prompt?** If the answer is "via `| @pretty`," you've found the bug — there are no handles to find because they were never rendered. Don't go looking for runtime gaps in handle minting; the gap is at the prompt-assembly boundary.
+
+**Diagnostic check** in any new probe: print the value before serialization AND after. The before-form has `.mx.factsources`. The after-form is a string with no `.mx` accessor at all. The contrast is the proof-loss point.
+
+```mlld
+show "before serialize:"
+show @value.mx.factsources              >> [{ kind: "record-field", ... }]
+let @serialized = @value | @pretty
+show "after serialize (no .mx anymore):"
+show @typeof(@serialized)               >> "string"
+>> @serialized.mx.factsources           >> would error: cannot access mx on string
+```
+
+This is the same lesson the JS interop section makes for `js {}` boundaries. JSON serialization is the OTHER lossy boundary, equally common and easier to miss because it looks like benign formatting.
+
+### The general principle
+
+| Operation | Preserves `.mx`? | Preserves factsources? | Safe for prompt assembly with metadata? |
+|---|:---:|:---:|:---:|
+| Direct field access (`@x.field`) | ✓ | ✓ | ✓ |
+| `let @y = @x` assignment | ✓ | ✓ | ✓ |
+| `@fyi.shelf.<alias>` interpolation in template | ✓ | ✓ | ✓ (projection applied at LLM bridge) |
+| Tool result returned from `@claude` call | ✓ (display projection applied) | ✓ | ✓ (handles minted in this call's scope) |
+| `| @pretty` | ✗ | ✗ | ✗ — debug only |
+| `| @parse` (or any `JSON.parse` path) | ✗ | ✗ | ✗ — fresh primitives, no proof |
+| `js {}` block params (without `.keep`) | ✗ | ✗ | ✗ — JS auto-unwrap |
+| Object spread `{ ...@x }` | ✗ | ✗ | ✗ — materializes plain data |
+| Bare value pasted into a `cmd { }` block | becomes a string | ✗ | ✗ — string interpolation |
+
+If you need a value to carry its proof across a boundary, the boundary must be in the left column. If you need to inspect it for debugging, the right column is fine. **Never confuse the two.**
+
+## Architecture Overview
+
+The clean rig runs as a **single persistent planner LLM session** per task. The planner calls rig-owned tools naturally via provider tool-use protocol. There is no outer iteration loop, no per-turn prompt reconstruction, and no planner resume. See `SINGLE-PLANNER.md` for the full design.
+
+### Layers
+
+1. **Python host (`src/host.py`, `src/run.py`, `src/mcp_server.py`)** — minimal. Builds per-task MCP server, calls the mlld agent entrypoint, parses stdout, formats results for AgentDojo.
+
+2. **Per-suite agent file (`bench/agents/<suite>.mld`)** — ~30-50 LOC. Imports rig framework + per-suite domain content, builds the agent via `@rig.build`, runs it via `@rig.run`, returns `{ content: <text> }`.
+
+3. **Per-suite domain content (`bench/domains/<suite>/`)**:
+   - `records.mld` — Record types with facts/data/display modes (role:planner / role:worker projections)
+   - `tools.mld` — `var tools` catalog with input records, labels, `can_authorize`, `description`, `instructions`
+   - `bridge.mld` — MCP bridge helpers (date normalization, string coercion)
+
+4. **Rig framework (`rig/`)** — Single persistent planner with rig-owned tool wrappers:
+   - `index.mld` — `@rig.build` entry point, agent handle assembly
+   - `orchestration.mld` — Single-session runner: initialize state, invoke one planner call with tools, return terminal result
+   - `workers/planner.mld` — Planner prompt builder, planner tool surface builder, one persistent `@llmCall`
+   - `workers/resolve.mld`, `extract.mld`, `derive.mld`, `execute.mld`, `compose.mld` — Phase worker implementations (called by planner tool wrappers, not by an outer loop)
+   - `runtime.mld` — State helpers, display projection, session management
+   - `tooling.mld` — Catalog helpers, policy synthesis
+   - `intent.mld` — Authorization intent compilation
+   - `guards.mld` — Schema validators, tool-call budget enforcement
+   - `prompts/` — `.att` template files
+
+5. **mlld runtime (`~/mlld/mlld/`)** — Owns label propagation, structuredvalue boundaries, policy compilation, factsources, handle resolution, guard chain execution, MCP tool dispatch.
+
+### The planner tool surface
+
+The planner sees exactly six rig-owned tools:
+
+| Tool | Purpose | Return contract |
+|---|---|---|
+| `resolve` | Ground entities via read tools | `=> record` with `role:planner` projection, or `->` attestation |
+| `extract` | Read content from resolved sources | `->` attestation only |
+| `derive` | Transform/select from extracted data | `->` attestation only |
+| `execute` | One concrete write under compiled auth | `->` attestation only |
+| `compose` | Final user-facing answer (terminal) | `->` terminal attestation |
+| `blocked` | Terminal failure (terminal) | `->` terminal attestation |
+
+The planner never gets direct access to suite/domain tools. The wrappers ARE the security boundary — guards, policy compilation, display projection, attestation shaping, lifecycle emission, and state mutation all happen inside the wrappers.
+
+When debugging, identify which layer the issue lives in BEFORE making changes. Layer 5 fixes go in `~/mlld/mlld/.tickets/`. Layers 2-4 fixes go in `clean/.tickets/` or are tracked via `tk` in the clean repo.
+
+## Current High-Value Generalizable Frontiers
+
+These are the main classes worth working on now (post-single-planner architecture):
+
+### 1. Planner Tool-Call Discipline
+
+The default dev model is `openrouter/z-ai/glm-5.1`. Treat planner tool-call mistakes as prompt/wrapper issues first, not as model-quality problems.
+
+In the persistent model, the planner learns from tool errors in-session. Wrapper error messages are the primary teaching mechanism:
+
+- Planner calls `execute` without first resolving the target → wrapper returns structured error guiding it to call `resolve` first
+- Planner calls `blocked` prematurely → wrapper returns error with "you haven't attempted resolve yet"
+- Planner tries to derive recipient emails from names instead of grounding contacts → intent compiler rejects with `payload_only_source_in_control_arg`
+- Planner burns error budget → terminal failure with the accumulated error history
+
+The key discipline: wrapper error messages should be actionable instructions, not generic "invalid input" strings. The planner's only teacher is the tool results it receives.
+
+### 2. Attestation Shape Tuning
+
+Each wrapper's `->` return shapes what the planner knows after each tool call. Too little information and the planner can't make good next-step decisions. Too much and the planner sees content it shouldn't.
+
+The right balance per tool:
+- `resolve`: handles + record metadata (name, key fields) — enough for the planner to reference results in extract/execute calls
+- `extract`: schema name + field list + provenance — enough for the planner to know what was extracted without seeing the content
+- `derive`: same shape as extract — what was derived, not the values
+- `execute`: status + tool name + result handles — enough to confirm the write happened
+
+### 3. Compose Phase Separation
+
+The compose phase has no tools and emits only natural-language text. The planner must call `compose` as a terminal tool and then emit its final text response. No other tool should produce user-facing output.
+
+### 4. MCP Tool Callback State Integrity
+
+The persistent planner's tool wrappers run as MCP tool callbacks. State must survive correctly across invocations. Known bug families:
+- Variable aliasing across callbacks (m-5683: `state` and `query` aliasing to `agent` on second call)
+- StructuredValue wrapper stripping through let-bindings (m-2f36 family)
+- Environment serialization in debug/audit paths (m-0ea4)
+
+When you find a new state-integrity gap, file it as a focused ticket in `~/mlld/mlld/.tickets/`. Do not add rig-side workarounds.
+
+## Guidance on Prompt Editing
+
+Prompt edits are allowed, but follow these rules:
+
+- Prefer general behavioral rules over benchmark examples
+- Prefer one good structural rule over three task-shaped reminders
+- If a prompt fix only helps one task and cannot be defended as a general agent rule, do not land it
+- If a prompt fix is compensating for something code should decide deterministically, move it into code instead
+
+Good prompt rule:
+- "If a task references an existing scheduled payment but no concrete change is grounded, inspect and report rather than modify."
+
+Bad prompt rule:
+- "For task phrased like X, choose transaction id 7."
+
+Good schema constraint:
+- A predicate in `~/mlld/rig/guards.mld` that catches the failure pattern, called from the relevant dispatcher, retries with a specific hint.
+
+## Guidance on Security Work
+
+When investigating security:
+- Keep the planner clean — it should run on uninfluenced user task text only, never on tainted tool results
+- Keep untrusted content out of planner authorization intent
+- Let the runtime own proof, handles, and authorizations via `@policy.build` and `@policy.validate`
+- Use bucketed intent (`resolved` / `known` / `allow`) — never hand-roll constraints
+- Verify defenses by integration test, not by inspection
+
+Do not hand-roll authorization semantics in benchmark JS unless you have no runtime alternative.
+
+## Guidance on Writing Up Runtime Gaps
+
+When you find a likely mlld runtime gap:
+
+1. Confirm it is not just rig framework misuse or benchmark misuse
+2. Build a minimal local reproduction in `~/mlld/benchmarks/tmp/probe-<topic>/`
+3. Use mlld-native value inspection (NOT JS) to identify the wrapper shape that diverges
+4. Write a focused ticket in `~/mlld/mlld/.tickets/` via `cd ~/mlld/mlld && tk create ...`
+5. Keep the report concrete:
+   - Exact input shape
+   - Exact observed output (with trace events)
+   - Expected behavior
+   - Reference paths in the runtime source code if you can locate the relevant function
+   - Suggested fix direction (one or two options, not exhaustive)
+6. Tag P0 if it blocks rig integration; P1 for API improvements; P2 for nice-to-haves
+
+Do not send vague "policy builder seems broken" reports.
+
+## Recommended Working Loop
+
+Use this loop:
+
+1. Pick one failing task with a representative failure class
+2. Reproduce it locally with `--debug` and `MLLD_TRACE=verbose MLLD_TRACE_FILE=tmp/<task>.jsonl`
+3. Read the JSONL row carefully — `mcp_calls`, `final_output`, `execute_error`, `metrics`
+4. Filter the trace for `guard.deny`, `policy.compile_drop`, and `llm.call ok:false`
+5. Decide whether it is:
+   - runtime / boundary
+   - rig framework dispatcher
+   - planner-quality
+   - LLM-side execution
+   - host parsing
+6. **Ask: "what specific design or contract question does this failure expose?"** If the answer can be tested with synthetic data, write a probe in `tmp/probe-<topic>/` BEFORE making any code change. Use `tmp/probe-cross-phase-bucket/` as the template — it answered a structural-looking question with a 7-row matrix in seconds, no LLM cost.
+7. Make ONE generalizable change informed by the probe's matrix (new schema constraint, dispatcher fix, runtime ticket, planner prompt clarification)
+8. Re-run the SAME task
+9. If fixed, re-run one nearby task in the same class (3-task max)
+10. Only after a small class improves, run a larger checkpoint
+11. If a runtime fix from `~/mlld/mlld` landed since your last sweep, run the b-fefe smoke harness (when it exists) BEFORE the sweep — untested runtime fixes cause regressions that look like model failures.
+
+## Cost Discipline
+
+Per CLAUDE.md: **Default model is `openrouter/z-ai/glm-5.1`** for per-port iteration. Use a comparison model only after the default path is behaving cleanly.
+
+LLM calls are expensive. Full-suite runs should come after exhausting clear local fixes.
+
+Use:
+- Single-task runs during iteration
+- Parallel runs (`-p N`) when you need multiple tasks for a class verification
+- Spike-based regression guards (no real LLM) for framework correctness checks
+- `mlld validate` for syntax / contract changes (no LLM cost)
+
+## Current Working Conclusion
+
+The main risk right now is not "the model can't do it."
+
+The main risk is that agents debugging this repo will:
+
+- **use sonnet 4 sweeps to ask spike-shaped questions** (the most expensive failure mode in this repo)
+- **pipe shelf state through `| @pretty` into prompts** and wonder why handles are missing
+- **trust JSON-parsed values as if they carry proof** (they don't — JSON parse strips everything)
+- overfit prompts to the benchmark
+- misclassify rig framework or runtime bugs as model weakness
+- chase prompt fixes when the constraint should be in code
+- skip the minimal-repro discipline and burn cycles on hypothesis-driven debugging
+- try to inspect mlld values via JS instead of mlld-native accessors
+- skip the rig smoke check on runtime patches and discover the regression by accident in the next sweep
+
+Do not do that.
+
+Prioritize structural rig framework + runtime correctness first. **Spike before sweep, every time.** Once the framework path is clean, planner prompt iteration and model selection become measurable concerns, not confounders.
+
+## See Also
+
+- `CLAUDE.md` for the cardinal rules and project layout
+- `SINGLE-PLANNER.md` for the persistent planner architecture and remaining work
+- `STATUS.md` for current project status and what's verified green
+- `~/mlld/benchmarks/labels-policies-guards.md` for the security model narrative
+- `~/mlld/mlld/spec-input-records-and-tool-catalog.md` for the input-record / tool-catalog spec
+- `~/mlld/mlld/docs/dev/DATA.md` for the structured-value boundary helpers and serialization rules
+- `~/mlld/mlld/.tickets/` for active and recent mlld runtime tickets via `tk` CLI
+- `~/.local/share/opencode/` for opencode session data, logs, and per-tool-call part storage

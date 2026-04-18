@@ -51,7 +51,7 @@ import {
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg } from "../intent.mld"
 import { @callTool, @toolCallError, @emptyState } from "../runtime.mld"
-import { @initializePlannerSession } from "../session.mld"
+import { @initializePlannerSession, @plannerState } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation } from "../workers/extract.mld"
@@ -460,6 +460,66 @@ var @plannerResolveDispatchResult = @callTool(
     purpose: "ground one synthetic day context"
   }
 )
+var @plannerExtractFixtureAgent = @rigBuild({
+  suite: "fixture-planner-extract",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  overrides: {
+    stub: {
+      extract: [{
+        status: "ok",
+        schema_name: "contact",
+        name: "contact_details",
+        provenance: "extracted",
+        preview_fields: ["email", "name"],
+        payload: {
+          email: "alice.example",
+          name: "Alice",
+          notes: "planner-hidden note"
+        }
+      }]
+    }
+  }
+})
+@initializePlannerSession(@plannerExtractFixtureAgent, "Find Alice in my contacts.")
+var @plannerResolveContactsResult = @callTool(
+  @plannerTools.resolve,
+  @plannerTools,
+  "resolve",
+  {
+    tool: "get_contacts",
+    args: {},
+    purpose: "ground the contact list"
+  }
+)
+var @plannerStateAfterContactResolve = @plannerState()
+var @plannerResolvedContactEmail = @resolveRefValue(
+  @plannerStateAfterContactResolve,
+  {
+    source: "resolved",
+    record: "contact",
+    handle: "r_contact_alice.example",
+    field: "email"
+  }
+)
+var @plannerExtractDispatchResult = @callTool(
+  @plannerTools.extract,
+  @plannerTools,
+  "extract",
+  {
+    source: {
+      source: "resolved",
+      record: "contact",
+      handle: "r_contact_alice.example"
+    },
+    schema_name: "contact",
+    name: "contact_details",
+    purpose: "inspect one resolved contact"
+  }
+)
+var @plannerStateAfterContactExtract = @plannerState()
 var tools @readArgFixtureTools = {
   search_day_events: {
     mlld: @search_day_events,
@@ -1217,6 +1277,22 @@ var @plannerResolveDispatchOk =
   @plannerResolveDispatchResult.status == "resolved" &&
   @plannerResolveDispatchResult.count == 1 &&
   @plannerResolveDispatchResult.record_type == "datetime_context"
+var @plannerResolveContactsPretty = @plannerResolveContactsResult | @pretty
+var @plannerResolveContactsOk =
+  @plannerResolveContactsResult["error"] == null &&
+  @plannerResolveContactsResult.status == "resolved" &&
+  @plannerResolveContactsResult.count == 2 &&
+  @plannerStateAfterContactResolve.resolved.contact.length == 2
+var @plannerResolvedContactEmailPretty = @plannerResolvedContactEmail | @pretty
+var @plannerResolvedContactEmailOk =
+  @plannerResolvedContactEmail.ok == true &&
+  @plannerResolvedContactEmail.value == "alice.example"
+var @plannerExtractDispatchPretty = @plannerExtractDispatchResult | @pretty
+var @plannerExtractDispatchOk =
+  @plannerExtractDispatchResult["error"] == null &&
+  @plannerExtractDispatchResult.status == "extracted" &&
+  @plannerExtractDispatchResult.name == "contact_details" &&
+  @plannerExtractDispatchResult.schema_name == "contact"
 var @readArgDocPretty = @docSummary(@readArgDoc)
 var @readArgDocOk =
   @field(@readArgDoc, "controlArgs").includes("query") &&
@@ -2078,6 +2154,9 @@ exe @allChecks() = [
   @check("resolve-worker-success-path", @dispatchResolveOk, @dispatchResolvePretty),
   @check("resolve-worker-scalar-keyed-path", @dispatchScalarResolveOk, @dispatchScalarResolvePretty),
   @check("planner-tool-collection-dispatch-does-not-recurse", @plannerResolveDispatchOk, @plannerResolveDispatchPretty),
+  @check("planner-session-state-persists-across-direct-planner-tool-calls", @plannerResolveContactsOk, @plannerResolveContactsPretty),
+  @check("planner-session-resolved-handle-remains-readable-after-direct-resolve", @plannerResolvedContactEmailOk, @plannerResolvedContactEmailPretty),
+  @check("planner-source-backed-extract-works-on-direct-planner-tool-path", @plannerExtractDispatchOk, @plannerExtractDispatchPretty),
   @check("read-tool-docs-classify-all-read-params-as-control", @readArgDocOk, @readArgDocPretty),
   @check("resolve-worker-accepts-read-tool-params-without-legacy-controlArgs", @dispatchReadArgResolveOk, @dispatchReadArgResolvePretty),
   @check("execute-worker-zero-control-arg-policy", @dispatchCreateNoteOk, @dispatchCreateNotePretty),
