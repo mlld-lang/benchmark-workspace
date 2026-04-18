@@ -4,7 +4,6 @@ import {
   @llmSessionId,
   @arrayItems,
   @recordTypeName,
-  @resolveDispatchArgs,
   @callTool,
   @toolCallError,
   @toolRuntimeMessage,
@@ -13,9 +12,14 @@ import {
   @updateNamedState,
   @appendExecutionLog
 } from "../runtime.mld"
-import { @resolveRefValue } from "../intent.mld"
+import { @compileToolArgs, @resolveRefValue } from "../intent.mld"
 import { @extractAttestation } from "../records.mld"
 import { @phaseToolEntry } from "../tooling.mld"
+import {
+  @validatePlannerArgRefs,
+  @validatePlannerSourceRef,
+  @plannerValidationFailure
+} from "../planner_inputs.mld"
 
 exe @extractPrompt(query, sourceValue, schemaDoc, decision) = template "../prompts/extract.att"
 
@@ -66,8 +70,10 @@ exe @dispatchExtract(agent, state, decision, query) = [
   if @decision.tool.isDefined() [
     let @tool = @phaseToolEntry(@agent, "extract", @decision.tool)
     if !@tool [ => { error: "unknown_extract_tool", summary: @decision.tool } ]
-    let @argsCheck = @resolveDispatchArgs(@state, @decision.args ?? {})
-    if !@argsCheck.ok [ => { error: @argsCheck.error, summary: @argsCheck.issues | @pretty } ]
+    let @shapeCheck = @validatePlannerArgRefs(@decision.args ?? {})
+    if !@shapeCheck.ok [ => @plannerValidationFailure("planner_ref_validation_failed", @shapeCheck, @shapeCheck.issues) ]
+    let @argsCheck = @compileToolArgs(@state, @tool, @decision.args ?? {}, @query)
+    if !@argsCheck.ok [ => @plannerValidationFailure(@argsCheck.error ?? "intent_compile_failed", @argsCheck, @argsCheck.issues) ]
     >> Keep the routed entry intact so dispatch sees the runtime arg docs
     >> instead of a planner-only catalog object that may have shed them.
     let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, @argsCheck.args, @agent.runtimeTools ?? null)
@@ -110,8 +116,10 @@ exe @dispatchExtract(agent, state, decision, query) = [
     }
   ]
 
+  let @sourceCheck = @validatePlannerSourceRef(@decision.source, ["resolved", "selection", "extracted", "derived"])
+  if !@sourceCheck.ok [ => @plannerValidationFailure("planner_source_validation_failed", @sourceCheck, @sourceCheck.issues) ]
   let @resolvedSource = @resolveRefValue(@state, @decision.source)
-  if !@resolvedSource.ok [ => { error: @resolvedSource.error, summary: @resolvedSource.error } ]
+  if !@resolvedSource.ok [ => @plannerValidationFailure(@resolvedSource.error ?? "extract_source_resolution_failed", @resolvedSource, @resolvedSource.issues ?? null) ]
   let @schemaDef = @schemaRecord(@agent, @decision.schema)
   let @prompt = @extractPrompt(@query, @resolvedSource.value, @schemaDef ?? @decision.schema, @decision)
   let @raw = @llmCall(@agent.harness, @prompt, {

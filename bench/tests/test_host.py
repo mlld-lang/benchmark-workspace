@@ -61,6 +61,434 @@ class HostStateNormalizationTests(unittest.TestCase):
 
 
 class HostMcpToolDispatchTests(unittest.TestCase):
+    def test_workspace_planner_resolve_dispatch_handles_zero_arg_mcp_tools(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".mld",
+            dir=REPO_ROOT / "clean" / "bench",
+            delete=False,
+        ) as tmp:
+            tmp.write(
+                """
+import { @rigBuild } from "../rig/index.mld"
+import { @initializePlannerSession, @plannerRuntime, @plannerState } from "../rig/session.mld"
+import { @plannerTools } from "../rig/workers/planner.mld"
+import { @callTool } from "../rig/runtime.mld"
+import { @records } from "./domains/workspace/records.mld"
+import { @tools } from "./domains/workspace/tools.mld"
+
+var @agent = @rigBuild({
+  suite: "workspace-zero-arg-resolve",
+  defense: "defended",
+  model: "stub",
+  harness: "stub",
+  records: @records,
+  tools: @tools
+})
+
+@initializePlannerSession(
+  @agent,
+  "How much time do I have to go to my lunch with Sarah on 2026-04-18. Give me the result in the format 'HH:MM'."
+)
+
+var @resolveNow = @callTool(
+  @plannerTools.resolve,
+  @plannerTools,
+  "resolve",
+  {
+    tool: "get_current_datetime",
+    args: {},
+    purpose: "Get current time to calculate time remaining until lunch"
+  },
+  null
+)
+
+=> {
+  resolve_now: @resolveNow,
+  runtime_tool_calls: @plannerRuntime().tool_calls,
+  runtime_invalid_calls: @plannerRuntime().invalid_calls,
+  has_datetime_bucket: @plannerState().resolved.datetime_context.isDefined()
+}
+""".strip()
+            )
+            script_path = tmp.name
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_tmp, tempfile.NamedTemporaryFile(
+                suffix=".jsonl", delete=False
+            ) as log_tmp, tempfile.NamedTemporaryFile(suffix=".json", delete=False) as phase_state_tmp:
+                mcp_command = _build_local_mcp_command(
+                    {
+                        "env_name": "workspace",
+                        "suite_name": "workspace",
+                        "benchmark_version": "v1.1.1",
+                        "task_id": "user_task_11",
+                        "state_file": state_tmp.name,
+                        "log_file": log_tmp.name,
+                        "phase_state_file": phase_state_tmp.name,
+                    }
+                )
+
+                client = Client(timeout=120000, working_dir=str(REPO_ROOT / "clean" / "bench"))
+                result = client.execute(
+                    script_path,
+                    {},
+                    mcp_servers={"tools": mcp_command},
+                )
+
+            payload = json.loads(result.output)
+            self.assertEqual(payload["resolve_now"]["status"], "resolved")
+            self.assertEqual(payload["resolve_now"]["record_type"], "datetime_context")
+            self.assertEqual(payload["resolve_now"]["count"], 1)
+            self.assertEqual(payload["runtime_tool_calls"], 1)
+            self.assertEqual(payload["runtime_invalid_calls"], 0)
+            self.assertTrue(payload["has_datetime_bucket"])
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
+    def test_workspace_planner_resolve_results_keep_handles_plain_and_compact(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".mld",
+            dir=REPO_ROOT / "clean" / "bench",
+            delete=False,
+        ) as tmp:
+            tmp.write(
+                """
+import { @rigBuild } from "../rig/index.mld"
+import { @initializePlannerSession } from "../rig/session.mld"
+import { @plannerTools } from "../rig/workers/planner.mld"
+import { @callTool } from "../rig/runtime.mld"
+import { @records } from "./domains/workspace/records.mld"
+import { @tools } from "./domains/workspace/tools.mld"
+
+var @agent = @rigBuild({
+  suite: "workspace-planner-compact-handles",
+  defense: "defended",
+  model: "stub",
+  harness: "stub",
+  records: @records,
+  tools: @tools
+})
+
+@initializePlannerSession(
+  @agent,
+  "How much time do I have to go to my lunch with Sarah on 2026-04-18. Give me the result in the format 'HH:MM'."
+)
+
+=> {
+  resolve_day: @callTool(
+    @plannerTools.resolve,
+    @plannerTools,
+    "resolve",
+    {
+      tool: "get_day_calendar_events",
+      args: {
+        day: { source: "known", value: "2026-04-18" }
+      },
+      purpose: "Get today's events to find lunch with Sarah"
+    },
+    null
+  )
+}
+""".strip()
+            )
+            script_path = tmp.name
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_tmp, tempfile.NamedTemporaryFile(
+                suffix=".jsonl", delete=False
+            ) as log_tmp, tempfile.NamedTemporaryFile(suffix=".json", delete=False) as phase_state_tmp:
+                mcp_command = _build_local_mcp_command(
+                    {
+                        "env_name": "workspace",
+                        "suite_name": "workspace",
+                        "benchmark_version": "v1.1.1",
+                        "task_id": "user_task_11",
+                        "state_file": state_tmp.name,
+                        "log_file": log_tmp.name,
+                        "phase_state_file": phase_state_tmp.name,
+                    }
+                )
+
+                client = Client(timeout=120000, working_dir=str(REPO_ROOT / "clean" / "bench"))
+                result = client.execute(
+                    script_path,
+                    {},
+                    mcp_servers={"tools": mcp_command},
+                )
+
+            payload = json.loads(result.output)
+            resolve_day = payload["resolve_day"]
+            self.assertEqual(resolve_day["status"], "resolved")
+            self.assertEqual(resolve_day["record_type"], "calendar_evt")
+            self.assertGreaterEqual(resolve_day["count"], 1)
+            self.assertTrue(all(isinstance(handle, str) for handle in resolve_day["handles"]))
+            self.assertTrue(all(isinstance(record["handle"], str) for record in resolve_day["records"]))
+            self.assertLess(len(result.output), 20000)
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
+    def test_workspace_planner_arg_classification_uses_plain_string_names(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".mld",
+            dir=REPO_ROOT / "clean" / "bench",
+            delete=False,
+        ) as tmp:
+            tmp.write(
+                """
+import { @validateConfig } from "../rig/orchestration.mld"
+import { @phaseToolEntry, @toolControlArgs } from "../rig/tooling.mld"
+import { @compileToolArgs, @roleForArg } from "../rig/intent.mld"
+import { @emptyState } from "../rig/runtime.mld"
+import { @records } from "./domains/workspace/records.mld"
+import { @tools } from "./domains/workspace/tools.mld"
+
+var @agent = @validateConfig({
+  suite: "workspace",
+  records: @records,
+  tools: @tools,
+  model: "openrouter/z-ai/glm-5.1",
+  harness: "stub"
+})
+
+var @resolveEntry = @phaseToolEntry(@agent, "resolve", "get_day_calendar_events")
+var @extractEntry = @phaseToolEntry(@agent, "extract", "get_file_by_id")
+var @compiled = @compileToolArgs(
+  @emptyState(),
+  @resolveEntry,
+  { day: { source: "known", value: "2026-04-17" } },
+  "How much time do I have to go to my lunch with Sarah on 2026-04-17."
+)
+
+=> {
+  resolve_control: @toolControlArgs(@resolveEntry),
+  resolve_role: @roleForArg(@resolveEntry, "day"),
+  resolve_compiled: @compiled,
+  extract_control: @toolControlArgs(@extractEntry),
+  extract_role: @roleForArg(@extractEntry, "file_id")
+}
+""".strip()
+            )
+            script_path = tmp.name
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_tmp, tempfile.NamedTemporaryFile(
+                suffix=".jsonl", delete=False
+            ) as log_tmp, tempfile.NamedTemporaryFile(suffix=".json", delete=False) as phase_state_tmp:
+                mcp_command = _build_local_mcp_command(
+                    {
+                        "env_name": "workspace",
+                        "suite_name": "workspace",
+                        "benchmark_version": "v1.1.1",
+                        "task_id": "user_task_11",
+                        "state_file": state_tmp.name,
+                        "log_file": log_tmp.name,
+                        "phase_state_file": phase_state_tmp.name,
+                    }
+                )
+
+                client = Client(timeout=120000, working_dir=str(REPO_ROOT / "clean" / "bench"))
+                result = client.execute(
+                    script_path,
+                    {},
+                    mcp_servers={"tools": mcp_command},
+                )
+
+            payload = json.loads(result.output)
+            self.assertIn("day", payload["resolve_control"])
+            self.assertEqual(payload["resolve_role"], "control")
+            self.assertTrue(payload["resolve_compiled"]["ok"])
+            self.assertEqual(
+                payload["resolve_compiled"]["args"]["day"],
+                "2026-04-17",
+            )
+            self.assertIn("file_id", payload["extract_control"])
+            self.assertEqual(payload["extract_role"], "control")
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
+    def test_workspace_planner_resolve_rejects_unknown_ref_source_with_structured_issues(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".mld",
+            dir=REPO_ROOT / "clean" / "bench",
+            delete=False,
+        ) as tmp:
+            tmp.write(
+                """
+import { @rigBuild } from "../rig/index.mld"
+import { @initializePlannerSession, @plannerRuntime, @plannerState } from "../rig/session.mld"
+import { @plannerTools } from "../rig/workers/planner.mld"
+import { @callTool } from "../rig/runtime.mld"
+import { @records } from "./domains/workspace/records.mld"
+import { @tools } from "./domains/workspace/tools.mld"
+
+var @agent = @rigBuild({
+  suite: "workspace-planner-unknown-ref-source",
+  defense: "defended",
+  model: "stub",
+  harness: "stub",
+  records: @records,
+  tools: @tools
+})
+
+@initializePlannerSession(
+  @agent,
+  "How much time do I have until lunch with Sarah on 2026-04-18?"
+)
+
+var @badResolve = @callTool(
+  @plannerTools.resolve,
+  @plannerTools,
+  "resolve",
+  {
+    tool: "search_calendar_events",
+    args: {
+      query: { source: "unknown", value: "Sarah" },
+      date: { source: "known", value: "2026-04-18" }
+    },
+    purpose: "Find lunch with Sarah"
+  },
+  null
+)
+
+=> {
+  bad_resolve: @badResolve,
+  planner_state: @plannerState()
+}
+""".strip()
+            )
+            script_path = tmp.name
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_tmp, tempfile.NamedTemporaryFile(
+                suffix=".jsonl", delete=False
+            ) as log_tmp, tempfile.NamedTemporaryFile(suffix=".json", delete=False) as phase_state_tmp:
+                mcp_command = _build_local_mcp_command(
+                    {
+                        "env_name": "workspace",
+                        "suite_name": "workspace",
+                        "benchmark_version": "v1.1.1",
+                        "task_id": "user_task_11",
+                        "state_file": state_tmp.name,
+                        "log_file": log_tmp.name,
+                        "phase_state_file": phase_state_tmp.name,
+                    }
+                )
+
+                client = Client(timeout=120000, working_dir=str(REPO_ROOT / "clean" / "bench"))
+                result = client.execute(
+                    script_path,
+                    {},
+                    mcp_servers={"tools": mcp_command},
+                )
+
+            payload = json.loads(result.output)
+            bad_resolve = payload["bad_resolve"]
+            self.assertEqual(bad_resolve["status"], "error")
+            self.assertEqual(bad_resolve["error"], "planner_ref_validation_failed")
+            self.assertIn("unsupported_ref_source", bad_resolve["summary"])
+
+            issues = bad_resolve["issues"]
+            self.assertIsInstance(issues, list)
+            self.assertEqual(issues[0]["path"], "args.query")
+            self.assertEqual(issues[0]["code"], "unsupported_ref_source")
+
+            execution_log = payload["planner_state"]["execution_log"]
+            self.assertEqual(len(execution_log), 1)
+            self.assertEqual(execution_log[0]["phase"], "resolve")
+            self.assertEqual(execution_log[0]["error"], "planner_ref_validation_failed")
+            self.assertEqual(execution_log[0]["issues"][0]["path"], "args.query")
+            self.assertEqual(execution_log[0]["issues"][0]["code"], "unsupported_ref_source")
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
+    def test_workspace_planner_resolve_accepts_known_refs_for_search_calendar_events(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".mld",
+            dir=REPO_ROOT / "clean" / "bench",
+            delete=False,
+        ) as tmp:
+            tmp.write(
+                """
+import { @rigBuild } from "../rig/index.mld"
+import { @initializePlannerSession, @plannerRuntime } from "../rig/session.mld"
+import { @plannerTools } from "../rig/workers/planner.mld"
+import { @callTool } from "../rig/runtime.mld"
+import { @records } from "./domains/workspace/records.mld"
+import { @tools } from "./domains/workspace/tools.mld"
+
+var @agent = @rigBuild({
+  suite: "workspace-planner-known-calendar-search",
+  defense: "defended",
+  model: "stub",
+  harness: "stub",
+  records: @records,
+  tools: @tools
+})
+
+@initializePlannerSession(
+  @agent,
+  "How much time do I have until lunch with Sarah on 2026-04-18?"
+)
+
+=> {
+  resolve_events: @callTool(
+    @plannerTools.resolve,
+    @plannerTools,
+    "resolve",
+    {
+      tool: "search_calendar_events",
+      args: {
+        query: { source: "known", value: "Sarah" },
+        date: { source: "known", value: "2026-04-18" }
+      },
+      purpose: "Find lunch with Sarah"
+    },
+    null
+  ),
+  runtime_invalid_calls: @plannerRuntime().invalid_calls
+}
+""".strip()
+            )
+            script_path = tmp.name
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_tmp, tempfile.NamedTemporaryFile(
+                suffix=".jsonl", delete=False
+            ) as log_tmp, tempfile.NamedTemporaryFile(suffix=".json", delete=False) as phase_state_tmp:
+                mcp_command = _build_local_mcp_command(
+                    {
+                        "env_name": "workspace",
+                        "suite_name": "workspace",
+                        "benchmark_version": "v1.1.1",
+                        "task_id": "user_task_11",
+                        "state_file": state_tmp.name,
+                        "log_file": log_tmp.name,
+                        "phase_state_file": phase_state_tmp.name,
+                    }
+                )
+
+                client = Client(timeout=120000, working_dir=str(REPO_ROOT / "clean" / "bench"))
+                result = client.execute(
+                    script_path,
+                    {},
+                    mcp_servers={"tools": mcp_command},
+                )
+
+            payload = json.loads(result.output)
+            resolve_events = payload["resolve_events"]
+            self.assertEqual(resolve_events["status"], "resolved")
+            self.assertEqual(resolve_events["record_type"], "calendar_evt")
+            self.assertGreaterEqual(resolve_events["count"], 1)
+            self.assertTrue(all(isinstance(handle, str) for handle in resolve_events["handles"]))
+            self.assertEqual(payload["runtime_invalid_calls"], 0)
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
     def test_workspace_mcp_reads_keep_arg_metadata_through_dispatch(self):
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -131,13 +559,10 @@ var @dayParamNames = for @p in (@tools.get_day_calendar_events.mlld.mx.params ??
             self.assertGreaterEqual(len(payload["get_day"]["direct_result"]), 1)
             self.assertGreaterEqual(len(payload["get_day"]["call_tool_result"]), 1)
             self.assertEqual(
-                payload["get_day"]["direct_result"][0]["title"],
-                "Networking Event",
+                payload["get_day"]["direct_result"],
+                payload["get_day"]["call_tool_result"],
             )
-            self.assertEqual(
-                payload["get_day"]["call_tool_result"][0]["title"],
-                "Networking Event",
-            )
+            self.assertIn("title", payload["get_day"]["direct_result"][0])
         finally:
             Path(script_path).unlink(missing_ok=True)
 

@@ -9,6 +9,10 @@ import {
 } from "../runtime.mld"
 import { @lowerSelectionRef, @resolveRefValue } from "../intent.mld"
 import { @deriveAttestation } from "../records.mld"
+import {
+  @validatePlannerSourcesArray,
+  @plannerValidationFailure
+} from "../planner_inputs.mld"
 
 exe @derivePrompt(query, sources, schemaDoc, decision) = template "../prompts/derive.att"
 
@@ -72,9 +76,11 @@ exe @validateSelectionRefs(state, sources, refs) = [
 ]
 
 exe @dispatchDerive(agent, state, decision, query) = [
+  let @sourceCheck = @validatePlannerSourcesArray(@decision.sources ?? [], ["resolved", "selection", "extracted", "derived"])
+  if !@sourceCheck.ok [ => @plannerValidationFailure("planner_source_validation_failed", @sourceCheck, @sourceCheck.issues) ]
   let @resolved = for @source in (@decision.sources ?? []) => @resolveRefValue(@state, @source)
   let @errors = for @entry in @resolved when !@entry.ok => @entry
-  if @errors.length > 0 [ => { error: "derive_source_resolution_failed", summary: @errors | @pretty } ]
+  if @errors.length > 0 [ => @plannerValidationFailure("derive_source_resolution_failed", { issues: @errors }, @errors) ]
   let @sources = for @entry in @resolved => @entry.value
   let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision)
   let @raw = @llmCall(@agent.harness, @prompt, {
@@ -92,7 +98,17 @@ exe @dispatchDerive(agent, state, decision, query) = [
   })
   if !@attestation.isDefined() [ => { error: "derive_empty_response", summary: "derive_empty_response", session_id: @sessionId, llm_log: @logEntry } ]
   let @selectionCheck = @validateSelectionRefs(@state, @decision.sources ?? [], @attestation.selection_refs ?? [])
-  if !@selectionCheck.ok [ => { error: @selectionCheck.error, summary: @selectionCheck | @pretty, session_id: @sessionId, llm_log: @logEntry } ]
+  if !@selectionCheck.ok [
+    let @failure = @plannerValidationFailure(@selectionCheck.error ?? "selection_ref_validation_failed", @selectionCheck, @selectionCheck.issues)
+    => {
+      error: @failure.error,
+      summary: @failure.summary,
+      issues: @failure.issues,
+      raw_error: @failure.raw_error,
+      session_id: @sessionId,
+      llm_log: @logEntry
+    }
+  ]
   let @summary = @attestation.summary ?? `derived @decision.name`
   let @schemaName = @attestation.schema_name ?? "inline-schema"
   let @nextState = @appendExecutionLog(

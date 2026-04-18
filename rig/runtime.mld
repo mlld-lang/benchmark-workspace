@@ -10,6 +10,7 @@ import {
   @phaseToolNames
 } from "./tooling.mld"
 import { @resolveRefValue } from "./intent.mld"
+import { @appendLlmCall, @serializeLifecycleJson } from "./lifecycle.mld"
 
 >> Shared runtime helpers for the rig loop and per-phase workers.
 >> These helpers stay on native mlld values so resolved factsources and
@@ -98,6 +99,34 @@ exe @sanitizeJson(inputValue) = js {
   return JSON.parse(JSON.stringify(inputValue ?? null));
 }
 
+exe @jsonSummary(inputValue) = js {
+  function unwrap(value) {
+    if (value == null || typeof value !== "object") return value;
+    if (
+      value.mx &&
+      typeof value.mx === "object" &&
+      Object.prototype.hasOwnProperty.call(value.mx, "data")
+    ) {
+      return unwrap(value.mx.data);
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(value, "type") &&
+      Object.prototype.hasOwnProperty.call(value, "text") &&
+      Object.prototype.hasOwnProperty.call(value, "data")
+    ) {
+      return unwrap(value.data);
+    }
+    return value;
+  }
+
+  try {
+    const sanitized = JSON.parse(JSON.stringify(unwrap(inputValue ?? null)));
+    return JSON.stringify(sanitized, null, 2);
+  } catch (_error) {
+    return String(inputValue ?? "");
+  }
+}
+
 exe @llmCallEntry(phase, prompt, raw, parsed, sessionId, extra) = [
   => {
     phase: @phase,
@@ -109,10 +138,23 @@ exe @llmCallEntry(phase, prompt, raw, parsed, sessionId, extra) = [
   }
 ]
 
+exe @appendLlmDebug(agent, entry) = [
+  if !@agent.logLlmCalls [ => false ]
+  if !@agent.llmCallLogFile.isDefined() [ => false ]
+  if !@entry.isDefined() [ => false ]
+  @appendLlmCall(@agent.llmCallLogFile, @serializeLifecycleJson(@entry))
+  => true
+]
+
 exe @structuredData(inputValue) = when [
   @inputValue.mx.data.isDefined() => @inputValue.mx.data
   @inputValue.data.isDefined() => @inputValue.data
   * => @inputValue
+]
+
+exe @stringValue(inputValue) = when [
+  @inputValue.isDefined() => `@structuredData(@inputValue)`
+  * => null
 ]
 
 exe @arrayItems(values) = when [
@@ -324,6 +366,7 @@ exe @projectResolvedFieldValue(entry, fieldName) = [
 
 exe @projectResolvedEntry(recordType, recordDef, entry, role) = [
   let @mode = @recordDisplayMode(@recordDef, @role)
+  let @plainHandle = @stringValue(@entry.handle)
   let @pairs = for @modeEntry in @mode [
     let @display = @displayEntry(@modeEntry)
     if !@display [ => null ]
@@ -331,7 +374,7 @@ exe @projectResolvedEntry(recordType, recordDef, entry, role) = [
     if !@value.isDefined() [ => null ]
     let @projectedValue = when [
       @display.kind == "mask" => @maskPreview(@value)
-      @display.kind == "handle" => @entry.handle
+      @display.kind == "handle" => @plainHandle
       * => @value
     ]
     => {
@@ -342,7 +385,7 @@ exe @projectResolvedEntry(recordType, recordDef, entry, role) = [
   let @visible = for @pair in @pairs when @pair => @pair
   let @visibleFields = @pairsToObject(@visible)
   => {
-    handle: @entry.handle,
+    handle: @plainHandle,
     record: @recordType,
     ...@visibleFields
   }
@@ -436,7 +479,7 @@ exe @projectNamedState(records, stateMap, role) = [
   => @pairsToObject(@pairs)
 ]
 
-exe @plannerStateSummary(agent, state) = [
+exe @plannerVisibleState(agent, state) = [
   => {
     resolved: @projectResolvedSummary(@agent.records ?? {}, @state, "role:planner"),
     extracted: @projectNamedState(@agent.records ?? {}, @state.extracted, "role:planner"),
@@ -452,13 +495,12 @@ exe @workerStateSummary(agent, state) = [
   }
 ]
 
-exe @rigState(resolved, extracted, derived, executionLog, plannerSessionId, phaseEvents) = [
+exe @rigState(resolved, extracted, derived, executionLog, phaseEvents) = [
   => {
     resolved: @resolved,
     extracted: @extracted,
     derived: @derived,
     execution_log: @executionLog,
-    planner_session_id: @plannerSessionId,
     phase_events: @phaseEvents
   }
 ]
@@ -469,21 +511,8 @@ exe @emptyState() = [
     extracted: {},
     derived: {},
     execution_log: [],
-    planner_session_id: null,
     phase_events: []
   }
-]
-
-exe @withPlannerSession(state, plannerSessionId) = [
-  let @nextPlannerSession = @normalizeSessionId(@plannerSessionId) ?? @normalizeSessionId(@state.planner_session_id)
-  => @rigState(
-    @structuredData(@state.resolved),
-    @structuredData(@state.extracted),
-    @structuredData(@state.derived),
-    @arrayItems(@state.execution_log),
-    @nextPlannerSession,
-    @arrayItems(@state.phase_events)
-  )
 ]
 
 exe @mergeResolvedEntries(existingEntries, newEntries) = [
@@ -514,7 +543,6 @@ exe @updateResolvedState(state, recordName, entries) = [
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
     @arrayItems(@state.execution_log),
-    @normalizeSessionId(@state.planner_session_id),
     @arrayItems(@state.phase_events)
   )
 ]
@@ -528,7 +556,6 @@ exe @updateNamedState(state, bucket, name, entry) = [
       @nextBucket,
       @structuredData(@state.derived),
       @arrayItems(@state.execution_log),
-      @normalizeSessionId(@state.planner_session_id),
       @arrayItems(@state.phase_events)
     )
     @bucket == "derived" => @rigState(
@@ -536,7 +563,6 @@ exe @updateNamedState(state, bucket, name, entry) = [
       @structuredData(@state.extracted),
       @nextBucket,
       @arrayItems(@state.execution_log),
-      @normalizeSessionId(@state.planner_session_id),
       @arrayItems(@state.phase_events)
     )
     * => @state
@@ -550,7 +576,6 @@ exe @appendExecutionLog(state, entry) = [
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
     @arrayItems(@state.execution_log).concat([@plainEntry]),
-    @normalizeSessionId(@state.planner_session_id),
     @arrayItems(@state.phase_events)
   )
 ]
@@ -562,7 +587,6 @@ exe @appendPhaseEvents(state, events) = [
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
     @arrayItems(@state.execution_log),
-    @normalizeSessionId(@state.planner_session_id),
     @arrayItems(@state.phase_events).concat(@plainEvents)
   )
 ]
@@ -676,10 +700,10 @@ exe @lookupRuntimeTool(toolEntry, toolsCollection, toolName, runtimeTools) = [
   >> tool name string as `.mlld`, which is useful metadata but not a
   >> callable binding.
   => when [
-    @typeof(@runtimeOverride) == "executable" => @runtimeOverride
     @typeof(@runtimeOverride.mlld) == "executable" => @runtimeOverride
-    @typeof(@toolEntry) == "executable" => @toolEntry
+    @typeof(@runtimeOverride) == "executable" => @runtimeOverride
     @typeof(@toolEntry.mlld) == "executable" => @toolEntry
+    @typeof(@toolEntry) == "executable" => @toolEntry
     @runtimeOverride.isDefined() => @runtimeOverride
     @collectionCatalog[@toolKey].isDefined() => @collectionCatalog[@toolKey]
     @toolsCollection.mx.entries.isDefined() && @mxEntry(@toolsCollection.mx.entries, @toolKey).isDefined() => @mxEntry(@toolsCollection.mx.entries, @toolKey)
@@ -688,13 +712,10 @@ exe @lookupRuntimeTool(toolEntry, toolsCollection, toolName, runtimeTools) = [
   ]
 ]
 
-exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, policyValue, runtimeTools) = [
+exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, policyValue, runtimeTools) = [
   let @toolKey = `@toolName`
   let @collectionCatalog = @toolCatalogObject(@toolsCollection)
-  let @callableCollection = when [
-    @collectionCatalog[@toolKey].isDefined() => @collectionCatalog
-    * => @toolsCollection
-  ]
+  let @callableCollection = @toolsCollection
   let @runtimeEntry = @lookupRuntimeTool(@toolEntry, @toolsCollection, @toolName, @runtimeTools)
   let @entry = when [
     @runtimeEntry.isDefined() => @runtimeEntry
@@ -733,13 +754,13 @@ exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, poli
     @typeof(@args) == "object" && @singleArgName.isDefined() => @args[@singleArgName]
     * => @args
   ]
-  let @collectionEntry = when [
+  let @callableEntry = when [
     @callableCollection[@toolKey].isDefined() => @callableCollection[@toolKey]
     * => null
   ]
-  let @collectionExe = when [
-    @typeof(@collectionEntry) == "executable" => @collectionEntry
-    @typeof(@collectionEntry.mlld) == "executable" => @collectionEntry.mlld
+  let @collectionEntry = when [
+    @collectionCatalog[@toolKey].isDefined() => @collectionCatalog[@toolKey]
+    @callableEntry.isDefined() => @callableEntry
     * => null
   ]
   >> Direct single-parameter reads expect a scalar positional argument.
@@ -748,8 +769,8 @@ exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, poli
   >> to the underlying scalar value and leave execute-with-policy calls
   >> on the original native objects.
   let @exe = when [
-    @typeof(@entry) == "executable" => @entry
     @typeof(@entry.mlld) == "executable" => @entry.mlld
+    @typeof(@entry) == "executable" => @entry
     * => null
   ]
   >> Policy-bearing dispatch usually prefers the named `var tools`
@@ -767,7 +788,7 @@ exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, poli
   ]
   if @policyValue.isDefined() &&
     @metadataEntry.inputs.isDefined() &&
-    @collectionEntry.isDefined() [
+    @callableEntry.isDefined() [
     => when [
       @argKeys.length == 0 => @callableCollection[@toolKey]() with { policy: @policyValue }
       @paramNames.length == 1 => @callableCollection[@toolKey](@singleArg) with { policy: @policyValue }
@@ -786,10 +807,12 @@ exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, poli
   >> The benchmark agents intentionally build a local `var tools`
   >> collection in the same file that runs the phase loop. That bridge is
   >> the primary non-policy dispatch surface: it preserves same-file call
-  >> binding and native mlld coercion for imported tools. Bare executable
-  >> refs remain the fallback, and `direct: true` is the explicit escape
-  >> hatch for wrappers that must bypass the collection proxy.
-  if !@preferDirect && @collectionEntry.isDefined() [
+  >> binding and native mlld coercion for imported tools when the original
+  >> collection object still exposes the keyed callable surface. Bare
+  >> executable refs remain the fallback, and `direct: true` is the
+  >> explicit escape hatch for wrappers that must bypass the collection
+  >> proxy.
+  if !@preferDirect && @callableEntry.isDefined() [
     => when [
       @argKeys.length == 0 => @callableCollection[@toolKey]()
       @paramNames.length == 1 => @callableCollection[@toolKey](@singleArg)
@@ -809,11 +832,11 @@ exe @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, poli
   ]
 ]
 
-exe @callTool(toolEntry, toolsCollection, toolName, args, runtimeTools) = [
+exe recursive @callTool(toolEntry, toolsCollection, toolName, args, runtimeTools) = [
   => @callToolWithOptionalPolicy(@toolEntry, @toolsCollection, @toolName, @args, null, @runtimeTools)
 ]
 
-exe @callToolWithPolicy(toolEntry, toolsCollection, toolName, args, policyValue, runtimeTools) = [
+exe recursive @callToolWithPolicy(toolEntry, toolsCollection, toolName, args, policyValue, runtimeTools) = [
   => @callToolWithOptionalPolicy(@toolEntry, @toolsCollection, @toolName, @args, @policyValue, @runtimeTools)
 ]
 
@@ -832,10 +855,13 @@ exe @toolRuntimeMessage(toolName, raw) = when [
 exe @toolFailureDetail(raw) = when [
   !@raw.isDefined() => null
   @typeof(@raw) == "string" => @raw
-  @raw["message"].isDefined() => `@raw["message"]`
-  @raw["summary"].isDefined() => `@raw["summary"]`
-  @raw["error"].isDefined() && @raw["error"] != true => `@raw["error"]`
-  * => @sanitizeJson(@raw) | @pretty
+  @raw["message"].isDefined() && @typeof(@raw["message"]) == "string" => `@raw["message"]`
+  @raw["message"].isDefined() => `@jsonSummary(@raw["message"])`
+  @raw["summary"].isDefined() && @typeof(@raw["summary"]) == "string" => `@raw["summary"]`
+  @raw["summary"].isDefined() => `@jsonSummary(@raw["summary"])`
+  @raw["error"].isDefined() && @raw["error"] != true && @typeof(@raw["error"]) == "string" => `@raw["error"]`
+  @raw["error"].isDefined() && @raw["error"] != true => `@jsonSummary(@raw["error"])`
+  * => `@jsonSummary(@raw)`
 ]
 
 >> Runtime bridges sometimes return an object envelope with `error: false`
@@ -897,8 +923,11 @@ export {
   @llmSessionId,
   @normalizePositiveInt,
   @sanitizeJson,
+  @jsonSummary,
   @llmCallEntry,
+  @appendLlmDebug,
   @structuredData,
+  @stringValue,
   @arrayItems,
   @plainObjectKeys,
   @replaceObjectField,
@@ -922,11 +951,10 @@ export {
   @projectNamedRecordFields,
   @projectNamedEntry,
   @projectNamedState,
-  @plannerStateSummary,
+  @plannerVisibleState,
   @workerStateSummary,
   @rigState,
   @emptyState,
-  @withPlannerSession,
   @mergeResolvedEntries,
   @updateResolvedState,
   @updateNamedState,

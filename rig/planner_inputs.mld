@@ -1,0 +1,304 @@
+import {
+  @arrayItems,
+  @stringValue,
+  @sanitizeJson,
+  @jsonSummary,
+  @isStructuredRef
+} from "./runtime.mld"
+
+>> Planner-facing ref records. These are the structural source of truth
+>> for the nested ref shapes the planner is allowed to emit.
+
+record @planner_base_ref = {
+  data: [source: string],
+  validate: "demote"
+}
+
+record @planner_known_ref = {
+  data: [source: string, value: string],
+  validate: "demote"
+}
+
+record @planner_resolved_ref = {
+  data: [source: string, record: string, handle: string?, field: string?],
+  validate: "demote"
+}
+
+record @planner_selection_backing = {
+  data: [record: string, handle: string],
+  validate: "demote"
+}
+
+record @planner_selection_ref = {
+  data: [source: string, backing: object, field: string?],
+  validate: "demote"
+}
+
+record @planner_named_ref = {
+  data: [source: string, name: string, field: string?],
+  validate: "demote"
+}
+
+record @planner_allow_ref = {
+  data: [source: string],
+  validate: "demote"
+}
+
+exe @plannerField(inputValue, fieldName) = [
+  let @fieldKey = @stringValue(@fieldName)
+  => when [
+    !@fieldKey.isDefined() => null
+    @inputValue.mx.data[@fieldKey].isDefined() => @inputValue.mx.data[@fieldKey]
+    @inputValue.data[@fieldKey].isDefined() => @inputValue.data[@fieldKey]
+    @inputValue[@fieldKey].isDefined() => @inputValue[@fieldKey]
+    * => null
+  ]
+]
+
+exe @plannerRefSource(ref) = [
+  => @stringValue(@plannerField(@ref, "source"))
+]
+
+exe @plannerIssue(path, code, message, expected, actual) = [
+  => {
+    path: @path,
+    code: @code,
+    message: @message,
+    expected: @expected ?? null,
+    actual: @actual ?? null
+  }
+]
+
+exe @plannerIssuePath(basePath, childPath) = when [
+  @childPath.isDefined() && @stringValue(@childPath) != "" => `@basePath.@childPath`
+  * => @basePath
+]
+
+exe @plannerIndexedPath(basePath, index) = js {
+  return `${String(basePath ?? "")}[${String(index ?? "")}]`;
+}
+
+exe @plannerSchemaIssues(basePath, candidate) = [
+  let @errors = @candidate.mx.schema.errors ?? []
+  => for @error in @arrayItems(@errors) => {
+    path: @plannerIssuePath(@basePath, @error.path ?? null),
+    code: @error.code ?? "schema_validation_failed",
+    message: @error.message ?? "schema_validation_failed",
+    expected: @error.expected ?? null,
+    actual: @error.actual ?? null
+  }
+]
+
+exe @plannerFlattenIssues(groups) = [
+  let @items = @arrayItems(@groups)
+  let @flattened = loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "plannerFlattenIssues" => @input
+      * => { _rig_cursor: "plannerFlattenIssues", index: 0, values: [] }
+    ]
+    if @ctx.index >= @items.length [ done @ctx.values ]
+    continue {
+      _rig_cursor: "plannerFlattenIssues",
+      index: @ctx.index + 1,
+      values: @ctx.values.concat(@items[@ctx.index] ?? [])
+    }
+  ]
+  => @flattened
+]
+
+exe @plannerCastOk(path, candidate) = [
+  => when [
+    @candidate.mx.schema.valid == false => {
+      ok: false,
+      issues: @plannerSchemaIssues(@path, @candidate)
+    }
+    * => { ok: true, value: @candidate }
+  ]
+]
+
+exe @plannerValidateKnownRef(path, ref) = [
+  => @plannerCastOk(@path, @cast(@ref, @planner_known_ref))
+]
+
+exe @plannerValidateResolvedRef(path, ref) = [
+  => @plannerCastOk(@path, @cast(@ref, @planner_resolved_ref))
+]
+
+exe @plannerValidateNamedRef(path, ref) = [
+  => @plannerCastOk(@path, @cast(@ref, @planner_named_ref))
+]
+
+exe @plannerValidateAllowRef(path, ref) = [
+  => @plannerCastOk(@path, @cast(@ref, @planner_allow_ref))
+]
+
+exe @plannerValidateSelectionRef(path, ref) = [
+  let @candidate = @cast(@ref, @planner_selection_ref)
+  let @selectionCheck = @plannerCastOk(@path, @candidate)
+  if !@selectionCheck.ok [ => @selectionCheck ]
+  let @backingCheck = @plannerCastOk(
+    `@path.backing`,
+    @cast(@plannerField(@candidate, "backing"), @planner_selection_backing)
+  )
+  if !@backingCheck.ok [ => @backingCheck ]
+  => { ok: true, value: @candidate }
+]
+
+exe @plannerUnsupportedSource(path, source) = [
+  => {
+    ok: false,
+    issues: [
+      @plannerIssue(
+        @path,
+        "unsupported_ref_source",
+        `unsupported ref source '@source'`,
+        ["known", "resolved", "selection", "extracted", "derived", "allow"],
+        @source ?? null
+      )
+    ]
+  }
+]
+
+exe @plannerValidateRef(path, ref) = [
+  if !@isStructuredRef(@ref) [
+    => {
+      ok: false,
+      issues: [
+        @plannerIssue(
+          @path,
+          "structured_ref_required",
+          "structured ref required",
+          "object with source",
+          @typeof(@ref)
+        )
+      ]
+    }
+  ]
+
+  let @baseCheck = @plannerCastOk(@path, @cast(@ref, @planner_base_ref))
+  if !@baseCheck.ok [ => @baseCheck ]
+
+  let @source = @plannerRefSource(@baseCheck.value)
+  => when [
+    @source == "known" => @plannerValidateKnownRef(@path, @ref)
+    @source == "resolved" => @plannerValidateResolvedRef(@path, @ref)
+    @source == "selection" => @plannerValidateSelectionRef(@path, @ref)
+    @source == "extracted" || @source == "derived" => @plannerValidateNamedRef(@path, @ref)
+    @source == "allow" => @plannerValidateAllowRef(@path, @ref)
+    * => @plannerUnsupportedSource(@path, @source)
+  ]
+]
+
+exe @plannerValidateAllowedSource(path, ref, allowedSources) = [
+  let @validated = @plannerValidateRef(@path, @ref)
+  if !@validated.ok [ => @validated ]
+  let @allowed = for @source in (@allowedSources ?? []) => @stringValue(@source)
+  let @source = @plannerRefSource(@validated.value)
+  => when [
+    @allowed.length == 0 || @allowed.includes(@source) => @validated
+    * => {
+      ok: false,
+      issues: [
+        @plannerIssue(
+          @path,
+          "unsupported_source_for_phase",
+          `source '@source' is not allowed here`,
+          @allowed,
+          @source
+        )
+      ]
+    }
+  ]
+]
+
+exe @plannerValidateArgValue(path, argValue) = [
+  => when [
+    @typeof(@argValue) == "array" => [
+      let @results = for @item in @argValue => @plannerValidateRef(@plannerIndexedPath(@path, @mx.for.index), @item)
+      let @groups = for @entry in @results when !@entry.ok => @entry.issues ?? []
+      let @issues = @plannerFlattenIssues(@groups)
+      => when [
+        @issues.length == 0 => { ok: true }
+        * => { ok: false, issues: @issues }
+      ]
+    ]
+    * => @plannerValidateRef(@path, @argValue)
+  ]
+]
+
+exe @validatePlannerArgRefs(args) = [
+  if !@args.isDefined() [ => { ok: true } ]
+  if @typeof(@args) != "object" [
+    => {
+      ok: false,
+      issues: [
+        @plannerIssue("args", "type", "args must be an object", "object", @typeof(@args))
+      ]
+    }
+  ]
+  let @results = for @argName, @argValue in @args => @plannerValidateArgValue(`args.@argName`, @argValue)
+  let @groups = for @entry in @results when !@entry.ok => @entry.issues ?? []
+  let @issues = @plannerFlattenIssues(@groups)
+  => when [
+    @issues.length == 0 => { ok: true }
+    * => { ok: false, issues: @issues }
+  ]
+]
+
+exe @validatePlannerSourceRef(sourceRef, allowedSources) = [
+  if !@sourceRef.isDefined() [
+    => {
+      ok: false,
+      issues: [
+        @plannerIssue("source", "missing", "source ref is required", "structured ref", null)
+      ]
+    }
+  ]
+  => @plannerValidateAllowedSource("source", @sourceRef, @allowedSources ?? [])
+]
+
+exe @validatePlannerSourcesArray(sources, allowedSources) = [
+  if @typeof(@sources) != "array" [
+    => {
+      ok: false,
+      issues: [
+        @plannerIssue("sources", "type", "sources must be an array", "array", @typeof(@sources))
+      ]
+    }
+  ]
+  let @results = for @source in (@sources ?? []) => @plannerValidateAllowedSource(@plannerIndexedPath("sources", @mx.for.index), @source, @allowedSources ?? [])
+  let @groups = for @entry in @results when !@entry.ok => @entry.issues ?? []
+  let @issues = @plannerFlattenIssues(@groups)
+  => when [
+    @issues.length == 0 => { ok: true }
+    * => { ok: false, issues: @issues }
+  ]
+]
+
+exe @plannerValidationFailure(errorCode, detail, issues) = [
+  let @plainDetail = @sanitizeJson(@detail ?? null)
+  let @plainIssues = when [
+    @issues.isDefined() => @sanitizeJson(@issues)
+    @plainDetail.issues.isDefined() => @sanitizeJson(@plainDetail.issues)
+    * => []
+  ]
+  let @summary = when [
+    @plainIssues.length > 0 => `@jsonSummary(@plainIssues)`
+    @typeof(@plainDetail) == "object" && @plainDetail != null => `@jsonSummary(@plainDetail)`
+    @typeof(@plainDetail) == "string" && @plainDetail != "" => @plainDetail
+    * => @errorCode
+  ]
+  => {
+    error: @errorCode,
+    summary: @summary,
+    issues: when [ @plainIssues.length > 0 => @plainIssues * => null ],
+    raw_error: when [ @typeof(@plainDetail) == "object" && @plainDetail != null => @plainDetail * => null ]
+  }
+]
+
+export {
+  @validatePlannerArgRefs,
+  @validatePlannerSourceRef,
+  @validatePlannerSourcesArray,
+  @plannerValidationFailure
+}

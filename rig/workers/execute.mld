@@ -16,6 +16,7 @@ import {
 } from "../runtime.mld"
 import { @compileExecuteIntent } from "../intent.mld"
 import { @executeAttestation } from "../records.mld"
+import { @validatePlannerArgRefs, @plannerValidationFailure } from "../planner_inputs.mld"
 
 >> Most execute steps dispatch directly once intent compilation and
 >> policy construction succeed. The prompt remains available for suites
@@ -29,7 +30,8 @@ exe @coerceExecuteAttestation(raw) = [
 ] => record @executeAttestation
 
 exe @controlArgValues(compiledEntries, controlArgs) = [
-  let @pairs = for @entry in (@compiledEntries ?? []) when @controlArgs.includes(@entry.arg) => {
+  let @controlArgNames = for @argName in (@controlArgs ?? []) => `@argName`
+  let @pairs = for @entry in (@compiledEntries ?? []) when @controlArgNames.includes(`@entry.arg`) => {
     key: @entry.arg,
     value: @entry.value
   }
@@ -37,7 +39,8 @@ exe @controlArgValues(compiledEntries, controlArgs) = [
 ]
 
 exe @hasNonNullFieldValue(inputValue, fieldNames) = [
-  let @matches = for @fieldName in (@fieldNames ?? []) when @inputValue[@fieldName].isDefined() && @inputValue[@fieldName] != null => @fieldName
+  let @names = for @fieldName in (@fieldNames ?? []) => `@fieldName`
+  let @matches = for @fieldName in @names when @inputValue[@fieldName].isDefined() && @inputValue[@fieldName] != null => @fieldName
   => @matches.length > 0
 ]
 
@@ -85,11 +88,14 @@ exe @omittedOptionalControlIntent(operationName, controlArgs) = [
 >> learn that path natively, rig strips only the unknown-target rules for
 >> that one dispatch and authorizes the tool-level call internally.
 exe @presentControlArgs(compiledEntries, controlArgs) = [
-  => for @entry in (@compiledEntries ?? []) when @controlArgs.includes(@entry.arg) => @entry.arg
+  let @controlArgNames = for @argName in (@controlArgs ?? []) => `@argName`
+  => for @entry in (@compiledEntries ?? []) when @controlArgNames.includes(`@entry.arg`) => @entry.arg
 ]
 
 exe @allControlArgsOptional(controlArgs, optionalArgs) = [
-  let @required = for @argName in (@controlArgs ?? []) when !@optionalArgs.includes(@argName) => @argName
+  let @controlArgNames = for @argName in (@controlArgs ?? []) => `@argName`
+  let @optionalArgNames = for @argName in (@optionalArgs ?? []) => `@argName`
+  let @required = for @argName in @controlArgNames when !@optionalArgNames.includes(@argName) => @argName
   => @required.length == 0
 ]
 
@@ -110,14 +116,16 @@ exe @omitUnknownTargetRules(basePolicy) = [
 ]
 
 exe role:planner @dispatchExecute(agent, state, decision, query) = [
+  let @shapeCheck = @validatePlannerArgRefs(@decision.args ?? {})
+  if !@shapeCheck.ok [ => @plannerValidationFailure("planner_ref_validation_failed", @shapeCheck, @shapeCheck.issues) ]
   let @compiled = @compileExecuteIntent(@state, @agent.tools, @decision, @query)
-  if !@compiled.ok [ => { error: @compiled.error ?? "intent_compile_failed", summary: @compiled | @pretty } ]
+  if !@compiled.ok [ => @plannerValidationFailure(@compiled.error ?? "intent_compile_failed", @compiled, @compiled.issues ?? null) ]
   let @tool = @compiled.tool
   let @operationName = @decision.operation
-  let @controlArgs = @toolControlArgs(@tool)
-  let @optionalArgs = @toolOptionalArgs(@tool)
-  let @payloadArgs = @toolPayloadArgs(@tool)
-  let @updateFields = @toolUpdateArgs(@tool)
+  let @controlArgs = for @argName in @toolControlArgs(@tool) => `@argName`
+  let @optionalArgs = for @argName in @toolOptionalArgs(@tool) => `@argName`
+  let @payloadArgs = for @argName in @toolPayloadArgs(@tool) => `@argName`
+  let @updateFields = for @argName in @toolUpdateArgs(@tool) => `@argName`
   let @controlValues = @controlArgValues(@compiled.compiled_entries, @controlArgs)
   let @presentControlArgNames = @presentControlArgs(@compiled.compiled_entries, @controlArgs)
   let @payloadPairs = for @argName in @payloadArgs when @compiled.compiled_args[@argName].isDefined() => {
@@ -131,11 +139,11 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   >> already validates shape against `inputs:` at call time.
   let @preparedArgs = @inputValues
   if @updateFields.length > 0 && !@hasNonNullFieldValue(@preparedArgs, @updateFields) [
-    => { error: "no_update_fields", summary: @updateFields | @pretty }
+    => @plannerValidationFailure("no_update_fields", { update_fields: @updateFields }, null)
   ]
   if @toolCorrelateControlArgs(@tool) [
     let @correlated = @correlatedControlArgsCheck(@compiled.compiled_entries, @controlArgs)
-    if !@correlated.ok [ => { error: @correlated.error, summary: @correlated | @pretty } ]
+    if !@correlated.ok [ => @plannerValidationFailure(@correlated.error ?? "correlated_control_args_failed", @correlated, @correlated.issues ?? null) ]
   ]
   let @optionalControlArgsOmitted = @controlArgs.length > 0 &&
     @presentControlArgNames.length == 0 &&
@@ -158,7 +166,7 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
     )
     * => { valid: true, policy: null, issues: [] }
   ]
-  if !@built.valid [ => { error: "policy_build_invalid", summary: @built.issues | @pretty } ]
+  if !@built.valid [ => @plannerValidationFailure("policy_build_invalid", @built, @built.issues ?? null) ]
   let @finalArgs = @mergeArgSources([@preparedArgs, @compiled.bind_args])
   >> `@policy.build(..., { basePolicy })` already returns the compiled
   >> task policy layered onto the active base policy. Re-merging

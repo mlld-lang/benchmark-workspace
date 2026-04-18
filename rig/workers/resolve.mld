@@ -8,6 +8,7 @@ import {
 import { @resolveAttestation } from "../records.mld"
 import { @compileToolArgs } from "../intent.mld"
 import { @phaseToolEntry } from "../tooling.mld"
+import { @validatePlannerArgRefs, @plannerValidationFailure } from "../planner_inputs.mld"
 
 exe @resolvePrompt(query, decision, toolDocs, stateSummary) = template "../prompts/resolve.att"
 
@@ -32,9 +33,11 @@ exe @dispatchResolve(agent, state, decision, query) = [
   @resolveDebug(@agent, "dispatchResolve:start")
   let @tool = @phaseToolEntry(@agent, "resolve", @decision.tool)
   if !@tool [ => { error: "unknown_resolve_tool", summary: @decision.tool } ]
+  let @shapeCheck = @validatePlannerArgRefs(@decision.args ?? {})
+  if !@shapeCheck.ok [ => @plannerValidationFailure("planner_ref_validation_failed", @shapeCheck, @shapeCheck.issues) ]
   @resolveDebug(@agent, "dispatchResolve:tool")
   let @argsCheck = @compileToolArgs(@state, @tool, @decision.args ?? {}, @query)
-  if !@argsCheck.ok [ => { error: "tool_arg_validation_failed", summary: @argsCheck.issues | @pretty } ]
+  if !@argsCheck.ok [ => @plannerValidationFailure(@argsCheck.error ?? "tool_arg_validation_failed", @argsCheck, @argsCheck.issues) ]
   @resolveDebug(@agent, "dispatchResolve:args")
   >> Dispatch through the routed entry so runtime metadata such as
   >> `expose` and `optional` survives. `@callTool` still resolves the
