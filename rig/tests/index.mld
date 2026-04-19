@@ -20,6 +20,7 @@ import {
   @create_note_inputs,
   @send_email_inputs
 } from "./fixtures.mld"
+import { @opencodeToolAgentName, @opencodePermissionRules } from "../../../modules/opencode/index.mld"
 import { @imported_tools } from "./imported-tools-fixture.mld"
 import {
   @mxEntry,
@@ -54,7 +55,7 @@ import { @callTool, @toolCallError, @emptyState } from "../runtime.mld"
 import { @initializePlannerSession, @plannerState } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
-import { @coerceExtractAttestation } from "../workers/extract.mld"
+import { @coerceExtractAttestation, @dispatchExtract } from "../workers/extract.mld"
 import { @plannerTools } from "../workers/planner.mld"
 
 exe @status(ok) = when [
@@ -202,6 +203,16 @@ record @thin_arrow_output = {
 
 record @string_id_holder = {
   facts: [id_: string]
+}
+
+record @shared_file_entry = {
+  facts: [id_: string, shared_with: array?],
+  data: [filename: string?],
+  key: id_,
+  display: {
+    role:planner: [{ ref: "id_" }, filename, { ref: "shared_with" }],
+    role:worker: [{ ref: "id_" }, filename, { ref: "shared_with" }]
+  }
 }
 
 record @local_meeting_request_inputs = {
@@ -520,6 +531,65 @@ var @plannerExtractDispatchResult = @callTool(
   }
 )
 var @plannerStateAfterContactExtract = @plannerState()
+var @plannerDeriveFixtureAgent = @rigBuild({
+  suite: "fixture-planner-derive",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  overrides: {
+    stub: {
+      derive: [{
+        status: "derived",
+        schema_name: "action_items",
+        name: "action_items",
+        provenance: "derived",
+        payload: {
+          items: [{
+            person_name: "Alice",
+            task_description: "Send the launch update",
+            deadline: "2026-04-23"
+          }]
+        },
+        summary: "derived action_items"
+      }]
+    }
+  }
+})
+@initializePlannerSession(@plannerDeriveFixtureAgent, "Email each person in the TODO list.")
+var @plannerDeriveResolveResult = @callTool(
+  @plannerTools.resolve,
+  @plannerTools,
+  "resolve",
+  {
+    tool: "get_contacts",
+    args: {},
+    purpose: "ground the contact list"
+  }
+)
+var @plannerDeriveDispatchResult = @callTool(
+  @plannerTools.derive,
+  @plannerTools,
+  "derive",
+  {
+    sources: [{ source: "resolved", record: "contact" }],
+    goal: "Extract the action items into a typed array",
+    schema_name: "action_items",
+    name: "action_items",
+    purpose: "prepare one action-item worklist"
+  }
+)
+var @plannerExtractDerivedResult = @callTool(
+  @plannerTools.extract,
+  @plannerTools,
+  "extract",
+  {
+    source: { source: "derived", name: "action_items" },
+    schema_name: "action_items",
+    name: "action_items_copy",
+    purpose: "inspect the derived action items"
+  }
+)
 var tools @readArgFixtureTools = {
   search_day_events: {
     mlld: @search_day_events,
@@ -549,6 +619,31 @@ var @dispatchReadArgResolveResult = @dispatchResolve(
     purpose: "ground one synthetic day search result"
   },
   "Am I free for lunch at 12:00 on 2026-04-21?"
+)
+var @wrongPhaseExtractResult = @dispatchExtract(
+  @builtFixtureAgent,
+  @emptyState(),
+  {
+    phase: "extract",
+    tool: "get_contacts",
+    args: {},
+    name: "contact_details",
+    purpose: "inspect grounded contacts"
+  },
+  "Find Alice in my contacts."
+)
+var @wrongPhaseResolveResult = @dispatchResolve(
+  @builtFixtureAgent,
+  @emptyState(),
+  {
+    phase: "resolve",
+    tool: "get_webpage",
+    args: {
+      url: { source: "known", value: "https://example.com" }
+    },
+    purpose: "fetch one webpage"
+  },
+  "Fetch https://example.com."
 )
 >> The execute regressions use one transparent local `var tools`
 >> catalog end-to-end. Planner metadata and runtime callability now
@@ -1194,6 +1289,25 @@ var @singlePlannerRunnerOk =
   !@orchestrationText.includes('@dispatchPlanner')
 var @singlePlannerRunnerDetail = `orchestration=@orchestrationText`
 
+var @opencodePlannerAllowedCsv = "mlld_tools_resolve,mlld_tools_extract,mlld_tools_derive,mlld_tools_execute,mlld_tools_compose,mlld_tools_blocked"
+var @opencodePlannerPermissionRules = @opencodePermissionRules(@opencodePlannerAllowedCsv, ["mlld_tools"])
+var @opencodePlannerToolSurfaceOk =
+  @opencodeToolAgentName(null) == "build" &&
+  @field(@opencodePlannerPermissionRules, "*") == "deny" &&
+  @field(@opencodePlannerPermissionRules, "mlld_tools_*") == "allow" &&
+  @field(@opencodePlannerPermissionRules, "mlld_tools_resolve") == "allow" &&
+  @field(@opencodePlannerPermissionRules, "mlld_tools_extract") == "allow" &&
+  @field(@opencodePlannerPermissionRules, "mlld_tools_derive") == "allow" &&
+  @field(@opencodePlannerPermissionRules, "mlld_tools_execute") == "allow" &&
+  @field(@opencodePlannerPermissionRules, "mlld_tools_compose") == "allow" &&
+  @field(@opencodePlannerPermissionRules, "mlld_tools_blocked") == "allow" &&
+  @field(@opencodePlannerPermissionRules, "read") == null &&
+  @field(@opencodePlannerPermissionRules, "glob") == null &&
+  @field(@opencodePlannerPermissionRules, "bash") == null &&
+  @field(@opencodePlannerPermissionRules, "edit") == null &&
+  @field(@opencodePlannerPermissionRules, "write") == null
+var @opencodePlannerToolSurfaceDetail = `rules=@opencodePlannerPermissionRules`
+
 var @collectionRoundtripOk = @collectionRoundtrip(@policyBuildToolCollection, @manualBasePolicy) == true
 var @toolMetadataOk = @sendParams.length == 3 &&
   @sendControlArgs.includes("recipients") &&
@@ -1293,6 +1407,21 @@ var @plannerExtractDispatchOk =
   @plannerExtractDispatchResult.status == "extracted" &&
   @plannerExtractDispatchResult.name == "contact_details" &&
   @plannerExtractDispatchResult.schema_name == "contact"
+var @plannerDeriveDispatchPretty = @plannerDeriveDispatchResult | @pretty
+var @plannerDeriveDispatchOk =
+  @plannerDeriveResolveResult["error"] == null &&
+  @plannerDeriveDispatchResult["error"] == null &&
+  @plannerDeriveDispatchResult.status == "derived" &&
+  @plannerDeriveDispatchResult.name == "action_items" &&
+  @plannerDeriveDispatchResult.schema_name == "action_items" &&
+  @plannerDeriveDispatchResult.preview_fields.includes("person_name") &&
+  @plannerDeriveDispatchResult.preview_fields.includes("task_description") &&
+  @plannerDeriveDispatchResult.preview_fields.includes("deadline")
+var @plannerExtractDerivedPretty = @plannerExtractDerivedResult | @pretty
+var @plannerExtractDerivedOk =
+  @plannerExtractDerivedResult["error"] == null &&
+  @plannerExtractDerivedResult.status == "extracted" &&
+  @plannerExtractDerivedResult.name == "action_items_copy"
 var @readArgDocPretty = @docSummary(@readArgDoc)
 var @readArgDocOk =
   @field(@readArgDoc, "controlArgs").includes("query") &&
@@ -1304,6 +1433,24 @@ var @dispatchReadArgResolveOk =
   @dispatchReadArgResolveResult.result.status == "resolved" &&
   @dispatchReadArgResolveResult.result.count == 1 &&
   @dispatchReadArgResolveResult.result.record_type == "datetime_context"
+var @wrongPhaseExtractIssues = @wrongPhaseExtractResult.issues ?? []
+var @wrongPhaseExtractIssue = @wrongPhaseExtractIssues[0] ?? null
+var @wrongPhaseExtractPretty = @wrongPhaseExtractResult | @pretty
+var @wrongPhaseExtractOk =
+  @wrongPhaseExtractResult.error == "wrong_phase_tool" &&
+  @field(@wrongPhaseExtractIssue, "tool") == "get_contacts" &&
+  @field(@wrongPhaseExtractIssue, "requested_phase") == "extract" &&
+  @field(@wrongPhaseExtractIssue, "correct_phase") == "resolve" &&
+  @field(@wrongPhaseExtractIssue, "repair").includes("Call resolve(")
+var @wrongPhaseResolveIssues = @wrongPhaseResolveResult.issues ?? []
+var @wrongPhaseResolveIssue = @wrongPhaseResolveIssues[0] ?? null
+var @wrongPhaseResolvePretty = @wrongPhaseResolveResult | @pretty
+var @wrongPhaseResolveOk =
+  @wrongPhaseResolveResult.error == "wrong_phase_tool" &&
+  @field(@wrongPhaseResolveIssue, "tool") == "get_webpage" &&
+  @field(@wrongPhaseResolveIssue, "requested_phase") == "resolve" &&
+  @field(@wrongPhaseResolveIssue, "correct_phase") == "extract" &&
+  @field(@wrongPhaseResolveIssue, "repair").includes("Call extract(")
 var @dispatchCreateNotePretty = @dispatchSummary(@dispatchCreateNoteResult)
 var @dispatchCreateNoteOk =
   @dispatchCreateNoteResult["error"] == null &&
@@ -1568,6 +1715,67 @@ var @perElementOk = !@perElementAttempt.ok &&
   @field(@perElementIssue, "error") == "array_arg_element_invalid" &&
   @field(@perElementNestedIssue, "error") == "control_ref_backing_missing"
 
+var @sharedFileRecord = {
+  id_: "24",
+  filename: "team-meeting-minutes.docx",
+  shared_with: [
+    "emma.johnson@bluesparrowtech.com",
+    "linda.jameson@bluesparrowtech.com"
+  ]
+} as record @shared_file_entry
+var @sharedFileId = @sharedFileRecord.id_
+var @sharedFileName = @sharedFileRecord.filename
+var @sharedFileSharedWith = @sharedFileRecord.shared_with
+var @sharedFileArrayState = {
+  resolved: {
+    shared_file_entry: [{
+      handle: "r_shared_file_entry_24",
+      key: "24",
+      value: @sharedFileRecord,
+      identity_field: "id_",
+      identity_value: @sharedFileId,
+      field_values: {
+        id_: @sharedFileId,
+        filename: @sharedFileName,
+        shared_with: @sharedFileSharedWith
+      }
+    }]
+  },
+  extracted: {},
+  derived: {},
+  execution_log: [],
+  phase_events: []
+}
+var @indexedArraySelectionAttempt = @compileExecuteIntent(
+  @sharedFileArrayState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [{
+        source: "selection",
+        backing: {
+          record: "shared_file_entry",
+          handle: "r_shared_file_entry_24"
+        },
+        field: "shared_with[0]"
+      }],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  },
+  "send hello"
+)
+var @indexedArraySelectionEntries = @field(@indexedArraySelectionAttempt, "compiled_entries") ?? []
+var @indexedArraySelectionEntry = @indexedArraySelectionEntries[0] ?? null
+var @indexedArraySelectionFlatEq = @field(@indexedArraySelectionEntry, "flat_eq") ?? []
+var @indexedArraySelectionAttestations = @field(@indexedArraySelectionEntry, "flat_attestations") ?? []
+var @indexedArraySelectionPretty = `ok=@field(@indexedArraySelectionAttempt, "ok") eq=@indexedArraySelectionFlatEq attestations=@indexedArraySelectionAttestations`
+var @indexedArraySelectionOk = @indexedArraySelectionAttempt.ok &&
+  @indexedArraySelectionFlatEq[0] == "emma.johnson@bluesparrowtech.com" &&
+  @indexedArraySelectionAttestations.includes("fact:@@shared_file_entry.shared_with[0]")
+
 var @selectionKeyedPretty = `ok=@field(@selectionKeyedAttempt, "ok") arg=@field(@selectionKeyedAttempt, "arg")`
 var @selectionKeyedOk = @selectionKeyedAttempt.ok
 
@@ -1616,7 +1824,7 @@ var @proofChainMatches = for @entry in @proofChainEntries when @field(@entry, "a
 var @proofChainEntry = @proofChainMatches[0]
 var @proofChainAttestations = @field(@proofChainEntry, "flat_attestations") ?? []
 var @proofChainPolicyPretty = `attestations=@proofChainAttestations`
-var @proofChainFactRef = "fact:@@note_entry.id_"
+var @proofChainFactRef = "fact:@@note_entry.id_[0]"
 var @proofChainOk = @proofResolvedControl.ok &&
   @proofResolvedAttestations.includes(@proofChainFactRef) &&
   @proofWeakenedControl.ok &&
@@ -1744,6 +1952,8 @@ var @scalarExtractOk = @field(@scalarExtractAttestation, "payload") == "bounded 
 >> only needs schema/field structure so it can emit refs by name.
 var @taintedExtractMarker = "ATTACKER_INJECTED_PAYLOAD_MARKER"
 var @taintedDerivedMarker = "DERIVED_ATTACK_PAYLOAD_MARKER"
+var @indexedExtractMarker = "INDEXED_EXTRACT_BODY_MARKER"
+var @indexedDerivedMarker = "INDEXED_DERIVED_BODY_MARKER"
 var @stateWithTaintedNamedValues = {
   resolved: {},
   extracted: {
@@ -1756,6 +1966,17 @@ var @stateWithTaintedNamedValues = {
         metadata: {
           nested: `nested @taintedExtractMarker content`
         }
+      }
+    },
+    ranked_messages: {
+      provenance: "extracted",
+      schema_name: "inline-schema",
+      preview_fields: ["rows"],
+      value: {
+        rows: [
+          { body: "ignored row 0" },
+          { body: @indexedExtractMarker }
+        ]
       }
     }
   },
@@ -1777,6 +1998,17 @@ var @stateWithTaintedNamedValues = {
           handle: "r_contact_alice.example"
         }
       }]
+    },
+    ranked_messages: {
+      provenance: "derived",
+      schema_name: "inline-schema",
+      preview_fields: ["rows"],
+      value: {
+        rows: [
+          { body: "ignored row 0" },
+          { body: @indexedDerivedMarker }
+        ]
+      }
     }
   },
   execution_log: [],
@@ -1827,12 +2059,42 @@ var @derivedPayloadCompile = @compileExecuteIntent(
   },
   "create a note from derived content"
 )
+var @indexedExtractedPayloadCompile = @compileExecuteIntent(
+  @stateWithTaintedNamedValues,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "extracted", name: "ranked_messages", field: "rows[1].body" }
+    }
+  },
+  "create a note from indexed extracted content"
+)
+var @indexedDerivedPayloadCompile = @compileExecuteIntent(
+  @stateWithTaintedNamedValues,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "derived", name: "ranked_messages", field: "rows[1].body" }
+    }
+  },
+  "create a note from indexed derived content"
+)
 var @extractedPayloadCompileOk = @extractedPayloadCompile.ok &&
   @field(@field(@extractedPayloadCompile, "compiled_args"), "content").includes(@taintedExtractMarker)
 var @derivedPayloadCompileOk = @derivedPayloadCompile.ok &&
   @field(@field(@derivedPayloadCompile, "compiled_args"), "content").includes(@taintedDerivedMarker)
+var @indexedExtractedPayloadCompileOk = @indexedExtractedPayloadCompile.ok &&
+  @field(@field(@indexedExtractedPayloadCompile, "compiled_args"), "content") == @indexedExtractMarker
+var @indexedDerivedPayloadCompileOk = @indexedDerivedPayloadCompile.ok &&
+  @field(@field(@indexedDerivedPayloadCompile, "compiled_args"), "content") == @indexedDerivedMarker
 var @extractedPayloadCompilePretty = `ok=@field(@extractedPayloadCompile, "ok") content=@field(@field(@extractedPayloadCompile, "compiled_args"), "content")`
 var @derivedPayloadCompilePretty = `ok=@field(@derivedPayloadCompile, "ok") content=@field(@field(@derivedPayloadCompile, "compiled_args"), "content")`
+var @indexedExtractedPayloadCompilePretty = `ok=@field(@indexedExtractedPayloadCompile, "ok") content=@field(@field(@indexedExtractedPayloadCompile, "compiled_args"), "content")`
+var @indexedDerivedPayloadCompilePretty = `ok=@field(@indexedDerivedPayloadCompile, "ok") content=@field(@field(@indexedDerivedPayloadCompile, "compiled_args"), "content")`
 
 var @recordBackedMarker = "RECORD_BACKED_BODY_MARKER"
 var @recordBackedNestedMarker = "RECORD_BACKED_NOTE_MARKER"
@@ -2134,6 +2396,7 @@ exe @allChecks() = [
   @check("BENCH-CAT-4", @travelBenchCatalogOk, @travelBenchCatalogDetail),
   @check("PLANNER-ARCH-1", @singlePlannerArchitectureOk, @singlePlannerArchitectureDetail),
   @check("PLANNER-ARCH-2", @singlePlannerRunnerOk, @singlePlannerRunnerDetail),
+  @check("PLANNER-ARCH-3", @opencodePlannerToolSurfaceOk, @opencodePlannerToolSurfaceDetail),
   @check("POL-ROUNDTRIP-1", @collectionRoundtripOk, "policy.build succeeded inside a wrapper exe"),
   @check("POL-ROUNDTRIP-2", @policySectionRoundtripOk, @policySectionRoundtripDetail),
   @check("synthesized-policy-shape", @syntheticPolicyOk, @syntheticPolicyDetail),
@@ -2157,8 +2420,12 @@ exe @allChecks() = [
   @check("planner-session-state-persists-across-direct-planner-tool-calls", @plannerResolveContactsOk, @plannerResolveContactsPretty),
   @check("planner-session-resolved-handle-remains-readable-after-direct-resolve", @plannerResolvedContactEmailOk, @plannerResolvedContactEmailPretty),
   @check("planner-source-backed-extract-works-on-direct-planner-tool-path", @plannerExtractDispatchOk, @plannerExtractDispatchPretty),
+  @check("planner-derive-exposes-preview-fields", @plannerDeriveDispatchOk, @plannerDeriveDispatchPretty),
+  @check("planner-extract-from-derived-source-does-not-recurse", @plannerExtractDerivedOk, @plannerExtractDerivedPretty),
   @check("read-tool-docs-classify-all-read-params-as-control", @readArgDocOk, @readArgDocPretty),
   @check("resolve-worker-accepts-read-tool-params-without-legacy-controlArgs", @dispatchReadArgResolveOk, @dispatchReadArgResolvePretty),
+  @check("extract-worker-guides-wrong-phase-read-tool", @wrongPhaseExtractOk, @wrongPhaseExtractPretty),
+  @check("resolve-worker-guides-wrong-phase-extract-tool", @wrongPhaseResolveOk, @wrongPhaseResolvePretty),
   @check("execute-worker-zero-control-arg-policy", @dispatchCreateNoteOk, @dispatchCreateNotePretty),
   @check("execute-worker-optional-fact-omission", @dispatchOptionalMeetingOk, @dispatchOptionalMeetingPretty),
   @check("known-datetime-canonicalization", @dispatchNaturalDatetimeMeetingOk, @dispatchNaturalDatetimeMeetingPretty),
@@ -2189,6 +2456,7 @@ exe @allChecks() = [
   @check("allow-with-control-args", @allowOk, @allowPretty),
   @check("source-class-mismatch", @wrongSourceOk, @wrongSourcePretty),
   @check("array-control-proof", @perElementOk, @perElementPretty),
+  @check("indexed-array-selection-proof", @indexedArraySelectionOk, @indexedArraySelectionPretty),
   @check("selection-keyed-control", @selectionKeyedOk, @selectionKeyedPretty),
   @check("planner-arg-shape", @plannerArgShapeOk, @plannerArgShapePretty),
   @check("scalar-extract-payload", @scalarExtractOk, `attestation=@scalarExtractPretty planner=@scalarExtractPlannerSummary worker=@scalarExtractWorkerSummary`),
@@ -2196,6 +2464,8 @@ exe @allChecks() = [
   @check("worker-named-state-retains-tainted-values", @taintedWorkerProjectionOk, @taintedWorkerSummary),
   @check("execute-compile-reads-extracted-state", @extractedPayloadCompileOk, @extractedPayloadCompilePretty),
   @check("execute-compile-reads-derived-state", @derivedPayloadCompileOk, @derivedPayloadCompilePretty),
+  @check("execute-compile-reads-indexed-extracted-state", @indexedExtractedPayloadCompileOk, @indexedExtractedPayloadCompilePretty),
+  @check("execute-compile-reads-indexed-derived-state", @indexedDerivedPayloadCompileOk, @indexedDerivedPayloadCompilePretty),
   @check("record-backed-named-state-projects-display", @recordBackedDisplayOk, @recordBackedDisplayPretty),
   @check("named-state-retains-prior-results", @namedStateOk, `planner=@namedStatePlannerSummary worker=@namedStateWorkerSummary`),
   @check("named-state-retains-execution-log", @namedStateLogOk, @namedStateLogPretty),

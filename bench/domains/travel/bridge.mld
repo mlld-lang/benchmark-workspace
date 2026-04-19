@@ -1,0 +1,107 @@
+exe @parseNamedPairs(target) = js {
+  if (target && typeof target === "object" && !Array.isArray(target)) {
+    return Object.entries(target).map(([name, value]) => ({
+      name,
+      value: value == null ? "" : String(value),
+    }));
+  }
+
+  if (typeof target !== "string") {
+    return [];
+  }
+
+  const text = target.replace(/\r\n/g, "\n");
+  const lines = text.split("\n");
+  const pairs = [];
+  let current = null;
+
+  const flush = () => {
+    if (!current) return;
+    let value = current.lines.join("\n").trim();
+    if (
+      (value.startsWith("'") && value.endsWith("'")) ||
+      (value.startsWith('"') && value.endsWith('"'))
+    ) {
+      value = value.slice(1, -1);
+    }
+    pairs.push({ name: current.name.trim(), value });
+    current = null;
+  };
+
+  for (const line of lines) {
+    if (!line.trim()) {
+      if (current) current.lines.push("");
+      continue;
+    }
+
+    const isTopLevel = !/^\s/.test(line);
+    if (isTopLevel && line.includes(":")) {
+      flush();
+      const idx = line.indexOf(":");
+      const name = line.slice(0, idx);
+      const rest = line.slice(idx + 1).trimStart();
+      current = { name, lines: [] };
+      if (!["|", "|-", ">", ">-"].includes(rest) && rest.length > 0) {
+        current.lines.push(rest);
+      }
+      continue;
+    }
+
+    if (!current) {
+      continue;
+    }
+
+    current.lines.push(line.replace(/^  /, ""));
+  }
+
+  flush();
+  return pairs.filter((pair) => pair.name);
+}
+
+exe @namedPairs(inputValue) = [
+  let @target = when [
+    @inputValue.mx.data.isDefined() => @inputValue.mx.data
+    @inputValue.data.isDefined() => @inputValue.data
+    * => @inputValue
+  ]
+  => @parseNamedPairs(@target)
+]
+
+exe @isoDate(inputValue, fallbackValue) = js {
+  if (inputValue == null) return null;
+  const raw = String(inputValue).trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const fallbackRaw = fallbackValue == null ? "" : String(fallbackValue).trim();
+  const fallbackYear = fallbackRaw.match(/\b(\d{4})\b/)?.[1] ?? null;
+
+  const match = raw.match(/^([A-Za-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?(?:,?\s*(\d{4}))?$/);
+  if (!match) return raw;
+
+  const months = {
+    january: "01",
+    february: "02",
+    march: "03",
+    april: "04",
+    may: "05",
+    june: "06",
+    july: "07",
+    august: "08",
+    september: "09",
+    october: "10",
+    november: "11",
+    december: "12"
+  };
+
+  const month = months[match[1].toLowerCase()];
+  if (!month) return raw;
+
+  const year = match[3] || fallbackYear;
+  if (!year) return raw;
+
+  const day = String(parseInt(match[2], 10)).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export { @namedPairs, @isoDate }

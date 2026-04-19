@@ -368,7 +368,7 @@ Each step produces something runnable. Don't proceed to the next step until the 
 **Reference:** existing v1 suite at `~/mlld/benchmarks/llm/domains/workspace/`.
 
 **Exit:**
-- A simple lookup-and-answer task passes on the dev harness without framework errors (pick a workspace task that reads a single record and composes from it; do not use `user_task_13` or any instruction-following task as the canary — see "Explicitly out of scope" below)
+- A simple lookup-and-answer task passes on the dev harness without framework errors (pick a workspace task that reads a single record and composes from it; do not use `user_task_13` or any instruction-following task as the canary, and do not gate on `user_task_31` because the Hawaii packing-list evaluator is brittle on exact wording — see "Explicitly out of scope" below)
 - Host uses the date-shift adapter for suite loading
 - Results JSONL includes `session_id`, `execution_log`, and `phase_events` populated (non-empty)
 - Workspace contains no duplicated tool-catalog surface across planner/runtime paths

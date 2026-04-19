@@ -84,6 +84,48 @@ exe @valueField(inputValue, fieldName) = [
   ]
 ]
 
+exe @fieldPathSteps(fieldName) = js {
+  const raw = fieldName == null ? "" : String(fieldName);
+  if (!raw) return [];
+
+  const steps = [];
+  const pattern = /([^[.\]]+)|\[(\d+)\]/g;
+  let match;
+  while ((match = pattern.exec(raw)) !== null) {
+    if (match[1] !== undefined) {
+      steps.push({ kind: "field", value: match[1] });
+      continue;
+    }
+    steps.push({ kind: "index", value: Number(match[2]) });
+  }
+
+  return steps.length > 0 ? steps : [{ kind: "field", value: raw }];
+}
+
+exe @valueIndex(inputValue, indexValue) = [
+  let @index = @indexValue
+  => when [
+    !@index.isDefined() => null
+    @inputValue.mx.data.items[@index].isDefined() => @inputValue.mx.data.items[@index]
+    @inputValue.data.items[@index].isDefined() => @inputValue.data.items[@index]
+    @inputValue.items[@index].isDefined() => @inputValue.items[@index]
+    @inputValue.mx.data[@index].isDefined() => @inputValue.mx.data[@index]
+    @inputValue.data[@index].isDefined() => @inputValue.data[@index]
+    @inputValue[@index].isDefined() => @inputValue[@index]
+    * => null
+  ]
+]
+
+exe @pathStepValue(inputValue, step) = [
+  let @kind = @name(@valueField(@step, "kind"))
+  let @value = @valueField(@step, "value")
+  => when [
+    @kind == "field" => @valueField(@inputValue, @value)
+    @kind == "index" => @valueIndex(@inputValue, @value)
+    * => null
+  ]
+]
+
 exe @refSource(ref) = [
   => @name(@valueField(@ref, "source"))
 ]
@@ -111,13 +153,39 @@ exe @lookupResolvedEntry(state, recordName, handle) = [
   ]
 ]
 
-exe @resolvedEntryFieldValue(entry, fieldName) = [
+exe @resolvedEntryFieldRootValue(entry, fieldName) = [
   let @fieldKey = @name(@fieldName)
   => when [
     !@fieldKey.isDefined() => @entry.value
     @entry.identity_field.isDefined() && @fieldKey == @name(@entry.identity_field) && @entry.identity_value.isDefined() => @entry.identity_value
     @entry.field_values[@fieldKey].isDefined() => @entry.field_values[@fieldKey]
     * => @valueField(@entry.value, @fieldKey)
+  ]
+]
+
+exe @resolvedEntryFieldValue(entry, fieldName) = [
+  let @steps = @fieldPathSteps(@fieldName)
+  if @steps.length == 0 [ => @entry.value ]
+
+  let @first = @steps[0]
+  if @name(@valueField(@first, "kind")) != "field" [ => null ]
+
+  let @rootValue = @resolvedEntryFieldRootValue(@entry, @valueField(@first, "value"))
+  if @steps.length == 1 [ => @rootValue ]
+
+  => loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "resolvedEntryFieldPath" => @input
+      * => { _rig_cursor: "resolvedEntryFieldPath", index: 1, value: @rootValue }
+    ]
+    if !@ctx.value.isDefined() || @ctx.value == null [ done null ]
+    if @ctx.index >= @steps.length [ done @ctx.value ]
+    let @nextValue = @pathStepValue(@ctx.value, @steps[@ctx.index])
+    continue {
+      _rig_cursor: "resolvedEntryFieldPath",
+      index: @ctx.index + 1,
+      value: @nextValue
+    }
   ]
 ]
 
@@ -150,7 +218,9 @@ exe @factAttestations(inputValue) = js {
 
     for (const source of facts) {
       if (typeof source?.ref === "string" && source.ref !== "") {
-        refs.push(`fact:${source.ref}`);
+        const suffix =
+          Number.isInteger(source?.position) ? `[${source.position}]` : "";
+        refs.push(`fact:${source.ref}${suffix}`);
       }
     }
 
@@ -191,7 +261,7 @@ exe @resolvedControlResult(fieldName, fieldValue) = [
 exe @entryControlValue(entry) = [
   if @entry.identity_field.isDefined() [
     let @identityValue = @resolvedEntryFieldValue(@entry, @entry.identity_field)
-    if @identityValue.isDefined() [
+    if @identityValue.isDefined() && @identityValue != null [
       => { ok: true, field: @entry.identity_field, value: @identityValue }
     ]
   ]
@@ -204,7 +274,7 @@ exe @entryControlValue(entry) = [
     }
   ]
 
-  let @matchingKeyFields = for @fieldName, @fieldValue in (@entry.field_values ?? {}) when @constraintEqValue(@fieldValue) == @constraintEqValue(@entry.key) => {
+  let @matchingKeyFields = for @fieldName, @fieldValue in (@entry.field_values ?? {}) when @fieldValue != null && @constraintEqValue(@fieldValue) == @constraintEqValue(@entry.key) => {
     field: @fieldName,
     value: @fieldValue
   }
@@ -212,7 +282,7 @@ exe @entryControlValue(entry) = [
     => { ok: true, field: @matchingKeyFields[0].field, value: @matchingKeyFields[0].value }
   ]
 
-  let @factFields = for @fieldName, @fieldValue in (@entry.field_values ?? {}) when @hasFacts(@fieldValue) => {
+  let @factFields = for @fieldName, @fieldValue in (@entry.field_values ?? {}) when @fieldValue != null && @hasFacts(@fieldValue) => {
     field: @fieldName,
     value: @fieldValue
   }
@@ -229,14 +299,14 @@ exe @lookupResolvedControlValue(state, recordName, handle, fieldName) = [
   if @fieldName.isDefined() [
     let @fieldValue = @resolvedEntryFieldValue(@entry, @fieldName)
     => when [
-      @fieldValue.isDefined() => @resolvedControlResult(@fieldName, @fieldValue)
+      @fieldValue.isDefined() && @fieldValue != null => @resolvedControlResult(@fieldName, @fieldValue)
       * => { ok: false, error: "resolved_field_missing", field: @fieldName }
     ]
   ]
 
   if @entry.identity_field.isDefined() [
     let @identityValue = @resolvedEntryFieldValue(@entry, @entry.identity_field)
-    if @identityValue.isDefined() [ => @resolvedControlResult(@entry.identity_field, @identityValue) ]
+    if @identityValue.isDefined() && @identityValue != null [ => @resolvedControlResult(@entry.identity_field, @identityValue) ]
   ]
 
   if @entry.identity_value.isDefined() && @hasFacts(@entry.identity_value) [
@@ -288,8 +358,23 @@ exe @resolveNamedValue(state, bucketName, ref) = [
   let @entry = @namedStateEntry(@bucket[@ref.name])
   if !@entry.isDefined() [ => { ok: false, error: `@bucketName\_name_not_found`, name: @ref.name } ]
   let @value = when [
-    @ref.field.isDefined() => @valueField(@entry.value, @ref.field)
-    * => @entry.value
+    !@ref.field.isDefined() => @entry.value
+    * => loop(1000) [
+      let @steps = @fieldPathSteps(@ref.field)
+      if @steps.length == 0 [ done @entry.value ]
+      let @ctx = when [
+        @input["_rig_cursor"] == "namedEntryFieldPath" => @input
+        * => { _rig_cursor: "namedEntryFieldPath", index: 0, value: @entry.value }
+      ]
+      if !@ctx.value.isDefined() || @ctx.value == null [ done null ]
+      if @ctx.index >= @steps.length [ done @ctx.value ]
+      let @nextValue = @pathStepValue(@ctx.value, @steps[@ctx.index])
+      continue {
+        _rig_cursor: "namedEntryFieldPath",
+        index: @ctx.index + 1,
+        value: @nextValue
+      }
+    ]
   ]
   => when [
     @value.isDefined() => { ok: true, source: @bucketName, name: @ref.name, value: @value }

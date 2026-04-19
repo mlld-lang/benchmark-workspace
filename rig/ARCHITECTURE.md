@@ -63,7 +63,7 @@ This invariant is load-bearing. If the planner sees tainted content, prompt inje
 That's the whole app-to-rig contract. Two files per suite. No shelf authoring. No policy wiring. No contract catalogs for derivation.
 
 **Rig owns the mechanics:**
-- phase loop and worker dispatch
+- planner-facing tool wrappers and worker dispatch
 - state storage (derived from record declarations)
 - display projection at LLM boundaries
 - handle exposure and resolution

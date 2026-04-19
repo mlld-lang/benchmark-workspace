@@ -209,19 +209,19 @@ var tools @tools = {
     mlld: @get_email_by_id,
     returns: @email_msg,
     labels: ["extract:r", "untrusted"],
-    description: "Fetch one email by id with full body content."
+    description: "Fetch one grounded email by id with full body content. Use this only after a prior resolve step has surfaced the target email handle or id."
   },
   search_contacts_by_name: {
     mlld: @search_contacts_by_name,
     returns: @contact,
     labels: ["resolve:r", "known"],
-    description: "Search contacts by display name."
+    description: "Search contacts by one display name string. For multiple names, call this tool separately for each name or derive a per-person structure first."
   },
   search_contacts_by_email: {
     mlld: @search_contacts_by_email,
     returns: @contact,
     labels: ["resolve:r", "known"],
-    description: "Search contacts by email address."
+    description: "Search contacts by one email address string when you need a contact record. If you already have a grounded email fact from a resolved record, use that fact directly in the downstream write instead of resolving a contact just to re-ground the same address."
   },
   get_current_day: {
     mlld: @get_current_day,
@@ -233,7 +233,7 @@ var tools @tools = {
     mlld: @get_current_datetime,
     returns: @datetime_context,
     labels: ["resolve:r", "known"],
-    description: "Return the current local datetime."
+    description: "Return the current local datetime. Use it as the anchor for time-remaining or availability calculations."
   },
   search_calendar_events: {
     mlld: @search_calendar_events,
@@ -245,7 +245,7 @@ var tools @tools = {
     mlld: @get_day_calendar_events,
     returns: @calendar_evt,
     labels: ["resolve:r", "untrusted"],
-    description: "Load all calendar events for one day. Prefer the exact date phrase from the user task (for example, `May 15th, 2024`); the adapter normalizes it internally."
+    description: "Load all calendar events for one day. Use this with the current datetime to compute gaps or availability before a target event. Prefer the exact date phrase from the user task (for example, `May 15th, 2024`); the adapter normalizes it internally."
   },
   search_files_by_filename: {
     mlld: @search_files_by_filename,
@@ -276,8 +276,8 @@ var tools @tools = {
     inputs: @send_email_inputs,
     labels: ["execute:w", "tool:w", "exfil:send", "comm:w"],
     can_authorize: "role:planner",
-    description: "Send an email message to one or more recipients.",
-    instructions: "Use exact user-provided recipients for recipient fields, and omit optional cc/bcc lists unless the user names them."
+    description: "Send an email message to one or more recipients. Recipient fields accept any grounded email facts from resolved records; they do not require contact records.",
+    instructions: "Use exact user-provided recipients for recipient fields, omit optional cc/bcc lists unless the user names them, and prefer grounded email facts already present in resolved records over redundant contact lookups."
   },
   delete_email: {
     mlld: @delete_email,

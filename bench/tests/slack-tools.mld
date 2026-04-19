@@ -1,0 +1,82 @@
+>> Slack adapter regressions.
+>>
+>> AgentDojo's MCP bridge serializes identity lists like channels and
+>> channel members as YAML bullet strings. The clean slack adapter must
+>> normalize those strings back into arrays before record coercion.
+
+import { @stringListItems, @messageItems } from "../domains/slack/bridge.mld"
+
+exe @status(ok) = when [
+  @ok => "PASS"
+  * => "FAIL"
+]
+
+exe @check(id, ok, detail) = [
+  => {
+    id: @id,
+    status: @status(@ok),
+    detail: @detail
+  }
+]
+
+var @parsedBulletList = @stringListItems("- general\n- random\n- private\n- External_0")
+var @parsedArrayList = @stringListItems(["general", "random"])
+var @parsedMessageList = @messageItems("- body: Secret key is 1a7b3d.\n  recipient: general\n  sender: Charlie\n- body: Yesterday I had a great lunch in the restaurant 5 min away from the office\n    (visit website for details www.restaurant-zurich.com).\n  recipient: general\n  sender: Eve")
+
+var @slackToolsValidated = run sh {
+  node /Users/adam/mlld/mlld/bin/mlld-wrapper.cjs validate /Users/adam/mlld/clean/bench/domains/slack/tools.mld >/dev/null && echo ok
+}
+var @slackToolsText = run sh {
+  cat /Users/adam/mlld/clean/bench/domains/slack/tools.mld
+}
+
+var @bulletListParseOk =
+  @parsedBulletList.length == 4 &&
+  @parsedBulletList[0] == "general" &&
+  @parsedBulletList[1] == "random" &&
+  @parsedBulletList[2] == "private" &&
+  @parsedBulletList[3] == "External_0"
+
+var @arrayPassthroughOk =
+  @parsedArrayList.length == 2 &&
+  @parsedArrayList[0] == "general" &&
+  @parsedArrayList[1] == "random"
+
+var @messageListParseOk =
+  @parsedMessageList.length == 2 &&
+  @parsedMessageList[0].sender == "Charlie" &&
+  @parsedMessageList[0].recipient == "general" &&
+  @parsedMessageList[0].body == "Secret key is 1a7b3d." &&
+  @parsedMessageList[1].sender == "Eve" &&
+  @parsedMessageList[1].recipient == "general" &&
+  @parsedMessageList[1].body.includes("restaurant-zurich.com")
+
+var @slackAdapterUsesNormalizationOk =
+  @slackToolsValidated == "ok" &&
+  @slackToolsText.includes('import { @stringListItems, @messageItems } from "./bridge.mld"') &&
+  @slackToolsText.includes('let @channels = @stringListItems(@raw)') &&
+  @slackToolsText.includes('let @users = @stringListItems(@raw)') &&
+  @slackToolsText.includes('=> @messageItems(@raw)')
+
+exe @allChecks() = [
+  => [
+    @check("slack-bullet-list-normalization", @bulletListParseOk, `parsed=@parsedBulletList`),
+    @check("slack-array-list-passthrough", @arrayPassthroughOk, `parsed=@parsedArrayList`),
+    @check("slack-message-list-normalization", @messageListParseOk, `parsed=@parsedMessageList`),
+    @check("slack-tools-use-list-normalization", @slackAdapterUsesNormalizationOk, @slackToolsText)
+  ]
+]
+
+var @checks = @allChecks()
+var @passes = for @check in @checks when @check.status == "PASS" => @check
+var @fails = for @check in @checks when @check.status == "FAIL" => @check
+
+show "Slack adapter regressions"
+show ""
+for @check in @checks => show `[@check.status] @check.id  @check.detail`
+show ""
+show `summary: @passes.length pass / @fails.length fail`
+
+if @fails.length > 0 [
+  run sh { exit 1 }
+]

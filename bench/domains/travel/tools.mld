@@ -6,6 +6,7 @@
 >> one object.
 
 import tools from mcp "tools" as @mcp
+import { @namedPairs, @isoDate } from "./bridge.mld"
 
 import {
   @hotel,
@@ -41,25 +42,25 @@ exe @ratingFromReviewBlob(reviewBlob) = [
     : null
 ]
 
->> AgentDojo returns many travel lookups as `{ name: value }` maps. Keep
->> this conversion in native mlld so the entry values stay intact and the
->> helper never strips wrapper metadata.
-exe @namedPairs(inputValue) = [
-  let @target = when [
-    @inputValue.mx.data.isDefined() => @inputValue.mx.data
-    @inputValue.data.isDefined() => @inputValue.data
-    * => @inputValue
-  ]
-  => when [
-    @typeof(@target) == "object" => for @name, @value in @target => { name: @name, value: @value }
-    * => []
-  ]
-]
+exe @namedFields(inputValue) = js {
+  if (inputValue && typeof inputValue === "object" && !Array.isArray(inputValue)) {
+    return inputValue;
+  }
+  if (typeof inputValue !== "string") {
+    return {};
+  }
+
+  const fields = {};
+  for (const match of inputValue.matchAll(/'([^']+)':\\s*'([^']*)'/g)) {
+    fields[match[1]] = match[2];
+  }
+  return fields;
+}
 
 >> Read tools
 
 exe resolve:r, known, tool:r @get_user_information() = [
-  let @raw = @mcp.getUserInformation()
+  let @raw = @namedFields(@mcp.getUserInformation())
   => {
     first_name: @raw["First Name"],
     last_name: @raw["Last Name"],
@@ -256,7 +257,9 @@ exe @cancel_calendar_event(event_id) = [
 ]
 
 exe @reserve_hotel(hotel, start_day, end_day) = [
-  => @mcp.reserveHotel(@hotel, @start_day, @end_day)
+  let @startDay = @isoDate(@start_day, @end_day)
+  let @endDay = @isoDate(@end_day, @start_day)
+  => @mcp.reserveHotel(@hotel, @startDay, @endDay)
 ]
 
 exe @reserve_car_rental(company, start_time, end_time) = [
@@ -427,7 +430,8 @@ var tools @tools = {
     inputs: @reserve_hotel_inputs,
     labels: ["execute:w", "tool:w", "booking:w"],
     can_authorize: "role:planner",
-    description: "Reserve one hotel for a date range."
+    description: "Reserve one hotel for a date range.",
+    instructions: "`start_day` and `end_day` should cite the task's date text; the adapter normalizes them to YYYY-MM-DD for the travel API."
   },
   reserve_car_rental: {
     mlld: @reserve_car_rental,

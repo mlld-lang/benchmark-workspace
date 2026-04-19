@@ -161,9 +161,9 @@ exe @toolExecutable(toolEntry) = [
 ]
 
 exe @toolDeclaredParamNames(toolEntry) = [
-  let @exe = @toolExecutable(@toolEntry)
+  let @entryExecutable = @toolExecutable(@toolEntry)
   let @params = when [
-    @typeof(@exe) == "executable" => @exe.mx.params ?? []
+    @typeof(@entryExecutable) == "executable" => @entryExecutable.mx.params ?? []
     * => []
   ]
   => for @param in @params [
@@ -441,6 +441,51 @@ exe @phaseToolEntry(agent, phase, toolName) = [
   ]
 ]
 
+exe @toolPhase(agent, toolName) = [
+  let @name = `@toolName`
+  let @catalog = @toolCatalogObject(@agent.tools)
+  => when [
+    !@catalog[@name].isDefined() => null
+    @toolInPhase(@catalog[@name], "resolve") => "resolve"
+    @toolInPhase(@catalog[@name], "extract") => "extract"
+    @toolInPhase(@catalog[@name], "execute") => "execute"
+    * => null
+  ]
+]
+
+exe @phaseRepairCall(toolName, phase) = when [
+  @phase == "resolve" => `Call resolve({ "tool": "@toolName", "purpose": "..." }).`
+  @phase == "extract" => `Call extract({ "tool": "@toolName", "args": { ... }, "name": "...", "purpose": "..." }).`
+  @phase == "execute" => `Call execute({ "operation": "@toolName", "args": { ... }, "purpose": "..." }).`
+  * => null
+]
+
+exe @wrongPhaseToolFailure(agent, requestedPhase, toolName) = [
+  let @correctPhase = @toolPhase(@agent, @toolName)
+  let @repair = @phaseRepairCall(@toolName, @correctPhase)
+  => when [
+    !@correctPhase.isDefined() => null
+    @correctPhase == @requestedPhase => null
+    * => {
+      error: "wrong_phase_tool",
+      summary: `@toolName is a @correctPhase tool, not a @requestedPhase tool. @repair`,
+      issues: [{
+        code: "wrong_phase_tool",
+        tool: @toolName,
+        requested_phase: @requestedPhase,
+        correct_phase: @correctPhase,
+        repair: @repair
+      }],
+      raw_error: {
+        tool: @toolName,
+        requested_phase: @requestedPhase,
+        correct_phase: @correctPhase,
+        repair: @repair
+      }
+    }
+  ]
+]
+
 exe @toolNames(tools) = [
   if !@tools.isDefined() [ => [] ]
   if @typeof(@tools) == "array" [
@@ -604,6 +649,8 @@ export {
   @phaseCatalog,
   @phaseToolNames,
   @phaseToolEntry,
+  @toolPhase,
+  @wrongPhaseToolFailure,
   @toolNames,
   @renderToolDoc,
   @renderToolDocs,

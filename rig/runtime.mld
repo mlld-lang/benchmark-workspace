@@ -1,5 +1,5 @@
 import { @claude } from "@mlld/claude"
-import { @opencode } from "@mlld/opencode"
+import { @opencode } from "../../modules/opencode/index.mld"
 
 import {
   @mxEntry,
@@ -132,7 +132,10 @@ exe @llmCallEntry(phase, prompt, raw, parsed, sessionId, extra) = [
     prompt: @prompt,
     raw: @sanitizeJson(@raw),
     parsed: @sanitizeJson(@parsed),
+    call_kind: @extra.call_kind ?? null,
     session_id: @normalizeSessionId(@sessionId),
+    outer_planner_session_id: @normalizeSessionId(@extra.outer_planner_session_id),
+    inner_worker_session_id: @normalizeSessionId(@extra.inner_worker_session_id),
     extra: @extra ?? {}
   }
 ]

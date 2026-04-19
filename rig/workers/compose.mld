@@ -29,7 +29,10 @@ exe @dispatchCompose(agent, state, query) = [
   => {
     text: @attestation["text"] ?? @raw,
     session_id: @sessionId,
-    llm_log: @llmCallEntry("compose", @prompt, @raw, @attestation, @sessionId, {})
+    llm_log: @llmCallEntry("compose", @prompt, @raw, @attestation, @sessionId, {
+      call_kind: "inner_worker",
+      inner_worker_session_id: @sessionId
+    })
   }
 ]
 

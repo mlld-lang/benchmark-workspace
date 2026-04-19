@@ -78,28 +78,35 @@ When a benchmark run fails and the JSONL just says `blocked` or `utility: false`
 
 #### Opencode transcripts (primary harness for bench runs)
 
-Opencode stores rich session data in three places, from highest to lowest signal:
+Use the Opencode surfaces in this order:
 
-**1. Session part storage** (`~/.local/share/opencode/storage/part/`): Every tool invocation gets its own JSON file with full input, output, timing, and metadata. These are the richest records — each `prt_*.json` shows exactly what tool was called, what args it received, and what came back.
+**1. Session database** (`~/.local/share/opencode/opencode.db`): best live surface while the run is still active. The `part` rows show tool calls, reasoning, step boundaries, and tool outputs as they land. This is the first place to look when you want to know what the planner is doing *right now*.
+
+**2. Session part storage** (`~/.local/share/opencode/storage/part/`): best raw surface after the run finishes. The per-part JSON files are still valuable, but they are less convenient than the DB when you are following a live session.
+
+**3. Operational logs** (`~/.local/share/opencode/log/`): coarse process/session tracing only. These are useful for continuity questions ("did the outer session ID stay stable?", "did the provider request finish?"), not for tool-call semantics.
+
+Use the helper in `clean/src/opencode_debug.py` instead of ad hoc sqlite one-offs:
 
 ```bash
-# List recent session parts
-ls -lt ~/.local/share/opencode/storage/part/ | head -20
+# List recent sessions
+python3 clean/src/opencode_debug.py sessions
 
-# Read a specific part (tool call record)
-cat ~/.local/share/opencode/storage/part/<msg_id>/<part_file>.json | jq .
+# Show recent parts for the latest session
+python3 clean/src/opencode_debug.py parts --session latest --limit 20
+
+# Follow a live session as new parts arrive
+python3 clean/src/opencode_debug.py follow --session latest
+
+# Show coarse opencode log lines for one session
+python3 clean/src/opencode_debug.py logs --session lucky-knight
 ```
 
-**2. Session database** (`~/.local/share/opencode/opencode.db`): Structured storage with message and part rows. Part types include `tool`, `text`, `reasoning`, `step-start`, `step-finish`. Use this when you need to query across sessions or find a specific session's tool call history.
-
-**3. Operational logs** (`~/.local/share/opencode/log/`): Timestamped log files. These are coarse — mostly HTTP/service/session tracing, no MCP tool names. Useful for diagnosing hangs, connection failures, and process lifecycle, but NOT for understanding what the agent decided or what tools it called.
+If you need the raw files after completion:
 
 ```bash
-# List recent log files
-ls -lt ~/.local/share/opencode/log/ | head -10
-
-# Search for session-level events
-grep -l "ses_<session_id>" ~/.local/share/opencode/log/*.log
+ls -lt ~/.local/share/opencode/storage/part/ | head -20
+cat ~/.local/share/opencode/storage/part/<msg_id>/<part_file>.json | jq .
 ```
 
 **Finding the session ID:** The bench result JSONL includes the session ID. Also check the rig execution log and audit trail:
@@ -111,6 +118,13 @@ jq -c 'select(.event | contains("session"))' clean/bench/.llm/sec/audit.jsonl | 
 # From the result row
 jq -r '.session_id // .metrics.planner_session_id // empty' results/.../defended.jsonl | tail -1
 ```
+
+If the run is still active and no result row exists yet, use `python3 clean/src/opencode_debug.py sessions` and pick the most recently updated session with the matching task title.
+
+Two rules that matter here:
+
+- A null inner worker session ID is not planner thread loss. The continuity question is whether the **outer planner** session ID stays stable across assistant turns.
+- If the bench debug `llm_call_log_*.jsonl` exists, read `call_kind`, `outer_planner_session_id`, and `inner_worker_session_id` before concluding anything about resume or thread loss.
 
 #### Claude Code transcripts
 
@@ -359,18 +373,17 @@ jq -c '. | {task: .task_id, util: .utility, err: ((.execute_error // "") | .[0:2
 ### Inspect opencode agent transcripts
 
 ```bash
-# Recent opencode logs (coarse — connection/session tracing, not tool calls)
-ls -lt ~/.local/share/opencode/log/ | head -10
+# Recent sessions
+python3 clean/src/opencode_debug.py sessions
 
-# Rich per-tool-call part storage (highest signal)
-ls -lt ~/.local/share/opencode/storage/part/ | head -20
+# Follow the latest live session
+python3 clean/src/opencode_debug.py follow --session latest
 
-# Read a specific tool call record
-cat ~/.local/share/opencode/storage/part/<msg_id>/*.json | jq .
+# Dump the most recent parts from a specific session
+python3 clean/src/opencode_debug.py parts --session ses_...
 
-# Search opencode DB for a specific session's parts
-sqlite3 ~/.local/share/opencode/opencode.db \
-  "SELECT type, tool FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id = 'ses_...')"
+# Coarse continuity/process tracing for that session
+python3 clean/src/opencode_debug.py logs --session ses_...
 ```
 
 ### Filter trace events

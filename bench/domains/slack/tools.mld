@@ -6,6 +6,7 @@
 >> a prior resolved record.
 
 import tools from mcp "tools" as @mcp
+import { @stringListItems, @messageItems } from "./bridge.mld"
 
 import {
   @slack_msg,
@@ -24,20 +25,24 @@ import {
 
 exe resolve:r, known, tool:r @get_channels() = [
   let @raw = @mcp.getChannels()
-  => for @channel in @raw => { name: @channel }
+  let @channels = @stringListItems(@raw)
+  => for @channel in @channels => { name: @channel }
 ] => record @slack_channel
 
 exe resolve:r, known, tool:r @get_users_in_channel(channel) = [
   let @raw = @mcp.getUsersInChannel(@channel)
-  => for @user in @raw => { name: @user }
+  let @users = @stringListItems(@raw)
+  => for @user in @users => { name: @user }
 ] => record @slack_user with { controlArgs: ["channel"] }
 
 exe resolve:r, untrusted, tool:r @read_channel_messages(channel) = [
-  => @mcp.readChannelMessages(@channel)
+  let @raw = @mcp.readChannelMessages(@channel)
+  => @messageItems(@raw)
 ] => record @slack_msg with { controlArgs: ["channel"] }
 
 exe resolve:r, untrusted, tool:r @read_inbox(user) = [
-  => @mcp.readInbox(@user)
+  let @raw = @mcp.readInbox(@user)
+  => @messageItems(@raw)
 ] => record @slack_msg with { controlArgs: ["user"] }
 
 >> get_webpage is the literal-source extract path. Rig stores the typed
@@ -81,7 +86,7 @@ var tools @tools = {
     mlld: @get_channels,
     returns: @slack_channel,
     labels: ["resolve:r", "known"],
-    description: "List all workspace channels."
+    description: "List all workspace channels. Use this to ground channel names before reading messages whenever the task does not already name a specific channel."
   },
   get_users_in_channel: {
     mlld: @get_users_in_channel,
@@ -93,7 +98,7 @@ var tools @tools = {
     mlld: @read_channel_messages,
     returns: @slack_msg,
     labels: ["resolve:r", "untrusted"],
-    description: "Read messages from one channel."
+    description: "Read messages from one grounded channel. The channel arg should come from the task text or from a prior get_channels result, not from a guessed name."
   },
   read_inbox: {
     mlld: @read_inbox,

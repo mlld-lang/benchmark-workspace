@@ -93,6 +93,8 @@ exe @dispatchDerive(agent, state, decision, query) = [
   let @attestation = @coerceDeriveAttestation(@raw)
   let @sessionId = @llmSessionId(@raw)
   let @logEntry = @llmCallEntry("derive", @prompt, @raw, @attestation, @sessionId, {
+    call_kind: "inner_worker",
+    inner_worker_session_id: @sessionId,
     name: @decision.name,
     goal: @decision.goal ?? null
   })
@@ -133,6 +135,7 @@ exe @dispatchDerive(agent, state, decision, query) = [
       schema_name: @schemaName,
       name: @decision.name,
       provenance: "derived",
+      preview_fields: @previewFields(@attestation.payload),
       selection_refs: @selectionCheck.refs,
       summary: @summary
     },

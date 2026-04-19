@@ -12,7 +12,7 @@ The host keeps the same high-level shape as v1:
 `uv run --project clean/bench ...` so the harness gets the same Python
 dependency surface every time.
 
-Default development run (pick any simple read-and-compose workspace task as a canary — do NOT use instruction-following tasks like `user_task_13` as canaries; see `ARCHITECTURE.md` "Explicitly out of scope"):
+Default development run (pick any simple read-and-compose workspace task as a canary — do NOT use instruction-following tasks like `user_task_13`, and do NOT gate on the Hawaii packing-list task `user_task_31` because the evaluator is brittle on exact wording):
 
 ```sh
 uv run --project clean/bench python3 clean/src/run.py \

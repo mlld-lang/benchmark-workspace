@@ -145,6 +145,351 @@ var @resolveNow = @callTool(
         finally:
             Path(script_path).unlink(missing_ok=True)
 
+    def test_travel_planner_resolve_dispatch_handles_zero_arg_profile_tools(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".mld",
+            dir=REPO_ROOT / "clean" / "bench",
+            delete=False,
+        ) as tmp:
+            tmp.write(
+                """
+import { @rigBuild } from "../rig/index.mld"
+import { @initializePlannerSession, @plannerRuntime, @plannerState } from "../rig/session.mld"
+import { @plannerTools } from "../rig/workers/planner.mld"
+import { @callTool } from "../rig/runtime.mld"
+import { @records } from "./domains/travel/records.mld"
+import { @tools } from "./domains/travel/tools.mld"
+
+var @agent = @rigBuild({
+  suite: "travel-zero-arg-resolve",
+  defense: "defended",
+  model: "stub",
+  harness: "stub",
+  records: @records,
+  tools: @tools
+})
+
+@initializePlannerSession(
+  @agent,
+  "I'm heading to Paris soon. Please check the hotel details before I book."
+)
+
+var @resolveProfile = @callTool(
+  @plannerTools.resolve,
+  @plannerTools,
+  "resolve",
+  {
+    tool: "get_user_information",
+    args: {},
+    purpose: "Load the user's travel profile"
+  }
+)
+
+=> {
+  resolve_profile: @resolveProfile,
+  runtime_tool_calls: @plannerRuntime().tool_calls,
+  runtime_invalid_calls: @plannerRuntime().invalid_calls,
+  has_user_info_bucket: @plannerState().resolved.user_info.isDefined()
+}
+""".strip()
+            )
+            script_path = tmp.name
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_tmp, tempfile.NamedTemporaryFile(
+                suffix=".jsonl", delete=False
+            ) as log_tmp, tempfile.NamedTemporaryFile(suffix=".json", delete=False) as phase_state_tmp:
+                mcp_command = _build_local_mcp_command(
+                    {
+                        "env_name": "travel",
+                        "suite_name": "travel",
+                        "benchmark_version": "v1.1.1",
+                        "task_id": "user_task_0",
+                        "state_file": state_tmp.name,
+                        "log_file": log_tmp.name,
+                        "phase_state_file": phase_state_tmp.name,
+                    }
+                )
+
+                client = Client(timeout=120000, working_dir=str(REPO_ROOT / "clean" / "bench"))
+                result = client.execute(
+                    script_path,
+                    {},
+                    mcp_servers={"tools": mcp_command},
+                )
+
+            payload = json.loads(result.output)
+            resolve_profile = payload["resolve_profile"]
+            self.assertEqual(resolve_profile["status"], "resolved")
+            self.assertEqual(resolve_profile["record_type"], "user_info")
+            self.assertEqual(resolve_profile["count"], 1)
+            self.assertEqual(payload["runtime_tool_calls"], 1)
+            self.assertEqual(payload["runtime_invalid_calls"], 0)
+            self.assertTrue(payload["has_user_info_bucket"])
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
+    def test_banking_planner_resolve_dispatch_handles_zero_arg_account_tools(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".mld",
+            dir=REPO_ROOT / "clean" / "bench",
+            delete=False,
+        ) as tmp:
+            tmp.write(
+                """
+import { @rigBuild } from "../rig/index.mld"
+import { @initializePlannerSession, @plannerRuntime, @plannerState } from "../rig/session.mld"
+import { @plannerTools } from "../rig/workers/planner.mld"
+import { @callTool } from "../rig/runtime.mld"
+import { @records } from "./domains/banking/records.mld"
+import { @tools } from "./domains/banking/tools.mld"
+
+var @agent = @rigBuild({
+  suite: "banking-zero-arg-resolve",
+  defense: "defended",
+  model: "stub",
+  harness: "stub",
+  records: @records,
+  tools: @tools
+})
+
+@initializePlannerSession(
+  @agent,
+  "What's my current balance?"
+)
+
+var @resolveBalance = @callTool(
+  @plannerTools.resolve,
+  @plannerTools,
+  "resolve",
+  {
+    tool: "get_balance",
+    args: {},
+    purpose: "Load the current account balance"
+  }
+)
+
+=> {
+  resolve_balance: @resolveBalance,
+  runtime_tool_calls: @plannerRuntime().tool_calls,
+  runtime_invalid_calls: @plannerRuntime().invalid_calls,
+  has_balance_bucket: @plannerState().resolved.balance_value.isDefined()
+}
+""".strip()
+            )
+            script_path = tmp.name
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_tmp, tempfile.NamedTemporaryFile(
+                suffix=".jsonl", delete=False
+            ) as log_tmp, tempfile.NamedTemporaryFile(suffix=".json", delete=False) as phase_state_tmp:
+                mcp_command = _build_local_mcp_command(
+                    {
+                        "env_name": "banking",
+                        "suite_name": "banking",
+                        "benchmark_version": "v1.1.1",
+                        "task_id": "user_task_0",
+                        "state_file": state_tmp.name,
+                        "log_file": log_tmp.name,
+                        "phase_state_file": phase_state_tmp.name,
+                    }
+                )
+
+                client = Client(timeout=120000, working_dir=str(REPO_ROOT / "clean" / "bench"))
+                result = client.execute(
+                    script_path,
+                    {},
+                    mcp_servers={"tools": mcp_command},
+                )
+
+            payload = json.loads(result.output)
+            resolve_balance = payload["resolve_balance"]
+            self.assertEqual(resolve_balance["status"], "resolved")
+            self.assertEqual(resolve_balance["record_type"], "balance_value")
+            self.assertEqual(resolve_balance["count"], 1)
+            self.assertEqual(payload["runtime_tool_calls"], 1)
+            self.assertEqual(payload["runtime_invalid_calls"], 0)
+            self.assertTrue(payload["has_balance_bucket"])
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
+    def test_slack_planner_resolve_dispatch_handles_zero_arg_channel_tools(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".mld",
+            dir=REPO_ROOT / "clean" / "bench",
+            delete=False,
+        ) as tmp:
+            tmp.write(
+                """
+import { @rigBuild } from "../rig/index.mld"
+import { @initializePlannerSession, @plannerRuntime, @plannerState } from "../rig/session.mld"
+import { @plannerTools } from "../rig/workers/planner.mld"
+import { @callTool } from "../rig/runtime.mld"
+import { @records } from "./domains/slack/records.mld"
+import { @tools } from "./domains/slack/tools.mld"
+
+var @agent = @rigBuild({
+  suite: "slack-zero-arg-resolve",
+  defense: "defended",
+  model: "stub",
+  harness: "stub",
+  records: @records,
+  tools: @tools
+})
+
+@initializePlannerSession(
+  @agent,
+  "Which channels exist in Slack?"
+)
+
+var @resolveChannels = @callTool(
+  @plannerTools.resolve,
+  @plannerTools,
+  "resolve",
+  {
+    tool: "get_channels",
+    args: {},
+    purpose: "List available channels before choosing one"
+  }
+)
+
+=> {
+  resolve_channels: @resolveChannels,
+  runtime_tool_calls: @plannerRuntime().tool_calls,
+  runtime_invalid_calls: @plannerRuntime().invalid_calls,
+  has_channel_bucket: @plannerState().resolved.slack_channel.isDefined()
+}
+""".strip()
+            )
+            script_path = tmp.name
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_tmp, tempfile.NamedTemporaryFile(
+                suffix=".jsonl", delete=False
+            ) as log_tmp, tempfile.NamedTemporaryFile(suffix=".json", delete=False) as phase_state_tmp:
+                mcp_command = _build_local_mcp_command(
+                    {
+                        "env_name": "slack",
+                        "suite_name": "slack",
+                        "benchmark_version": "v1.1.1",
+                        "task_id": "user_task_0",
+                        "state_file": state_tmp.name,
+                        "log_file": log_tmp.name,
+                        "phase_state_file": phase_state_tmp.name,
+                    }
+                )
+
+                client = Client(timeout=120000, working_dir=str(REPO_ROOT / "clean" / "bench"))
+                result = client.execute(
+                    script_path,
+                    {},
+                    mcp_servers={"tools": mcp_command},
+                )
+
+            payload = json.loads(result.output)
+            resolve_channels = payload["resolve_channels"]
+            self.assertEqual(resolve_channels["status"], "resolved")
+            self.assertEqual(resolve_channels["record_type"], "slack_channel")
+            self.assertGreater(resolve_channels["count"], 0)
+            self.assertEqual(payload["runtime_tool_calls"], 1)
+            self.assertEqual(payload["runtime_invalid_calls"], 0)
+            self.assertTrue(payload["has_channel_bucket"])
+            first = resolve_channels["records"][0]
+            self.assertTrue(first["name"])
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
+    def test_slack_planner_resolve_dispatch_normalizes_channel_messages(self):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".mld",
+            dir=REPO_ROOT / "clean" / "bench",
+            delete=False,
+        ) as tmp:
+            tmp.write(
+                """
+import { @rigBuild } from "../rig/index.mld"
+import { @initializePlannerSession, @plannerRuntime, @plannerState } from "../rig/session.mld"
+import { @plannerTools } from "../rig/workers/planner.mld"
+import { @callTool } from "../rig/runtime.mld"
+import { @records } from "./domains/slack/records.mld"
+import { @tools } from "./domains/slack/tools.mld"
+
+var @agent = @rigBuild({
+  suite: "slack-message-normalization",
+  defense: "defended",
+  model: "stub",
+  harness: "stub",
+  records: @records,
+  tools: @tools
+})
+
+@initializePlannerSession(
+  @agent,
+  "Read the messages in general."
+)
+
+var @resolveMessages = @callTool(
+  @plannerTools.resolve,
+  @plannerTools,
+  "resolve",
+  {
+    tool: "read_channel_messages",
+    args: {
+      channel: { source: "known", value: "general" }
+    },
+    purpose: "Read messages from the general channel"
+  }
+)
+
+=> {
+  resolve_messages: @resolveMessages,
+  runtime_tool_calls: @plannerRuntime().tool_calls,
+  runtime_invalid_calls: @plannerRuntime().invalid_calls
+}
+""".strip()
+            )
+            script_path = tmp.name
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as state_tmp, tempfile.NamedTemporaryFile(
+                suffix=".jsonl", delete=False
+            ) as log_tmp, tempfile.NamedTemporaryFile(suffix=".json", delete=False) as phase_state_tmp:
+                mcp_command = _build_local_mcp_command(
+                    {
+                        "env_name": "slack",
+                        "suite_name": "slack",
+                        "benchmark_version": "v1.1.1",
+                        "task_id": "user_task_14",
+                        "state_file": state_tmp.name,
+                        "log_file": log_tmp.name,
+                        "phase_state_file": phase_state_tmp.name,
+                    }
+                )
+
+                client = Client(timeout=120000, working_dir=str(REPO_ROOT / "clean" / "bench"))
+                result = client.execute(
+                    script_path,
+                    {},
+                    mcp_servers={"tools": mcp_command},
+                )
+
+            payload = json.loads(result.output)
+            resolve_messages = payload["resolve_messages"]
+            self.assertEqual(resolve_messages["status"], "resolved")
+            self.assertEqual(resolve_messages["record_type"], "slack_msg")
+            self.assertGreater(resolve_messages["count"], 0)
+            self.assertEqual(payload["runtime_tool_calls"], 1)
+            self.assertEqual(payload["runtime_invalid_calls"], 0)
+            first = resolve_messages["records"][0]
+            self.assertEqual(first["sender"], "Charlie")
+            self.assertEqual(first["recipient"], "general")
+        finally:
+            Path(script_path).unlink(missing_ok=True)
+
     def test_workspace_planner_resolve_results_keep_handles_plain_and_compact(self):
         with tempfile.NamedTemporaryFile(
             mode="w",
