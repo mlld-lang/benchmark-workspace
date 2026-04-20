@@ -524,6 +524,11 @@ var @plannerStateAfterContactResolve = @extractChainResult.stateAfterResolve
 var @plannerResolvedContactEmail = @extractChainResult.resolvedEmail
 var @plannerExtractDispatchResult = @extractChainResult.extractResult
 var @plannerStateAfterContactExtract = @extractChainResult.stateAfterExtract
+var @sessionFinalState = @extractChainResult.mx.sessions.planner
+var @sessionFinalStateOk =
+  @sessionFinalState.isDefined() &&
+  @sessionFinalState.runtime.tool_calls == 2 &&
+  @sessionFinalState.state.resolved.contact.length == 2
 var @plannerDeriveFixtureAgent = @rigBuild({
   suite: "fixture-planner-derive",
   defense: "defended",
@@ -1267,6 +1272,8 @@ var @singlePlannerArchitectureOk =
   @plannerWorkerText.includes('var tools @plannerTools = {') &&
   @plannerWorkerText.includes('tools: @plannerTools') &&
   @plannerWorkerText.includes('session: @planner') &&
+  (@plannerWorkerText.includes('@opencode(@prompt, @plannerConfig) with {') || @plannerWorkerText.includes('@claude(@prompt, @plannerConfig) with {')) &&
+  !@plannerWorkerText.includes('@llmCall(@agent.harness, @prompt, {') &&
   !@plannerWorkerText.includes('@dispatchPlanner') &&
   !@plannerWorkerText.includes('resume:') &&
   !@plannerPromptText.includes('<state_summary>') &&
@@ -2479,6 +2486,7 @@ exe @allChecks() = [
   @check("resolve-worker-scalar-keyed-path", @dispatchScalarResolveOk, @dispatchScalarResolvePretty),
   @check("planner-tool-collection-dispatch-does-not-recurse", @plannerResolveDispatchOk, @plannerResolveDispatchPretty),
   @check("planner-session-state-persists-across-direct-planner-tool-calls", @plannerResolveContactsOk, @plannerResolveContactsPretty),
+  @check("session-final-state-accessible-via-mx-sessions", @sessionFinalStateOk, `runtime_calls=@sessionFinalState.runtime.tool_calls resolved=@sessionFinalState.state.resolved.contact.length`),
   @check("planner-session-resolved-handle-remains-readable-after-direct-resolve", @plannerResolvedContactEmailOk, @plannerResolvedContactEmailPretty),
   @check("planner-source-backed-extract-works-on-direct-planner-tool-path", @plannerExtractDispatchOk, @plannerExtractDispatchPretty),
   @check("planner-derive-exposes-preview-fields", @plannerDeriveDispatchOk, @plannerDeriveDispatchPretty),
