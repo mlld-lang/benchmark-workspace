@@ -242,30 +242,15 @@ exe @finishPlannerTool(ctx, nextState, nextRuntime, workerSessionId, outcome, su
   }
 ]
 
-exe @plannerResolve(input) = [
-  let @coerced = @input ?? {}
-  let @tool = @coerced.tool
-  let @args = @coerced.args ?? {}
-  let @purpose = @coerced.purpose ?? null
-  let @decision = {
-    phase: "resolve",
-    tool: @tool,
-    args: @args,
-    purpose: @purpose
-  }
-  let @toolCtx = @plannerToolContext("resolve", @decision)
-  if !@toolCtx.ok [
-    -> @toolCtx.result
-    => @toolCtx.result
-  ]
-  let @phaseResult = @dispatchResolve(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query)
+exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
   let @workerSessionId = @normalizeSessionId(@phaseResult.session_id)
   let @nextState = when [
     @phaseResult.error.isDefined() => @appendExecutionLog(
       @phaseResult.state ?? @toolCtx.state,
       {
-        phase: "resolve",
-        tool: @tool,
+        phase: @decision.phase,
+        tool: @decision.tool ?? @decision.operation ?? null,
+        name: @decision.name ?? null,
         status: "error",
         error: @phaseResult.error,
         summary: @phaseResult.summary ?? @phaseResult.error,
@@ -298,7 +283,6 @@ exe @plannerResolve(input) = [
     @phaseResult.error.isDefined() => @phaseResult.summary ?? @phaseResult.error
     * => @phaseResult.result.summary
   ]
-  let @resolvedHandles = for @handle in @arrayItems(@phaseResult.result.handles ?? []) => @stringValue(@handle)
   let @finished = @finishPlannerTool(
     @toolCtx,
     @nextState,
@@ -308,30 +292,35 @@ exe @plannerResolve(input) = [
     @summary,
     @phaseResult.llm_log ?? null
   )
+  => {
+    finished: @finished,
+    terminal: @terminal,
+    summary: @summary,
+    workerSessionId: @workerSessionId
+  }
+]
+
+exe @plannerResolve(input) = [
+  let @coerced = @input ?? {}
+  let @tool = @coerced.tool
+  let @args = @coerced.args ?? {}
+  let @purpose = @coerced.purpose ?? null
+  let @decision = { phase: "resolve", tool: @tool, args: @args, purpose: @purpose }
+  let @toolCtx = @plannerToolContext("resolve", @decision)
+  if !@toolCtx.ok [ -> @toolCtx.result; => @toolCtx.result ]
+  let @phaseResult = @dispatchResolve(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query)
+  let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
+  let @resolvedHandles = for @handle in @arrayItems(@phaseResult.result.handles ?? []) => @stringValue(@handle)
   let @result = when [
-    @terminal.isDefined() => {
-      status: "blocked",
-      reason: "planner_error_budget_exhausted"
-    }
-    @phaseResult.error.isDefined() => {
-      status: "error",
-      phase: "resolve",
-      error: @phaseResult.error,
-      summary: @summary,
-      issues: @phaseResult.issues ?? null
-    }
+    @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
+    @phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null }
     * => {
       status: "resolved",
       tool: @tool,
       record_type: @phaseResult.result.record_type,
       count: @phaseResult.result.count,
       handles: @resolvedHandles,
-      records: @plannerResolvedRecords(
-        @toolCtx.agent.records ?? {},
-        @finished.state,
-        @phaseResult.result.record_type,
-        @resolvedHandles
-      ),
+      records: @plannerResolvedRecords(@toolCtx.agent.records ?? {}, @settled.finished.state, @phaseResult.result.record_type, @resolvedHandles),
       summary: @phaseResult.result.summary
     }
   ]
@@ -405,67 +394,10 @@ exe @plannerExtract(input) = [
     => @missingResult
   ]
   let @phaseResult = @dispatchExtract(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query)
-  let @workerSessionId = @normalizeSessionId(@phaseResult.session_id)
-  let @nextState = when [
-    @phaseResult.error.isDefined() => @appendExecutionLog(
-      @phaseResult.state ?? @toolCtx.state,
-      {
-        phase: "extract",
-        tool: @tool ?? null,
-        name: @name,
-        status: "error",
-        error: @phaseResult.error,
-        summary: @phaseResult.summary ?? @phaseResult.error,
-        issues: @phaseResult.issues ?? null,
-        raw_error: @phaseResult.raw_error ?? null,
-        worker_session_id: @workerSessionId
-      }
-    )
-    * => @phaseResult.state
-  ]
-  let @invalidCalls = when [
-    @phaseResult.error.isDefined() => @toolCtx.runtime.invalid_calls + 1
-    * => 0
-  ]
-  let @terminal = when [
-    @phaseResult.error.isDefined() && @invalidCalls >= @plannerInvalidBudget() => {
-      status: "blocked",
-      text: "blocked: planner_error_budget_exhausted",
-      reason: "planner_error_budget_exhausted"
-    }
-    * => null
-  ]
-  let @nextRuntime = @plannerRuntimeState(
-    @toolCtx.runtime.tool_calls + 1,
-    @invalidCalls,
-    @terminal,
-    @decision
-  )
-  let @summary = when [
-    @phaseResult.error.isDefined() => @phaseResult.summary ?? @phaseResult.error
-    * => @phaseResult.result.summary
-  ]
-  @finishPlannerTool(
-    @toolCtx,
-    @nextState,
-    @nextRuntime,
-    @workerSessionId,
-    when [ @phaseResult.error.isDefined() => "error" * => "success" ],
-    @summary,
-    @phaseResult.llm_log ?? null
-  )
+  let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
-    @terminal.isDefined() => {
-      status: "blocked",
-      reason: "planner_error_budget_exhausted"
-    }
-    @phaseResult.error.isDefined() => {
-      status: "error",
-      phase: "extract",
-      error: @phaseResult.error,
-      summary: @summary,
-      issues: @phaseResult.issues ?? null
-    }
+    @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
+    @phaseResult.error.isDefined() => { status: "error", phase: "extract", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null }
     * => {
       status: "extracted",
       name: @phaseResult.result.name,
@@ -501,66 +433,10 @@ exe @plannerDerive(input) = [
     => @toolCtx.result
   ]
   let @phaseResult = @dispatchDerive(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query)
-  let @workerSessionId = @normalizeSessionId(@phaseResult.session_id)
-  let @nextState = when [
-    @phaseResult.error.isDefined() => @appendExecutionLog(
-      @phaseResult.state ?? @toolCtx.state,
-      {
-        phase: "derive",
-        name: @name,
-        status: "error",
-        error: @phaseResult.error,
-        summary: @phaseResult.summary ?? @phaseResult.error,
-        issues: @phaseResult.issues ?? null,
-        raw_error: @phaseResult.raw_error ?? null,
-        worker_session_id: @workerSessionId
-      }
-    )
-    * => @phaseResult.state
-  ]
-  let @invalidCalls = when [
-    @phaseResult.error.isDefined() => @toolCtx.runtime.invalid_calls + 1
-    * => 0
-  ]
-  let @terminal = when [
-    @phaseResult.error.isDefined() && @invalidCalls >= @plannerInvalidBudget() => {
-      status: "blocked",
-      text: "blocked: planner_error_budget_exhausted",
-      reason: "planner_error_budget_exhausted"
-    }
-    * => null
-  ]
-  let @nextRuntime = @plannerRuntimeState(
-    @toolCtx.runtime.tool_calls + 1,
-    @invalidCalls,
-    @terminal,
-    @decision
-  )
-  let @summary = when [
-    @phaseResult.error.isDefined() => @phaseResult.summary ?? @phaseResult.error
-    * => @phaseResult.result.summary
-  ]
-  @finishPlannerTool(
-    @toolCtx,
-    @nextState,
-    @nextRuntime,
-    @workerSessionId,
-    when [ @phaseResult.error.isDefined() => "error" * => "success" ],
-    @summary,
-    @phaseResult.llm_log ?? null
-  )
+  let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
-    @terminal.isDefined() => {
-      status: "blocked",
-      reason: "planner_error_budget_exhausted"
-    }
-    @phaseResult.error.isDefined() => {
-      status: "error",
-      phase: "derive",
-      error: @phaseResult.error,
-      summary: @summary,
-      issues: @phaseResult.issues ?? null
-    }
+    @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
+    @phaseResult.error.isDefined() => { status: "error", phase: "derive", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null }
     * => {
       status: "derived",
       name: @phaseResult.result.name,
@@ -592,66 +468,10 @@ exe @plannerExecute(input) = [
     => @toolCtx.result
   ]
   let @phaseResult = @dispatchExecute(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query)
-  let @workerSessionId = @normalizeSessionId(@phaseResult.session_id)
-  let @nextState = when [
-    @phaseResult.error.isDefined() => @appendExecutionLog(
-      @phaseResult.state ?? @toolCtx.state,
-      {
-        phase: "execute",
-        tool: @operation,
-        status: "error",
-        error: @phaseResult.error,
-        summary: @phaseResult.summary ?? @phaseResult.error,
-        issues: @phaseResult.issues ?? null,
-        raw_error: @phaseResult.raw_error ?? null,
-        worker_session_id: @workerSessionId
-      }
-    )
-    * => @phaseResult.state
-  ]
-  let @invalidCalls = when [
-    @phaseResult.error.isDefined() => @toolCtx.runtime.invalid_calls + 1
-    * => 0
-  ]
-  let @terminal = when [
-    @phaseResult.error.isDefined() && @invalidCalls >= @plannerInvalidBudget() => {
-      status: "blocked",
-      text: "blocked: planner_error_budget_exhausted",
-      reason: "planner_error_budget_exhausted"
-    }
-    * => null
-  ]
-  let @nextRuntime = @plannerRuntimeState(
-    @toolCtx.runtime.tool_calls + 1,
-    @invalidCalls,
-    @terminal,
-    @decision
-  )
-  let @summary = when [
-    @phaseResult.error.isDefined() => @phaseResult.summary ?? @phaseResult.error
-    * => @phaseResult.result.summary
-  ]
-  @finishPlannerTool(
-    @toolCtx,
-    @nextState,
-    @nextRuntime,
-    @workerSessionId,
-    when [ @phaseResult.error.isDefined() => "error" * => "success" ],
-    @summary,
-    @phaseResult.llm_log ?? null
-  )
+  let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
-    @terminal.isDefined() => {
-      status: "blocked",
-      reason: "planner_error_budget_exhausted"
-    }
-    @phaseResult.error.isDefined() => {
-      status: "error",
-      phase: "execute",
-      error: @phaseResult.error,
-      summary: @summary,
-      issues: @phaseResult.issues ?? null
-    }
+    @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
+    @phaseResult.error.isDefined() => { status: "error", phase: "execute", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null }
     * => {
       status: "executed",
       tool: @phaseResult.result.tool,
