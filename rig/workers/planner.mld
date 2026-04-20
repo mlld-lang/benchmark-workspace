@@ -1,3 +1,5 @@
+import { @claude } from "@mlld/claude"
+import { @opencode } from "@mlld/opencode"
 import { @phaseToolDocs } from "../tooling.mld"
 import {
   @llmCall,
@@ -627,21 +629,17 @@ exe @runPlannerSession(agent, query) = [
   let @extractDocs = @phaseToolDocs(@agent, "extract")
   let @executeDocs = @phaseToolDocs(@agent, "execute")
   let @prompt = @plannerPrompt(@query, @resolveDocs, @extractDocs, @executeDocs)
-  let @raw = @llmCall(@agent.harness, @prompt, {
+  let @plannerConfig = {
     model: @agent.model,
     tools: @plannerTools,
     stubPhase: "planner",
     stubResponses: @agent.stub.planner ?? []
-  }) with {
-    display: "role:planner",
-    session: @planner,
-    seed: {
-      agent: @agent,
-      query: @query,
-      state: @emptyState(),
-      runtime: @emptyPlannerRuntime()
-    }
   }
+  let @raw = when [
+    @agent.harness == "stub" => @llmCall("stub", @prompt, @plannerConfig) with { display: "role:planner" }
+    @agent.harness == "opencode" => @opencode(@prompt, @plannerConfig) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
+    * => @claude(@prompt, @plannerConfig) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
+  ]
   let @sessionId = @llmSessionId(@raw)
   let @finalSession = @raw.mx.sessions.planner
   let @runtime = @finalSession.runtime ?? @emptyPlannerRuntime()

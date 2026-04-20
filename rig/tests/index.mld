@@ -1265,8 +1265,8 @@ var @travelBenchCatalogDetail = `tools=@travelToolsText agent=@travelAgentText`
 
 var @singlePlannerArchitectureOk =
   @plannerWorkerText.includes('var tools @plannerTools = {') &&
-  @plannerWorkerText.includes('@llmCall(@agent.harness, @prompt, {') &&
   @plannerWorkerText.includes('tools: @plannerTools') &&
+  @plannerWorkerText.includes('session: @planner') &&
   !@plannerWorkerText.includes('@dispatchPlanner') &&
   !@plannerWorkerText.includes('resume:') &&
   !@plannerPromptText.includes('<state_summary>') &&
