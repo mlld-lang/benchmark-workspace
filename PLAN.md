@@ -493,29 +493,30 @@ Banking, slack, and travel are already migrated onto the new surface. This step 
 
 Four mlld primitives landed that replace rig-side compensations. Migrate rig onto them and delete the workarounds:
 
-1. **Session migration** (`var session` replaces shelf-based `session.mld`):
-   - Pin current planner-wrapper observable behavior as test invariants before touching implementation
-   - Rewrite `session.mld` to `var session @planner = {...}` schema (~10 lines)
-   - Migrate `workers/planner.mld` wrappers from shelf getters/setters to `@planner.*` session accessors
-   - Migrate `runPlannerSession` to attach session via `with { session: @planner, seed: {...} }` and read final state from `@raw.mx.sessions.planner`
-   - Restructure test invariants (`tests/index.mld`) and host tests (`bench/tests/test_host.py`) to exercise planner wrappers inside `exe llm` session frames instead of calling them directly after shelf init
-   - Delete: shelf declaration, 4 slot records, `@slotValue`, `@resetPlannerSession`, `@initializePlannerSession`, all getter/setter exes, the global shelf singleton
+1. ~~**Session migration**~~ ✓ (`var session` replaces shelf-based `session.mld`):
+   - `session.mld` collapsed from 111 lines to ~25 lines
+   - `workers/planner.mld` wrappers use `@planner.*` session accessors
+   - `runPlannerSession` attaches session via `with { session: @planner, seed: {...} }` directly on the provider call (`@opencode`/`@claude`), reads final state from `@raw.mx.sessions.planner`
+   - Test invariants restructured to use `exe llm` session frames
+   - Deleted: shelf declaration, 4 slot records, `@slotValue`, `@resetPlannerSession`, `@initializePlannerSession`, all getter/setter exes, the global shelf singleton
+   - Bugs found + fixed: `var tools` collection dispatch didn't propagate session frames (m-87eb); session must attach to provider call not routing wrapper
    - Gate must stay green throughout
-2. **Wrapper factory extraction** (session + guards replace copy-paste boilerplate):
-   - Extract shared budget/counter/terminal-latch/log/lifecycle boilerplate from the six planner-tool wrappers into a factory or guard-based middleware
-   - Each of the six wrappers collapses to dispatch + result-shape only (~5 lines each)
-   - Follows directly from (1) — session makes the factory possible
+2. ~~**Wrapper factory extraction**~~ ✓ (session + guards replace copy-paste boilerplate):
+   - `@settlePhaseDispatch` extracted: shared error-path/budget/runtime/finish logic
+   - Four non-terminal wrappers collapsed from ~30 to ~15 lines each (net +35/-215)
 3. **Delete `direct: true`** (default object dispatch makes it unnecessary):
    - Strip `direct: true` from all six planner-tool entries in `workers/planner.mld`
    - Simplify dispatch branching in `runtime.mld` `@callToolWithOptionalPolicy`
+   - **Blocked**: runtime.mld dispatch doesn't yet recognize `inputs: @record` as implying object dispatch
 4. **Delete optional-fact workarounds** (optional fact omission in `@policy.build` makes them unnecessary):
    - Delete `@omittedOptionalControlIntent`, `@allControlArgsOptional`, `@omitUnknownTargetRules`, and the `optionalControlArgsOmitted` branch from `workers/execute.mld`
+   - **Blocked**: `@policy.build` doesn't accept `{ allow: [op] }` for tools where all control args are optional and omitted
 5. **Simplify tool-catalog helpers** (reflection completeness reduces crawler complexity):
    - Collapse or delete `@pairsToObject`, `@toolCatalogObject`, `@toolEntryObject`, and most `@tool*Args` helpers in `tooling.mld`
 
 **Also in this step — review-derived cleanup (independent of primitive migration):**
 
-6. **Delete stale guards**: remove dead code in `guards.mld` including the legacy `write_tool`/`authorizations` schema hint at `:61`
+6. ~~**Delete stale guards**~~ ✓: `guards.mld` deleted entirely (309 lines, unreferenced by any module)
 7. **Prompt split**: `@rig.build` accepts optional `prompts:` config for suite addendum templates; move domain-specific rules out of `rig/prompts/planner.att` into `bench/domains/<suite>/prompts/`; per-tool knowledge goes in tool entry `instructions:` field
 8. **Delete `@phaseToolDocs`**: provider `<tool_notes>` auto-injection already covers per-tool docs; spike to confirm coverage first, then delete redundant prompt-body rendering from `tooling.mld` and `workers/planner.mld`
 9. **MCP coercion audit**: classify `_coerce_tool_args` rules in `src/mcp_server.py` as (a) generic normalization, (b) AgentDojo-specific overfitting, or (c) planner-mistake masking; keep (a) with labels, delete (b) and (c)

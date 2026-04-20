@@ -69,13 +69,14 @@ Not remaining:
 ### Rig gate
 
 - `mlld clean/rig/tests/index.mld --no-checkpoint`
-  - `summary: 91 pass / 0 fail`
+  - `summary: 92 pass / 0 fail`
   - This is the current authoritative invariant gate.
   - It now includes:
-    - single-planner architectural assertions
+    - single-planner architectural assertions (session attaches to provider, not routing wrapper)
     - OpenCode planner tool-surface assertions
     - indexed-path lowering on resolved, extracted, and derived state
     - wrapped-scalar execute compilation regressions
+    - session final-state accessibility via `.mx.sessions.planner`
 
 ### Recent rig fixes now reflected in the gate
 
@@ -194,29 +195,31 @@ Done:
 
 Current work — primitive migration (new mlld primitives → delete rig workarounds):
 
-The code review surfaced six cleanup items. Four depend on new mlld primitives (now landed); two are independent. Sequenced as:
+The code review surfaced nine cleanup items. Three are complete; two are blocked on runtime primitives not fully wired; four are pending after bench verification.
 
-1. **Session migration** (in progress): rewrite `session.mld` to `var session @planner`, migrate `workers/planner.mld` wrappers from shelf-based getters/setters to `@planner.*` accessors, restructure tests to exercise wrappers inside session frames. Handoff notes at [rig-session-migration-handoff.md](/Users/adam/mlld/clean/tmp/rig-session-migration-handoff.md). Key finding: session writes work inside `exe llm` bodies (not just tool callbacks), so test restructure is a lightweight `exe llm` wrapper pattern, not a vitest dependency.
-2. **Wrapper factory extraction**: collapse the six copy-paste planner-tool wrappers into a factory pattern using session + guard middleware. Natural follow-on to (1).
-3. **Stale guards deletion**: delete dead code in `guards.mld` including the legacy `write_tool`/`authorizations` schema hint. Independent, cheap.
-4. **Prompt split**: `@rig.build` accepts optional `prompts:` config for suite addendum templates. Moves domain-specific rules out of `rig/prompts/planner.att`. After bench verification is green.
-5. **Delete `@phaseToolDocs`**: provider `<tool_notes>` auto-injection already covers per-tool docs. Spike to confirm coverage, then delete redundant prompt-body rendering. After bench verification.
-6. **MCP coercion audit**: classify `_coerce_tool_args` rules as generic normalization vs AgentDojo overfitting vs planner-mistake masking. Delete categories (b) and (c). Independent of rig work.
+Done:
 
-Still open (from before):
+1. ~~**Session migration**~~: `session.mld` collapsed from 111 lines to ~25 lines (`var session @planner` schema). Planner wrappers migrated to `@planner.*` accessors. Session attaches directly to provider calls. Regression: `session-final-state-accessible-via-mx-sessions`. Bug found and fixed: `var tools` collection dispatch didn't propagate session frames (m-87eb, closed). Bug found and fixed: session must attach to provider call, not routing wrapper.
+2. ~~**Wrapper factory extraction**~~: `@settlePhaseDispatch` extracted; four non-terminal wrappers collapsed from ~30 lines each to ~15 lines. Net: +35/-215.
+3. ~~**Stale guards deletion**~~: `guards.mld` deleted entirely (309 lines of dead transition-era code, unreferenced by any other module).
 
-- finish the remaining bench verification slice on OpenCode
-- recover the remaining in-scope utility misses (see §Current Remaining Work)
-- do one last doc sync after the remaining recovery targets are classified
+Blocked:
+
+4. **`direct: true` removal**: blocked on `runtime.mld`'s `@callToolWithOptionalPolicy` needing to recognize `inputs: @record` as implying object dispatch. Without that, removing the flag breaks collection dispatch routing.
+5. **Optional-fact workaround deletion**: blocked on `@policy.build` not accepting `{ allow: [op] }` for tools where all control args are optional and omitted. The workaround (`@omittedOptionalControlIntent` + `@omitUnknownTargetRules`) remains necessary.
+
+Pending (after bench verification is green):
+
+6. **Tooling.mld simplification**: collapse `@pairsToObject`, `@toolCatalogObject`, `@toolEntryObject`, and most `@tool*Args` helpers once reflection completeness is wired.
+7. **Prompt split**: `@rig.build` accepts optional `prompts:` config for suite addendum templates. Moves domain-specific rules out of `rig/prompts/planner.att`.
+8. **Delete `@phaseToolDocs`**: provider `<tool_notes>` auto-injection already covers per-tool docs. Spike to confirm coverage first.
+9. **MCP coercion audit**: classify `_coerce_tool_args` rules in `src/mcp_server.py`. Keep generic normalization; delete AgentDojo overfitting and planner-mistake masking.
 
 ## Current Remaining Work
 
-### Primitive migration (Step 12 — current focus)
+### Bench verification (current focus)
 
-1. Session migration: pin current behavior as test invariants, then rewrite `session.mld` + `workers/planner.mld` + test call sites. Gate must stay green throughout.
-2. Wrapper factory extraction: collapse six planner-tool wrappers into factory pattern.
-3. Stale guards deletion: one commit, independent.
-4. Prompt split, `@phaseToolDocs` deletion, MCP coercion audit: after bench verification is green.
+Running full 4-suite defended verification on OpenCode/GLM 5.1 to establish post-migration baseline.
 
 ### Bench verification and recovery
 
