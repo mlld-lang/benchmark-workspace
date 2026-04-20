@@ -20,7 +20,7 @@ import {
   @create_note_inputs,
   @send_email_inputs
 } from "./fixtures.mld"
-import { @opencodeToolAgentName, @opencodePermissionRules } from "../../../modules/opencode/index.mld"
+import { @opencodeToolAgentName, @opencodePermissionRules } from "@mlld/opencode"
 import { @imported_tools } from "./imported-tools-fixture.mld"
 import {
   @mxEntry,
@@ -52,11 +52,11 @@ import {
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg } from "../intent.mld"
 import { @callTool, @toolCallError, @emptyState } from "../runtime.mld"
-import { @initializePlannerSession, @plannerState } from "../session.mld"
+import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation, @dispatchExtract } from "../workers/extract.mld"
-import { @plannerTools } from "../workers/planner.mld"
+import { @planner, @plannerTools } from "../workers/planner.mld"
 
 exe @status(ok) = when [
   @ok => "PASS"
@@ -460,17 +460,15 @@ var @dispatchScalarResolveResult = @dispatchResolve(
   },
   "What day is it?"
 )
-@initializePlannerSession(@builtFixtureAgent, "What day is it?")
-var @plannerResolveDispatchResult = @callTool(
-  @plannerTools.resolve,
-  @plannerTools,
-  "resolve",
-  {
-    tool: "get_today",
-    args: {},
-    purpose: "ground one synthetic day context"
-  }
-)
+exe llm @testPlannerResolve(prompt, config) = [
+  => @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.args)
+]
+var @plannerResolveDispatchResult = @testPlannerResolve("test", {
+  args: { tool: "get_today", args: {}, purpose: "ground one synthetic day context" }
+}) with {
+  session: @planner,
+  seed: { agent: @builtFixtureAgent, query: "What day is it?", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
 var @plannerExtractFixtureAgent = @rigBuild({
   suite: "fixture-planner-extract",
   defense: "defended",
@@ -494,43 +492,38 @@ var @plannerExtractFixtureAgent = @rigBuild({
     }
   }
 })
-@initializePlannerSession(@plannerExtractFixtureAgent, "Find Alice in my contacts.")
-var @plannerResolveContactsResult = @callTool(
-  @plannerTools.resolve,
-  @plannerTools,
-  "resolve",
-  {
-    tool: "get_contacts",
-    args: {},
-    purpose: "ground the contact list"
+exe llm @testPlannerExtractChain(prompt, config) = [
+  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.resolveArgs)
+  let @stateAfterResolve = @planner.state
+  let @resolvedEmail = @resolveRefValue(@stateAfterResolve, @config.refValue)
+  let @extractResult = @callTool(@plannerTools.extract, @plannerTools, "extract", @config.extractArgs)
+  let @stateAfterExtract = @planner.state
+  => {
+    resolveResult: @resolveResult,
+    stateAfterResolve: @stateAfterResolve,
+    resolvedEmail: @resolvedEmail,
+    extractResult: @extractResult,
+    stateAfterExtract: @stateAfterExtract
   }
-)
-var @plannerStateAfterContactResolve = @plannerState()
-var @plannerResolvedContactEmail = @resolveRefValue(
-  @plannerStateAfterContactResolve,
-  {
-    source: "resolved",
-    record: "contact",
-    handle: "r_contact_alice.example",
-    field: "email"
-  }
-)
-var @plannerExtractDispatchResult = @callTool(
-  @plannerTools.extract,
-  @plannerTools,
-  "extract",
-  {
-    source: {
-      source: "resolved",
-      record: "contact",
-      handle: "r_contact_alice.example"
-    },
+]
+var @extractChainResult = @testPlannerExtractChain("test", {
+  resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+  refValue: { source: "resolved", record: "contact", handle: "r_contact_alice.example", field: "email" },
+  extractArgs: {
+    source: { source: "resolved", record: "contact", handle: "r_contact_alice.example" },
     schema_name: "contact",
     name: "contact_details",
     purpose: "inspect one resolved contact"
   }
-)
-var @plannerStateAfterContactExtract = @plannerState()
+}) with {
+  session: @planner,
+  seed: { agent: @plannerExtractFixtureAgent, query: "Find Alice in my contacts.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+var @plannerResolveContactsResult = @extractChainResult.resolveResult
+var @plannerStateAfterContactResolve = @extractChainResult.stateAfterResolve
+var @plannerResolvedContactEmail = @extractChainResult.resolvedEmail
+var @plannerExtractDispatchResult = @extractChainResult.extractResult
+var @plannerStateAfterContactExtract = @extractChainResult.stateAfterExtract
 var @plannerDeriveFixtureAgent = @rigBuild({
   suite: "fixture-planner-derive",
   defense: "defended",
@@ -556,40 +549,38 @@ var @plannerDeriveFixtureAgent = @rigBuild({
     }
   }
 })
-@initializePlannerSession(@plannerDeriveFixtureAgent, "Email each person in the TODO list.")
-var @plannerDeriveResolveResult = @callTool(
-  @plannerTools.resolve,
-  @plannerTools,
-  "resolve",
-  {
-    tool: "get_contacts",
-    args: {},
-    purpose: "ground the contact list"
+exe llm @testPlannerDeriveChain(prompt, config) = [
+  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.resolveArgs)
+  let @deriveResult = @callTool(@plannerTools.derive, @plannerTools, "derive", @config.deriveArgs)
+  let @extractDerivedResult = @callTool(@plannerTools.extract, @plannerTools, "extract", @config.extractArgs)
+  => {
+    resolveResult: @resolveResult,
+    deriveResult: @deriveResult,
+    extractDerivedResult: @extractDerivedResult
   }
-)
-var @plannerDeriveDispatchResult = @callTool(
-  @plannerTools.derive,
-  @plannerTools,
-  "derive",
-  {
+]
+var @deriveChainResult = @testPlannerDeriveChain("test", {
+  resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+  deriveArgs: {
     sources: [{ source: "resolved", record: "contact" }],
     goal: "Extract the action items into a typed array",
     schema_name: "action_items",
     name: "action_items",
     purpose: "prepare one action-item worklist"
-  }
-)
-var @plannerExtractDerivedResult = @callTool(
-  @plannerTools.extract,
-  @plannerTools,
-  "extract",
-  {
+  },
+  extractArgs: {
     source: { source: "derived", name: "action_items" },
     schema_name: "action_items",
     name: "action_items_copy",
     purpose: "inspect the derived action items"
   }
-)
+}) with {
+  session: @planner,
+  seed: { agent: @plannerDeriveFixtureAgent, query: "Email each person in the TODO list.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+var @plannerDeriveResolveResult = @deriveChainResult.resolveResult
+var @plannerDeriveDispatchResult = @deriveChainResult.deriveResult
+var @plannerExtractDerivedResult = @deriveChainResult.extractDerivedResult
 var tools @readArgFixtureTools = {
   search_day_events: {
     mlld: @search_day_events,
@@ -1292,21 +1283,34 @@ var @singlePlannerRunnerDetail = `orchestration=@orchestrationText`
 var @opencodePlannerAllowedCsv = "mlld_tools_resolve,mlld_tools_extract,mlld_tools_derive,mlld_tools_execute,mlld_tools_compose,mlld_tools_blocked"
 var @opencodePlannerPermissionRules = @opencodePermissionRules(@opencodePlannerAllowedCsv, ["mlld_tools"])
 var @opencodePlannerToolSurfaceOk =
-  @opencodeToolAgentName(null) == "build" &&
+  @opencodeToolAgentName(null) == "mlld" &&
   @field(@opencodePlannerPermissionRules, "*") == "deny" &&
-  @field(@opencodePlannerPermissionRules, "mlld_tools_*") == "allow" &&
+  @field(@opencodePlannerPermissionRules, "mcp__mlld_tools__*") == "allow" &&
   @field(@opencodePlannerPermissionRules, "mlld_tools_resolve") == "allow" &&
   @field(@opencodePlannerPermissionRules, "mlld_tools_extract") == "allow" &&
   @field(@opencodePlannerPermissionRules, "mlld_tools_derive") == "allow" &&
   @field(@opencodePlannerPermissionRules, "mlld_tools_execute") == "allow" &&
   @field(@opencodePlannerPermissionRules, "mlld_tools_compose") == "allow" &&
   @field(@opencodePlannerPermissionRules, "mlld_tools_blocked") == "allow" &&
-  @field(@opencodePlannerPermissionRules, "read") == null &&
-  @field(@opencodePlannerPermissionRules, "glob") == null &&
-  @field(@opencodePlannerPermissionRules, "bash") == null &&
-  @field(@opencodePlannerPermissionRules, "edit") == null &&
-  @field(@opencodePlannerPermissionRules, "write") == null
+  @isBlank(@field(@opencodePlannerPermissionRules, "read")) &&
+  @isBlank(@field(@opencodePlannerPermissionRules, "glob")) &&
+  @isBlank(@field(@opencodePlannerPermissionRules, "bash")) &&
+  @isBlank(@field(@opencodePlannerPermissionRules, "edit")) &&
+  @isBlank(@field(@opencodePlannerPermissionRules, "write"))
 var @opencodePlannerToolSurfaceDetail = `rules=@opencodePlannerPermissionRules`
+
+exe llm @testPlannerUninitialized(prompt, config) = [
+  => @plannerTools.resolve.mlld({ tool: "noop", purpose: "test" })
+]
+var @plannerToolUninitializedResult = @testPlannerUninitialized("test", {}) with {
+  session: @planner,
+  seed: { agent: null, query: null, state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+var @plannerToolUninitializedDetail = `status=@field(@plannerToolUninitializedResult, "status") error=@field(@plannerToolUninitializedResult, "error") summary=@field(@plannerToolUninitializedResult, "summary")`
+var @plannerToolUninitializedOk =
+  @field(@plannerToolUninitializedResult, "status") == "error" &&
+  @field(@plannerToolUninitializedResult, "error") == "planner_session_uninitialized" &&
+  @field(@plannerToolUninitializedResult, "summary") == "planner_session_uninitialized"
 
 var @collectionRoundtripOk = @collectionRoundtrip(@policyBuildToolCollection, @manualBasePolicy) == true
 var @toolMetadataOk = @sendParams.length == 3 &&
@@ -2096,6 +2100,62 @@ var @derivedPayloadCompilePretty = `ok=@field(@derivedPayloadCompile, "ok") cont
 var @indexedExtractedPayloadCompilePretty = `ok=@field(@indexedExtractedPayloadCompile, "ok") content=@field(@field(@indexedExtractedPayloadCompile, "compiled_args"), "content")`
 var @indexedDerivedPayloadCompilePretty = `ok=@field(@indexedDerivedPayloadCompile, "ok") content=@field(@field(@indexedDerivedPayloadCompile, "compiled_args"), "content")`
 
+var @wrappedScalarNamedState = {
+  resolved: {},
+  extracted: {
+    note_text: {
+      provenance: "extracted",
+      schema_name: "text",
+      preview_fields: ["value"],
+      value: {
+        value: "wrapped extracted scalar"
+      }
+    }
+  },
+  derived: {
+    note_summary: {
+      provenance: "derived",
+      schema_name: "text",
+      preview_fields: ["value"],
+      value: {
+        value: "wrapped derived scalar"
+      }
+    }
+  },
+  execution_log: [],
+  phase_events: []
+}
+var @wrappedScalarExtractCompile = @compileExecuteIntent(
+  @wrappedScalarNamedState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "extracted", name: "note_text" }
+    }
+  },
+  "create note from wrapped extracted scalar"
+)
+var @wrappedScalarDerivedCompile = @compileExecuteIntent(
+  @wrappedScalarNamedState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "derived", name: "note_summary" }
+    }
+  },
+  "create note from wrapped derived scalar"
+)
+var @wrappedScalarExtractCompileOk = @wrappedScalarExtractCompile.ok &&
+  @field(@field(@wrappedScalarExtractCompile, "compiled_args"), "content") == "wrapped extracted scalar"
+var @wrappedScalarDerivedCompileOk = @wrappedScalarDerivedCompile.ok &&
+  @field(@field(@wrappedScalarDerivedCompile, "compiled_args"), "content") == "wrapped derived scalar"
+var @wrappedScalarExtractCompilePretty = `ok=@field(@wrappedScalarExtractCompile, "ok") content=@field(@field(@wrappedScalarExtractCompile, "compiled_args"), "content")`
+var @wrappedScalarDerivedCompilePretty = `ok=@field(@wrappedScalarDerivedCompile, "ok") content=@field(@field(@wrappedScalarDerivedCompile, "compiled_args"), "content")`
+
 var @recordBackedMarker = "RECORD_BACKED_BODY_MARKER"
 var @recordBackedNestedMarker = "RECORD_BACKED_NOTE_MARKER"
 >> Deliberately hostile preview_fields prove planner summaries derive
@@ -2397,6 +2457,7 @@ exe @allChecks() = [
   @check("PLANNER-ARCH-1", @singlePlannerArchitectureOk, @singlePlannerArchitectureDetail),
   @check("PLANNER-ARCH-2", @singlePlannerRunnerOk, @singlePlannerRunnerDetail),
   @check("PLANNER-ARCH-3", @opencodePlannerToolSurfaceOk, @opencodePlannerToolSurfaceDetail),
+  @check("PLANNER-ARCH-4", @plannerToolUninitializedOk, @plannerToolUninitializedDetail),
   @check("POL-ROUNDTRIP-1", @collectionRoundtripOk, "policy.build succeeded inside a wrapper exe"),
   @check("POL-ROUNDTRIP-2", @policySectionRoundtripOk, @policySectionRoundtripDetail),
   @check("synthesized-policy-shape", @syntheticPolicyOk, @syntheticPolicyDetail),
@@ -2466,6 +2527,8 @@ exe @allChecks() = [
   @check("execute-compile-reads-derived-state", @derivedPayloadCompileOk, @derivedPayloadCompilePretty),
   @check("execute-compile-reads-indexed-extracted-state", @indexedExtractedPayloadCompileOk, @indexedExtractedPayloadCompilePretty),
   @check("execute-compile-reads-indexed-derived-state", @indexedDerivedPayloadCompileOk, @indexedDerivedPayloadCompilePretty),
+  @check("execute-compile-unwraps-wrapped-extracted-scalar", @wrappedScalarExtractCompileOk, @wrappedScalarExtractCompilePretty),
+  @check("execute-compile-unwraps-wrapped-derived-scalar", @wrappedScalarDerivedCompileOk, @wrappedScalarDerivedCompilePretty),
   @check("record-backed-named-state-projects-display", @recordBackedDisplayOk, @recordBackedDisplayPretty),
   @check("named-state-retains-prior-results", @namedStateOk, `planner=@namedStatePlannerSummary worker=@namedStateWorkerSummary`),
   @check("named-state-retains-execution-log", @namedStateLogOk, @namedStateLogPretty),

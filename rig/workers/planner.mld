@@ -22,15 +22,7 @@ import {
   @phaseEndEvent,
   @phaseState
 } from "../lifecycle.mld"
-import {
-  @initializePlannerSession,
-  @plannerAgent,
-  @plannerQuery,
-  @plannerState,
-  @plannerRuntime,
-  @writePlannerState,
-  @writePlannerRuntime
-} from "../session.mld"
+import { @planner, @emptyPlannerRuntime, @emptyState } from "../session.mld"
 import { @dispatchResolve } from "./resolve.mld"
 import { @dispatchExtract } from "./extract.mld"
 import { @dispatchDerive } from "./derive.mld"
@@ -126,6 +118,7 @@ exe @plannerInvalidBudget() = [
   => 3
 ]
 
+
 exe @plannerResolvedRecords(records, state, recordType, handles) = [
   let @recordDef = @records[@recordType]
   if !@recordDef.isDefined() [ => [] ]
@@ -134,7 +127,7 @@ exe @plannerResolvedRecords(records, state, recordType, handles) = [
 ]
 
 exe @plannerToolContext(phase, decision) = [
-  let @agent = @plannerAgent()
+  let @agent = @planner.agent
   if !@agent.isDefined() [
     => {
       ok: false,
@@ -146,7 +139,19 @@ exe @plannerToolContext(phase, decision) = [
       }
     }
   ]
-  let @runtime = @plannerRuntime()
+  let @query = @planner.query
+  if !@query.isDefined() [
+    => {
+      ok: false,
+      result: {
+        status: "error",
+        phase: @phase,
+        error: "planner_session_uninitialized",
+        summary: "planner_session_uninitialized"
+      }
+    }
+  ]
+  let @runtime = @planner.runtime
   if @runtime.terminal.isDefined() [
     => {
       ok: false,
@@ -165,7 +170,7 @@ exe @plannerToolContext(phase, decision) = [
       text: "blocked: planner_tool_budget_exhausted",
       reason: "planner_tool_budget_exhausted"
     }
-    @writePlannerRuntime(@plannerRuntimeState(@runtime.tool_calls, @runtime.invalid_calls, @terminal, @decision))
+    @planner.set({ runtime: @plannerRuntimeState(@runtime.tool_calls, @runtime.invalid_calls, @terminal, @decision) })
     => {
       ok: false,
       result: {
@@ -180,7 +185,7 @@ exe @plannerToolContext(phase, decision) = [
       text: "blocked: planner_error_budget_exhausted",
       reason: "planner_error_budget_exhausted"
     }
-    @writePlannerRuntime(@plannerRuntimeState(@runtime.tool_calls, @runtime.invalid_calls, @terminal, @decision))
+    @planner.set({ runtime: @plannerRuntimeState(@runtime.tool_calls, @runtime.invalid_calls, @terminal, @decision) })
     => {
       ok: false,
       result: {
@@ -202,8 +207,8 @@ exe @plannerToolContext(phase, decision) = [
   => {
     ok: true,
     agent: @agent,
-    query: @plannerQuery(),
-    state: @plannerState(),
+    query: @query,
+    state: @planner.state,
     runtime: @runtime,
     iteration: @iteration,
     phase_id: @phaseIdValue,
@@ -230,8 +235,7 @@ exe @finishPlannerTool(ctx, nextState, nextRuntime, workerSessionId, outcome, su
   @appendPhaseEvent(@ctx.agent.phaseLogFile, @serializeLifecycleJson(@endEvent))
   @writePhaseStateFile(@ctx.agent.phaseStateFile, @serializeLifecycleJson(@betweenState()))
   let @stateWithEvents = @appendPhaseEvents(@nextState, [@ctx.planner_event, @ctx.start_event, @endEvent])
-  @writePlannerState(@stateWithEvents)
-  @writePlannerRuntime(@nextRuntime)
+  @planner.set({ state: @stateWithEvents, runtime: @nextRuntime })
   => {
     state: @stateWithEvents,
     runtime: @nextRuntime
@@ -799,7 +803,6 @@ var tools @plannerTools = {
 }
 
 exe @runPlannerSession(agent, query) = [
-  @initializePlannerSession(@agent, @query)
   let @resolveDocs = @phaseToolDocs(@agent, "resolve")
   let @extractDocs = @phaseToolDocs(@agent, "extract")
   let @executeDocs = @phaseToolDocs(@agent, "execute")
@@ -810,11 +813,19 @@ exe @runPlannerSession(agent, query) = [
     stubPhase: "planner",
     stubResponses: @agent.stub.planner ?? []
   }) with {
-    display: "role:planner"
+    display: "role:planner",
+    session: @planner,
+    seed: {
+      agent: @agent,
+      query: @query,
+      state: @emptyState(),
+      runtime: @emptyPlannerRuntime()
+    }
   }
   let @sessionId = @llmSessionId(@raw)
-  let @runtime = @plannerRuntime()
-  let @sessionState = @plannerState()
+  let @finalSession = @raw.mx.sessions.planner
+  let @runtime = @finalSession.runtime ?? @emptyPlannerRuntime()
+  let @sessionState = @finalSession.state ?? @emptyState()
   let @logEntry = @llmCallEntry(
     "planner",
     @prompt,
@@ -847,4 +858,4 @@ exe @runPlannerSession(agent, query) = [
   }
 ]
 
-export { @plannerPrompt, @plannerTools, @runPlannerSession }
+export { @planner, @plannerPrompt, @plannerTools, @runPlannerSession }

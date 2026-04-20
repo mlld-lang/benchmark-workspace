@@ -70,6 +70,18 @@ exe @namedStateEntry(entryValue) = when [
   * => @entryValue
 ]
 
+exe @namedEntryRootValue(entry) = [
+  let @rootValue = @entry.value
+  let @schemaName = @name(@entry.schema_name)
+  let @preview0 = @entry.preview_fields[0] ?? null
+  => when [
+    (@schemaName == "text" || @schemaName == "string" || @schemaName == "number" || @schemaName == "boolean") &&
+      @preview0 == "value" &&
+      @entry.value.value.isDefined() => @entry.value.value
+    * => @rootValue
+  ]
+]
+
 >> Native mlld field access preserves wrappers. Use it directly and only
 >> fall back across the common container layouts we see at module and
 >> checkpoint boundaries.
@@ -358,13 +370,13 @@ exe @resolveNamedValue(state, bucketName, ref) = [
   let @entry = @namedStateEntry(@bucket[@ref.name])
   if !@entry.isDefined() [ => { ok: false, error: `@bucketName\_name_not_found`, name: @ref.name } ]
   let @value = when [
-    !@ref.field.isDefined() => @entry.value
+    !@ref.field.isDefined() => @namedEntryRootValue(@entry)
     * => loop(1000) [
       let @steps = @fieldPathSteps(@ref.field)
-      if @steps.length == 0 [ done @entry.value ]
+      if @steps.length == 0 [ done @namedEntryRootValue(@entry) ]
       let @ctx = when [
         @input["_rig_cursor"] == "namedEntryFieldPath" => @input
-        * => { _rig_cursor: "namedEntryFieldPath", index: 0, value: @entry.value }
+        * => { _rig_cursor: "namedEntryFieldPath", index: 0, value: @namedEntryRootValue(@entry) }
       ]
       if !@ctx.value.isDefined() || @ctx.value == null [ done null ]
       if @ctx.index >= @steps.length [ done @ctx.value ]

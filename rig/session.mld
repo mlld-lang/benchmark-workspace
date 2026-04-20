@@ -1,41 +1,15 @@
 import { @emptyState } from "./runtime.mld"
 
-record @planner_agent_slot = {
-  data: [value: object],
-  validate: "strict"
+record @plannerRuntime = {
+  data: [tool_calls: number, invalid_calls: number, terminal: object?, last_decision: object?]
 }
 
-record @planner_query_slot = {
-  data: [value: string],
-  validate: "strict"
+var session @planner = {
+  agent: object?,
+  query: string?,
+  state: object,
+  runtime: @plannerRuntime
 }
-
-record @planner_state_slot = {
-  data: [value: object],
-  validate: "strict"
-}
-
-record @planner_runtime_slot = {
-  data: [value: object],
-  validate: "strict"
-}
-
-shelf @plannerSession = {
-  agent: planner_agent_slot?,
-  query: planner_query_slot?,
-  state: planner_state_slot?,
-  runtime: planner_runtime_slot?
-}
-
-exe @slotValue(slotRef) = [
-  let @value = @shelf.read(@slotRef)
-  => when [
-    !@value.isDefined() => null
-    @value.value.isDefined() => @value.value
-    @value.mx.data.value.isDefined() => @value.mx.data.value
-    * => @value
-  ]
-]
 
 exe @emptyPlannerRuntime() = [
   => {
@@ -46,66 +20,4 @@ exe @emptyPlannerRuntime() = [
   }
 ]
 
-exe @resetPlannerSession() = [
-  @shelf.clear(@plannerSession.agent)
-  @shelf.clear(@plannerSession.query)
-  @shelf.clear(@plannerSession.state)
-  @shelf.clear(@plannerSession.runtime)
-  => true
-]
-
-exe @initializePlannerSession(agent, query) = [
-  @resetPlannerSession()
-  @shelf.write(@plannerSession.agent, { value: @agent })
-  @shelf.write(@plannerSession.query, { value: @query })
-  @shelf.write(@plannerSession.state, { value: @emptyState() })
-  @shelf.write(@plannerSession.runtime, { value: @emptyPlannerRuntime() })
-  => true
-]
-
-exe @plannerAgent() = [
-  => @slotValue(@plannerSession.agent)
-]
-
-exe @plannerQuery() = [
-  => @slotValue(@plannerSession.query)
-]
-
-exe @plannerState() = [
-  let @value = @slotValue(@plannerSession.state)
-  => when [
-    @value.isDefined() => @value
-    * => @emptyState()
-  ]
-]
-
-exe @plannerRuntime() = [
-  let @value = @slotValue(@plannerSession.runtime)
-  => when [
-    @value.isDefined() => @value
-    * => @emptyPlannerRuntime()
-  ]
-]
-
-exe @writePlannerState(state) = [
-  @shelf.write(@plannerSession.state, { value: @state })
-  => @plannerState()
-]
-
-exe @writePlannerRuntime(runtime) = [
-  @shelf.write(@plannerSession.runtime, { value: @runtime })
-  => @plannerRuntime()
-]
-
-export {
-  @plannerSession,
-  @emptyPlannerRuntime,
-  @resetPlannerSession,
-  @initializePlannerSession,
-  @plannerAgent,
-  @plannerQuery,
-  @plannerState,
-  @plannerRuntime,
-  @writePlannerState,
-  @writePlannerRuntime
-}
+export { @planner, @plannerRuntime, @emptyPlannerRuntime, @emptyState }
