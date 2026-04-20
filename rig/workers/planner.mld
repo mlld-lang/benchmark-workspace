@@ -294,11 +294,18 @@ exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
     @summary,
     @phaseResult.llm_log ?? null
   )
+  let @budget = @plannerToolBudget(@toolCtx.agent)
+  let @remaining = @budget - (@toolCtx.runtime.tool_calls + 1)
+  let @budgetWarning = when [
+    @remaining <= 3 => `You have @remaining tool call(s) remaining. If you can answer the user's question now, call compose immediately.`
+    * => null
+  ]
   => {
     finished: @finished,
     terminal: @terminal,
     summary: @summary,
-    workerSessionId: @workerSessionId
+    workerSessionId: @workerSessionId,
+    budget_warning: @budgetWarning
   }
 ]
 
@@ -315,7 +322,7 @@ exe @plannerResolve(input) = [
   let @resolvedHandles = for @handle in @arrayItems(@phaseResult.result.handles ?? []) => @stringValue(@handle)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null }
+    @phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning }
     * => {
       status: "resolved",
       tool: @tool,
@@ -323,7 +330,8 @@ exe @plannerResolve(input) = [
       count: @phaseResult.result.count,
       handles: @resolvedHandles,
       records: @plannerResolvedRecords(@toolCtx.agent.records ?? {}, @settled.finished.state, @phaseResult.result.record_type, @resolvedHandles),
-      summary: @phaseResult.result.summary
+      summary: @phaseResult.result.summary,
+      budget_warning: @settled.budget_warning
     }
   ]
   -> @result
@@ -399,14 +407,15 @@ exe @plannerExtract(input) = [
   let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "extract", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null }
+    @phaseResult.error.isDefined() => { status: "error", phase: "extract", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning }
     * => {
       status: "extracted",
       name: @phaseResult.result.name,
       schema_name: @phaseResult.result.schema_name,
       provenance: @phaseResult.result.provenance,
       preview_fields: @phaseResult.result.preview_fields,
-      summary: @phaseResult.result.summary
+      summary: @phaseResult.result.summary,
+      budget_warning: @settled.budget_warning
     }
   ]
   -> @result
@@ -438,7 +447,7 @@ exe @plannerDerive(input) = [
   let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "derive", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null }
+    @phaseResult.error.isDefined() => { status: "error", phase: "derive", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning }
     * => {
       status: "derived",
       name: @phaseResult.result.name,
@@ -446,7 +455,8 @@ exe @plannerDerive(input) = [
       provenance: @phaseResult.result.provenance,
       preview_fields: @phaseResult.result.preview_fields,
       selection_refs: @phaseResult.result.selection_refs,
-      summary: @phaseResult.result.summary
+      summary: @phaseResult.result.summary,
+      budget_warning: @settled.budget_warning
     }
   ]
   -> @result
@@ -473,12 +483,13 @@ exe @plannerExecute(input) = [
   let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "execute", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null }
+    @phaseResult.error.isDefined() => { status: "error", phase: "execute", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning }
     * => {
       status: "executed",
       tool: @phaseResult.result.tool,
       result_handles: @phaseResult.result.result_handles,
-      summary: @phaseResult.result.summary
+      summary: @phaseResult.result.summary,
+      budget_warning: @settled.budget_warning
     }
   ]
   -> @result
