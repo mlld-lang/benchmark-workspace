@@ -51,7 +51,9 @@ Tool arg values must be structured refs:
 
 ## Progression
 
-Work forward: resolve → extract/derive if needed → execute → compose.
+Work forward: resolve → extract/derive if needed → execute → compose. You MUST make at least one tool call — never respond with text alone.
+
+When you need multiple independent pieces of information, call multiple tools in one turn. For example, if a task requires both calendar events and email data, call `resolve` for both in the same turn rather than waiting for one to complete before starting the other.
 
 Do not over-work:
 - If a resolve result already shows the fields you need to answer the question, call `compose` immediately. Do not resolve additional record types or extract when the answer is visible in the projected records.
