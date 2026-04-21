@@ -18,9 +18,13 @@ Return only JSON.
 @decision
 </planner_decision>
 
+<resolved_handles>
+@handleMap
+</resolved_handles>
+
 Compute the requested derived result from the typed inputs only.
-If you need to point back to a resolved record, return a selection ref:
-{ "source": "selection", "backing": { "record": "<record>", "handle": "<handle>" } }
+If you need to point back to a resolved record, return a selection ref using the EXACT handle from <resolved_handles>:
+{ "source": "selection", "backing": { "record": "<record>", "handle": "<exact handle from resolved_handles>" } }
 
 {
   "status": "derived",

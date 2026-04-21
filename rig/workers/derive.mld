@@ -7,14 +7,14 @@ import {
   @updateNamedState,
   @appendExecutionLog
 } from "../runtime.mld"
-import { @lowerSelectionRef, @resolveRefValue } from "../intent.mld"
+import { @lowerSelectionRef, @resolveRefValue, @resolvedEntries } from "../intent.mld"
 import { @deriveAttestation } from "../records.mld"
 import {
   @validatePlannerSourcesArray,
   @plannerValidationFailure
 } from "../planner_inputs.mld"
 
-exe @derivePrompt(query, sources, schemaDoc, decision) = template "../prompts/derive.att"
+exe @derivePrompt(query, sources, schemaDoc, decision, handleMap) = template "../prompts/derive.att"
 
 exe @coerceDeriveAttestation(raw) = [
   if @raw == null [ => null ]
@@ -58,7 +58,7 @@ exe @validateSelectionRefs(state, sources, refs) = [
   let @validated = for @ref in (@refs ?? []) [
     let @lowered = @lowerSelectionRef(@state, @ref)
     => when [
-      !@lowered.ok => { ok: false, error: @lowered.error, ref: @ref }
+      !@lowered.ok => { ok: false, error: @lowered.error, ref: @ref, available_handles: @lowered.available_handles ?? null }
       !@allowed.includes(`@lowered.ref.record:@lowered.ref.handle`) => {
         ok: false,
         error: "selection_ref_not_in_derive_input",
@@ -82,7 +82,12 @@ exe @dispatchDerive(agent, state, decision, query) = [
   let @errors = for @entry in @resolved when !@entry.ok => @entry
   if @errors.length > 0 [ => @plannerValidationFailure("derive_source_resolution_failed", { issues: @errors }, @errors) ]
   let @sources = for @entry in @resolved => @entry.value
-  let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision)
+  let @handleMap = for @source in (@decision.sources ?? []) when @source.source == "resolved" [
+    let @entries = @resolvedEntries(@state, @source.record)
+    => for @e in @entries => { record: @source.record, handle: @e.handle }
+  ]
+  let @flatHandles = @handleMap.flat()
+  let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision, @flatHandles)
   let @raw = @llmCall(@agent.harness, @prompt, {
     model: @agent.model,
     tools: [],
