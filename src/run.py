@@ -112,19 +112,21 @@ def _run_task(suite_name, task, model, debug, defense, run_log_path, harness=Non
     agent = _make_agent(model, debug, suite_name, defense, run_log_path=run_log_path, harness=harness)
     agent._current_task_id = task.ID
     suite = get_shifted_suite(BENCHMARK_VERSION, suite_name)
+    t0 = time.time()
     try:
         utility, security, _result = run_agentdojo_task(
             suite, agent, task, injection_task=None, injections={},
             benchmark_version=BENCHMARK_VERSION,
         )
         agent.update_verdict(utility, security)
-        return task.ID, utility, security, None
+        elapsed = time.time() - t0
+        return task.ID, utility, security, None, elapsed
     except MlldInfrastructureError as e:
-        # Infrastructure failure — never claim a security verdict for a
-        # non-run. See b-e8e4.
-        return task.ID, None, None, f"INFRASTRUCTURE: {e}"
+        elapsed = time.time() - t0
+        return task.ID, None, None, f"INFRASTRUCTURE: {e}", elapsed
     except Exception as e:
-        return task.ID, None, None, str(e)
+        elapsed = time.time() - t0
+        return task.ID, None, None, str(e), elapsed
     finally:
         agent.close()
 
@@ -184,17 +186,20 @@ def _run_benign(args, suite, tasks):
                 time.sleep(stagger)
         done_count = 0
         rate_limited = False
+        task_times = {}
         for future in as_completed(futures):
-            task_id, utility, security, error = future.result()
+            task_id, utility, security, error, task_elapsed = future.result()
             utility_results[task_id] = utility
+            task_times[task_id] = task_elapsed
             done_count += 1
             status = "PASS" if utility else "FAIL"
+            time_str = f" ({task_elapsed:.0f}s)" if task_elapsed else ""
             if error:
                 errors[task_id] = error
                 status = f"ERROR: {error[:60]}"
                 if "rate limit" in error.lower():
                     rate_limited = True
-            print(f"  [{done_count}/{len(tasks)}] {task_id}: {status}")
+            print(f"  [{done_count}/{len(tasks)}] {task_id}: {status}{time_str}")
             if rate_limited:
                 print("\nRate limited — cancelling remaining tasks.")
                 pool.shutdown(wait=False, cancel_futures=True)
@@ -207,7 +212,8 @@ def _run_benign(args, suite, tasks):
     passed = sum(1 for v in graded.values() if v)
     total = len(graded)
     pct = (100 * passed / total) if total else 0.0
-    print(f"\nUtility: {passed}/{total} ({pct:.1f}%) in {elapsed:.1f}s")
+    avg_time = sum(task_times.values()) / len(task_times) if task_times else 0
+    print(f"\nUtility: {passed}/{total} ({pct:.1f}%) in {elapsed:.1f}s wall, {avg_time:.0f}s avg/task")
     if infra_failures:
         print(f"Infrastructure errors (excluded from utility): {len(infra_failures)}")
 
