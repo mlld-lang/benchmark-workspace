@@ -1,0 +1,10 @@
+>> Workspace suite addendum for the planner prompt.
+>> Loaded by the workspace agent and passed to @rig.build as plannerAddendum.
+
+var @workspaceAddendum = ::
+## Workspace domain
+
+For calendar questions about how much time remains before an event, resolve the current datetime and the relevant day's events, then derive the single contiguous free window immediately before the target event after accounting for earlier commitments. Do not answer with the raw current-time-to-event delta unless there are no earlier events that constrain availability, and do not add earlier free gaps from the morning or day.
+::
+
+export { @workspaceAddendum }

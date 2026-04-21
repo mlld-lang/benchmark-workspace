@@ -99,7 +99,7 @@ record @planner_tool_result = {
   validate: "demote"
 }
 
-exe @plannerPrompt(query, resolveTools, extractTools, executeTools) = template "../prompts/planner.att"
+exe @plannerPrompt(query, resolveTools, extractTools, executeTools, suiteAddendum) = template "../prompts/planner.att"
 
 exe @phaseId(phase, iteration) = `@phase:@iteration`
 
@@ -296,8 +296,10 @@ exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
   )
   let @budget = @plannerToolBudget(@toolCtx.agent)
   let @remaining = @budget - (@toolCtx.runtime.tool_calls + 1)
+  let @halfBudget = @budget / 2
   let @budgetWarning = when [
-    @remaining <= 3 => `You have @remaining tool call(s) remaining. If you can answer the user's question now, call compose immediately.`
+    @remaining <= 3 => `You have @remaining tool call(s) remaining. Call compose or execute now.`
+    @remaining <= @halfBudget => `You have used @toolCtx.runtime.tool_calls of @budget tool calls. If you have the information you need, proceed to execute or compose. Do not re-extract or re-derive.`
     * => null
   ]
   => {
@@ -633,7 +635,8 @@ exe @runPlannerSession(agent, query) = [
   let @resolveDocs = @phaseToolDocs(@agent, "resolve")
   let @extractDocs = @phaseToolDocs(@agent, "extract")
   let @executeDocs = @phaseToolDocs(@agent, "execute")
-  let @prompt = @plannerPrompt(@query, @resolveDocs, @extractDocs, @executeDocs)
+  let @addendum = @agent.plannerAddendum ?? ""
+  let @prompt = @plannerPrompt(@query, @resolveDocs, @extractDocs, @executeDocs, @addendum)
   let @plannerConfig = {
     model: @agent.model,
     tools: @plannerTools,

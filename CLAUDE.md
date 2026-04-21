@@ -48,6 +48,36 @@ clean/
 
 Prompt education (Step 12b). The framework is correct; the planner doesn't exercise it efficiently. See SCIENCE.md for the failure analysis, pattern classification, and experiment queue.
 
+## Prompt Placement Rules
+
+Three layers of prompt content, each with a clear scope. When writing or reviewing a rule, ask: "Would this be true in a completely different domain?" If yes → rig prompt. If true for any task in this suite → suite addendum. If true for any caller of this tool → tool description/instructions.
+
+### Layer 1: Rig prompt (`rig/prompts/planner.att`)
+
+Framework discipline only. Phase rules, ref grammar, source class rules, terminal discipline, anti-looping, budget awareness. Must be domain-agnostic — no mention of calendars, contacts, emails, hotels, channels, or any suite-specific entity.
+
+**Test:** Would removing this rule cause a wrong tool call shape, a wrong source class, or a protocol violation regardless of domain? If yes, it belongs here.
+
+### Layer 2: Suite addendums (`bench/domains/<suite>/prompts/`)
+
+Domain workflow patterns. How to reason about data in this specific domain — multi-step patterns, availability calculations, cross-record reasoning strategies. Must be true for any task in that suite, not just one task.
+
+**Test:** Would removing this rule cause wrong reasoning for a CLASS of tasks in this suite? If yes, it belongs here. If it only helps one task, it's overfitting.
+
+### Layer 3: Tool descriptions and `instructions:` fields
+
+Per-tool usage guidance in the tool catalog entry. Arg format constraints, scalar-vs-array clarification, when to prefer this tool over similar ones. Must be true for any caller of the tool.
+
+**Test:** Would removing this cause a wrong call to THIS specific tool? If yes, it belongs here. If the guidance is about when to call the tool relative to other tools, it might belong in the suite addendum instead.
+
+### What does NOT belong in any prompt layer
+
+- Task-id-specific logic ("for task X, do Y")
+- Evaluator-shaped rules ("the checker expects this exact wording")
+- Model-specific workarounds ("GLM sometimes does X, so add Y")
+- Redundant restatements of rules already in a higher layer
+- Rules that only help one task — if a rule's entire justification is one benchmark result, it's overfitting
+
 ## Commands
 
 ```bash

@@ -122,7 +122,8 @@ exe @validateConfig(config) = [
     phaseLogFile: @config.phaseLogFile ?? null,
     phaseStateFile: @config.phaseStateFile ?? null,
     llmCallLogFile: @config.llmCallLogFile ?? null,
-    logLlmCalls: @config.logLlmCalls ?? false
+    logLlmCalls: @config.logLlmCalls ?? false,
+    plannerAddendum: @config.plannerAddendum ?? ""
   }
 ]
 
