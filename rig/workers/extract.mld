@@ -33,9 +33,12 @@ exe @extractSourceKey(source) = when [
   * => null
 ]
 
+>> Only block re-extraction when a prior extract from the same source
+>> produced actual content (non-empty preview_fields). If the prior
+>> extract returned null/empty (e.g., MCP timeout), allow retry.
 exe @findPriorExtractForSource(executionLog, sourceKey) = [
   if @sourceKey == null [ => null ]
-  let @matches = for @entry in @arrayItems(@executionLog) when @entry.phase == "extract" && @entry.status != "error" && @entry.source_key != null && @entry.source_key == @sourceKey => @entry.name
+  let @matches = for @entry in @arrayItems(@executionLog) when @entry.phase == "extract" && @entry.status != "error" && @entry.source_key != null && @entry.source_key == @sourceKey && @entry.has_content == true => @entry.name
   => @matches.length > 0 ? @matches[0] : null
 ]
 
@@ -155,6 +158,10 @@ exe @dispatchExtract(agent, state, decision, query) = [
   let @prompt = @extractPrompt(@query, @resolvedSource.value, @schemaDef ?? @decision.schema, @decision)
   let @raw = @llmCall(@agent.harness, @prompt, {
     model: @agent.model,
+    pure: @agent.opencodePure,
+    dir: @agent.innerWorkerDir,
+    dataHome: @agent.innerWorkerDataHome,
+    stateHome: @agent.innerWorkerStateHome,
     tools: [],
     stubPhase: "extract",
     stubResponses: @agent.stub.extract ?? [],
@@ -181,17 +188,19 @@ exe @dispatchExtract(agent, state, decision, query) = [
     @typeof(@decision.schema) == "string" => @decision.schema
     * => "inline-schema"
   ]
+  let @extractedPreviewFields = @previewFields(@typed)
   let @nextState = @appendExecutionLog(
     @updateNamedState(@state, "extracted", @decision.name, {
       provenance: "extracted",
       schema_name: @schemaName,
-      preview_fields: @previewFields(@typed),
+      preview_fields: @extractedPreviewFields,
       value: @typed
     }),
     {
       phase: "extract",
       name: @decision.name,
       source_key: @srcKey,
+      has_content: @extractedPreviewFields.length > 0,
       summary: @summary,
       session_id: @sessionId
     }

@@ -350,38 +350,28 @@ exe @plannerResolveBatch(input) = [
   let @resolves = @coerced.resolves ?? []
   let @batchPurpose = @coerced.purpose ?? null
 
-  >> Phase 1: prepare contexts sequentially (increments budget counters)
-  let @preparations = for @spec in @resolves [
+  >> Dispatch sequentially so each resolve sees the accumulated state
+  >> from prior resolves. Saves planner LLM round-trips (one tool call
+  >> instead of N) even though MCP calls are serial.
+  let @results = for @spec in @resolves [
     let @tool = @spec.tool
     let @args = @spec.args ?? {}
     let @decision = { phase: "resolve", tool: @tool, args: @args, purpose: @spec.purpose ?? @batchPurpose }
     let @toolCtx = @plannerToolContext("resolve", @decision)
-    => { decision: @decision, toolCtx: @toolCtx }
-  ]
-
-  >> Phase 2: dispatch MCP tool calls in parallel (the slow part)
-  let @dispatched = for parallel(10, 1s) @prep in @preparations [
-    if !@prep.toolCtx.ok [ => { error: "context_failed", result: @prep.toolCtx.result } ]
-    => @dispatchResolve(@prep.toolCtx.agent, @prep.toolCtx.state, @prep.decision, @prep.toolCtx.query)
-  ]
-
-  >> Phase 3: settle results sequentially (updates session state)
-  let @results = for @i, @phaseResult in @dispatched [
-    let @prep = @preparations[@i]
-    if !@prep.toolCtx.ok [ => @prep.toolCtx.result ]
-    if @phaseResult.error == "context_failed" [ => @phaseResult.result ]
-    let @settled = @settlePhaseDispatch(@prep.toolCtx, @phaseResult, @prep.decision)
+    if !@toolCtx.ok [ => @toolCtx.result ]
+    let @phaseResult = @dispatchResolve(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query)
+    let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
     let @resolvedHandles = for @handle in @arrayItems(@phaseResult.result.handles ?? []) => @stringValue(@handle)
     => when [
       @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
       @phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @phaseResult.error, summary: @settled.summary }
       * => {
         status: "resolved",
-        tool: @prep.decision.tool,
+        tool: @tool,
         record_type: @phaseResult.result.record_type,
         count: @phaseResult.result.count,
         handles: @resolvedHandles,
-        records: @plannerResolvedRecords(@prep.toolCtx.agent.records ?? {}, @settled.finished.state, @phaseResult.result.record_type, @resolvedHandles),
+        records: @plannerResolvedRecords(@toolCtx.agent.records ?? {}, @settled.finished.state, @phaseResult.result.record_type, @resolvedHandles),
         summary: @phaseResult.result.summary
       }
     ]
@@ -703,7 +693,7 @@ exe @runPlannerSession(agent, query) = [
     stubResponses: @agent.stub.planner ?? []
   }
   let @raw = when [
-    @agent.harness == "stub" => @llmCall("stub", @prompt, @plannerConfig) with { display: "role:planner" }
+    @agent.harness == "stub" => @llmCall("stub", @prompt, @plannerConfig) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
     @agent.harness == "opencode" => @opencode(@prompt, @plannerConfig) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
     * => @claude(@prompt, @plannerConfig) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
   ]
