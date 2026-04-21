@@ -23,12 +23,13 @@ import {
 
 exe @extractPrompt(query, sourceValue, schemaDoc, decision) = template "../prompts/extract.att"
 
+>> Only dedup resolved sources. Re-extracting from resolved state with a
+>> different name is always redundant — the data hasn't changed. But
+>> extracting different schemas from extracted/derived sources is legitimate.
 exe @extractSourceKey(source) = when [
   !@source.isDefined() => null
   @source.source == "resolved" && @source.handle.isDefined() => `resolved:@source.record:@source.handle`
   @source.source == "resolved" => `resolved:@source.record`
-  @source.source == "extracted" => `extracted:@source.name`
-  @source.source == "derived" => `derived:@source.name`
   * => null
 ]
 
