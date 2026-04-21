@@ -3,7 +3,7 @@
 Experiment log and task classification. Tracks what works, what fails, why, and what to test next.
 
 Model: `openrouter/z-ai/glm-5.1` via OpenCode. Budget: 25 iterations. Defense: defended.
-Date: 2026-04-21. Post session-migration, post OOM fix, pattern tests written.
+Date: 2026-04-21. Post session-migration, post OOM fix, pattern tests written, prompt rewrite landed.
 
 ---
 
@@ -218,11 +218,15 @@ The model uses `known` with a date/value that doesn't EXACTLY match the task tex
 
 **Test:** Pattern test #1 (resolve → execute with resolved ref). Compare before/after attestation change.
 
+**Status:** Lower priority than expected. Pattern tests show ref construction works on minimal tasks. May still help in full-suite context where the model degrades.
+
 ### T2: Error message with correct ref suggestion
 
 **Hypothesis:** When `known_value_not_in_task_text` fires for a value that EXISTS in resolved state, including "Did you mean { source: 'resolved', ... }?" in the error will eliminate the retry loop.
 
 **Test:** Pattern test #1. Reproduce the known-ref mistake, verify the model uses the suggestion on first retry.
+
+**Status:** Lower priority for the same reason as T1. But a new variant is now the #1 priority — see T6.
 
 ### T3: Auto-route after 2 wrong-phase errors
 
@@ -230,17 +234,37 @@ The model uses `known` with a date/value that doesn't EXACTLY match the task tex
 
 **Test:** Pattern test #5. Call a resolve tool via extract twice, verify auto-route fires and the model doesn't repeat the mistake.
 
+**Status:** Deprioritized. Pattern 5 shows no wrong-phase errors on GLM 5.1 with the current prompt. May still matter for full suites with more tools.
+
 ### T4: Travel suite addendum for metadata tool chaining
 
 **Hypothesis:** A suite-level prompt addendum that documents "resolve family → pick instance by handle → call metadata tool with specific handle" will reduce travel resolve-loops from 10-35 iterations to 3-5.
 
 **Test:** Travel UT9 as canary (resolves restaurants, loops on get_cuisine_type with family ref). Add addendum, rerun.
 
-### T5: Budget warning at 60% instead of 88%
+**Status:** Pending. Addendum plumbing is landed. Write the travel addendum and test.
 
-**Hypothesis:** Warning earlier gives the model more time to course-correct toward compose. Current warning at iteration 22/25 is too late — the model may need 3-5 iterations to compose properly.
+### T5: Budget warning at 50% instead of 88%
 
-**Test:** Lower warning threshold, rerun workspace UT21 (which was budget-exhausted after successful resolve + extract + derive but never composed).
+**Hypothesis:** Warning earlier gives the model more time to course-correct toward compose.
+
+**Status:** ✓ Implemented. Tiered budget warning now fires at 50% (advisory) and 3-remaining (urgent). The advisory includes anti-looping advice. Effect on pattern 4: the model stopped over-extracting. Not yet validated on full suites.
+
+### T6: Selection ref error with available handles (NEW)
+
+**Hypothesis:** When `selection_backing_missing` fires, including the list of valid handles from resolved state (`r_product_WIDGET-A, r_product_WIDGET-B, ...`) will let the model self-correct on first retry instead of repeating the wrong handle 4+ times.
+
+**Test:** Pattern test #4. The current failure is exactly this: the derive worker uses `WIDGET-B` instead of `r_product_WIDGET-B`. If the error message shows available handles, the model should correct immediately.
+
+**Why this is now the #1 theory:** Pattern 4's failure mode after the prompt rewrite is purely a handle-format problem. The flow is correct (resolve → extract → derive → selection ref → execute), the anti-looping works, the model tries to act. It just uses the raw SKU instead of the resolved handle. One good error message fixes this.
+
+### T7: Extract source dedup (NEW)
+
+**Hypothesis:** Rejecting duplicate extract calls from the same source (returning "You already extracted from this source as '<name>'. Reference it with `{ source: 'extracted', name: '<name>' }`") will prevent re-extraction even without prompt-level anti-looping.
+
+**Test:** Pattern test #4 on the OLD prompt with the dedup enabled. If it prevents the over-working loop without any prompt changes, this is a framework-level guard that makes the prompt rules less load-bearing.
+
+**Status:** Not yet implemented. The prompt rewrite reduced over-extraction, so this is insurance rather than the primary fix. Worth building as a safety net for full-suite runs where context degradation may reintroduce looping.
 
 ---
 
@@ -293,6 +317,8 @@ The SCIENCE.md patterns need to be corrected against taskdata ground truth. Seve
 
 Five isolated pattern tests at `rig/tests/patterns/`, each exercising one planner behavior with a minimal agent (1-2 tools, simple task) on GLM 5.1. Budget: 10-12 iterations per test.
 
+### Baseline (pre-rewrite prompt)
+
 | Pattern | Test file | Result | Calls | Errors | Finding |
 |---------|-----------|--------|-------|--------|---------|
 | 1: resolve → execute | `resolve-to-execute.mld` | **PASS** (5/5) | 3 | 0 | Ref construction works on first attempt |
@@ -301,32 +327,35 @@ Five isolated pattern tests at `rig/tests/patterns/`, each exercising one planne
 | 4: selection execute | `selection-execute.mld` | **FAIL** (3/7) | 12 | 0 | Extract/derive loop — Pattern D |
 | 5: wrong-phase recovery | `wrong-phase-recovery.mld` | **PASS** (5/5) | 2 | 0 | No wrong-phase errors at all |
 
-### Key finding: Pattern D is the bottleneck, not Pattern A
+Key finding: Pattern A (ref construction) does not reproduce on minimal tasks. Pattern D (over-working) is the bottleneck. Pattern 4 trace: resolve → extract → derive on calls 1-3, then 9 more extract/derive calls without ever executing. 0 errors. The model had the answer but didn't recognize it.
 
-Pattern A (resolved-ref construction failure) was the hypothesized #1 failure, but it **does not reproduce on minimal tasks**. On patterns 1 and 2, the model constructs `{ source: "resolved", handle: "...", field: "..." }` correctly on the first attempt with zero errors.
+### Post-rewrite prompt + tiered budget warning
 
-Pattern D (extract/derive loop without execute) is the actual bottleneck. Pattern 4's execution trace:
+Prompt restructured with anti-looping discipline ("do not over-work", "each extract/derive must produce new information"), tiered budget warning (advisory at 50%, urgent at 3 remaining), and three-layer prompt split (rig generic / suite addendum / tool instructions).
+
+| Pattern | Result | Calls | Errors | Change from baseline |
+|---------|--------|-------|--------|---------------------|
+| 1 | **PASS** (4/5) | 3 | 0 | Same — flaky compose miss (~33% of runs) |
+| 2 | **PASS** (5/5) | 3 | 0 | No change |
+| 4 | **FAIL** (3/7) | 10 | 5 | **Different failure mode** — see below |
+| 5 | **PASS** (5/5) | 2 | 0 | No change |
+
+#### Pattern 4 failure mode changed
+
+**Before (old prompt):** Pure Pattern D — 12 calls, 0 errors, 7 extracts, 4 derives, 0 executes. The model over-extracted indefinitely.
+
+**After (new prompt):** The model correctly does resolve → extract → derive on calls 1-3 (no more over-extracting), then tries to construct a selection ref for execute. But the derive worker uses raw SKU values (`handle: "WIDGET-B"`) instead of resolved handles (`handle: "r_product_WIDGET-B"`). The rig rejects with `selection_backing_missing`. The model retries 4 times with the same wrong handle.
 
 ```
-resolve(list_products) → extract(ratings) → derive(best) →
-extract(all_ratings) → derive(rating_widget_a) → extract(ratings) →
-extract(all_product_data) → derive(best) → extract(product_data) →
-extract(widget_d_details) → derive(best) → extract(d_rating) → BUDGET
+resolve(products) → extract(ratings) → derive(best) ✓ → 
+derive(select, handle:"WIDGET-B") ✗ selection_backing_missing →
+derive(top) ✓ → extract(best_sku) → derive(hr, handle:"WIDGET-B") ✗ →
+derive(select_best, handle:"WIDGET-B") ✗ → derive(pick, handle:"WIDGET-B") ✗ → BUDGET
 ```
 
-12 calls, 0 errors, 7 extracts, 4 derives, 0 executes. The model successfully extracted customer ratings and derived the best product on calls 2-3, then re-extracted and re-derived 10 more times without proceeding to execute. It had the answer but didn't recognize it was done.
+The anti-looping worked: the model stopped re-extracting and tried to act. The new failure is that the derive worker constructs selection refs with raw data values instead of the `r_*` handles from resolve results. This is a targeted, fixable problem — the `selection_backing_missing` error message should list available handles.
 
-### Implications for prompt education
-
-1. **Ref construction teaching** (T1, T2) has lower priority than expected. The model handles refs on simple tasks. The ref failures in full suites may be a context-length effect (more tools, longer conversation) rather than a prompt clarity issue.
-
-2. **Anti-looping discipline** is the highest priority. The prompt needs: "After a successful extract and derive, you have enough data. Proceed to execute. Do not re-extract or re-derive the same information."
-
-3. **Compose discipline** needs reinforcement. Pattern 1 had one run (out of two) where the model stopped after execute without calling compose. The prompt should say: "You MUST call compose or blocked to finalize. Never stop without a terminal tool."
-
-4. **Wrong-phase errors** don't reproduce on minimal tests. They may require more tools competing for attention (the full slack suite has ~10 tools vs. the pattern test's 1-2).
-
-### What the pattern tests can and cannot show
+### What the pattern tests show
 
 Pattern tests validate **planner behavior on simple tasks with short context**. They confirm the model understands the ref grammar and phase rules. They do NOT reproduce failures that emerge from:
 - Long conversations (20+ tool results in context)
@@ -336,18 +365,24 @@ Pattern tests validate **planner behavior on simple tasks with short context**. 
 
 The full-suite failures are a combination of prompt gaps AND context-length degradation. Pattern tests isolate the prompt gaps; full-suite runs expose the interaction effects.
 
+### Two remaining prompt-level issues
+
+**1. Compose discipline (flaky).** Pattern 1 skips compose ~33% of runs — the model stops after execute without calling compose. The prompt says "You MUST call compose or blocked" but the model sometimes treats execute as implicitly terminal. May need stronger wording: "The session is NOT complete after execute."
+
+**2. Selection ref handle format.** The derive worker constructs selection refs using data values instead of `r_*` handles. The `selection_backing_missing` error doesn't tell the model what valid handles look like. Improving this error message (c-46f9) should fix pattern 4 — the model already has the right flow, it just uses the wrong handle format.
+
 ## Experiment Queue
 
-Priority order (updated after pattern test results):
-1. ~~Write pattern tests 1-5 in `rig/tests/patterns/`~~ ✓
-2. **Rewrite planner.att** (c-d172) — anti-looping discipline, compose discipline, structured hierarchy
-3. Test T1 (attestation with ref example) — may have lower impact than expected given pattern test results, but still worth testing
-4. Test T2 (error message suggestion) — complements T1
-5. Test T3 (auto-route) — reduces iteration waste
-6. Test T5 (earlier budget warning) — directly addresses Pattern D
-7. Test T4 (travel addendum) — suite-specific, after core prompt work
-8. Execute prompt split (c-87a6) after core prompt passes patterns
-9. Full-suite rerun on improved prompts
+Priority order (updated after prompt rewrite):
+1. ~~Write pattern tests 1-5~~ ✓
+2. ~~Rewrite planner.att~~ ✓ — anti-looping, structured sections, prompt split
+3. ~~Tiered budget warning (T5)~~ ✓ — advisory at 50%, urgent at 3 remaining
+4. **T6: `selection_backing_missing` error with available handles** — the #1 fix for pattern 4. Implement in c-46f9.
+5. **T7: Extract source dedup** — framework guard against re-extraction. Insurance for full-suite runs.
+6. **Compose discipline** — strengthen terminal wording or add framework enforcement (reject session end without compose/blocked)
+7. T4: Travel suite addendum — write and test
+8. T1/T2: Ref construction error messages — lower priority but may help in full-suite context
+9. Full-suite rerun on workspace + slack to measure combined impact
 10. Sonnet 4 measurement run
 
 ---
