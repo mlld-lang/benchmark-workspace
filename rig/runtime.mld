@@ -697,6 +697,23 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
   let @argCheck = @validateToolCallArgs(@entry, @args)
   if !@argCheck.ok [ => { error: @argCheck.error, summary: @argCheck.summary, tool: @toolKey } ]
   let @hasInputRecord = @entry.inputs.isDefined()
+  let @exe = when [
+    @typeof(@entry.mlld) == "executable" => @entry.mlld
+    @typeof(@entry) == "executable" => @entry
+    * => null
+  ]
+  let @exeParamCount = @typeof(@exe) == "executable" ? @exe.mx.paramNames.length : 0
+
+  >> For multi-param input-record tools, use collection dispatch which
+  >> spreads object args into named params correctly.
+  if @hasInputRecord && @exeParamCount > 1 && @callableCollection[@toolKey].isDefined() [
+    => when [
+      @policyValue.isDefined() => @callableCollection[@toolKey](@args) with { policy: @policyValue }
+      * => @callableCollection[@toolKey](@args)
+    ]
+  ]
+
+  >> Original single-param and legacy dispatch paths below.
   let @preferDirect = (@entry.direct ?? false) == true || @hasInputRecord
   let @paramNames = when [
     @hasInputRecord => @toolParamNames(@entry).slice(0, 1)
