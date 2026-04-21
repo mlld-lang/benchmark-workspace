@@ -64,7 +64,7 @@ var tools @testTools = {
 var @agent = @rigBuild({
   suite: "pattern-chained-resolve",
   defense: "defended",
-  model: "openrouter/z-ai/glm-5.1",
+  model: "togetherai/zai-org/GLM-5.1",
   records: @records,
   tools: @testTools,
   maxIterations: 10

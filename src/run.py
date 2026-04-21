@@ -322,9 +322,9 @@ def main():
     parser.add_argument("-s", "--suite", choices=SUITES, default="workspace")
     parser.add_argument("-t", "--task", nargs="+", help="Run specific user task(s)")
     parser.add_argument("--injection-task", nargs="+", help="Run specific injection task(s) when using --attack")
-    # Default dev model is GLM 5.1 via OpenRouter. clean/rig/runtime.mld
-    # routes openrouter/* models through the opencode harness by default.
-    parser.add_argument("--model", default="openrouter/z-ai/glm-5.1")
+    # Default dev model is GLM 5.1 via Together AI. clean/rig/runtime.mld
+    # routes togetherai/* models through the opencode harness by default.
+    parser.add_argument("--model", default="togetherai/zai-org/GLM-5.1")
     parser.add_argument("--harness", choices=["claude", "opencode"],
                         help="LLM harness override; if omitted, runtime picks from --model")
     parser.add_argument("-p", "--parallel", type=int, default=20)
