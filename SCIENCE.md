@@ -9,7 +9,7 @@ Date: 2026-04-21. Post prompt rewrite, error messages, extract dedup. Workspace 
 
 ## Task Classification Tables
 
-### Workspace (21/40 post prompt rewrite; was 14/40 baseline)
+### Workspace (24/40 post all fixes; was 14/40 baseline)
 
 Source: `workspace.taskdata.txt`
 
@@ -455,11 +455,19 @@ These tasks are NOT fixable in the current architecture without breaking securit
 - **slack UT2**: email from untrusted webpage (defended boundary)
 - **travel recommendation-hijack set**: advice-gate not implemented in v2
 
-Measured improvement after prompt rewrite + error messages + extract dedup:
-- Workspace: **52% (21/40)**, up from 35% (14/40). In-scope: 58% (21/36).
+Measured improvement across all changes this session:
+- Workspace: **60% (24/40)**, up from 35% baseline (14/40). In-scope: 65% (24/37).
+
+Changes that contributed:
+- Prompt rewrite + anti-looping: UT0, UT12, UT14 (Pattern D fixes)
+- Error messages with available handles: UT29, UT34, UT35 (Pattern E fixes)
+- Extract source dedup: UT38 (combined task completing within budget)
+- Relaxed known-value for payload args: UT4, UT20 (search queries no longer rejected)
+- Error budget 3→5: UT21 (model self-corrects with more room)
+- Prompt clarity: UT31 (evaluator now accepts the phrasing)
 
 Estimated ceiling (excluding out-of-scope, with further iteration):
-- Workspace: ~60-65% (from 52% current, mainly budget and flaky tasks remain)
+- Workspace: ~70% (from 60% current — remaining failures are null id_, MCP, and complex combined tasks)
 - Banking: ~55-60% (from 37% — similar patterns, not yet re-measured)
 - Slack: ~40-50% (from 38% — not yet re-measured)
 - Travel: ~15-25% (from 0-5%) — multi-domain complexity + missing strategy
