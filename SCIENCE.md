@@ -365,24 +365,46 @@ Pattern tests validate **planner behavior on simple tasks with short context**. 
 
 The full-suite failures are a combination of prompt gaps AND context-length degradation. Pattern tests isolate the prompt gaps; full-suite runs expose the interaction effects.
 
-### Two remaining prompt-level issues
+### Post error-message improvements + derive handle map
 
-**1. Compose discipline (flaky).** Pattern 1 skips compose ~33% of runs — the model stops after execute without calling compose. The prompt says "You MUST call compose or blocked" but the model sometimes treats execute as implicitly terminal. May need stronger wording: "The session is NOT complete after execute."
+Error messages for `selection_backing_missing`, `known_value_not_in_task_text`, and `control_ref_requires_specific_instance` now include available handles and hints. Derive worker prompt receives `<resolved_handles>` section with exact handle values from resolved state.
 
-**2. Selection ref handle format.** The derive worker constructs selection refs using data values instead of `r_*` handles. The `selection_backing_missing` error doesn't tell the model what valid handles look like. Improving this error message (c-46f9) should fix pattern 4 — the model already has the right flow, it just uses the wrong handle format.
+| Pattern | Result | Calls | Errors | Change from post-rewrite |
+|---------|--------|-------|--------|--------------------------|
+| 4 | **FAIL** (3/7) | 10 | 1 | derive-selection now PASSES (was failing). Errors 5→1 |
+
+The derive worker now constructs valid selection refs (correct `r_*` handles). But the model still doesn't transition from successful derive to execute — it re-extracts/re-derives after getting a valid selection, then calls blocked at budget exhaustion. The derive→execute transition is the remaining gap.
+
+**Full-suite canary results (workspace):**
+
+| Task | Previous | Current | Notes |
+|------|----------|---------|-------|
+| UT0 | fail (over-working) | **PASS** | Anti-looping: composes from projected record instead of hunting |
+| UT14 | fail/timeout (30 extracts) | **PASS** | Anti-looping: extracts once instead of 30 times |
+| UT17 | fail/timeout (9 extracts) | **PASS** | Anti-looping: extracts once instead of 9 times |
+
+Three Pattern D workspace failures now passing. The prompt rewrite + tiered budget warning are working on full-suite tasks.
+
+### Remaining issues
+
+**1. Compose discipline (flaky).** Pattern 1 skips compose ~33% of runs — model stops after execute without calling compose. Consistent across all prompt versions. May be a model-level behavior where the write feels "done."
+
+**2. Derive→execute transition.** Pattern 4 successfully derives with valid selection refs but doesn't proceed to execute. The model re-extracts/re-derives instead. The anti-looping prompt reduces the total calls (12→10) and errors (5→1) but doesn't solve the final transition. This might need the extract source dedup (T7) to prevent re-extraction, or a prompt change specifically about "after successful derive with selection ref, call execute."
+
+**3. Resolved-value passing to inner workers (c-44b5).** The derive worker needs handles to construct selection refs, but the current architecture only passes raw values. We added a `handleMap` workaround. The session/shelf mechanism was intended for this kind of state passing but may need redesign for v2's single-planner architecture.
 
 ## Experiment Queue
 
-Priority order (updated after prompt rewrite):
+Priority order (updated after error message improvements):
 1. ~~Write pattern tests 1-5~~ ✓
 2. ~~Rewrite planner.att~~ ✓ — anti-looping, structured sections, prompt split
 3. ~~Tiered budget warning (T5)~~ ✓ — advisory at 50%, urgent at 3 remaining
-4. **T6: `selection_backing_missing` error with available handles** — the #1 fix for pattern 4. Implement in c-46f9.
-5. **T7: Extract source dedup** — framework guard against re-extraction. Insurance for full-suite runs.
-6. **Compose discipline** — strengthen terminal wording or add framework enforcement (reject session end without compose/blocked)
-7. T4: Travel suite addendum — write and test
-8. T1/T2: Ref construction error messages — lower priority but may help in full-suite context
-9. Full-suite rerun on workspace + slack to measure combined impact
+4. ~~T6: Error messages with available handles~~ ✓ — derive-selection passes, errors 5→1
+5. **T7: Extract source dedup** — prevent re-extraction from same source. Directly addresses the remaining pattern 4 loop.
+6. **Compose discipline** — strengthen terminal wording or add framework enforcement
+7. **Full-suite workspace rerun** — measure combined impact of all changes (3 canaries already passing)
+8. T4: Travel suite addendum — write and test
+9. T1/T2: Ref construction error messages — lower priority, may help in full-suite context
 10. Sonnet 4 measurement run
 
 ---
