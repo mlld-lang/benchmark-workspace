@@ -96,6 +96,9 @@ GLM 5.1 outperforms Sonnet 4.6. The same underlying model has hit 80%+ utility o
 | Plan | `PLAN.md` (Step 12b is current) |
 | Status | `STATUS.md` |
 | Debugging guide | `AGENT_DEBUGGING_GUIDE.md` |
+| Per-suite task data (tools, models, per-task steps) | `<suite>.taskdata.txt` |
+| Per-suite threat model (attack trees, defense specs) | `<suite>.threatmodel.txt` |
+| Security model narrative | `labels-policies-guards.md` (symlink) |
 | Bench results | `bench/results/openrouter/z-ai/glm-5.1/<suite>/defended.*.jsonl` |
 
 ## How to Validate
