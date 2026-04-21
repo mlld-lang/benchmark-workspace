@@ -336,7 +336,7 @@ def main():
     parser.add_argument("--harness", choices=["claude", "opencode"],
                         help="LLM harness override; if omitted, runtime picks from --model")
     parser.add_argument("-p", "--parallel", type=int, default=20)
-    parser.add_argument("--stagger", type=float, default=2.0,
+    parser.add_argument("--stagger", type=float, default=5.0,
                         help="Seconds between launching parallel tasks (default: 2.0)")
     parser.add_argument("-d", "--defense", default="undefended",
                         help="Defense level: undefended (default) or defended (authorization bundles)")
