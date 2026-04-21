@@ -407,13 +407,25 @@ All changes combined: prompt rewrite + tiered budget warning + error messages wi
 
 Regressions (3): UT33 (extract dedup too aggressive on non-resolved sources — fixed in 0772f35, needs re-verify), UT36 and UT39 (timeouts — GLM 5.1 flakiness, 0 log entries).
 
-**Still failing (excluding oos/ng):** UT2, UT4, UT7, UT8, UT15, UT17 (flaky), UT18, UT20, UT21, UT23, UT32, UT37. Mix of Pattern A+E (ref construction in longer contexts), Pattern D (multi-step combined tasks), and budget exhaustion.
+**Still failing (excluding oos/ng):** UT2, UT4, UT7, UT8, UT15, UT17, UT18, UT20, UT21, UT23, UT32, UT37.
 
-**Remaining ceiling analysis:** With UT33 regression fixed, expected stable result is ~22/40 (55%). The remaining failures split into:
-- Budget exhaustion on combined tasks (UT4, UT21, UT23, UT37, UT38): need more budget or more efficient workflows
-- Pattern A+E in longer contexts (UT7, UT8, UT32): ref construction works on simple tasks but degrades with more tools and longer conversation
-- Pattern D on multi-step writes (UT15, UT18, UT20): extract/derive/execute chains that exceed budget
-- Flaky (UT17): passes on canary runs, fails on suite
+### Transcript-based failure analysis (2026-04-21)
+
+Investigated agent transcripts via `opencode_debug.py` for key failing tasks. Findings contradict prior hypotheses — failures are infrastructure and budget issues, not model quality.
+
+**MCP null returns (c-6912):** UT39 — model tried 7 different email search strategies (Facebook, TechServices, security code, reset password, get_unread, get_received), ALL returned null. Model correctly identified "MCP connection closed" and called blocked with accurate reason. UT8 — model eventually constructed the correct resolved ref for event_id on attempt 4, but the last 3 execute calls returned null (connection lost). NOT model failures.
+
+**Null id_ in resolved records (c-c64f):** UT7 — `search_calendar_events("Dental check-up")` returned `r_calendar_evt_null` with id_=null. The model can't call `reschedule_calendar_event` without an event_id. It correctly pivoted to alternative strategies (get_day_calendar_events, extract, derive) but budget ran out. Could be projection issue or date-shift data gap.
+
+**Error budget too tight (c-ab13):** UT7, UT8, UT23, UT33 — the 3-consecutive-error budget kills sessions before the model can self-correct. UT8 is the clearest case: the model tried `"24"` (rejected as raw string), then wrong ref shapes, then constructed the correct `{ source: "resolved", record: "calendar_evt", handle: "r_calendar_evt_24", field: "id_" }` — but the session was already dead. The model IS learning from errors; it just needs more room.
+
+**Remaining failure classification:**
+- MCP/infra (UT2, UT4, UT8, UT18, UT20, UT32, UT36, UT37, UT39): likely connection loss or null returns — need transcript verification
+- Null record data (UT7): calendar event has null id_
+- Error budget (UT7, UT8, UT23, UT33): 3-strike limit too tight
+- Compose discipline (UT17): session ends without terminal tool
+- Wrong answer (UT21): model completes but with incorrect time reasoning
+- Pattern D residual (UT15): multi-step extract/derive chain exceeds budget
 
 ## Experiment Queue
 
