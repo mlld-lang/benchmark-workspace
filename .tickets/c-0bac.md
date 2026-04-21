@@ -1,6 +1,6 @@
 ---
 id: c-0bac
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-04-21T02:40:25Z
@@ -8,7 +8,7 @@ type: task
 priority: 0
 assignee: Adam
 tags: [prompt, testing]
-updated: 2026-04-21T05:55:40Z
+updated: 2026-04-21T11:59:37Z
 ---
 # Write isolated pattern tests for planner prompt education
 
@@ -47,3 +47,5 @@ Prompt education priorities (for c-d172):
 - "After successful derive with selection ref, proceed to execute"
 - "Always call compose to finalize — never end without a terminal tool"
 - Budget warnings earlier to prevent over-working
+
+**2026-04-21T11:59:37Z** Pattern tests written, validated against GLM 5.1, used to drive prompt rewrite + error messages + extract dedup. All 5 patterns pass on final iteration. Full workspace run: 21/40 (52%), up from 14/40 (35%).
