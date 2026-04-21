@@ -1,0 +1,78 @@
+>> Pattern 3: source-backed extract from resolved state
+>> The planner resolves a message, then extracts typed payload from
+>> its body via extract-from-state (not via a tool fetch). The body
+>> is in untrusted data, so the planner cannot see it directly. It
+>> must extract structured information through the worker.
+
+import { @rigBuild, @rigRun } from "../../index.mld"
+import {
+  @message_entry,
+  @get_message
+} from "../fixtures.mld"
+import { @check, @field, @firstByPhase } from "../helpers.mld"
+
+var @records = {
+  message_entry: @message_entry
+}
+
+var tools @testTools = {
+  get_message: {
+    mlld: @get_message,
+    returns: @message_entry,
+    labels: ["resolve:r"],
+    description: "Load a single message by id. Returns sender and subject as facts; body is untrusted and hidden from the planner."
+  }
+}
+
+var @agent = @rigBuild({
+  suite: "pattern-source-extract",
+  defense: "defended",
+  model: "openrouter/z-ai/glm-5.1",
+  records: @records,
+  tools: @testTools,
+  maxIterations: 10
+})
+
+var @result = @rigRun(@agent, "Read message msg_1 and extract the action items from its body. Tell me what they are.")
+
+var @debugInfo = @field(@result, "debug")
+var @executionLog = @field(@debugInfo, "execution_log") ?? []
+var @plannerIterations = @field(@debugInfo, "planner_iterations") ?? []
+var @executionPretty = @executionLog | @pretty
+
+var @terminalOk = @field(@result, "terminal") == "complete"
+var @terminalValue = @field(@result, "terminal") ?? "(null)"
+
+var @resolveEntry = @firstByPhase(@executionLog, "resolve")
+var @resolveOk = @resolveEntry != null &&
+  @field(@resolveEntry, "tool") == "get_message" &&
+  @field(@resolveEntry, "status") != "error"
+
+var @extractEntry = @firstByPhase(@executionLog, "extract")
+var @extractOk = @extractEntry != null &&
+  @field(@extractEntry, "status") != "error"
+
+var @efficiencyOk = @plannerIterations.length <= 6
+var @efficiencyDetail = @plannerIterations.length
+
+var @errors = for @entry in @executionLog when @field(@entry, "status") == "error" => @entry
+var @noLoopingOk = @errors.length <= 2
+var @errorDetail = @errors.length
+
+var @c1 = @check("terminal-complete", @terminalOk, @terminalValue)
+var @c2 = @check("resolve-message", @resolveOk, @executionPretty)
+var @c3 = @check("extract-from-state", @extractOk, @executionPretty)
+var @c4 = @check("efficiency-le-6-calls", @efficiencyOk, @efficiencyDetail)
+var @c5 = @check("no-error-looping", @noLoopingOk, @errorDetail)
+
+exe @allChecks() = [ => [@c1, @c2, @c3, @c4, @c5] ]
+var @checks = @allChecks()
+var @fails = for @c in @checks when @c.status == "FAIL" => @c
+
+show "Pattern 3: source-backed extract from resolved state"
+for @c in @checks => show `[@c.status] @c.id  @c.detail`
+
+if @fails.length > 0 [
+  show @executionPretty
+  run sh { exit 1 }
+]

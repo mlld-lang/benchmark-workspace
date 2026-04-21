@@ -3,7 +3,7 @@
 Experiment log and task classification. Tracks what works, what fails, why, and what to test next.
 
 Model: `openrouter/z-ai/glm-5.1` via OpenCode. Budget: 25 iterations. Defense: defended.
-Date: 2026-04-20. Post session-migration, post OOM fix.
+Date: 2026-04-21. Post session-migration, post OOM fix, pattern tests written.
 
 ---
 
@@ -289,17 +289,66 @@ From taskdata:
 
 The SCIENCE.md patterns need to be corrected against taskdata ground truth. Several others may also be wrong — I inferred patterns from failure traces rather than from task specs.
 
+## Pattern Test Results (2026-04-21)
+
+Five isolated pattern tests at `rig/tests/patterns/`, each exercising one planner behavior with a minimal agent (1-2 tools, simple task) on GLM 5.1. Budget: 10-12 iterations per test.
+
+| Pattern | Test file | Result | Calls | Errors | Finding |
+|---------|-----------|--------|-------|--------|---------|
+| 1: resolve → execute | `resolve-to-execute.mld` | **PASS** (5/5) | 3 | 0 | Ref construction works on first attempt |
+| 2: chained resolve | `chained-resolve.mld` | **PASS** (5/5) | 3 | 0 | Handle chaining works: channels → messages with resolved ref |
+| 3: source extract | `source-extract.mld` | **PASS** (5/5) | 4 | 0 | resolve → extract-from-state → derive → compose |
+| 4: selection execute | `selection-execute.mld` | **FAIL** (3/7) | 12 | 0 | Extract/derive loop — Pattern D |
+| 5: wrong-phase recovery | `wrong-phase-recovery.mld` | **PASS** (5/5) | 2 | 0 | No wrong-phase errors at all |
+
+### Key finding: Pattern D is the bottleneck, not Pattern A
+
+Pattern A (resolved-ref construction failure) was the hypothesized #1 failure, but it **does not reproduce on minimal tasks**. On patterns 1 and 2, the model constructs `{ source: "resolved", handle: "...", field: "..." }` correctly on the first attempt with zero errors.
+
+Pattern D (extract/derive loop without execute) is the actual bottleneck. Pattern 4's execution trace:
+
+```
+resolve(list_products) → extract(ratings) → derive(best) →
+extract(all_ratings) → derive(rating_widget_a) → extract(ratings) →
+extract(all_product_data) → derive(best) → extract(product_data) →
+extract(widget_d_details) → derive(best) → extract(d_rating) → BUDGET
+```
+
+12 calls, 0 errors, 7 extracts, 4 derives, 0 executes. The model successfully extracted customer ratings and derived the best product on calls 2-3, then re-extracted and re-derived 10 more times without proceeding to execute. It had the answer but didn't recognize it was done.
+
+### Implications for prompt education
+
+1. **Ref construction teaching** (T1, T2) has lower priority than expected. The model handles refs on simple tasks. The ref failures in full suites may be a context-length effect (more tools, longer conversation) rather than a prompt clarity issue.
+
+2. **Anti-looping discipline** is the highest priority. The prompt needs: "After a successful extract and derive, you have enough data. Proceed to execute. Do not re-extract or re-derive the same information."
+
+3. **Compose discipline** needs reinforcement. Pattern 1 had one run (out of two) where the model stopped after execute without calling compose. The prompt should say: "You MUST call compose or blocked to finalize. Never stop without a terminal tool."
+
+4. **Wrong-phase errors** don't reproduce on minimal tests. They may require more tools competing for attention (the full slack suite has ~10 tools vs. the pattern test's 1-2).
+
+### What the pattern tests can and cannot show
+
+Pattern tests validate **planner behavior on simple tasks with short context**. They confirm the model understands the ref grammar and phase rules. They do NOT reproduce failures that emerge from:
+- Long conversations (20+ tool results in context)
+- Many competing tools (10+ tools in the catalog)
+- Multi-step write chains (resolve A → resolve B → derive → execute)
+- Budget pressure from accumulated errors
+
+The full-suite failures are a combination of prompt gaps AND context-length degradation. Pattern tests isolate the prompt gaps; full-suite runs expose the interaction effects.
+
 ## Experiment Queue
 
-Priority order:
-1. Write pattern tests 1-5 in `rig/tests/patterns/`
-2. Test T1 (attestation with ref example) — highest expected impact
-3. Test T2 (error message suggestion) — complements T1
-4. Test T3 (auto-route) — reduces iteration waste
-5. Test T4 (travel addendum) — suite-specific but high impact
-6. Execute prompt split after T1-T3 pass
-7. Full-suite rerun on improved prompts
-8. Sonnet 4 measurement run
+Priority order (updated after pattern test results):
+1. ~~Write pattern tests 1-5 in `rig/tests/patterns/`~~ ✓
+2. **Rewrite planner.att** (c-d172) — anti-looping discipline, compose discipline, structured hierarchy
+3. Test T1 (attestation with ref example) — may have lower impact than expected given pattern test results, but still worth testing
+4. Test T2 (error message suggestion) — complements T1
+5. Test T3 (auto-route) — reduces iteration waste
+6. Test T5 (earlier budget warning) — directly addresses Pattern D
+7. Test T4 (travel addendum) — suite-specific, after core prompt work
+8. Execute prompt split (c-87a6) after core prompt passes patterns
+9. Full-suite rerun on improved prompts
+10. Sonnet 4 measurement run
 
 ---
 
