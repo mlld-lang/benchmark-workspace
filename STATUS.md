@@ -69,7 +69,7 @@ Not remaining:
 ### Rig gate
 
 - `mlld clean/rig/tests/index.mld --no-checkpoint`
-  - `summary: 92 pass / 0 fail`
+  - `summary: 92 pass / 0 fail` (post session-migration, post OOM fix)
   - This is the current authoritative invariant gate.
   - It now includes:
     - single-planner architectural assertions (session attaches to provider, not routing wrapper)
@@ -217,9 +217,25 @@ Pending (after bench verification is green):
 
 ## Current Remaining Work
 
-### Bench verification (current focus)
+### Prompt education and pattern testing (current focus — Step 12b)
 
-Running full 4-suite defended verification on OpenCode/GLM 5.1 to establish post-migration baseline.
+Full-suite baseline established (post session-migration, budget=25, OOM mitigated):
+- Workspace: ~42% utility
+- Banking: ~37-44% utility
+- Slack: ~24-38% utility (improved after OOM fix)
+- Travel: ~5% utility
+
+Root cause analysis complete (see `tmp/investigation-planner-looping.md`). The framework path is clean; failures are dominated by three planner-quality patterns that respond to prompt/attestation education:
+1. Resolved-ref construction confusion (model uses `known` for resolved values)
+2. Wrong-phase tool calls (resolve tools called via extract, 3-4 correction cycles)
+3. Repeated failed executes (model tries every wrong source class before finding resolved)
+
+Next steps:
+1. Write isolated pattern tests at `rig/tests/patterns/`
+2. Iterate on planner prompt until patterns pass reliably
+3. Execute the prompt split (rig generic vs suite addendum)
+4. Improve error messages for common ref-construction mistakes
+5. Re-run full suites after prompt work lands
 
 ### Bench verification and recovery
 

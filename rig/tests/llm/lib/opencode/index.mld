@@ -1,0 +1,413 @@
+needs { sh }
+
+>> ── Stream format adapter for Opencode CLI NDJSON events (opencode run --format json) ──
+>>
+>> Aligned with @claudeStreamFormat where possible. Opencode fuses tool-use and
+>> tool-result into a single `tool_use` event at completion time, so the tool-use
+>> kind here carries `result` inline instead of being paired with a separate
+>> tool-result event. See modules/claude/index.mld for the claude-shape reference.
+var @opencodeStreamFormat = {
+  name: "opencode",
+  format: "ndjson",
+  schemas: [
+    {
+      kind: "message",
+      matchPath: "type",
+      matchValue: "text",
+      extract: { chunk: "part.text" }
+    },
+    {
+      kind: "thinking",
+      matchPath: "type",
+      matchValue: "reasoning",
+      extract: { text: "part.text" }
+    },
+    {
+      kind: "tool-use",
+      matchPath: "type",
+      matchValue: "tool_use",
+      extract: {
+        name: "part.tool",
+        id: "part.callID",
+        input: "part.state.input",
+        result: "part.state.output",
+        status: "part.state.status"
+      }
+    },
+    {
+      kind: "metadata",
+      matchPath: "type",
+      matchValue: "step_start",
+      extract: { sessionId: "sessionID" }
+    },
+    {
+      kind: "metadata",
+      matchPath: "type",
+      matchValue: "step_finish",
+      extract: {
+        inputTokens: "part.tokens.input",
+        outputTokens: "part.tokens.output",
+        totalTokens: "part.tokens.total",
+        reasoningTokens: "part.tokens.reasoning",
+        cost: "part.cost",
+        reason: "part.reason"
+      }
+    }
+  ]
+}
+
+>> ── Session / resume helpers ──
+
+>> Opencode session ids look like `ses_<base36>` and are case-sensitive,
+>> so we trim but preserve case.
+exe @normalizeOpencodeSessionId(sessionId) = js {
+  if (typeof sessionId !== "string") return null;
+  const trimmed = sessionId.trim();
+  return trimmed || null;
+}
+
+>> Parses opencode run --format json NDJSON output for session id, final text, and usage.
+>> Concatenates every `text` event's `part.text` in order to reconstruct the agent message.
+exe @parseOpencodeJsonl(raw) = js {
+  const result = { sessionId: null, text: "", inputTokens: null, outputTokens: null, totalTokens: null, cost: null };
+  if (typeof raw !== "string" || !raw) return result;
+  const chunks = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let obj;
+    try { obj = JSON.parse(trimmed); } catch { continue; }
+    if (!obj || typeof obj !== "object") continue;
+    if (!result.sessionId && typeof obj.sessionID === "string") {
+      result.sessionId = obj.sessionID;
+    }
+    if (obj.type === "text" && obj.part && typeof obj.part.text === "string") {
+      chunks.push(obj.part.text);
+    } else if (obj.type === "step_finish" && obj.part && obj.part.tokens && typeof obj.part.tokens === "object") {
+      const t = obj.part.tokens;
+      if (typeof t.input === "number") result.inputTokens = t.input;
+      if (typeof t.output === "number") result.outputTokens = t.output;
+      if (typeof t.total === "number") result.totalTokens = t.total;
+      if (typeof obj.part.cost === "number") result.cost = obj.part.cost;
+    }
+  }
+  result.text = chunks.join("");
+  return result;
+}
+
+>> Prepends a system prompt to the user prompt.
+>> Opencode has no per-invocation `--system` flag; agents carry their own prompts
+>> and modifying the prompt text is the only per-call hook.
+exe @prependOpencodeSystem(prompt, system) = js {
+  const sys = typeof system === "string" ? system : "";
+  const body = typeof prompt === "string" ? prompt : "";
+  return sys ? sys + "\n\n" + body : body;
+}
+
+>> When mlld provides an explicit tool surface, target a concrete OpenCode
+>> agent so we can bind permission rules to a real agent config.
+>> If the caller did not request an agent explicitly, use a dedicated
+>> invocation-local agent instead of the built-in `build` agent so the
+>> tool surface cannot inherit built-in defaults.
+exe @opencodeToolAgentName(requestedAgent) = js {
+  if (typeof requestedAgent === "string" && requestedAgent.trim()) {
+    return requestedAgent.trim();
+  }
+  return "mlld";
+}
+
+>> Build the invocation-local OpenCode `permission` config that denies every
+>> tool by default and then re-enables only the mlld-provided surface.
+>>
+>> - `allowedTools` is the runtime CSV from `@mx.llm.allowed`
+>> - `mcpServers` may be an array or CSV of generated MCP server names; each
+>>   server name enables `mcp__<server>__*`
+exe @opencodePermissionRules(allowedTools, mcpServers) = js {
+  const rules = { "*": "deny" };
+
+  const add = (name, value = "allow") => {
+    if (typeof name !== "string") return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    rules[trimmed] = value;
+  };
+
+  const serverNames = Array.isArray(mcpServers)
+    ? mcpServers
+    : typeof mcpServers === "string"
+      ? mcpServers.split(",")
+      : [];
+
+  for (const serverName of serverNames) {
+    add(`mcp__${serverName}__*`);
+  }
+
+  if (typeof allowedTools === "string") {
+    for (const toolName of allowedTools.split(",")) {
+      add(toolName);
+    }
+  }
+
+  return rules;
+}
+
+>> Reads the public and runtime-injected resume/session config for opencode.
+>>
+>> Public API:
+>>   config.sessionId - explicit conversation tracking id
+>>   config.resume    - explicit resume session id
+>>
+>> Runtime API:
+>>   config._mlld.resume = { sessionId, provider, continue }
+>>
+>> Runtime resume is ignored when the recorded provider is not opencode so a
+>> claude/codex session never leaks across providers.
+exe @opencodeResume(config) = [
+  let @cfg = @config ? @config : {}
+  let @runtime = @cfg._mlld ? @cfg._mlld : {}
+  let @resume = @runtime.resume ? @runtime.resume : {}
+  let @runtimeProvider = @resume.provider ? @resume.provider : "opencode"
+  let @runtimeSessionId = @normalizeOpencodeSessionId(@resume.sessionId)
+  let @publicSessionId = @normalizeOpencodeSessionId(@cfg.sessionId)
+  let @publicResumeId = @normalizeOpencodeSessionId(@cfg.resume)
+  => when [
+    @resume.continue && @runtimeSessionId && @runtimeProvider == "opencode" => {
+      continue: true,
+      sessionId: @runtimeSessionId,
+      provider: "opencode",
+      source: "runtime_resume"
+    }
+    @publicResumeId => {
+      continue: true,
+      sessionId: @publicResumeId,
+      provider: "opencode",
+      source: "public_resume"
+    }
+    @runtimeSessionId && @runtimeProvider == "opencode" => {
+      continue: false,
+      sessionId: @runtimeSessionId,
+      provider: "opencode",
+      source: "runtime_tracking"
+    }
+    @publicSessionId => {
+      continue: false,
+      sessionId: @publicSessionId,
+      provider: "opencode",
+      source: "public_session"
+    }
+    * => {
+      continue: false,
+      sessionId: null,
+      provider: "opencode",
+      source: "none"
+    }
+  ]
+]
+
+>> Wraps the result with a runtime-visible `_mlld` envelope so the interpreter
+>> can harvest the session id and provider across guard-driven resume.
+exe @opencodeResult(inputValue, resume) = when [
+  @resume.sessionId => {
+    value: @inputValue,
+    _mlld: {
+      sessionId: @resume.sessionId,
+      provider: @resume.provider
+    }
+  }
+  * => @inputValue
+]
+
+>> ── MCP bridge translation ──
+>>
+>> The runtime-generated MCP config at @mx.llm.config is a Claude-format JSON
+>> `{ mcpServers: { name: { command, args, env, url } } }`. Opencode consumes MCP
+>> servers via its `opencode.json` config under a top-level `mcp` key with shape:
+>>
+>>   { "mcp": { "name": { "type": "local", "command": ["node", "..."], "environment": {...} } } }
+>>
+>> OpenCode supports inline runtime overrides through OPENCODE_CONFIG_CONTENT.
+>> We use that as the invocation-local carrier for generated MCP servers plus
+>> the explicit tool surface for this call. This lands after global/project
+>> config merge, so the generated tool surface wins over ambient user defaults.
+exe @opencodeInlineConfig(configPath, allowedTools, requestedAgent, hasToolSurface) = node {
+  const fs = require('fs');
+  const explicitToolSurface = hasToolSurface === true || hasToolSurface === 'true' || hasToolSurface === 1;
+
+  const allowedNames = typeof allowedTools === 'string'
+    ? allowedTools.split(',').map((item) => item.trim()).filter(Boolean)
+    : [];
+
+  let parsed = null;
+  if (configPath && fs.existsSync(configPath)) {
+    try { parsed = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch { parsed = null; }
+  }
+
+  const translated = {};
+  const servers = parsed && parsed.mcpServers;
+  if (servers && typeof servers === 'object') {
+    for (const [name, spec] of Object.entries(servers)) {
+      if (!spec || typeof spec !== 'object') continue;
+      if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name)) continue;
+      if (typeof spec.url === 'string') {
+        const headers = {};
+        if (spec.headers && typeof spec.headers === 'object') {
+          for (const [k, v] of Object.entries(spec.headers)) {
+            if (typeof v === 'string') headers[k] = v;
+          }
+        }
+        translated[name] = { type: 'remote', url: spec.url, headers };
+        continue;
+      }
+      if (typeof spec.command !== 'string') continue;
+      const argv = [spec.command];
+      if (Array.isArray(spec.args)) {
+        for (const a of spec.args) argv.push(String(a));
+      }
+      const environment = {};
+      if (spec.env && typeof spec.env === 'object') {
+        for (const [k, v] of Object.entries(spec.env)) {
+          if (typeof v === 'string') environment[k] = v;
+        }
+      }
+      translated[name] = { type: 'local', command: argv, environment, enabled: true };
+    }
+  }
+
+  const translatedNames = Object.keys(translated);
+  if (!translatedNames.length && !allowedNames.length && !explicitToolSurface) return "";
+
+  const base = { $schema: 'https://opencode.ai/config.json' };
+  if (translatedNames.length) {
+    base.mcp = translated;
+  }
+
+  if (allowedNames.length || translatedNames.length || explicitToolSurface) {
+    const agentName = typeof requestedAgent === 'string' && requestedAgent.trim()
+      ? requestedAgent.trim()
+      : 'mlld';
+    const permissionRules = { '*': 'deny' };
+    const toolRules = { '*': false };
+    for (const name of translatedNames) {
+      permissionRules[`${name}_*`] = 'allow';
+      toolRules[`${name}_*`] = true;
+    }
+    for (const name of allowedNames) {
+      permissionRules[name] = 'allow';
+      toolRules[name] = true;
+    }
+    base.agent = {
+      [agentName]: {
+        permission: permissionRules,
+        tools: toolRules
+      }
+    };
+  }
+
+  return JSON.stringify(base);
+}
+
+>> ── Shell wrapper for opencode run ──
+>>
+>> Flat positional params so BashExecutor injects each one as a distinct env var.
+>> Routing through sh {} with env vars sidesteps the mlld cmd-block double-escape
+>> bug for interpolated values (see ticket m-8694).
+exe @runOpencodeSh(prompt, dir, model, agent, variant, bypass, inlineConfig, doResume, resumeId) = sh {
+  set -e
+
+  if [ -n "$inlineConfig" ]; then
+    export OPENCODE_CONFIG_CONTENT="$inlineConfig"
+  fi
+
+  dirFlag=()
+  if [ -n "$dir" ]; then
+    dirFlag=(--dir "$dir")
+  fi
+
+  modelFlag=()
+  if [ -n "$model" ]; then
+    modelFlag=(-m "$model")
+  fi
+
+  agentFlag=()
+  if [ -n "$agent" ]; then
+    agentFlag=(--agent "$agent")
+  fi
+
+  variantFlag=()
+  if [ -n "$variant" ]; then
+    variantFlag=(--variant "$variant")
+  fi
+
+  bypassFlag=()
+  if [ -n "$bypass" ]; then
+    bypassFlag=(--dangerously-skip-permissions)
+  fi
+
+  sessionFlag=()
+  if [ -n "$doResume" ]; then
+    sessionFlag=(-s "$resumeId")
+  fi
+
+  printf '%s' "$prompt" | opencode run --format json "${dirFlag[@]}" "${modelFlag[@]}" "${agentFlag[@]}" "${variantFlag[@]}" "${bypassFlag[@]}" "${sessionFlag[@]}"
+}
+
+>> ── Core invocation ──
+>>
+>> @opencode(prompt, config)
+>> config.model     - provider/model string, e.g. "anthropic/claude-sonnet-4-5"
+>> config.dir       - working directory (passed via --dir)
+>> config.agent     - opencode agent name (--agent)
+>> config.variant   - reasoning variant: "minimal" | "high" | "max" (--variant)
+>> config.bypass    - boolean, passes --dangerously-skip-permissions
+>> config.system    - prepended to the prompt (opencode has no per-call system flag)
+>> config.stream    - JSONL streaming via stream adapter
+>> config.sessionId - explicit tracking session id
+>> config.resume    - explicit resume session id
+>> config.tools     - mlld convention: runtime populates @mx.llm.config with a
+>>                    generated MCP bridge JSON. We translate it into an
+>>                    opencode.json mcp block and expose via XDG_CONFIG_HOME.
+>>                    When tools are present, the module also applies an
+>>                    invocation-local OpenCode agent permission block that
+>>                    denies every tool by default and re-enables only the
+>>                    requested mlld/MCP surface.
+>>
+>> Runtime notes:
+>> - Always runs `opencode run --format json` so we can parse sessionID + text
+>>   + usage regardless of streaming mode. In stream mode the stream adapter
+>>   consumes `text` events as they arrive; @raw still holds the full NDJSON.
+>> - Uses a `sh { }` block so interpolated values flow as bash env vars and
+>>   survive unescaped (see ticket m-8694 for the `cmd` block escaping bug).
+exe llm @opencode(prompt, config) = [
+  let @cfg = @config ? @config : {}
+  let @dir = @cfg.dir ? @cfg.dir : @root
+  let @model = @cfg.model ? @cfg.model : "openrouter/z-ai/glm-5.1"
+  let @requestedAgent = @cfg.agent ? @cfg.agent : ""
+  let @variant = @cfg.variant ? @cfg.variant : ""
+  let @bypass = @cfg.bypass ? "1" : ""
+  let @inlineConfig = @mx.llm && (@mx.llm.hasTools || @mx.llm.config.isDefined() || @mx.llm.allowed.isDefined())
+    ? @opencodeInlineConfig(@mx.llm.config ?? "", @mx.llm.allowed ?? "", @requestedAgent, @mx.llm.hasTools)
+    : ""
+  let @agent = when [
+    @inlineConfig && @mx.llm && @mx.llm.hasTools => @opencodeToolAgentName(@requestedAgent)
+    * => @requestedAgent
+  ]
+  let @finalPrompt = @cfg.system ? @prependOpencodeSystem(@prompt, @cfg.system) : @prompt
+  let @resume = @opencodeResume(@cfg)
+  let @doResume = @resume.continue && @resume.sessionId ? "1" : ""
+  let @resumeId = @resume.sessionId ? @resume.sessionId : ""
+  let @raw = @runOpencodeSh(@finalPrompt, @dir, @model, @agent, @variant, @bypass, @inlineConfig, @doResume, @resumeId)
+  let @parsed = @parseOpencodeJsonl(@raw)
+  let @sessionId = @normalizeOpencodeSessionId(@parsed.sessionId ?? @resume.sessionId ?? null)
+  let @value = when [
+    @cfg.stream => @raw
+    @parsed.text => @parsed.text
+    * => @raw
+  ]
+  => @opencodeResult(@value, {
+    sessionId: @sessionId,
+    provider: "opencode",
+    source: @resume.source
+  })
+] with { stream: @cfg.stream, streamFormat: @opencodeStreamFormat }
+
+export { @opencode, @opencodeStreamFormat, @opencodeToolAgentName, @opencodePermissionRules }

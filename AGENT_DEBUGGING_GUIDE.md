@@ -4,6 +4,14 @@ Guide for agents investigating utility, security, or runtime regressions in this
 
 This document is intentionally operational. It is not a design manifesto. It tells you how to debug the current rig-based system without wasting cycles on the wrong frontier.
 
+## Cardinal Rules (Read Before Every Session)
+
+**A. No benchmark cheating, reading, or overfitting.** Never look at AgentDojo checker code to reverse-engineer expected answers. Never add task-id-specific logic. Never shape prompts around what you know the evaluator expects. If a prompt fix only helps one task, it doesn't ship.
+
+**B. Proper separation of concerns.** Rig is a framework; bench is a consumer. Rig must not know about workspace calendars, slack channels, banking transactions, or travel hotels. Suite-specific knowledge goes in tool `instructions:` fields or suite-level prompt addendums — never in `rig/prompts/planner.att`. When you find task-shaped rules in rig, extract them.
+
+**C. Never over-eagerly blame model capability.** GLM 5.1 outperforms Sonnet 4.6. The same underlying model has hit 80%+ utility on these suites in prior architectures. When current results are worse, the problem is prompts, attestation shapes, error messages, or framework bugs — not "the model is weak." Prompt education is the variable; model capability is the constant.
+
 ## Core Position
 
 Do not blame the base model.
@@ -688,7 +696,6 @@ The clean rig runs as a **single persistent planner LLM session** per task. The 
    - `runtime.mld` — State helpers, display projection, session management
    - `tooling.mld` — Catalog helpers, policy synthesis
    - `intent.mld` — Authorization intent compilation
-   - `guards.mld` — Schema validators, tool-call budget enforcement
    - `prompts/` — `.att` template files
 
 5. **mlld runtime (`~/mlld/mlld/`)** — Owns label propagation, structuredvalue boundaries, policy compilation, factsources, handle resolution, guard chain execution, MCP tool dispatch.
@@ -766,7 +773,7 @@ Bad prompt rule:
 - "For task phrased like X, choose transaction id 7."
 
 Good schema constraint:
-- A predicate in `~/mlld/rig/guards.mld` that catches the failure pattern, called from the relevant dispatcher, retries with a specific hint.
+- A wrapper error message that catches the failure pattern and returns actionable structured guidance in the tool result.
 
 ## Guidance on Security Work
 

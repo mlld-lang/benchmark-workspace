@@ -534,6 +534,44 @@ Four mlld primitives landed that replace rig-side compensations. Migrate rig ont
 - Remaining compatibility debt is explicit and limited to truly deferred features, chiefly `supply:`
 - Rig and bench present a single coherent modern shape
 
+### Step 12b: Prompt education and pattern testing
+
+**Goal:** Get the planner to reliably use the rig tool-use protocol by improving prompt clarity and validating via isolated pattern tests. This is the main utility lever — the framework is correct but the planner doesn't exercise it efficiently.
+
+**Context:** Full-suite baseline on GLM 5.1 (post session-migration, post OOM fix, budget=25): workspace 38-42%, banking 37-44%, slack 24-38%, travel 5%. The framework path is clean (no crashes, no infra errors). Failures are dominated by planner-quality: resolved-ref confusion, wrong-phase tool calls, and repeated failed executes. See `tmp/investigation-planner-looping.md` for the full diagnosis.
+
+**Pattern tests (isolated, ~$0.01 each, ~30s per run):**
+
+Build standalone tests at `rig/tests/patterns/` that exercise one planner behavior pattern each. Each test sets up a minimal agent (1-2 tools, simple task) and runs one planner session on GLM 5.1. Iterate on the prompt until the pattern passes reliably.
+
+Patterns to test:
+1. **resolve → execute with resolved ref** — the #1 failure. Task: "look up contact Alice, send her an email." Planner must resolve contact → construct `{ source: "resolved", handle: "r_contact_...", field: "email" }` → execute send_email.
+2. **resolve → resolve with resolved ref** — using a resolved value as arg to another resolve. Task: "get channels, read messages from general." Planner must resolve channels → use resolved channel handle as arg to read_channel_messages.
+3. **source-backed extract from state** — extract typed payload from a resolved record. Task: "get the email, extract its body." Planner must resolve email → extract source from resolved state.
+4. **derive → execute with selection ref** — derive selects among resolved values. Task: "find cheapest hotel, book it." Planner must resolve hotels → derive cheapest → execute with selection ref.
+5. **wrong-phase recovery** — model corrects after 1 wrong-phase error (not 4). Task: call a resolve tool via extract, verify model switches within 2 attempts.
+
+**Prompt restructure:**
+
+After patterns 1-5 pass reliably, restructure `rig/prompts/planner.att`:
+- **Core framework prompt** (rig-owned): phase rules, ref grammar, terminal rules, budget discipline. Generic. No suite knowledge.
+- **Suite addendum** (bench-owned, via `@rig.build({ prompts: { plannerAddendum: ... } })`): domain-specific rules currently at planner.att:65-66. Move to `bench/domains/<suite>/prompts/planner-addendum.att`.
+- **Per-tool knowledge** stays in tool entry `instructions:` field. The provider `<tool_notes>` mechanism delivers these to the LLM alongside the tool schema.
+
+**Error message improvements:**
+
+Improve the structured error messages that tool wrappers return on common mistakes:
+- `known_value_not_in_task_text` → include "This value came from a prior resolve. Use { source: 'resolved', record: '<type>', handle: '<handle>' } instead of { source: 'known' }."
+- Wrong-phase tool call → after 2nd repetition, auto-route through the correct phase instead of returning another error.
+- `control_ref_requires_specific_instance` → include "You passed a family ref. Pick a specific handle from your prior resolve results."
+
+**Exit:**
+- All 5 pattern tests pass reliably on GLM 5.1 (3/3 runs each)
+- Planner prompt split into rig generic + suite addendum
+- No task-shaped rules remain in `rig/prompts/planner.att`
+- Error messages guide the model to the correct ref shape on first correction
+- Full-suite rerun shows measurable improvement (target: workspace >60%, slack >40%)
+
 ### Step 13: Cutover
 
 **Goal:** Replace v1 with v2 after the clean migration and deletion work is finished.
