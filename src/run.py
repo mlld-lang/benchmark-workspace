@@ -175,11 +175,13 @@ def _run_benign(args, suite, tasks):
     utility_results = {}
     errors = {}
 
+    stagger = getattr(args, 'stagger', 2.0)
     with ThreadPoolExecutor(max_workers=n) as pool:
-        futures = {
-            pool.submit(_run_task, args.suite, task, args.model, args.debug, args.defense, run_log_path, getattr(args, 'harness', None)): task
-            for task in tasks
-        }
+        futures = {}
+        for i, task in enumerate(tasks):
+            futures[pool.submit(_run_task, args.suite, task, args.model, args.debug, args.defense, run_log_path, getattr(args, 'harness', None))] = task
+            if stagger > 0 and i < len(tasks) - 1:
+                time.sleep(stagger)
         done_count = 0
         rate_limited = False
         for future in as_completed(futures):
@@ -328,6 +330,8 @@ def main():
     parser.add_argument("--harness", choices=["claude", "opencode"],
                         help="LLM harness override; if omitted, runtime picks from --model")
     parser.add_argument("-p", "--parallel", type=int, default=20)
+    parser.add_argument("--stagger", type=float, default=2.0,
+                        help="Seconds between launching parallel tasks (default: 2.0)")
     parser.add_argument("-d", "--defense", default="undefended",
                         help="Defense level: undefended (default) or defended (authorization bundles)")
     parser.add_argument("-a", "--attack", choices=ATTACKS,
