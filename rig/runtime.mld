@@ -695,8 +695,12 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
   let @entry = @toolEntry
   let @argCheck = @validateToolCallArgs(@entry, @args)
   if !@argCheck.ok [ => { error: @argCheck.error, summary: @argCheck.summary, tool: @toolKey } ]
-  let @preferDirect = (@entry.direct ?? false) == true
-  let @paramNames = @toolParamNames(@entry)
+  let @hasInputRecord = @entry.inputs.isDefined()
+  let @preferDirect = (@entry.direct ?? false) == true || @hasInputRecord
+  let @paramNames = when [
+    @hasInputRecord => @toolParamNames(@entry).slice(0, 1)
+    * => @toolParamNames(@entry)
+  ]
   let @argKeys = when [
     @typeof(@args) == "object" => @plainObjectKeys(@args)
     * => []
@@ -707,6 +711,7 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
     * => null
   ]
   let @singleArg = when [
+    @hasInputRecord => @args
     @typeof(@args) == "object" && @singleArgName.isDefined() => @args[@singleArgName]
     * => @args
   ]

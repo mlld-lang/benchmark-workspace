@@ -65,55 +65,6 @@ exe @mergeArgSources(values) = [
   => @pairsToObject(@pairs)
 ]
 
-exe @omittedOptionalControlIntent(operationName, controlArgs) = [
-  let @argPairs = for @argName in (@controlArgs ?? []) => {
-    key: @argName,
-    value: {
-      value: null,
-      source: "optional control arg omitted"
-    }
-  }
-  let @toolArgs = @pairsToObject(@argPairs)
-  => {
-    known: {
-      [@operationName]: @toolArgs
-    }
-  }
-]
-
->> Optional fact omission is a dispatched-tool contract, not planner
->> intent. When every control arg on a write tool is optional and absent,
->> the new input-record spec says the omission is benign and the runtime
->> should not force an unknown-destination check. Until mlld's base rules
->> learn that path natively, rig strips only the unknown-target rules for
->> that one dispatch and authorizes the tool-level call internally.
-exe @presentControlArgs(compiledEntries, controlArgs) = [
-  let @controlArgNames = for @argName in (@controlArgs ?? []) => `@argName`
-  => for @entry in (@compiledEntries ?? []) when @controlArgNames.includes(`@entry.arg`) => @entry.arg
-]
-
-exe @allControlArgsOptional(controlArgs, optionalArgs) = [
-  let @controlArgNames = for @argName in (@controlArgs ?? []) => `@argName`
-  let @optionalArgNames = for @argName in (@optionalArgs ?? []) => `@argName`
-  let @required = for @argName in @controlArgNames when !@optionalArgNames.includes(@argName) => @argName
-  => @required.length == 0
-]
-
-exe @omitUnknownTargetRules(basePolicy) = [
-  let @rules = @basePolicy.defaults.rules ?? []
-  let @filteredRules = for @rule in @rules when @rule != "no-send-to-unknown" && @rule != "no-destroy-unknown" => @rule
-  let @defaults = @basePolicy.defaults ?? {}
-  => {
-    defaults: {
-      unlabeled: @defaults.unlabeled ?? null,
-      rules: @filteredRules
-    },
-    capabilities: @basePolicy.capabilities ?? {},
-    operations: @basePolicy.operations ?? {},
-    labels: @basePolicy.labels ?? {},
-    authorizations: @basePolicy.authorizations ?? {}
-  }
-]
 
 exe role:planner @dispatchExecute(agent, state, decision, query) = [
   let @shapeCheck = @validatePlannerArgRefs(@decision.args ?? {})
@@ -127,7 +78,6 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   let @payloadArgs = for @argName in @toolPayloadArgs(@tool) => `@argName`
   let @updateFields = for @argName in @toolUpdateArgs(@tool) => `@argName`
   let @controlValues = @controlArgValues(@compiled.compiled_entries, @controlArgs)
-  let @presentControlArgNames = @presentControlArgs(@compiled.compiled_entries, @controlArgs)
   let @payloadPairs = for @argName in @payloadArgs when @compiled.compiled_args[@argName].isDefined() => {
     key: @argName,
     value: @compiled.compiled_args[@argName]
@@ -145,19 +95,12 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
     let @correlated = @correlatedControlArgsCheck(@compiled.compiled_entries, @controlArgs)
     if !@correlated.ok [ => @plannerValidationFailure(@correlated.error ?? "correlated_control_args_failed", @correlated, @correlated.issues ?? null) ]
   ]
-  let @optionalControlArgsOmitted = @controlArgs.length > 0 &&
-    @presentControlArgNames.length == 0 &&
-    @allControlArgsOptional(@controlArgs, @optionalArgs) &&
-    !@compiled.policy_intent[@operationName].isDefined()
   let @policyIntent = when [
     @controlArgs.length == 0 && !@compiled.policy_intent[@operationName].isDefined() => { allow: [@operationName] }
-    @optionalControlArgsOmitted => @omittedOptionalControlIntent(@operationName, @controlArgs)
-    * => @compiled.policy_intent
+    @compiled.policy_intent[@operationName].isDefined() => @compiled.policy_intent
+    * => { allow: [@operationName] }
   ]
-  let @dispatchBasePolicy = when [
-    @optionalControlArgsOmitted => @omitUnknownTargetRules(@agent.basePolicy)
-    * => @agent.basePolicy
-  ]
+  let @dispatchBasePolicy = @agent.basePolicy
   let @built = when [
     @agent.defense == "defended" => @policy.build(
       @policyIntent,

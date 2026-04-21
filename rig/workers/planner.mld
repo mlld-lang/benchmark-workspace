@@ -594,42 +594,36 @@ var tools @plannerTools = {
   resolve: {
     mlld: @plannerResolve,
     inputs: @planner_resolve_inputs,
-    direct: true,
     labels: ["tool:w"],
     description: "Ground records into planner-visible state with one resolve tool."
   },
   extract: {
     mlld: @plannerExtract,
     inputs: @planner_extract_inputs,
-    direct: true,
     labels: ["tool:w"],
     description: "Fetch literal untrusted content or extract typed payload from grounded state."
   },
   derive: {
     mlld: @plannerDerive,
     inputs: @planner_derive_inputs,
-    direct: true,
     labels: ["tool:w"],
     description: "Compute a typed named result from grounded inputs."
   },
   execute: {
     mlld: @plannerExecute,
     inputs: @planner_execute_inputs,
-    direct: true,
     labels: ["tool:w"],
     description: "Perform one concrete write through the defended execute path."
   },
   compose: {
     mlld: @plannerCompose,
     inputs: @planner_compose_inputs,
-    direct: true,
     labels: ["tool:w"],
     description: "Prepare the final answer and terminate the session."
   },
   blocked: {
     mlld: @plannerBlocked,
     inputs: @planner_blocked_inputs,
-    direct: true,
     labels: ["tool:w"],
     description: "Terminate the session because no legal path remains."
   }
