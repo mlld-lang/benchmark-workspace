@@ -117,7 +117,7 @@ exe @plannerToolBudget(agent) = [
 ]
 
 exe @plannerInvalidBudget() = [
-  => 3
+  => 5
 ]
 
 

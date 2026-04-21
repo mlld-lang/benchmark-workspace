@@ -536,7 +536,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
   ]
 
   if @resolved.source == "known" [
-    if !@knownInTask(@query, @resolved.value) [
+    if !@knownInTask(@query, @resolved.value) && @role == "control" [
       => {
         ok: false,
         arg: @arg,
