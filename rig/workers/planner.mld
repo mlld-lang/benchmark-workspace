@@ -1,5 +1,5 @@
 import { @claude } from "@mlld/claude"
-import { @opencode } from "@mlld/opencode"
+import { @opencode } from @local/opencode/index.mld
 import { @phaseToolDocs } from "../tooling.mld"
 import {
   @llmCall,
@@ -33,6 +33,11 @@ import { @dispatchCompose } from "./compose.mld"
 
 record @planner_resolve_inputs = {
   data: [tool: string, args: object?, purpose: string?],
+  validate: "strict"
+}
+
+record @planner_resolve_batch_inputs = {
+  data: [resolves: array, purpose: string?],
   validate: "strict"
 }
 
@@ -340,6 +345,38 @@ exe @plannerResolve(input) = [
   => @result
 ] => record @planner_tool_result
 
+exe @plannerResolveBatch(input) = [
+  let @coerced = @input ?? {}
+  let @resolves = @coerced.resolves ?? []
+  let @batchPurpose = @coerced.purpose ?? null
+  let @results = for @spec in @resolves [
+    let @tool = @spec.tool
+    let @args = @spec.args ?? {}
+    let @decision = { phase: "resolve", tool: @tool, args: @args, purpose: @spec.purpose ?? @batchPurpose }
+    let @toolCtx = @plannerToolContext("resolve", @decision)
+    if !@toolCtx.ok [ => @toolCtx.result ]
+    let @phaseResult = @dispatchResolve(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query)
+    let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
+    let @resolvedHandles = for @handle in @arrayItems(@phaseResult.result.handles ?? []) => @stringValue(@handle)
+    => when [
+      @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
+      @phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @phaseResult.error, summary: @settled.summary }
+      * => {
+        status: "resolved",
+        tool: @tool,
+        record_type: @phaseResult.result.record_type,
+        count: @phaseResult.result.count,
+        handles: @resolvedHandles,
+        records: @plannerResolvedRecords(@toolCtx.agent.records ?? {}, @settled.finished.state, @phaseResult.result.record_type, @resolvedHandles),
+        summary: @phaseResult.result.summary
+      }
+    ]
+  ]
+  let @combined = { status: "batch_resolved", results: @results }
+  -> @combined
+  => @combined
+] => record @planner_tool_result
+
 exe @plannerExtract(input) = [
   let @coerced = @input ?? {}
   let @tool = @coerced.tool ?? null
@@ -599,6 +636,12 @@ var tools @plannerTools = {
     labels: ["tool:w"],
     description: "Ground records into planner-visible state with one resolve tool."
   },
+  resolve_batch: {
+    mlld: @plannerResolveBatch,
+    inputs: @planner_resolve_batch_inputs,
+    labels: ["tool:w"],
+    description: "Ground multiple independent record types in one call. Each entry in the resolves array is { tool, args?, purpose? }. Saves round-trips when you need data from multiple tools."
+  },
   extract: {
     mlld: @plannerExtract,
     inputs: @planner_extract_inputs,
@@ -639,6 +682,7 @@ exe @runPlannerSession(agent, query) = [
   let @prompt = @plannerPrompt(@query, @resolveDocs, @extractDocs, @executeDocs, @addendum)
   let @plannerConfig = {
     model: @agent.model,
+    pure: @agent.opencodePure,
     tools: @plannerTools,
     stubPhase: "planner",
     stubResponses: @agent.stub.planner ?? []

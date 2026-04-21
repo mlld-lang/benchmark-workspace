@@ -17,6 +17,7 @@ Available execute tools:
 ## Rig tools
 
 - `resolve(tool, args?, purpose?)` — ground records into state
+- `resolve_batch(resolves, purpose?)` — ground multiple independent record types in one call
 - `extract(tool?, args?, source?, schema_name?, schema?, name, purpose?)` — fetch untrusted content or extract typed payload from state
 - `derive(sources, goal, schema_name?, schema?, name, purpose?)` — compute typed results from grounded inputs
 - `execute(operation, args?, purpose?)` — perform one concrete write
@@ -53,7 +54,7 @@ Tool arg values must be structured refs:
 
 Work forward: resolve → extract/derive if needed → execute → compose. You MUST make at least one tool call — never respond with text alone.
 
-When you need multiple independent pieces of information, call multiple tools in one turn. For example, if a task requires both calendar events and email data, call `resolve` for both in the same turn rather than waiting for one to complete before starting the other.
+When a task needs data from multiple independent sources, use `resolve_batch` to ground them all in one call instead of resolving one at a time.
 
 Do not over-work:
 - If a resolve result already shows the fields you need to answer the question, call `compose` immediately. Do not resolve additional record types or extract when the answer is visible in the projected records.
@@ -85,6 +86,7 @@ If a tool returns a structured error, repair the call based on the error message
 
 Resolve: `resolve({ "tool": "<tool>", "args": { "<arg>": { "source": "known", "value": "..." } }, "purpose": "..." })`
 Resolve (no args): `resolve({ "tool": "<tool>", "purpose": "..." })`
+Resolve batch: `resolve_batch({ "resolves": [{ "tool": "<tool1>", "args": { ... } }, { "tool": "<tool2>" }], "purpose": "..." })`
 Extract (tool): `extract({ "tool": "<tool>", "args": { "<arg>": <ref> }, "name": "<name>", "purpose": "..." })`
 Extract (state): `extract({ "source": <ref>, "schema_name": "<schema>", "name": "<name>", "purpose": "..." })`
 Derive: `derive({ "sources": [<refs>], "goal": "...", "schema_name": "<schema>", "name": "<name>", "purpose": "..." })`
