@@ -23,6 +23,21 @@ import {
 
 exe @extractPrompt(query, sourceValue, schemaDoc, decision) = template "../prompts/extract.att"
 
+exe @extractSourceKey(source) = when [
+  !@source.isDefined() => null
+  @source.source == "resolved" && @source.handle.isDefined() => `resolved:@source.record:@source.handle`
+  @source.source == "resolved" => `resolved:@source.record`
+  @source.source == "extracted" => `extracted:@source.name`
+  @source.source == "derived" => `derived:@source.name`
+  * => null
+]
+
+exe @findPriorExtractForSource(executionLog, sourceKey) = [
+  if @sourceKey == null [ => null ]
+  let @matches = for @entry in @arrayItems(@executionLog) when @entry.phase == "extract" && @entry.status != "error" && @entry.source_key != null && @entry.source_key == @sourceKey => @entry.name
+  => @matches.length > 0 ? @matches[0] : null
+]
+
 exe @coerceExtractEnvelope(parsed) = [
   => @parsed
 ] => record @extractAttestation
@@ -102,6 +117,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
         phase: "extract",
         tool: @decision.tool,
         name: @decision.name,
+        source_key: @extractSourceKey({ source: "tool", tool: @decision.tool }),
         summary: @summary,
         session_id: null
       }
@@ -122,6 +138,16 @@ exe @dispatchExtract(agent, state, decision, query) = [
 
   let @sourceCheck = @validatePlannerSourceRef(@decision.source, ["resolved", "selection", "extracted", "derived"])
   if !@sourceCheck.ok [ => @plannerValidationFailure("planner_source_validation_failed", @sourceCheck, @sourceCheck.issues) ]
+  let @srcKey = @extractSourceKey(@decision.source)
+  if @srcKey != null [
+    let @priorName = @findPriorExtractForSource(@state.execution_log ?? [], @srcKey)
+    if @priorName != null [
+      => {
+        error: "extract_source_already_extracted",
+        summary: `You already extracted from this source as "@priorName". Reference it with { "source": "extracted", "name": "@priorName" } instead of re-extracting. Proceed to derive or execute.`
+      }
+    ]
+  ]
   let @resolvedSource = @resolveRefValue(@state, @decision.source)
   if !@resolvedSource.ok [ => @plannerValidationFailure(@resolvedSource.error ?? "extract_source_resolution_failed", @resolvedSource, @resolvedSource.issues ?? null) ]
   let @schemaDef = @schemaRecord(@agent, @decision.schema)
@@ -164,6 +190,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
     {
       phase: "extract",
       name: @decision.name,
+      source_key: @srcKey,
       summary: @summary,
       session_id: @sessionId
     }
