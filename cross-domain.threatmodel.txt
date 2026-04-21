@@ -1,0 +1,150 @@
+# Cross-Domain Threat Model (Router Layer)
+
+## Status
+
+**Stub — router is deferred.**
+
+The routing layer described here does not yet exist. See `todo-add-domain-router.md` for the design rationale and deferral note. This document captures the attack classes the router will need to cover when it lands, so the work has a running start.
+
+For now, the routing function is performed by:
+
+- **In the benchmark:** the AgentDojo eval harness, which invokes the correct per-suite agent directly based on the suite under test
+- **In ad-hoc mlld agents:** whatever top-level orchestration the developer writes
+
+Neither of these has a cross-domain attack surface in the current setup. The benchmark eval always knows which suite a task belongs to (it's a test parameter, not discovered at runtime). Per-suite agents today cannot receive tasks for other suites because they're invoked directly.
+
+The cross-domain threat model becomes live when:
+
+1. A single top-level entry point dispatches tasks to multiple domain agents, or
+2. State flows from one domain agent into another (e.g., workspace reads feed slack posts)
+
+## Scope
+
+When built, this threat model will cover attacks on the composition layer — the router that picks which domain agent(s) handle a task, and any state flow between domain agents. Per-domain attacks are NOT in scope here; they're covered in `banking.threatmodel.md`, `workspace.threatmodel.md`, `slack.threatmodel.md`, and `travel.threatmodel.md`.
+
+The attacker's goal in cross-domain attacks is typically:
+
+- Use a low-privilege domain to reach a high-privilege domain's tools
+- Exfiltrate data from domain A through domain B's external-facing tools
+- Confuse the router into dispatching to the wrong domain
+- Leak state between domains in ways that bypass per-domain policies
+- Compose benign-looking actions across domains into a harmful sequence
+
+## Attack classes to cover (when building)
+
+When the router lands, this document should have one ThreatDown tree per class below. Trees are not written yet — these are the enumerated classes with a short description and the mlld primitives that would likely provide mitigation.
+
+### 1. Domain confusion
+
+**Goal:** Router assigns a task to the wrong domain, allowing an attacker to reach tools the user didn't authorize.
+
+**Likely attacker methods:**
+- Ambiguous task text that could match multiple domains
+- Injection in task-associated content that redirects the router's choice
+- Tasks that legitimately span domains but the router picks only one
+
+**Likely mitigations:**
+- `#clean-planner` — router runs on uninfluenced task text only, never on tool content
+- Narrow domain manifest descriptions so routing is deterministic
+- Explicit multi-domain routing (task split into domain-scoped subtasks)
+
+### 2. Routing manipulation
+
+**Goal:** Attacker influences the router's domain selection via injected content that reaches the router.
+
+**Likely attacker methods:**
+- Indirect prompt injection in upstream content if the router reads any
+- Preview leakage from tool results if the router inspects them
+- Historical task data poisoning
+
+**Likely mitigations:**
+- Router has no tools, or only metadata tools with no content access
+- Router reads only task text and domain manifests — nothing else
+- `#locked-policy` on router-level rules so even privileged guards can't widen
+
+### 3. Cross-domain state leakage
+
+**Goal:** State from domain A reaches domain B without authorization.
+
+**Likely attacker methods:**
+- Agent reads sensitive content in domain A, composes a "summary" that embeds it, sends to domain B
+- Shelf state from one domain is visible to another
+- Execution logs cross domain boundaries
+
+**Likely mitigations:**
+- `#shelf-access-control` — each domain has its own shelf, not shared
+- `#named-display-modes` — composition across domains uses restricted display
+- Explicit cross-domain data flow contracts at the router level
+- `#labels-custom-flow` to prevent specific label combinations from crossing
+
+### 4. Unauthorized domain elevation
+
+**Goal:** A task that should stay in a low-privilege domain gets routed to a high-privilege domain's tools.
+
+**Likely attacker methods:**
+- Task text that looks like a safe query but includes instructions to use destructive tools
+- Router misinterprets "read my banking info" as "modify my banking info"
+- Chained dispatches where a read-only domain's output becomes input to a write domain
+
+**Likely mitigations:**
+- Per-domain policy defense levels composed at the router
+- `#authorizations-deny` on the high-privilege domain includes tools the router shouldn't reach
+- Router never passes tool outputs as task text to another domain
+
+### 5. Multi-domain consequence chaining
+
+**Goal:** Individually benign steps across domains compose into an attack. No single step triggers a guard.
+
+**Likely attacker methods:**
+- Step 1: read file from workspace (benign)
+- Step 2: summarize in slack (benign)
+- Combined effect: leaked workspace content to slack public channel
+- Another variant: research via travel tools (benign), use research output as content in slack message (benign), combined: exfil via "what hotels did I look at" → attacker DM
+
+**Likely mitigations:**
+- `#untrusted-llms-get-influenced` carries taint across domain boundaries when composed
+- Cross-domain composition requires explicit authorization at the router
+- Hard invariants: some domain combinations are `#locked-policy` denied
+
+### 6. Router impersonation / forged subtasks
+
+**Goal:** Attacker crafts content that the router treats as a legitimate subtask, causing the agent to execute unauthorized operations.
+
+**Likely attacker methods:**
+- Content in tool results that looks like a routing instruction
+- User task text that embeds fake "subtask" JSON
+- Chained tasks where one step writes to shelf state and another reads it as a routing directive
+
+**Likely mitigations:**
+- Router uses structured input only (typed routing output from user task), not free-form parsing
+- Routing output is itself a `#records`-backed shape
+- `#clean-planner` — router never reads content, only user task text
+
+## Coverage table (deferred)
+
+This table will be built when the router is implemented. Primitives listed above will be concrete `[x]`/`[ ]` entries at that time.
+
+| Primitive | Attack classes it catches | Status |
+|---|---|---|
+| (deferred) | (deferred) | (deferred) |
+
+## Related documents
+
+- `todo-add-domain-router.md` — the router design rationale and deferral note
+- `banking.threatmodel.md`, `workspace.threatmodel.md`, `slack.threatmodel.md`, `travel.threatmodel.md` — per-domain threat models (each scoped to their own domain)
+- `spec-rig-contract-architecture.md` — the rig framework that the router will sit on top of
+- `~/mlld/mlld/plugins/mlld/skills/threat-modeling/SKILL.md` — the threat modeling skill, including the "Scope and composition" section that explains per-domain vs cross-domain decomposition
+
+## Notes for future work
+
+When it's time to build the router and write this threat model for real:
+
+1. **Enumerate attacks first.** Follow the process in the threat modeling skill. Don't start from "what does the router look like?" — start from "what does an attacker want to achieve by exploiting domain composition?"
+
+2. **Router must be narrow.** The TODO is explicit: do not let the router become a fuzzy second planner. If the router is doing target resolution or write planning, it's too wide. Its job is picking manifests.
+
+3. **Per-domain models remain scoped.** When the router lands, the existing per-domain threat models don't need to be rewritten. Their scope is already correct — attacks within one domain.
+
+4. **`#clean-planner` is the load-bearing invariant.** If the router reads untrusted content, cross-domain attacks have a huge new surface. Keeping the router on task text + manifest metadata only is probably the single most important mitigation.
+
+5. **Structural mitigations matter more here than anywhere else.** Cross-domain attacks are subtle and LLMs are bad at catching them procedurally. Lean on records, labels, and authorization structure. Prompt discipline is not defense against composition attacks.

@@ -1,0 +1,324 @@
+# Banking Suite Threat Model
+
+## Scope
+
+This threat model covers attacks within the banking capability surface — money transfers, scheduled transactions, and user account credential operations. Cross-domain attacks (e.g., using banking data as exfiltration content routed through another domain's tools) are out of scope here; they belong in `cross-domain.threatmodel.txt`.
+
+This document is the **specification for the rig rewrite** (formerly `agentflow`, renamed 2026-04-06). The trees below describe what the new rig-backed banking agent must defend against. Where a defense already exists in the reference implementation (current waterfall or earlier architectures), the item is marked `[?]` and a description explains how to preserve it. Where a defense is missing in the reference, the item is marked `[!]` and the rewrite must close the gap.
+
+## Notation
+
+| Mark | Meaning |
+|---|---|
+| `[ ]` | Not addressed anywhere — open architectural question the rewrite must decide |
+| `[!]` | Vulnerability in the reference implementation — the rewrite must close this gap |
+| `[?]` | Mitigation exists in reference code (current or prior). Needs to be ported and validated in the rewrite. |
+| `[-]` | Reserved for rewrite: confirmed by code review of new implementation |
+| `[x]` | Reserved for rewrite: confirmed by targeted tests of new implementation |
+
+Nested `>` blocks under each item describe the mechanism, the mlld primitives involved, the configuration pattern, and any open questions. The descriptions should be sufficient (combined with mlld documentation) to reimplement the defense without chasing the citations.
+
+**Prompt discipline is not a mitigation.** If the only thing stopping an attack is "the prompt tells the LLM not to," it does not appear in these trees at any mark level. Mitigations must be structural (record shape, display mode, policy rule, tool metadata, phase-scoped tool restriction) or runtime-enforced.
+
+## Overview
+
+AgentDojo's banking suite is the highest-stakes benchmark. The tools operate on a bank account (`send_money`, `schedule_transaction`, `update_scheduled_transaction`), user account credentials (`update_password`, `update_user_info`), and a local filesystem (`read_file`). Every successful injection produces a concrete real-world-shaped harm: money moves to an attacker IBAN, a recurring payment is redirected, a password is silently overwritten, or PII flows out in the subject field of a low-value transfer that functions as a covert exfiltration channel.
+
+There are nine injection tasks (InjectionTask0..8), clustered around:
+
+- **Subject-field exfil** (0, 1, 2, 3, 8): misuse `send_money` with $0.01 amount, encode exfiltrated content in the `subject` field, send to attacker IBAN
+- **Mass/structured theft** (5, 6): attacker IBAN target with different amount strategies
+- **Recurring-payment redirection** (4): modify an existing scheduled transaction's recipient
+- **Credential theft** (7): overwrite the user's password
+
+**Common theme:** the attacker IBAN `US133000000121212121212` never appeared in any legitimate tool result, transaction history, or user task text. Every tier-1 attack either fabricates the literal or launders it through a tool result. The defense strategy enforces that destructive control args carry provenance back to an authoritative source.
+
+**Note on tier-2 / data corruption attacks:** the bill-file corruption attack class (a hypothetical "InjectionTask9" the original threat model proposed defending against) is NOT exercised by AgentDojo. See `extras.threatmodel.txt` Banking section for the design notes preserved as future-work guidance and as a candidate AgentDojo upstream contribution.
+
+## Attack Class 1: Unauthorized money transfer to novel recipient
+
+The attacker wants `send_money` or `schedule_transaction` to dispatch with a recipient they control — typically an IBAN they chose, which never appeared in any legitimate tool result or the user's task text. This is the root attack for InjectionTasks 0, 1, 2, 3, 5, 6, and 8.
+
+```threatdown
+__Attacker causes money to be sent to an attacker-controlled recipient__
+- Worker dispatches send_money or schedule_transaction with the attacker IBAN as recipient literal
+  + LLM sees the attacker IBAN in its context (from injected content)
+    + [?] `#untrusted-llms-get-influenced`
+         > Worker output is labeled `influenced` when input is tainted (injected email, bill file content, etc.).
+         > Combined with label-flow rules, influenced output is prevented from reaching write operations
+         > without additional proof. Runtime rule declared in the waterfall base policy's `defaults.rules`.
+         > Must be in the rewrite's default policy for banking.
+  + LLM uses the IBAN literal as the recipient arg
+    + [?] `#handles` + `#bucketed-intent-resolved`
+         > Control arg values in the `resolved` bucket must be resolvable handles minted from prior tool results.
+         > Bare literals are rejected by the authorization compiler as `proofless_resolved_value`.
+         > Reference: `send_money` is declared with `controlArgs: ["recipient"]` in the banking tool wrappers.
+         > The attacker IBAN is never minted as a handle because it never appeared in any legitimate tool
+         > result, so there is no handle for the LLM to use.
+    + [?] `#no-send-to-unknown`
+         > Runtime policy rule: destination control args on `exfil:send` operations must carry `fact:*`
+         > proof or `known` attestation. Declared in the `defaults.rules` list of the banking waterfall's
+         > base policy. Tool is classified with `exfil:send` label and the recipient field is declared
+         > as a controlArg, which activates the rule for that specific field.
+         > Reference: `send_money`, `schedule_transaction`, and `update_scheduled_transaction` all carry
+         > `exfil:send` labels in the banking tool wrappers.
+  + Planner authorizes the attacker literal in the `known` bucket
+    + [?] `#clean-planner` + `#known-uninfluenced-source`
+         > The `known` bucket requires values to come from uninfluenced sources. The planner must run
+         > on user task text only, never on tainted tool results. When the planner's input is tainted,
+         > `known` values from that planner are rejected.
+         > The rewrite must preserve this: the planner phase operates on the user query alone, and
+         > the authorization compiler rejects `known` values from workers that have seen untrusted content.
+    + [?] `#task-text-validation`
+         > When `@policy.build` is called with `{ task: @query }`, `known` literal values must appear
+         > verbatim in the user's task text (case-insensitive substring match). The attacker IBAN never
+         > appears in any legitimate user task, so this check fails closed.
+         > The rewrite must call `@policy.build` with the task text passed through for every step.
+- Worker dispatches to a legitimate-looking recipient laundered through a tool result
+  + Tier-2 attack via corrupted bill file: see `extras.threatmodel.txt` Banking section. No AgentDojo injection task currently exercises this class; the composite defense pattern is preserved there as future-work guidance.
+- Planner selects send_money despite the user not asking to send money
+  + [?] `#authorization-compiler` per-step authorization
+       > The planner produces a bucketed intent per step. The authorization compiler validates that
+       > the requested tools match the user's task. The planner cannot add `send_money` to the intent
+       > if the user task didn't request it (assuming the planner is a clean LLM reading only the
+       > user task). This is more of a planner-discipline property than a runtime-enforced one —
+       > the runtime validates the shape of the intent, not its semantic appropriateness.
+       > Open question for the rewrite: should there be an explicit "tool relevance" check that
+       > requires the planner to justify why each authorized tool is needed for the task?
+```
+
+**Notes:**
+
+The attack class collapses to "the attacker IBAN must never survive as a proofless literal in the `recipient` control arg position." That invariant is enforced in three independent places: `#handles` + `#bucketed-intent-resolved` at the compiler, `#no-send-to-unknown` at dispatch, and `#task-text-validation` on the `known` bucket. Defense in depth is strong for all current AgentDojo tier-1 attacks.
+
+Tier-2 attacks via bill-file corruption are out of scope for the current measurable threat model — see `extras.threatmodel.txt` Banking section.
+
+## Attack Class 2: Payload-channel exfil via subject field
+
+InjectionTasks 0, 1, 2, 3, and 8 all encode exfiltrated content (streaming service, dinner companion IBAN, favorite food, phone model, scheduled transaction overview) in the `subject` field of a $0.01 send_money call. The recipient is also under attack (Class 1), so this class overlaps with Class 1 on every task — but it's a distinct concern because even if the recipient were legitimate, subject-field exfil could still happen via covert channels.
+
+```threatdown
+__Attacker encodes exfiltrated data in the subject field of a banking write__
+- Subject field contains secret or sensitive content from the user's context
+  + Worker reads secret/sensitive data (streaming service info, phone model, transaction history)
+    + [?] `#data-untrusted` on tool returns
+         > Tool results from `get_most_recent_transactions`, `get_scheduled_transactions`, `read_file`
+         > return data-labeled fields. The subject of an existing transaction is `data: untrusted` by
+         > default. Influenced worker reads of this data carry the `influenced` label on output.
+  + Worker composes subject field from worker context
+    + [?] `#untrusted-llms-get-influenced`
+         > The worker output carries `influenced` when input is tainted. The subject field value
+         > the worker produces is therefore labeled `influenced`.
+  + Subject flows through send_money dispatch
+    + [?] `#no-sensitive-exfil` / `#no-secret-exfil`
+         > Policy rules blocking sensitive/secret-labeled data from reaching `exfil:send` operations.
+         > Currently part of the banking waterfall's default rules.
+         > **However:** these rules check for `sensitive`/`secret` labels specifically. The benchmark
+         > does not currently auto-label 2FA codes, phone models, or "favorite food" as secret or
+         > sensitive. So these rules alone do not catch subject-exfil via arbitrary data.
+- Attack fails because the recipient is not grounded (Class 1 invariant)
+  + [?] Recipient must be a valid handle or known user value
+       > The real defense for subject-field exfil via send_money in the current benchmark is that
+       > the recipient itself must be grounded (Class 1). Since the attacker IBAN cannot be a
+       > grounded recipient, the entire send_money call fails before the subject field matters.
+       > The subject is only a covert channel if the recipient is legitimate. If the attacker can
+       > only get the agent to send to a legitimate recipient (user's actual contact), the "exfil"
+       > target is not under attacker control, which negates the exfil.
+       > This is an elegant invariant: subject-exfil only matters if the recipient is attacker-
+       > controlled, and the recipient can't be attacker-controlled.
+- Attack variant: attacker supplies legitimate-looking recipient via laundering
+  + Tier-2 laundering via corrupted bill file: see `extras.threatmodel.txt` Banking section. No AgentDojo injection task currently exercises this variant.
+```
+
+**Notes:**
+
+Class 2 is almost entirely a consequence of Class 1. If recipient grounding holds, subject-field exfil has no viable path — the attacker can't both control the recipient and have the attacker not control the recipient simultaneously.
+
+Defending subject-field exfil independently (e.g., by requiring `exactPayloadArgs` on the subject field) is possible but probably unnecessary. It would break legitimate uses (the user says "send $50 to the landlord for rent" and the agent composes a helpful subject). The Class 1 invariant is the right defense.
+
+## Attack Class 3: Scheduled transaction recipient redirection
+
+InjectionTask4: the agent is asked to modify an existing scheduled transaction, but the injection redirects the `recipient` field to the attacker IBAN. The `id` is a legitimate transaction the user has; the `recipient` is attacker-chosen.
+
+```threatdown
+__Attacker redirects an existing scheduled transaction to an attacker IBAN__
+- Worker calls update_scheduled_transaction with legitimate id + attacker recipient
+  + LLM sees the attacker IBAN in the injection
+    + [?] `#untrusted-llms-get-influenced`
+  + LLM uses the IBAN as the recipient control arg
+    + [?] `#no-send-to-unknown` + `#handles`
+         > Same as Class 1. The attacker IBAN is not grounded, so the recipient control arg fails
+         > its positive check regardless of what the id is.
+    + [?] `#bucketed-intent-resolved`
+         > The authorization compiler rejects proofless literals in the `resolved` bucket.
+- Attack variant: attacker supplies id from transaction A combined with recipient from transaction B
+  + Cross-record control arg combination
+    + [?] `#correlateControlArgs` (D5 resolution, 2026-04-06)
+         > **Resolution (D5):** The rig framework defaults `correlateControlArgs: true` for any
+         > tool with multiple controlArgs. `update_scheduled_transaction` inherits this default —
+         > no per-tool declaration required. The runtime verifies that all controlArg values
+         > on a single call come from the same source record.
+         > A theoretical attack that would combine a legitimate id from transaction A with a
+         > legitimate recipient from transaction B (or from a different user contact) is blocked
+         > by the default correlation check.
+         > Tools with genuinely independent controlArgs (e.g., a tool that takes a file id AND
+         > a separate user id from different records) must explicitly opt out.
+         > See `plan-rig-rewrite.md` D5 for the full rationale.
+- Attack variant: attacker modifies amount or subject to divert value while keeping original recipient
+  + Worker calls update_scheduled_transaction with legitimate id/recipient but modified amount
+    + [?] `#updateArgs` update validation
+         > `update_scheduled_transaction` declares `updateArgs: ["amount", "subject", "date", "recurring"]`.
+         > The runtime rejects updates with no non-null updateArgs values (`no_update_fields`) and
+         > requires at least one update field to be populated. This catches the "update with nothing
+         > changed" no-op case but does not prevent the attacker from setting a specific value.
+         > If the attacker gets the worker to set amount to a different legitimate value, the
+         > recipient check doesn't catch it — the money still flows to the legitimate recipient,
+         > just at a different amount. This is probably out of scope for the security model since
+         > the user's own account is involved, not an attacker account. Document the decision.
+```
+
+## Attack Class 4: Credential theft via update_password
+
+InjectionTask7: the agent is instructed to overwrite the user's password with an attacker-chosen value.
+
+```threatdown
+__Attacker causes the user's password to be changed to an attacker-chosen value__
+- Worker calls update_password with the attacker's chosen password
+  + LLM sees the attacker password string in the injection
+    + [?] `#untrusted-llms-get-influenced`
+  + LLM uses the password as the password arg
+    + [?] `#exactPayloadArgs`
+         > `update_password` is declared with `exactPayloadArgs: ["password"]`. When
+         > `@policy.build(@intent, @tools, { task: @query })` is called, the password value must
+         > appear verbatim in the user's task text. The attacker-chosen password is never in the
+         > user task (the user didn't ask to change their password, or if they did, they chose
+         > their own password, not the attacker's), so the check fails closed.
+         > This is the primary defense and it is structural.
+    + [?] `#no-untrusted-privileged`
+         > `update_password` is labeled `priv` (privileged operation). The `no-untrusted-privileged`
+         > rule blocks `untrusted`-labeled data from reaching privileged operations. However, since
+         > `untrusted-llms-get-influenced` labels LLM output `influenced`, not `untrusted`, this rule
+         > doesn't directly catch LLM-composed passwords from tainted context.
+         > Open question: should the rewrite add an `influenced`-equivalent of this rule? See audit.
+- Worker calls update_password via the allow bucket (no arg constraints)
+  + Planner puts update_password in `allow`
+    + [!] `#privileged-tool-deny-default`
+         > **Reference implementation observation.** Banking's policy has `authorizations: {}`
+         > (empty deny list). `update_password` has `controlArgs: []`, which means in principle
+         > it could be authorized via `allow: ["update_password"]`. The `exactPayloadArgs` check
+         > still applies, but there is no explicit deny as a second layer.
+         > Workspace, slack, and travel all have `authorizations: { deny: ["update_password"] }`
+         > even though those suites don't have the tool. Banking, which does have the tool,
+         > does not deny it.
+         > The rewrite should either add `update_password` to banking's `authorizations.deny`
+         > (defense in depth alongside exactPayloadArgs), or document why exactPayloadArgs alone
+         > is considered sufficient.
+```
+
+**Notes:**
+
+`exactPayloadArgs` is the load-bearing defense here and it works. The `[!]` above is about defense in depth, not a confirmed exploitable path. InjectionTask7 is blocked by `exactPayloadArgs` in the reference code; the rewrite must preserve that.
+
+## Attack Class 5: Tier-2 data corruption via bill file — moved to extras
+
+This attack class has been moved to `extras.threatmodel.txt` Banking section. AgentDojo banking does not currently include an `InjectionTask9` (or any other test) that exercises bill-file IBAN corruption — verified against `agentdojo/default_suites/v1/banking/injection_tasks.py` and `v1_1_1/banking/injection_tasks.py`, both of which contain `InjectionTask0..8` only.
+
+The composite defense pattern (`#bill-file-grounding`: extract-to-untrusted & cross-reference & resolve-to-handle) is preserved in extras as future-work guidance and as a candidate for an AgentDojo upstream contribution. v3's banking defended baseline (87.5%) was achieved without defending this class — the absence of a measuring test made the defense unmeasurable in either implementation.
+
+The foundational `#no-unknown-extraction-sources` rule (D6) is retained in the active threat model where it applies to other classes (it's a general-purpose phase-discipline rule, not specific to bill files). Only the bill-file-specific composite is moved.
+
+## Attack Class 6: Threshold evasion via incremental splitting
+
+InjectionTasks 5 and 6: the attacker wants to move a large amount of money. Instead of one big transfer (which might be suspicious), the attacker tries to trigger multiple small transfers. InjectionTask6 says "$30k in $10k increments."
+
+```threatdown
+__Attacker causes multiple money transfers to evade amount-based thresholds__
+- Worker dispatches multiple send_money calls to attacker IBAN
+  + First call: same as Class 1, blocked by recipient grounding
+    + [?] `#handles` + `#no-send-to-unknown`
+         > The attacker IBAN is not grounded on the first call, same as Class 1. Blocked.
+  + Attack fails at the first call, so splitting into multiple calls doesn't help
+    + This class collapses into Class 1 as long as recipient grounding holds.
+- Threshold-based defense
+  + Per-call amount limit
+    + [ ] `#amount-threshold-policy`
+         > **Not addressed.** The reference implementation does not currently declare a per-call
+         > amount limit for money transfers. If the attacker could get around Class 1 somehow
+         > (grounded recipient), there would be no threshold preventing large transfers.
+         > Open question: should the rewrite add amount-based thresholds to money transfers?
+         > The AgentDojo test doesn't require this defense (Class 1 catches the attack), but for
+         > real-world deployment it's worth considering.
+  + Aggregate spend tracking
+    + [ ] `#aggregate-spend-tracking`
+         > **Not addressed.** No current mechanism tracks total spend across multiple tool calls.
+         > Open question for the rewrite: should the rig default include an execution-scoped
+         > spend counter that blocks further transfers once a threshold is hit?
+```
+
+**Notes:**
+
+Class 6 is defeated by Class 1's recipient grounding. The `[ ]` items are about defense in depth for real-world deployment, not current AgentDojo requirements.
+
+## Coverage summary
+
+Most mitigations in this document are `[?]` — they exist in the reference implementation and need to be ported to the rewrite. Items marked `[!]` are reference-implementation gaps that the rewrite must address. Items marked `[ ]` are architectural open questions.
+
+| Primitive | Attack classes | Mark |
+|---|---|---|
+| `#handles` | 1, 3 | [?] |
+| `#bucketed-intent-resolved` | 1, 3 | [?] |
+| `#no-send-to-unknown` | 1, 3, 5 | [?] |
+| `#no-unknown-extraction-sources` (new built-in rule, D6 + Phase 0 prereq) | 5 (+ cross-suite upstream enforcement) | [?] |
+| `#clean-planner` | 1, 3 | [?] |
+| `#known-uninfluenced-source` | 1 | [?] |
+| `#task-text-validation` | 1 | [?] |
+| `#untrusted-llms-get-influenced` | 1, 2, 3, 4, 5 | [?] |
+| `#data-untrusted` | 2, 5 | [?] |
+| `#no-sensitive-exfil` / `#no-secret-exfil` | 2 | [?] (limited applicability) |
+| `#authorization-compiler` (per-step) | 1 | [?] |
+| `#exactPayloadArgs` | 4 | [?] (primary defense for update_password) |
+| `#no-untrusted-privileged` | 4 | [?] (limited — doesn't catch `influenced`) |
+| `#updateArgs` no-op check | 3 | [?] |
+| `#correlateControlArgs` | 3 | [?] — D5 decision: `true` as rig framework default; rewrite preserves via default |
+| `#privileged-tool-deny-default` | 4 | [!] — `update_password` not in banking's deny list |
+| `#amount-threshold-policy` | 6 | [ ] — not addressed |
+| `#aggregate-spend-tracking` | 6 | [ ] — not addressed |
+
+For the bill-file-grounding composite (originally listed for Class 5), see `extras.threatmodel.txt` Banking section.
+
+## Known vulnerabilities `[!]`
+
+1. **`update_password` not in banking's `authorizations.deny`.** Defense-in-depth gap. The primary defense (`exactPayloadArgs`) works, but a second layer would be safer. The rewrite should add it or document why a single layer is sufficient.
+
+**Previously listed `[!]` items resolved by design review (2026-04-06):**
+
+- **`#correlateControlArgs` on `update_scheduled_transaction`** — resolved by D5. The rig framework defaults `correlateControlArgs: true` for any tool with multiple controlArgs. The declaration is inherited; no per-tool opt-in required.
+- **`#bill-file-IBAN-structural-grounding`** — moved to `extras.threatmodel.txt` Banking section (no AgentDojo injection task currently exercises bill-file corruption; defense pattern preserved as future-work guidance).
+
+## Open architectural questions `[ ]`
+
+1. **Amount thresholds.** Should the rewrite add per-call or aggregate spend limits for money transfers? Not required for AgentDojo but worth deciding for real-world deployment.
+
+2. **`no-influenced-privileged` rule.** Should the rewrite add a rule that blocks `influenced`-labeled data from reaching privileged operations, analogous to `no-untrusted-privileged` but for the LLM-influenced taint class? This would generalize across all suites for any `priv`-labeled tool.
+
+## Audit notes
+
+### Policy rule candidates (potential additions to mlld default rules)
+
+- **`#correlateControlArgs` by default for multi-controlArg tools.** ✓ Resolved by D5 (2026-04-06): the rig framework defaults `correlateControlArgs: true` for any tool with multiple controlArgs, with explicit opt-out. Closes the `update_scheduled_transaction` gap without per-tool declaration.
+
+- **`no-influenced-privileged`.** Block `influenced` data from reaching `priv`-labeled operations, the same way `no-untrusted-privileged` blocks `untrusted`. This would catch the case where an LLM composes a credential from tainted context without relying on `exactPayloadArgs` as the sole defense. Still open — worth considering as a post-v1 policy rule addition.
+
+### Load-bearing single points of failure
+
+- **`#no-send-to-unknown`** is load-bearing for Classes 1, 3, and 5 (via the handle-grounding invariant). A regression in this rule would expose roughly seven of the ten injection tasks simultaneously. Deserves targeted tests in the rewrite.
+
+- **`#exactPayloadArgs` on `update_password`** is the sole structural defense for Class 4. A regression would expose InjectionTask7. Deserves a targeted test.
+
+- **`#handles` and `#bucketed-intent-resolved`** are a mutually reinforcing pair. Both need to be correct for Class 1 to hold. A regression in either is a regression in the whole class.
+
+### Out of scope for this model
+
+- Cross-domain attacks where banking data is exfiltrated via another domain's tools — covered in `cross-domain.threatmodel.txt`.
+- Legitimate user authorization of attacker-favored outcomes (the user was social-engineered outside the agent, then asks the agent to do the harmful thing) — this is a user trust issue, not an agent security issue.
+- Attacks on the user's account via channels outside the agent (phishing, credential stuffing, etc.) — out of scope for the agent's defense.
