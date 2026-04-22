@@ -20,7 +20,7 @@ import {
   @create_note_inputs,
   @send_email_inputs
 } from "./fixtures.mld"
-import { @opencodeToolAgentName, @opencodePermissionRules } from @local/opencode/index.mld
+import { @opencodeToolAgentName, @opencodePermissionRules } from "@mlld/opencode"
 import { @imported_tools } from "./imported-tools-fixture.mld"
 import {
   @mxEntry,
