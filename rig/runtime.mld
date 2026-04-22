@@ -6,6 +6,7 @@ import {
   @pairsToObject,
   @toolParamNames,
   @toolOptionalArgs,
+  @toolPayloadArgs,
   @phaseToolNames
 } from "./tooling.mld"
 import { @resolveRefValue } from "./intent.mld"
@@ -695,30 +696,18 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
   let @entry = @toolEntry
   let @argCheck = @validateToolCallArgs(@entry, @args)
   if !@argCheck.ok [ => { error: @argCheck.error, summary: @argCheck.summary, tool: @toolKey } ]
-  let @callableEntry = when [
-    @toolsCollection[@toolKey].isDefined() => @toolsCollection[@toolKey]
-    * => null
-  ]
+  let @hasInputRecord = @entry.inputs.isDefined()
   let @hasArgs = @typeof(@args) == "object" && @plainObjectKeys(@args).length > 0
-  let @directExe = when [
-    @typeof(@entry.mlld) == "executable" => @entry.mlld
-    @typeof(@entry) == "executable" => @entry
-    * => null
-  ]
-  >> Use input record field count as a proxy for exe param count.
-  >> Multi-param write tools (share_file, add_participants) have >1
-  >> input record fields AND >1 exe params. Single-param planner
-  >> wrappers have >1 input record fields but only 1 exe param —
-  >> they're excluded by checking that the exe name doesn't start
-  >> with "planner" (planner wrappers take one 'input' object).
-  let @inputFieldCount = @hasInputRecord ? @toolParamNames(@entry).length : 0
-  let @exeName = @typeof(@directExe) == "executable" ? @directExe.mx.type : ""
-  let @isMultiParamTool = @hasInputRecord && @inputFieldCount > 1 && @callableEntry.isDefined()
+  let @paramNames = @toolParamNames(@entry)
+  let @callableEntry = @toolsCollection[@toolKey].isDefined()
+  let @exeParamCount = @typeof(@entry.mlld) == "executable" ? @entry.mlld.mx.params.length : 0
 
-  >> Prefer surfaced collection dispatch for multi-param tools — it
-  >> spreads object args into named params and applies input-record
-  >> policy sections correctly.
-  if @isMultiParamTool [
+  >> For multi-param input-record tools with no payload args, use
+  >> collection dispatch which spreads args into named params correctly.
+  >> Tools with payload args (schedule_meeting, send_email) stay on
+  >> positional dispatch until m-fbf2 fixes policy on collection dispatch.
+  let @hasPayloadArgs = @toolPayloadArgs(@entry).length > 0
+  if @hasInputRecord && @exeParamCount > 1 && @callableEntry && !@hasPayloadArgs [
     => when [
       @policyValue.isDefined() && @hasArgs => @toolsCollection[@toolKey](@args) with { policy: @policyValue }
       @policyValue.isDefined() => @toolsCollection[@toolKey]() with { policy: @policyValue }
@@ -728,8 +717,10 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
   ]
 
   >> Positional dispatch for single-param and non-collection tools.
+  >> m-d9e6 enables @entry.mlld as field access; m-e091 enables calling
+  >> the result from a local without false circular-ref detection.
+  let @directExe = @entry.mlld
   if @typeof(@directExe) != "executable" [ => { error: "tool_missing_executable", tool: @toolKey } ]
-  let @paramNames = @toolParamNames(@entry)
   => when [
     @policyValue.isDefined() && @hasArgs => @directExe(@args) with { policy: @policyValue }
     @policyValue.isDefined() && @paramNames.length == 0 => @directExe() with { policy: @policyValue }
