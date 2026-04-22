@@ -692,96 +692,43 @@ exe @validateToolCallArgs(entry, args) = [
 
 exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, args, policyValue) = [
   let @toolKey = `@toolName`
-  let @callableCollection = @toolsCollection
   let @entry = @toolEntry
   let @argCheck = @validateToolCallArgs(@entry, @args)
   if !@argCheck.ok [ => { error: @argCheck.error, summary: @argCheck.summary, tool: @toolKey } ]
-  let @hasInputRecord = @entry.inputs.isDefined()
-  let @exe = when [
-    @typeof(@entry.mlld) == "executable" => @entry.mlld
-    @typeof(@entry) == "executable" => @entry
-    * => null
-  ]
-  let @exeParamCount = @typeof(@exe) == "executable" ? @exe.mx.paramNames.length : 0
-
-  >> For multi-param input-record tools, use collection dispatch which
-  >> spreads object args into named params correctly.
-  if @hasInputRecord && @exeParamCount > 1 && @callableCollection[@toolKey].isDefined() [
-    => when [
-      @policyValue.isDefined() => @callableCollection[@toolKey](@args) with { policy: @policyValue }
-      * => @callableCollection[@toolKey](@args)
-    ]
-  ]
-
-  >> Original single-param and legacy dispatch paths below.
-  let @preferDirect = (@entry.direct ?? false) == true || @hasInputRecord
-  let @paramNames = when [
-    @hasInputRecord => @toolParamNames(@entry).slice(0, 1)
-    * => @toolParamNames(@entry)
-  ]
-  let @argKeys = when [
-    @typeof(@args) == "object" => @plainObjectKeys(@args)
-    * => []
-  ]
-  let @singleArgName = when [
-    @argKeys.length > 0 => @argKeys[0]
-    @paramNames.length > 0 => @paramNames[0]
-    * => null
-  ]
-  let @singleArg = when [
-    @hasInputRecord => @args
-    @typeof(@args) == "object" && @singleArgName.isDefined() => @args[@singleArgName]
-    * => @args
-  ]
   let @callableEntry = when [
-    @callableCollection[@toolKey].isDefined() => @callableCollection[@toolKey]
+    @toolsCollection[@toolKey].isDefined() => @toolsCollection[@toolKey]
     * => null
   ]
-  let @exe = when [
+  let @hasArgs = @typeof(@args) == "object" && @plainObjectKeys(@args).length > 0
+  let @directExe = when [
     @typeof(@entry.mlld) == "executable" => @entry.mlld
     @typeof(@entry) == "executable" => @entry
     * => null
   ]
-  if @policyValue.isDefined() && @preferDirect && @typeof(@exe) == "executable" [
+  let @exeParamCount = @typeof(@directExe) == "executable" ? @directExe.mx.paramNames.length : 0
+
+  >> Prefer surfaced collection dispatch for multi-param tools — it
+  >> spreads object args into named params and applies input-record
+  >> policy sections correctly.
+  if @callableEntry.isDefined() && @exeParamCount > 1 [
     => when [
-      @paramNames.length == 0 => @exe() with { policy: @policyValue }
-      @paramNames.length == 1 => @exe(@singleArg) with { policy: @policyValue }
-      * => @exe(@args) with { policy: @policyValue }
+      @policyValue.isDefined() && @hasArgs => @toolsCollection[@toolKey](@args) with { policy: @policyValue }
+      @policyValue.isDefined() => @toolsCollection[@toolKey]() with { policy: @policyValue }
+      @hasArgs => @toolsCollection[@toolKey](@args)
+      * => @toolsCollection[@toolKey]()
     ]
   ]
-  if @policyValue.isDefined() && @callableEntry.isDefined() [
-    => when [
-      @argKeys.length == 0 => @callableCollection[@toolKey]() with { policy: @policyValue }
-      @paramNames.length == 1 => @callableCollection[@toolKey](@singleArg) with { policy: @policyValue }
-      * => @callableCollection[@toolKey](@args) with { policy: @policyValue }
-    ]
-  ]
-  if @policyValue.isDefined() && @typeof(@exe) == "executable" [
-    => when [
-      @paramNames.length == 0 => @exe() with { policy: @policyValue }
-      @paramNames.length == 1 => @exe(@singleArg) with { policy: @policyValue }
-      * => @exe(@args) with { policy: @policyValue }
-    ]
-  ]
-  if @preferDirect && @typeof(@exe) == "executable" [
-    => when [
-      @paramNames.length == 0 => @exe()
-      @paramNames.length == 1 => @exe(@singleArg)
-      * => @exe(@args)
-    ]
-  ]
-  if @callableEntry.isDefined() [
-    => when [
-      @argKeys.length == 0 => @callableCollection[@toolKey]()
-      @paramNames.length == 1 => @callableCollection[@toolKey](@singleArg)
-      * => @callableCollection[@toolKey](@args)
-    ]
-  ]
-  if @typeof(@exe) != "executable" [ => { error: "tool_missing_executable", tool: @toolKey } ]
+
+  >> Positional dispatch for single-param and non-collection tools.
+  if @typeof(@directExe) != "executable" [ => { error: "tool_missing_executable", tool: @toolKey } ]
+  let @paramNames = @toolParamNames(@entry)
   => when [
-    @paramNames.length == 0 => @exe()
-    @paramNames.length == 1 => @exe(@singleArg)
-    * => @exe(@args)
+    @policyValue.isDefined() && @hasArgs => @directExe(@args) with { policy: @policyValue }
+    @policyValue.isDefined() && @paramNames.length == 0 => @directExe() with { policy: @policyValue }
+    @policyValue.isDefined() => @directExe(@args) with { policy: @policyValue }
+    @hasArgs => @directExe(@args)
+    @paramNames.length == 0 => @directExe()
+    * => @directExe(@args)
   ]
 ]
 
