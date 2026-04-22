@@ -136,9 +136,18 @@ exe @plannerValidateSelectionRef(path, ref) = [
   let @candidate = @cast(@ref, @planner_selection_ref)
   let @selectionCheck = @plannerCastOk(@path, @candidate)
   if !@selectionCheck.ok [ => @selectionCheck ]
+  >> Access backing from the raw ref — the record cast may serialize
+  >> nested objects to strings, making field access fail.
+  let @rawBacking = @ref.backing
+  if @typeof(@rawBacking) != "object" [
+    => {
+      ok: false,
+      issues: [@plannerIssue(`@path\.backing`, "invalid_backing", "backing must be an object with record and handle", "object", @typeof(@rawBacking))]
+    }
+  ]
   let @backingCheck = @plannerCastOk(
-    `@path.backing`,
-    @cast(@plannerField(@candidate, "backing"), @planner_selection_backing)
+    `@path\.backing`,
+    @cast(@rawBacking, @planner_selection_backing)
   )
   if !@backingCheck.ok [ => @backingCheck ]
   => { ok: true, value: @candidate }
