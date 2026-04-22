@@ -1,0 +1,9 @@
+name: opencode
+author: mlld
+type: library
+about: "Opencode CLI invocation with session resume, streaming, and MCP tool bridging"
+version: 1.4.0
+license: CC0
+repo: "https://github.com/mlld-lang/modules"
+bugs: "https://github.com/mlld-lang/modules/issues"
+mlldVersion: ">=2.0.5"

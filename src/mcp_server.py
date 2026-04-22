@@ -27,9 +27,11 @@ import atexit
 import base64
 import importlib
 import json
+import os
 import re
 import signal
 import sys
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -301,8 +303,14 @@ def create_server(
     async def handle_list_tools() -> list[types.Tool]:
         return tools
 
+    _call_count = [0]
+
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict[str, Any] | None) -> list[types.TextContent]:
+        _call_count[0] += 1
+        call_num = _call_count[0]
+        t0 = time.monotonic()
+        print(f"[mcp-heartbeat] pid={os.getpid()} call={call_num} tool={name} start={datetime.now(timezone.utc).isoformat()}", file=sys.stderr, flush=True)
         arguments = arguments or {}
         coerced = _coerce_tool_args(runtime, name, arguments)
         try:
@@ -391,6 +399,8 @@ def create_server(
         })
         _save_state()
 
+        elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
+        print(f"[mcp-heartbeat] pid={os.getpid()} call={call_num} tool={name} done elapsed={elapsed_ms}ms result_len={len(result_text)}", file=sys.stderr, flush=True)
         return [types.TextContent(type="text", text=result_text)]
 
     # Also save state on shutdown
