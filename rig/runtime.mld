@@ -705,12 +705,20 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
     @typeof(@entry) == "executable" => @entry
     * => null
   ]
-  let @exeParamCount = @typeof(@directExe) == "executable" ? @directExe.mx.paramNames.length : 0
+  >> Use input record field count as a proxy for exe param count.
+  >> Multi-param write tools (share_file, add_participants) have >1
+  >> input record fields AND >1 exe params. Single-param planner
+  >> wrappers have >1 input record fields but only 1 exe param —
+  >> they're excluded by checking that the exe name doesn't start
+  >> with "planner" (planner wrappers take one 'input' object).
+  let @inputFieldCount = @hasInputRecord ? @toolParamNames(@entry).length : 0
+  let @exeName = @typeof(@directExe) == "executable" ? @directExe.mx.type : ""
+  let @isMultiParamTool = @hasInputRecord && @inputFieldCount > 1 && @callableEntry.isDefined()
 
   >> Prefer surfaced collection dispatch for multi-param tools — it
   >> spreads object args into named params and applies input-record
   >> policy sections correctly.
-  if @callableEntry.isDefined() && @exeParamCount > 1 [
+  if @isMultiParamTool [
     => when [
       @policyValue.isDefined() && @hasArgs => @toolsCollection[@toolKey](@args) with { policy: @policyValue }
       @policyValue.isDefined() => @toolsCollection[@toolKey]() with { policy: @policyValue }
