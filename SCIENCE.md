@@ -519,10 +519,5 @@ These tasks are NOT fixable in the current architecture without breaking securit
 
 Measured improvement across this session:
 - Workspace: **55% (22/40)** on Together AI, up from **35% baseline (14/40)**. Best on OpenRouter was 60% (24/40).
-- The Together AI number is lower than OpenRouter best due to no_compose failures (7 tasks). With `=> resume`, estimated: **~72% (29/40)**.
-
-Estimated ceiling (excluding oos, with further iteration):
-- Workspace: ~75-80% (with resume + UT8 fix + wrong-answer investigation)
-- Banking: ~55-60% (from 37% — not yet re-measured)
-- Slack: ~40-50% (from 38% — not yet re-measured)
-- Travel: ~15-25% (from 0-5%) — multi-domain complexity
+- The Together AI number is lower than OpenRouter best due to no_compose failures (7 tasks). With `=> resume`, those are recoverable.
+- Prior architectures hit 80%+ on the same suites with the same model. The remaining failures are bugs and gaps, not structural limits.
