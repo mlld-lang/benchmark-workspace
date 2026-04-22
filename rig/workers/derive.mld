@@ -90,6 +90,10 @@ exe @dispatchDerive(agent, state, decision, query) = [
   let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision, @flatHandles)
   let @raw = @llmCall(@agent.harness, @prompt, {
     model: @agent.model,
+    pure: @agent.opencodePure,
+    dir: @agent.innerWorkerDir,
+    dataHome: @agent.innerWorkerDataHome,
+    stateHome: @agent.innerWorkerStateHome,
     tools: [],
     stubPhase: "derive",
     stubResponses: @agent.stub.derive ?? [],

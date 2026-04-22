@@ -311,8 +311,16 @@ exe @opencodeInlineConfig(configPath, allowedTools, requestedAgent, hasToolSurfa
 >> Flat positional params so BashExecutor injects each one as a distinct env var.
 >> Routing through sh {} with env vars sidesteps the mlld cmd-block double-escape
 >> bug for interpolated values (see ticket m-8694).
-exe @runOpencodeSh(prompt, dir, model, agent, variant, bypass, inlineConfig, doResume, resumeId) = sh {
+exe @runOpencodeSh(prompt, dir, model, agent, variant, bypass, inlineConfig, doResume, resumeId, dataHome, stateHome, pure, escapePrompt) = sh {
   set -e
+
+  if [ -n "$dataHome" ]; then
+    export XDG_DATA_HOME="$dataHome"
+  fi
+
+  if [ -n "$stateHome" ]; then
+    export XDG_STATE_HOME="$stateHome"
+  fi
 
   if [ -n "$inlineConfig" ]; then
     export OPENCODE_CONFIG_CONTENT="$inlineConfig"
@@ -343,12 +351,22 @@ exe @runOpencodeSh(prompt, dir, model, agent, variant, bypass, inlineConfig, doR
     bypassFlag=(--dangerously-skip-permissions)
   fi
 
+  pureFlag=()
+  if [ -n "$pure" ]; then
+    pureFlag=(--pure)
+  fi
+
   sessionFlag=()
   if [ -n "$doResume" ]; then
     sessionFlag=(-s "$resumeId")
   fi
 
-  printf '%s' "$prompt" | opencode run --format json "${dirFlag[@]}" "${modelFlag[@]}" "${agentFlag[@]}" "${variantFlag[@]}" "${bypassFlag[@]}" "${sessionFlag[@]}"
+  promptArg="$prompt"
+  if [ -n "$escapePrompt" ]; then
+    promptArg=$(printf '%s' "$prompt" | perl -0pe 's/\r//g; s/\n+/ /g')
+  fi
+
+  opencode run "${pureFlag[@]}" --format json "${dirFlag[@]}" "${modelFlag[@]}" "${agentFlag[@]}" "${variantFlag[@]}" "${bypassFlag[@]}" "${sessionFlag[@]}" "$promptArg"
 }
 
 >> ── Core invocation ──
@@ -359,10 +377,15 @@ exe @runOpencodeSh(prompt, dir, model, agent, variant, bypass, inlineConfig, doR
 >> config.agent     - opencode agent name (--agent)
 >> config.variant   - reasoning variant: "minimal" | "high" | "max" (--variant)
 >> config.bypass    - boolean, passes --dangerously-skip-permissions
+>> config.pure      - boolean, passes --pure to skip external plugins
 >> config.system    - prepended to the prompt (opencode has no per-call system flag)
 >> config.stream    - JSONL streaming via stream adapter
 >> config.sessionId - explicit tracking session id
 >> config.resume    - explicit resume session id
+>> config.dataHome  - optional XDG_DATA_HOME override, useful for isolated
+>>                    nested opencode workers that must not share the parent
+>>                    process's active sqlite database
+>> config.stateHome - optional XDG_STATE_HOME override for isolated locks/state
 >> config.tools     - mlld convention: runtime populates @mx.llm.config with a
 >>                    generated MCP bridge JSON. We translate it into an
 >>                    opencode.json mcp block and expose via XDG_CONFIG_HOME.
@@ -384,18 +407,25 @@ exe llm @opencode(prompt, config) = [
   let @requestedAgent = @cfg.agent ? @cfg.agent : ""
   let @variant = @cfg.variant ? @cfg.variant : ""
   let @bypass = @cfg.bypass ? "1" : ""
-  let @inlineConfig = @mx.llm && (@mx.llm.hasTools || @mx.llm.config.isDefined() || @mx.llm.allowed.isDefined())
-    ? @opencodeInlineConfig(@mx.llm.config ?? "", @mx.llm.allowed ?? "", @requestedAgent, @mx.llm.hasTools)
-    : ""
+  let @explicitNoTools = @cfg.tools.isDefined() && @cfg.tools.length == 0
+  let @hasToolBridge = @mx.llm && !@explicitNoTools && @mx.llm.hasTools && (@mx.llm.allowed ?? "") != ""
+  let @inlineConfig = when [
+    @hasToolBridge => @opencodeInlineConfig(@mx.llm.config ?? "", @mx.llm.allowed ?? "", @requestedAgent, true)
+    * => ""
+  ]
   let @agent = when [
-    @inlineConfig && @mx.llm && @mx.llm.hasTools => @opencodeToolAgentName(@requestedAgent)
+    @inlineConfig && @hasToolBridge => @opencodeToolAgentName(@requestedAgent)
     * => @requestedAgent
   ]
   let @finalPrompt = @cfg.system ? @prependOpencodeSystem(@prompt, @cfg.system) : @prompt
   let @resume = @opencodeResume(@cfg)
   let @doResume = @resume.continue && @resume.sessionId ? "1" : ""
   let @resumeId = @resume.sessionId ? @resume.sessionId : ""
-  let @raw = @runOpencodeSh(@finalPrompt, @dir, @model, @agent, @variant, @bypass, @inlineConfig, @doResume, @resumeId)
+  let @dataHome = @cfg.dataHome ? @cfg.dataHome : ""
+  let @stateHome = @cfg.stateHome ? @cfg.stateHome : ""
+  let @pure = @cfg.pure ? "1" : ""
+  let @escapePrompt = @hasToolBridge ? "" : "1"
+  let @raw = @runOpencodeSh(@finalPrompt, @dir, @model, @agent, @variant, @bypass, @inlineConfig, @doResume, @resumeId, @dataHome, @stateHome, @pure, @escapePrompt)
   let @parsed = @parseOpencodeJsonl(@raw)
   let @sessionId = @normalizeOpencodeSessionId(@parsed.sessionId ?? @resume.sessionId ?? null)
   let @value = when [

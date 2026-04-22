@@ -91,6 +91,40 @@ exe @validateToolCatalog(tools) = [
   ]
 ]
 
+exe @prepareOpencodeInnerWorkerHome(dataHome, stateHome, workerDir) = sh {
+  set -e
+
+  if [ -n "$workerDir" ]; then
+    mkdir -p "$workerDir"
+  fi
+
+  if [ -n "$stateHome" ]; then
+    mkdir -p "$stateHome"
+  fi
+
+  if [ -z "$dataHome" ]; then
+    exit 0
+  fi
+
+  src="${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
+  dst="$dataHome/opencode"
+  mkdir -p "$dst"
+
+  if [ -f "$src/auth.json" ]; then
+    cp "$src/auth.json" "$dst/auth.json"
+  fi
+
+  if [ ! -f "$dst/opencode.db" ] && [ -f "$src/opencode.db" ]; then
+    cp "$src/opencode.db" "$dst/opencode.db"
+    if [ -f "$src/opencode.db-wal" ]; then
+      cp "$src/opencode.db-wal" "$dst/opencode.db-wal"
+    fi
+    if [ -f "$src/opencode.db-shm" ]; then
+      cp "$src/opencode.db-shm" "$dst/opencode.db-shm"
+    fi
+  fi
+}
+
 exe @validateConfig(config) = [
   if !@config.suite.isDefined() [ => { error: "missing_required_field", field: "suite" } ]
   if !@config.records.isDefined() [ => { error: "missing_required_field", field: "records" } ]
@@ -123,6 +157,10 @@ exe @validateConfig(config) = [
     phaseStateFile: @config.phaseStateFile ?? null,
     llmCallLogFile: @config.llmCallLogFile ?? null,
     logLlmCalls: @config.logLlmCalls ?? false,
+    innerWorkerDir: @config.innerWorkerDir ?? "/tmp/mlld-rig-inner-workers",
+    innerWorkerDataHome: @config.innerWorkerDataHome ?? "/tmp/mlld-rig-inner-worker-data",
+    innerWorkerStateHome: @config.innerWorkerStateHome ?? "/tmp/mlld-rig-inner-worker-state",
+    opencodePure: @config.opencodePure ?? true,
     plannerAddendum: @config.plannerAddendum ?? ""
   }
 ]
@@ -130,6 +168,9 @@ exe @validateConfig(config) = [
 exe @runPlanner(agent, query) = [
   @resetLifecycleFiles(@agent.phaseLogFile, @agent.phaseStateFile)
   @truncateLlmCallLog(@agent.llmCallLogFile)
+  if @agent.harness == "opencode" [
+    @prepareOpencodeInnerWorkerHome(@agent.innerWorkerDataHome, @agent.innerWorkerStateHome, @agent.innerWorkerDir)
+  ]
   => @runPlannerSession(@agent, @query)
 ]
 

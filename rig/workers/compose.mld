@@ -19,6 +19,10 @@ exe @dispatchCompose(agent, state, query) = [
   let @prompt = @composePrompt(@query, @workerStateSummary(@agent, @state), @arrayItems(@state.execution_log))
   let @raw = @llmCall(@agent.harness, @prompt, {
     model: @agent.model,
+    pure: @agent.opencodePure,
+    dir: @agent.innerWorkerDir,
+    dataHome: @agent.innerWorkerDataHome,
+    stateHome: @agent.innerWorkerStateHome,
     tools: [],
     stubPhase: "compose",
     stubResponses: @agent.stub.compose ?? [],

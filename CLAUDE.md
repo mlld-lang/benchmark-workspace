@@ -29,7 +29,7 @@ clean/
     agents/<suite>.mld      Agent entrypoints (~20 lines each)
     domains/<suite>/        Records, tools, bridge per suite
   SCIENCE.md              Working experiment log — task tables, patterns, theories
-  AGENT_DEBUGGING_GUIDE.md  Investigation methodology
+  DEBUG.md                Investigation methodology
   *.taskdata.txt          Per-suite tool/model/task reference (from AgentDojo)
   *.threatmodel.txt       Per-suite attack trees and defense specs
   labels-policies-guards.md  Security model narrative (symlink to benchmarks/)
@@ -43,6 +43,8 @@ clean/
 **B. Separation of concerns.** Rig is generic. Bench is specific. Suite knowledge goes in tool `instructions:` or suite addendums — never in `rig/prompts/`.
 
 **C. Don't blame the model.** GLM 5.1 outperforms Sonnet 4.6. Past architectures hit 80%+ on these suites. When utility is low, the problem is prompt education or framework bugs.
+
+**D. SERIOUSLY. DON'T BLAME THE MODEL OR "NONDETERMINISM" OR "FLAKINESS"** Read the agent transcripts. No GUESSES as to WHY tests fail without EVIDENCE. 
 
 ## Current Focus
 
@@ -99,10 +101,16 @@ tk ls             # all open
 tk show <id>      # details
 ```
 
+## Deferred: Logging Refactor (ticket c-3edc)
+
+A designed but unstarted refactor of rig's logging stack to lean on the runtime trace subsystem (`--trace effects` via SDK) plus `var session @planner` plus a small curated hook layer. Net effect: `lifecycle.mld` + `runtime.mld @appendLlmCall` + per-wrapper boilerplate shrink; rig gets parent/child LLM-call timing for free; the m-5683 / UT14 bug classes disappear structurally.
+
+Not scheduled. Raise it when any of the following bite: chasing per-worker timing bottlenecks by hand, another lifecycle emission seam getting added manually, shelf-based session state producing an aliasing/null-callback regression, or the bench analyzer wanting a structured call tree. Full plan lives in ticket c-3edc.
+
 ## Key Docs (read order for new session)
 
 1. `SCIENCE.md` — current state, task tables, failure patterns, theories
-2. `AGENT_DEBUGGING_GUIDE.md` — investigation methodology
+2. `DEBUG.md` — investigation methodology
 3. `rig/ARCHITECTURE.md` — why the framework is shaped this way
 4. `rig/SECURITY.md` — what must never be weakened
 5. `workspace.taskdata.txt` (or relevant suite) — ground truth for task requirements

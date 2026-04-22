@@ -363,9 +363,18 @@ uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_
 uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --model claude-sonnet-4-20250514 --debug
 ```
 
-### Run with full verbose tracing (essential for runtime debugging)
+### Run with runtime tracing
+
+Tracing emits structured events for LLM calls, sessions, guards, policy, handles, display projection, and record coercion. `effects` is the default — it redacts sensitive content and covers 95% of debugging. `verbose` shows unredacted content plus additional read/import/handle detail; opt in only for specific deep dives, not on runs carrying real credentials or tainted content.
+
+The bench host (`clean/src/host.py`) already forwards `MLLD_TRACE` and `MLLD_TRACE_FILE` env vars through to the SDK — no host changes needed.
 
 ```bash
+# Default — effects level, NDJSON file sink
+MLLD_TRACE=effects MLLD_TRACE_FILE=tmp/workspace-ut0-trace.jsonl \
+  uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --debug
+
+# Deep dive — unredacted content, full read/import/handle detail
 MLLD_TRACE=verbose MLLD_TRACE_FILE=tmp/workspace-ut0-trace.jsonl \
   uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --debug
 ```

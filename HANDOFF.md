@@ -95,7 +95,7 @@ GLM 5.1 outperforms Sonnet 4.6. The same underlying model has hit 80%+ utility o
 | Session migration handoff | `tmp/rig-session-migration-handoff.md` |
 | Plan | `PLAN.md` (Step 12b is current) |
 | Status | `STATUS.md` |
-| Debugging guide | `AGENT_DEBUGGING_GUIDE.md` |
+| Debugging guide | `DEBUG.md` |
 | Per-suite task data (tools, models, per-task steps) | `<suite>.taskdata.txt` |
 | Per-suite threat model (attack trees, defense specs) | `<suite>.threatmodel.txt` |
 | Security model narrative | `labels-policies-guards.md` (symlink) |
