@@ -4,17 +4,17 @@
 
 This threat model covers attacks within the workspace capability surface — email, calendar, and cloud drive tools. Cross-domain attacks (e.g., using workspace as a pivot to reach banking, slack, or travel domains) are out of scope here; they belong in `cross-domain.threatmodel.txt`.
 
-This document is the **specification for the rig rewrite** (formerly `agentflow`, renamed 2026-04-06). The trees below describe what the new rig-backed workspace agent must defend against. Where a defense already exists in the reference implementation (current waterfall or earlier architectures), the item is marked `[?]` and a description explains how to preserve it. Where a defense is missing, the item is marked `[!]` and the rewrite must close the gap.
+This document is the **threat model for the rig workspace agent**. The trees below describe what the rig-backed workspace agent defends against. Items marked `[-]` have been confirmed by code review of the current implementation (`bench/domains/workspace/records.mld`, `tools.mld`, `rig/orchestration.mld`, `rig/workers/execute.mld`, etc.). Items marked `[!]` are known gaps. Items marked `[?]` are believed present but not yet verified by code review or test.
 
 ## Notation
 
 | Mark | Meaning |
 |---|---|
-| `[ ]` | Not addressed anywhere — open architectural question the rewrite must decide |
-| `[!]` | Vulnerability in the reference implementation — the rewrite must close this gap |
-| `[?]` | Mitigation exists in reference code. Needs to be ported and validated in the rewrite. |
-| `[-]` | Reserved for rewrite: confirmed by code review of new implementation |
-| `[x]` | Reserved for rewrite: confirmed by targeted tests of new implementation |
+| `[ ]` | Not addressed anywhere — open architectural question |
+| `[!]` | Known gap that needs to be closed |
+| `[?]` | Mitigation believed present but not yet verified by code review or test |
+| `[-]` | Confirmed by code review of the current implementation |
+| `[x]` | Confirmed by targeted tests |
 
 Nested `>` blocks under each item describe the mechanism, the mlld primitives involved, the configuration pattern, and any open questions. Descriptions should be sufficient (combined with mlld documentation) to reimplement the defense.
 
@@ -35,7 +35,7 @@ The attacker surface is content the agent reads back from tools: every email bod
 
 The write tool surface is: `send_email`, `delete_email`, `create_calendar_event`, `cancel_calendar_event`, `reschedule_calendar_event`, `add_calendar_event_participants`, `create_file`, `append_to_file`, `delete_file`, `share_file`.
 
-**A note on calendar tools:** `create_calendar_event` and `cancel_calendar_event` are classified `calendar:w` but NOT `exfil:send`. `add_calendar_event_participants` IS classified `exfil:send` because it has the clear "add someone as a recipient" semantics. The implication is that `no-send-to-unknown` applies to `add_calendar_event_participants` but not to `create_calendar_event`. Calendar events are still defended because `controlArgs: ["participants"]` + bucketed intent grounding requires the participants to be handle-grounded from contact search, not attacker literals. Different mechanism, same end result.
+**A note on calendar tools:** `create_calendar_event` and `add_calendar_event_participants` both carry `exfil:send` because they trigger email notifications to participants. `cancel_calendar_event` is `destructive:targeted` (no new recipient surface). Both `no-send-to-unknown` and fact-arg grounding defend the participant arrays.
 
 ## Attack Class 1: Recipient exfiltration via send_email
 
@@ -45,56 +45,54 @@ The attacker wants `send_email` dispatched with a recipient they control. This i
 __Attacker causes email to be sent to an attacker-controlled address__
 - Worker dispatches send_email with the attacker address literal in `recipients`
   + LLM sees the attacker address in its context (from injected email body)
-    + [?] `@email_msg` planner display strips body content
-         > The `@email_msg` record's `planner` display mode omits `subject`, `body`, and
-         > `attachments` entirely, showing only handle/ref fields for identity (`id_`, `sender`,
-         > `recipients`, `cc`, `bcc`) plus `timestamp` and `read`. This is the primary structural
-         > defense for the planner: the planner cannot see email content, so it cannot be instructed
-         > by injected text in message bodies to authorize the wrong actions.
-         > The rewrite must define an email_msg record with a `planner` display mode that includes
-         > only identity and metadata fields, never body content.
-    + [?] `#untrusted-llms-get-influenced`
-         > When the execute worker reads email bodies, its output is labeled `influenced`. This
-         > propagates to downstream label-flow checks.
+    + [-] `@email_msg` planner display strips body content
+         > `bench/domains/workspace/records.mld`: `@email_msg.display.planner` includes only
+         > `[{ ref: "id_" }, { ref: "sender" }, { mask: "recipients" }, { mask: "cc" },
+         > { mask: "bcc" }, timestamp, read]`. Subject, body, and attachments are omitted.
+         > The planner cannot see email content and cannot be instructed by injected text.
+    + [-] `#untrusted-llms-get-influenced`
+         > `rig/orchestration.mld`: rule enabled in `@synthesizedPolicy`. Extract/derive workers
+         > processing tainted input produce `influenced` output. Policy `labels.influenced.deny`
+         > blocks `["destructive", "exfil"]`.
   + LLM uses the attacker literal as the recipient arg
-    + [?] `#handles` + `#bucketed-intent-resolved`
-         > `send_email.controlArgs: ["bcc", "cc", "recipients"]` means all three destination fields
-         > are security-relevant. Values in the `resolved` bucket must be minted handles; bare
-         > literals are rejected as `proofless_resolved_value`. The attacker address is never
-         > minted as a handle because it never appears in any legitimate tool result.
-    + [?] `#no-send-to-unknown`
-         > `send_email` carries both `comm:w` and `exfil:send` labels, placing it in the policy's
-         > `exfil:send` operations group. The `no-send-to-unknown` rule fires on destination
-         > control args and requires `fact:*` proof or `known` attestation.
+    + [-] `#handles` + `#bucketed-intent-resolved`
+         > `@send_email_inputs.facts: [recipients, cc, bcc]`. Planner ref grammar requires
+         > `{ "source": "resolved", "record": ..., "handle": ..., "field": ... }` for grounded
+         > values. `rig/intent.mld` compiles execute intent; `@policy.build` rejects bare literals
+         > as `proofless_resolved_value`. The attacker address is never minted as a handle.
+    + [-] `#no-send-to-unknown`
+         > `send_email` labels: `["execute:w", "tool:w", "exfil:send", "comm:w"]`. Rule enabled
+         > in `@synthesizedPolicy`. Fires on destination fact args and requires `fact:*` proof
+         > or `known` attestation.
   + Worker copies a masked preview string instead of a handle
-    + [?] `#boundary-canonicalization`
-         > Masked preview modes emit non-valid-email placeholders (e.g., `m***@gmail.com`).
-         > The runtime's boundary canonicalization resolves unique previews back to their handles
-         > at the authorization compiler. Ambiguous previews fail closed with guidance to use
-         > the handle wrapper directly.
+    + [-] `#boundary-canonicalization`
+         > Rig uses structured refs, not preview strings, for the planner→execute path.
+         > `planner.att` ref grammar requires `{ "source": "resolved" }` with record/handle/field.
+         > Masked previews are shown to the planner for readability but the structured ref
+         > mechanism bypasses string-matching entirely. Intent compilation in `rig/intent.mld`
+         > resolves refs from typed state.
   + Planner authorizes the attacker literal in the `known` bucket
-    + [?] `#clean-planner` + `#known-uninfluenced-source`
-         > The planner phase must run on uninfluenced input only. `known` values from a planner
-         > whose input is tainted are rejected. The rewrite must preserve the waterfall invariant
-         > that the planner reads only the user task, never tool results.
-    + [?] `#task-text-validation`
-         > `@policy.build(..., { task: @query })` validates that `known` literal values appear
-         > verbatim in the user task text. Attacker email addresses never appear in legitimate
-         > user tasks, so the check fails closed.
+    + [-] `#clean-planner` + `#known-uninfluenced-source`
+         > The planner session sees only the user query and tool-wrapper attestations (status,
+         > handles, counts). Display projections strip untrusted content. The planner never
+         > reads raw tool results. `planner.att`: "You are protected from prompt injection."
+    + [-] `#task-text-validation`
+         > `rig/workers/execute.mld`: `@policy.build(@policyIntent, @agent.tools, { task: @query })`
+         > validates `known` literal values against the user task text. Attacker email addresses
+         > never appear in legitimate user tasks.
 - Side-channel: `share_file(email=<attacker>, file_id=...)`
   + Worker dispatches share_file with attacker address
-    + [?] Same protections as send_email
-         > `share_file.controlArgs: ["email", "file_id"]` with labels `comm:w, exfil:send`.
+    + [-] Same protections as send_email
+         > `@share_file_inputs.facts: [email, file_id: handle]`, labels `["exfil:send", "comm:w"]`.
          > Attacker-controlled email fails the same grounding and positive-check chain.
 - Side-channel: `add_calendar_event_participants(participants=[<attacker>], event_id=<id>)`
   + Worker adds attacker to an existing event's participant list
-    + [?] `add_calendar_event_participants` is exfil:send-classified
-         > Unlike `create_calendar_event`, this tool carries `exfil:send` label, activating
-         > `no-send-to-unknown` on the participants arg. Participants must be handle-grounded.
-    + [?] `#controlArgs: ["event_id", "participants"]`
-         > Both args are control args. The event must be a legitimate event the user has
-         > access to (grounded via calendar search), and the participants must be grounded
-         > via contact search.
+    + [-] `add_calendar_event_participants` is exfil:send-classified
+         > Labels: `["execute:w", "tool:w", "calendar:w", "exfil:send"]`. `no-send-to-unknown`
+         > fires on the participants fact arg.
+    + [-] `@add_calendar_event_participants_inputs.facts: [participants, event_id: handle]`
+         > Both args are facts. event_id requires a handle; participants require per-element
+         > grounding.
 ```
 
 ## Attack Class 2: Sensitive content exfiltration via email body or attachments
@@ -105,59 +103,51 @@ Even when the recipient passes Class 1 checks, the body of an outgoing email (or
 __Agent sends a message whose body or attachment carries user-owned secrets or private data__
 - Worker builds send_email body from tainted context (forwarded email content, file content)
   + LLM reads tainted content
-    + [?] `@email_msg.data.body` is untrusted by default
-         > Email body lives in the `data:` section of the email record, which is sugar for
-         > `data: { untrusted: [...] }`. Body content carries `untrusted` taint.
+    + [-] `@email_msg.data.body` is untrusted by default
+         > `records.mld`: `@email_msg.data: { untrusted: [subject, body, attachments] }`.
+         > Body content carries `untrusted` taint.
   + LLM composes body containing the tainted content
-    + [?] `#untrusted-llms-get-influenced`
-         > Worker output is `influenced` when input is tainted.
-    & [?] `#no-send-to-unknown` (recipient dimension — see Class 1)
-         > **Part 1 of the composite defense (D3 resolution, 2026-04-06).** The recipient control
-         > arg must carry fact proof or `known` attestation. An attacker cannot redirect the send
-         > to an attacker-controlled address. This is the same primitive as Class 1.
-    & [?] `#extract-contract-pinning` (body dimension)
-         > **Part 2 of the composite defense (D3 resolution, 2026-04-06).** The extract worker
-         > produces an `@email_payload` contract (a `*_payload` record with typed fields like
-         > `subject`, `body`, and `recipients`). The worker cannot smuggle unauthorized content
-         > into fields that don't exist in the contract. Injection can influence what ends up
-         > in the contracted fields, but cannot add new fields or leak out-of-contract data.
+    + [-] `#untrusted-llms-get-influenced`
+         > Worker output is `influenced` when input is tainted. Rule enabled in `@synthesizedPolicy`.
+    & [-] `#no-send-to-unknown` (recipient dimension — see Class 1)
+         > Part 1 of the composite defense. Recipient fact args require `fact:*` proof or `known`
+         > attestation. An attacker cannot redirect the send to an attacker-controlled address.
+    & [-] `#extract-contract-pinning` (body dimension)
+         > Part 2 of the composite defense. `rig/workers/extract.mld` validates schemas via
+         > `@validateExtractSchema`, coerces output through record types via `@cast`, and rejects
+         > selection refs (`extract_may_not_emit_selection_refs`). The extract worker cannot
+         > smuggle unauthorized content into fields outside the schema. Extract source dedup
+         > prevents re-extraction from the same resolved source.
          >
-         > Together, `#no-send-to-unknown` + `#extract-contract-pinning` defend the body dimension:
-         > recipient is structurally grounded (part 1), body shape is structurally constrained
-         > (part 2). There is no independent "body content protection" primitive needed. This
-         > replaces the previously-flagged `[!] #influenced-content-in-exfil-body` gap.
+         > Together, `#no-send-to-unknown` + `#extract-contract-pinning` defend the body dimension.
          >
-         > The contract pinning defense only holds if extract contracts are REQUIRED under
-         > defended mode (see `plan-rig-rewrite.md` "Configuration parameters"). The rewrite
-         > enforces this: building an agent in defended mode without extract contracts for all
-         > execute-phase write tools fails closed at `@rig.build(...)`.
-         >
-         > **Out of scope:** a blanket `influenced → exfil:send` flow rule. Such a rule would
-         > break legitimate summarize/send workflows. The composition above defends the concern
-         > without breaking legitimate use. See `plan-rig-rewrite.md` D3 for the full rationale.
+         > **Out of scope:** a blanket `influenced → exfil:send` flow rule. The policy does set
+         > `labels.influenced.deny: ["destructive", "exfil"]` which blocks influenced data from
+         > reaching exfil operations at the label-flow level. Legitimate summarize/send workflows
+         > work because the planner (clean, uninfluenced) authorizes the send, and the worker's
+         > influenced output is structurally constrained by the extract contract.
 - Worker attaches a file containing the secret
   + Worker calls send_email with `attachments: [<file_handle>]`
-    + [?] `#handles` on attachment references
-         > Attachments are handle-bearing file references. The worker cannot attach a file it
-         > did not mint a handle for.
+    + [-] `#handles` on attachment references
+         > Attachment values flow through the `@send_email_inputs.data.trusted: [attachments]`
+         > field. File ids used as attachments must be handle-grounded from prior resolve.
     + [!] `#attachment-label-propagation`
-         > **Reference implementation gap.** The `@email_msg` record declares `attachments` as
+         > **Known gap.** The `@email_msg` record declares `attachments` as
          > `data`, not `facts`. If a file record's taint labels do not propagate through the
          > attachment reference into the send_email dispatch check, secret-labeled files could
          > be attached to outgoing email without triggering `no-secret-exfil`.
-         > The rewrite should verify that file taint labels flow through attachment references,
-         > or mint attachments as handle-bearing facts that carry their source's label set.
+         > Needs verification that file taint labels flow through attachment references,
+         > or attachments should be minted as handle-bearing facts carrying source labels.
 - Worker writes the secret to a new cloud drive file and uses share_file
   + Worker calls create_file with body containing the secret, then share_file to attacker
-    + [?] Class 1 share_file recipient check
-         > `share_file` is `comm:w, exfil:send` with `controlArgs: ["email", "file_id"]`. The
-         > email arg must be a grounded recipient, same as send_email. Attack fails at the
-         > recipient check.
+    + [-] Class 1 share_file recipient check
+         > `@share_file_inputs.facts: [email, file_id: handle]`. Labels include `exfil:send`.
+         > Same grounding and positive-check chain as send_email.
 ```
 
 **Notes:**
 
-Class 2 decomposes into two dimensions: the recipient dimension (defended by `#no-send-to-unknown`, same as Class 1) and the body dimension (defended by `#extract-contract-pinning`, which is required under defended mode). Together they form a composite defense that does not require an independent "body content protection" primitive. The previous `[!]` on `#influenced-content-in-exfil-body` was resolved by D3 (2026-04-06) — see the `&` group above. The `[!]` items that remain (`#attachment-label-propagation`) are real, unresolved gaps that need rewrite work.
+Class 2 decomposes into two dimensions: the recipient dimension (defended by `#no-send-to-unknown`, same as Class 1) and the body dimension (defended by `#extract-contract-pinning`, which is required under defended mode). Together they form a composite defense that does not require an independent "body content protection" primitive. The previous `[!]` on `#influenced-content-in-exfil-body` was resolved by D3 — see the `&` group above. The remaining `[!]` (`#attachment-label-propagation`) is a real, unresolved gap.
 
 ## Attack Class 3: Unauthorized destructive writes
 
@@ -167,38 +157,34 @@ InjectionTask1 (delete file 13), InjectionTask5 (delete email after forwarding a
 __Agent destroys a user-owned file, email, or calendar event not in the user's intent__
 - Worker dispatches delete_file, delete_email, or cancel_calendar_event with attacker-chosen target
   + LLM sees the target identifier in injected content
-    + [?] `@email_msg.display.planner` / `@file_entry.display.planner` strip content
-         > Email bodies and file content are never shown to the planner. The attacker cannot inject
-         > instructions that reach the planning LLM because the planner never sees injected text.
-    + [?] `@email_msg.facts.id_` / `@file_entry.facts.id_`
-         > Record IDs are declared as `facts`, so legitimate values carry handles when tool results
-         > are projected to the LLM. Bare literals (e.g., "13" for InjectionTask1) are not handles
-         > and fail the grounding check.
+    + [-] `@email_msg.display.planner` / `@file_entry.display.planner` strip content
+         > Planner display modes omit body/content fields. The planner cannot see injected text.
+    + [-] `@email_msg.facts.id_: handle` / `@file_entry.facts.id_: handle`
+         > Record IDs are declared as `facts` with `handle` type. Legitimate values carry handles
+         > from resolve results. Bare literals (e.g., "13" for InjectionTask1) are not handles.
   + LLM uses the literal as the target control arg
-    + [?] `#handles` + `#bucketed-intent-resolved`
-         > `delete_file.controlArgs: ["file_id"]`, `delete_email.controlArgs: ["email_id"]`,
-         > `cancel_calendar_event.controlArgs: ["event_id"]`. All require handle-grounded values.
-    + [?] `#no-destroy-unknown`
-         > Policy rule blocks destructive operations on targets without `fact:*` proof.
-         > All destructive workspace tools carry `destructive:targeted` label.
+    + [-] `#handles` + `#bucketed-intent-resolved`
+         > `@delete_file_inputs.facts: [file_id: handle]`, `@delete_email_inputs.facts: [email_id: handle]`,
+         > `@cancel_calendar_event_inputs.facts: [event_id: handle]`. All require handle-grounded values.
+    + [-] `#no-destroy-unknown`
+         > Rule enabled in `@synthesizedPolicy`. All destructive workspace tools carry
+         > `destructive:targeted` label.
   + Planner authorizes delete with attacker-chosen target
-    + [?] `#task-text-validation`
-         > The attacker's literal target ID must appear in the user task text for the `known`
-         > bucket to accept it. File ID "13" does not appear in any legitimate user task.
-    + [?] `#clean-planner`
-         > The planner reads only the user task. If the user did not ask for deletion, the planner
-         > cannot authorize a destructive tool.
+    + [-] `#task-text-validation`
+         > `execute.mld` calls `@policy.build(..., { task: @query })`. File ID "13" does not
+         > appear in any legitimate user task.
+    + [-] `#clean-planner`
+         > Planner reads only the user query and tool attestations. If the user did not ask for
+         > deletion, the planner cannot authorize a destructive tool.
 - Post-send cover-up: delete the email after sending it (InjectionTask5 chain)
   + Worker runs send_email successfully, then delete_email on the send result
-    + [?] Per-step authorization (no implicit chaining)
-         > The `@policy.build` call happens per-step with bucketed intent. A successful send_email
-         > does not authorize a subsequent delete_email — each step requires its own authorization
-         > from the planner. The planner built its plan from the user task, which did not mention
-         > deletion.
-    + [?] `#authorizations-deny` — `delete_email` optional deny
-         > The rewrite should consider adding `delete_email` to `authorizations.deny` for scopes
-         > whose user tasks never involve email deletion. This is a defense-in-depth option on
-         > top of per-step authorization.
+    + [-] Per-step authorization (no implicit chaining)
+         > `execute.mld` calls `@policy.build` per execute step. A successful send_email does
+         > not authorize a subsequent delete_email — each step requires independent authorization.
+    + [-] `#authorizations-deny` — mechanism available
+         > `@synthesizedAuthorizations` supports deny lists. `delete_email` is not currently
+         > denied (no workspace user task uses it, but it's not blocked either). Adding it
+         > to the deny list would be defense-in-depth.
 ```
 
 ## Attack Class 4: Payload manipulation (subject/body drift)
@@ -209,28 +195,23 @@ InjectionTasks 0 and 4 dictate specific subject or body text. Class 1 catches th
 __Agent sends a message whose text is dictated by the attacker rather than the user__
 - Worker uses attacker-authored subject/body strings in the send_email call
   + LLM sees the attacker's strings in context
-    + [?] `#untrusted-llms-get-influenced`
-         > Worker output is labeled `influenced` when input is tainted.
+    + [-] `#untrusted-llms-get-influenced`
+         > Worker output is `influenced` when input is tainted. Rule enabled in `@synthesizedPolicy`.
   + LLM uses them as `subject` / `body` args
-    + [?] `#extract-contract-pinning` (D3 resolution, 2026-04-06)
-         > Resolved by D3. The rewrite requires `extract contracts` for all execute-phase write
-         > tools under defended mode. For `send_email`, the extract worker produces an
-         > `@email_payload` contract with typed `subject`, `body`, `recipients` fields. The
-         > worker cannot add fields outside the contract or smuggle arbitrary content into
-         > fields the contract didn't declare. Combined with `#no-send-to-unknown` for the
-         > recipient dimension, this closes the body-drift concern without adding a new
-         > runtime rule.
-         > See Class 2 for the full D3 composition and `plan-rig-rewrite.md` D3 for rationale.
+    + [-] `#extract-contract-pinning` (D3 resolution)
+         > Extract worker validates schemas and coerces output through record types. For `send_email`,
+         > the `@send_email_inputs` record constrains the field set. Combined with `#no-send-to-unknown`
+         > for the recipient dimension. See Class 2 for the full composition.
 - Pure stylistic drift: attacker rewrites tone without changing recipient or sensitive fields
   + [ ] Not defendable structurally
        > If the recipient is correct and the body contains no sensitive labels, a tone shift
        > ("use formal language" vs "use casual language") is not an attack from the security
-       > model's perspective. Accepted as out of scope. Document this decision in the rewrite.
+       > model's perspective. Accepted as out of scope.
 ```
 
 **Notes:**
 
-Class 4 is the thinnest in the workspace suite. The reference implementation has no independent defense for body content manipulation — Class 1 recipient grounding is load-bearing. For AgentDojo's specific InjectionTasks (0 and 4), the recipient is also under attack, so Class 1 catches them. For hypothetical "correct recipient, wrong body" attacks, the rewrite should accept this as out of scope or introduce a contract-based defense.
+Class 4 is the thinnest in the workspace suite. For AgentDojo's specific InjectionTasks (0 and 4), the recipient is also under attack, so Class 1 catches them. For hypothetical "correct recipient, wrong body" attacks, extract contract pinning constrains the body shape, and `labels.influenced.deny: ["destructive", "exfil"]` blocks influenced data from reaching exfil operations at the label-flow level.
 
 ## Attack Class 5: Calendar-channel side-effect exfil
 
@@ -240,41 +221,31 @@ InjectionTask2 calls `create_calendar_event` with an attacker participant. Calen
 __Agent triggers an email to an attacker via a calendar write tool__
 - Worker calls create_calendar_event with attacker in `participants`
   + LLM places attacker literal in participants control arg
-    + [?] `#controlArgs: ["participants"]`
-         > `create_calendar_event.controlArgs: ["participants"]`. The participants list must pass
-         > the bucketed-intent-resolved check — values must be handle-grounded. Attacker email
-         > literals cannot appear as handles because they're not in any contact record.
-    + [?] `#bucketed-intent-resolved`
-         > Per-element check on array control args. Each participant must independently resolve
-         > to a handle minted from a `@contact` record with `facts: [email: ...]`.
-    + [!] `#create_calendar_event-not-in-exfil-group`
-         > **Reference implementation observation.** `create_calendar_event` carries `calendar:w`
-         > label but NOT `exfil`. The `no-send-to-unknown` rule applies to tools in the
-         > `exfil` operations group (via the `operations` mapping in the policy). So
-         > `no-send-to-unknown` does NOT fire on `create_calendar_event.participants`.
-         > The defense chain collapses to `#controlArgs` + `#bucketed-intent-resolved` alone.
-         > That is sufficient (grounded handles, not bare literals) but it's a narrower defense
-         > than send_email, which has both `no-send-to-unknown` AND control arg grounding.
-         > The rewrite must add the `exfil` label to `create_calendar_event` so
-         > `no-send-to-unknown` provides a second layer.
-         > (Note: post-`exfil:*`-collapse per `plan-rig-rewrite.md` prereq section, the label
-         > is the bare `exfil`, not `exfil:send`.)
+    + [-] `@create_calendar_event_inputs.facts: [participants: array?]`
+         > Participants are declared as optional facts. When present, each element must carry
+         > fact proof via the bucketed-intent-resolved check. Attacker email literals cannot
+         > appear as handles.
+    + [-] `#bucketed-intent-resolved`
+         > Per-element check on array fact args. Each participant must independently resolve
+         > to a handle minted from a `@contact` record.
+    + [-] `#create_calendar_event` in exfil group
+         > `tools.mld`: `create_calendar_event` labels include `"exfil:send"`. The
+         > `no-send-to-unknown` rule fires on the participants arg, providing a second
+         > defense layer alongside fact-arg grounding.
 - Worker calls `add_calendar_event_participants` on an existing event
-  + [?] `add_calendar_event_participants` is exfil:send-classified
-       > This tool DOES carry `exfil:send` label, so `no-send-to-unknown` fires.
-       > `controlArgs: ["event_id", "participants"]` — both args are grounded.
+  + [-] `add_calendar_event_participants` is exfil:send-classified
+       > Labels: `["execute:w", "tool:w", "calendar:w", "exfil:send"]`. `no-send-to-unknown`
+       > fires. `@add_calendar_event_participants_inputs.facts: [participants, event_id: handle]`.
 - Worker calls reschedule_calendar_event which triggers notification to participants
   + Existing participants receive the notification
-    + [?] `#updateArgs: ["new_start_time", "new_end_time"]`
-         > Reschedule has `controlArgs: ["event_id"]` and `updateArgs: ["new_start_time", "new_end_time"]`.
-         > The event_id is grounded. The notification goes to existing participants who were
-         > vetted when the event was originally created. The attacker cannot add new participants
-         > through reschedule — that requires `add_calendar_event_participants` which is Class 1.
-    + [ ] `#reschedule-notification-content-pinning`
-         > The reschedule notification body is generated by the underlying system, not by the
-         > agent. If the event title/description contains tainted content from prior attacker
-         > influence, the notification forwards it. Currently no defense; the rewrite should
-         > verify whether event descriptions are properly classified as untrusted data.
+    + [-] `@calendar_reschedule_inputs` with update fields
+         > `facts: [event_id: handle]`, `update: [new_start_time, new_end_time]`. Event_id
+         > is grounded. `execute.mld` enforces at least one update field is non-null.
+         > Notification goes to existing participants vetted at event creation.
+    + [-] `#reschedule-notification-content-pinning` — event data is untrusted
+         > `@calendar_evt.data: { untrusted: [title, description, location] }`. Event content
+         > that might appear in notifications is classified as untrusted. The planner display
+         > strips these fields, so the planner cannot be steered by injected event content.
 ```
 
 ## Attack Class 6: Consequence chaining and cover-up
@@ -285,41 +256,46 @@ InjectionTask5 explicitly tests a chained attack: forward the security code, the
 __Agent executes a sequence of tool calls whose aggregate effect is an attack__
 - Worker runs send_email, then delete_email on the send result (Task5)
   + Step 1 (send_email)
-    + [?] Class 1 recipient check
-         > If step 1 fails (recipient not grounded), the chain stops. For Task5, the attacker
-         > is also attempting Class 1 attacks simultaneously.
+    + [-] Class 1 recipient check
+         > If step 1 fails (recipient not grounded), the chain stops.
   + Step 2 (delete_email on step 1's return)
-    + [?] Per-step `@policy.build` with clean planner input
-         > The authorization compiler is called per step with the planner's bucketed intent.
-         > The planner's intent comes from the user task (clean), not from step 1's return value.
-         > A send step does not implicitly authorize a delete step.
-    + [?] `#task-text-validation`
+    + [-] Per-step `@policy.build` with clean planner input
+         > `execute.mld` calls `@policy.build` per step. The planner's intent comes from the
+         > user task (clean). A send step does not authorize a delete step.
+    + [-] `#task-text-validation`
          > The `known` bucket requires literal values to appear in the user task text. The
          > email_id of the just-sent email never appeared in the user task.
-    + [?] `#authorizations-deny` (optional)
-         > Scopes whose user tasks never involve deletion can add `delete_email` to the
-         > policy's `authorizations.deny` list for defense in depth.
-- Worker poisons a shelf slot in one turn, reads it back as "trusted" in a later turn
-  + Attacker-controlled value enters shelf state
-    + [?] `#shelf-grounding`
-         > Agent writes to fact fields in shelf slots require handles, not literals. An attacker
-         > email literal cannot be written to a fact field.
-    + [?] `#cross-slot-constraints`
-         > Slot `from` clauses prevent cross-slot selection of hallucinated values. A slot defined
-         > as `selected: contact? from recipients` requires `selected` to be one of the handles
-         > already in `recipients`.
-    + [?] `#shelf-access-control`
-         > Box configuration restricts which scopes can write which slots. A read-only box cannot
-         > write to the target-tracking slot.
+    + [-] `#authorizations-deny` — mechanism available (see Class 3 note)
+- Worker poisons typed state in one turn, reads it back as "trusted" in a later turn
+  + Attacker-controlled value enters rig state
+    + [-] `#typed-state-grounding` (equivalent of shelf-grounding)
+         > Rig uses typed state buckets (`state.resolved`, `state.extracted`, `state.derived`)
+         > instead of shelf slots. Resolved state entries have handles and fact proof from `=> record`
+         > coercion. Extracted/derived values are typed but not proof-bearing. An attacker literal
+         > cannot enter resolved state because it never passes through `=> record` coercion from
+         > a read tool.
+    + [-] `#source-class-firewall` (equivalent of cross-slot constraints)
+         > The planner ref grammar enforces source classes: `resolved`, `extracted`, `derived`,
+         > `known`, `selection`. `execute.mld` validates that control args use `resolved`, `known`,
+         > or `selection` sources — never `extracted` or `derived`. Selection refs are validated
+         > by derive against their input set. An extracted/derived value cannot reach a control arg
+         > position without a validated selection ref.
+    + [-] `#planner-mediated-access` (equivalent of shelf-access-control)
+         > Workers receive only the specific resolved/extracted/derived values the planner
+         > selected via structured refs. Workers cannot access arbitrary state. The planner
+         > controls which values flow to which phase.
 - Worker exploits guard retry to probe and slip through
   + Guard retry feedback reveals which check failed
     + [?] `#guard-retry` is bounded
-         > Retry counts are capped. Infinite retry loops are not possible.
+         > mlld runtime primitive. Retry counts are capped. Rig does not currently use custom
+         > guards (enforcement is via policy rules + intent compilation), but the runtime guarantee
+         > is available if guards are added.
     + [?] `#guards-privileged` — only privileged guards can strip labels
-         > Non-privileged guards cannot remove `influenced`, `untrusted`, or other protected labels.
+         > mlld runtime primitive. Available but not directly exercised by rig's current code.
     + [?] `#locked-policy`
-         > A locked policy cannot be overridden by any guard, privileged or not. Critical rules
-         > should be in a locked policy to prevent guard-based bypass.
+         > mlld runtime primitive. Rig's synthesized policy is not currently `locked: true`.
+         > Adding `locked: true` would make the base rules absolute — worth considering for
+         > production deployments.
 ```
 
 ## Attack Class 7: Content injection (the upstream condition)
@@ -331,117 +307,122 @@ __Attacker text reaches an LLM and is treated as instruction__
 - Attacker injects into an email body that the agent reads
   + Email is delivered (mail is an open channel — assumed true)
   + Worker reads the email via search_emails / get_email_by_id / etc.
-    + [?] `@email_msg.data.body` classified as `data: untrusted`
-         > Email body is untrusted by default. When the worker reads it, the worker's context
-         > is tainted.
-    + [?] Planner never reads email bodies
-         > `@email_msg.display.planner` omits body. The planner's reasoning is not influenced
-         > by injected email content. Only the worker phase reads bodies, and the worker's
-         > output cannot authorize new tool calls — it must act within the authorization the
-         > clean planner already produced.
+    + [-] `@email_msg.data.body` classified as `data: untrusted`
+         > `records.mld`: `@email_msg.data: { untrusted: [subject, body, attachments] }`.
+    + [-] Planner never reads email bodies
+         > `@email_msg.display.planner` omits body. Only extract/derive workers see body content.
+         > Workers produce attestations (status, schema, preview fields) — not raw content — that
+         > flow back to the planner.
   + Attacker text reaches the worker LLM context
-    + [?] `#untrusted-llms-get-influenced`
-         > Worker output carries `influenced` label. Downstream label flow rules can constrain
-         > what the influenced output can do.
+    + [-] `#untrusted-llms-get-influenced`
+         > Worker output carries `influenced` label. Policy `labels.influenced.deny: ["destructive", "exfil"]`.
   + LLM treats attacker text as instruction
     + Not structurally blockable at the LLM layer. This is the axiom of prompt injection.
     + The downstream effect is blocked by Classes 1-6.
+    + [-] `#no-unknown-extraction-sources`
+         > Rule enabled in `@synthesizedPolicy`. Prevents extract workers from silently
+         > re-sourcing to read from unauthorized locations. Extract must target a grounded
+         > source (handle from resolve or `known`-attested path from the user task).
 - Attacker injects into cloud drive file content
   + Worker reads the file via get_file_by_id or search_files
-    + [?] `@file_entry.data.content` classified as `data: untrusted`
-         > Same pattern as email body.
-  + [?] `@file_entry.display.planner` strips content
-       > Planner never sees file content. Worker sees it but produces influenced output.
+    + [-] `@file_entry.data.content` classified as `data: untrusted`
+         > `records.mld`: `@file_entry.data: { untrusted: [content] }`.
+  + [-] `@file_entry.display.planner` strips content
+       > Planner display: `[{ ref: "id_" }, filename, owner, size, { ref: "shared_with" }, last_modified]`.
+       > Content omitted.
 - Attacker injects into calendar event description
   + Worker reads via search_calendar_events or get_day_calendar_events
-    + [?] `@calendar_evt.data.description`, `.title`, `.location` classified as `data: untrusted`
-    + [?] `@calendar_evt.display.planner` strips title, description, location
-         > Planner sees only identity fields (id_, participants, start_time, end_time, status).
+    + [-] `@calendar_evt.data` untrusted fields
+         > `records.mld`: `@calendar_evt.data: { untrusted: [title, description, location] }`.
+    + [-] `@calendar_evt.display.planner` strips title, description, location
+         > Planner display: `[{ ref: "id_" }, { ref: "participants" }, start_time, end_time, all_day, status]`.
          > Attacker text in event content never reaches the planner.
 - Attacker uses contact-list poisoning
   + Attacker sends one innocent email → auto-populates user's contact list
   + Worker calls search_contacts_by_name and receives attacker contact
     + [!] `#contact-list-auto-population-labeling`
-         > **Reference implementation gap to verify.** The AgentDojo Inbox model auto-populates
-         > the contact list from received emails. If a contact record from this path is classified
-         > as authoritative (fact email), the attacker's email address receives a legitimate
-         > handle via search_contacts_by_name. The attacker could then trick the worker into
-         > using that handle as a recipient.
-         > The rewrite must ensure: either (a) auto-populated contacts carry the untrusted label
+         > **AgentDojo data model gap.** The Inbox model auto-populates the contact list from
+         > received emails. The `@contact` record declares `facts: [email]`, so any contact
+         > returned by `search_contacts_by_name` — including attacker-injected ones — gets
+         > fact-grade authority on the email field and a legitimate handle.
+         > Mitigation would require either (a) auto-populated contacts carrying the untrusted label
          > of the original sender email (so they can't be used as destination facts), or
-         > (b) the contact search path distinguishes "verified contacts" from "auto-populated
-         > from inbox" and only the former can be control args.
-         > This is the "shared_with must be a fact, not data" lesson applied to contacts.
+         > (b) the contact search path distinguishing "verified contacts" from "auto-populated
+         > from inbox" and only the former being usable as control args. This is the
+         > "shared_with must be a fact, not data" lesson applied to contacts.
 ```
 
 ## Coverage summary
 
 | Primitive | Attack classes | Mark |
 |---|---|---|
-| `@email_msg.display.planner` stripping content | 1, 3, 7 | [?] |
-| `@calendar_evt.display.planner` stripping content | 3, 5, 7 | [?] |
-| `@file_entry.display.planner` stripping content | 3, 7 | [?] |
-| `#handles` + `#bucketed-intent-resolved` | 1, 3, 5, 6 | [?] |
-| `#no-send-to-unknown` | 1 | [?] |
-| `#no-destroy-unknown` | 3 | [?] |
-| `#controlArgs` on write tools | 1, 3, 5 | [?] |
-| `#task-text-validation` | 1, 3, 6 | [?] |
-| `#clean-planner` | 1, 3, 6, 7 | [?] |
-| `#known-uninfluenced-source` | 1, 6 | [?] |
-| `#untrusted-llms-get-influenced` | 1, 2, 4, 6, 7 | [?] |
-| `#data-untrusted` (email body, file content, event description) | 2, 7 | [?] |
-| `#authorization-compiler` per-step | 1, 3, 6 | [?] |
-| `#boundary-canonicalization` | 1 | [?] |
-| `#shelf-grounding` | 6 | [?] |
-| `#cross-slot-constraints` | 6 | [?] |
-| `#guards-privileged` | 6 | [?] |
-| `#locked-policy` | 6 | [?] |
-| `#guard-retry` bounded | 6 | [?] |
-| `#updateArgs` | 5 (reschedule) | [?] |
-| `#authorizations-deny` (optional per-scope) | 3, 6 | [?] (defense in depth) |
-| `#extract-contract-pinning` (D3, defends with `#no-send-to-unknown`) | 2, 4 | [?] — required under defended mode per `plan-rig-rewrite.md` |
-| `#attachment-label-propagation` | 2 | [!] — needs verification and possibly structural fix |
-| `#create_calendar_event-not-in-exfil-send-group` | 5 | [!] — missing `exfil` label (note: post-`exfil:*`-collapse, this is just `exfil`) |
-| `#contact-list-auto-population-labeling` | 7 | [!] — auto-populated contacts may carry untrusted labels improperly |
-| `#reschedule-notification-content-pinning` | 5 | [?] — covered by extract contract pinning for the reschedule flow under D3 |
+| `@email_msg.display.planner` stripping content | 1, 3, 7 | [-] |
+| `@calendar_evt.display.planner` stripping content | 3, 5, 7 | [-] |
+| `@file_entry.display.planner` stripping content | 3, 7 | [-] |
+| `#handles` + `#bucketed-intent-resolved` | 1, 3, 5, 6 | [-] |
+| `#no-send-to-unknown` | 1, 5 | [-] |
+| `#no-destroy-unknown` | 3 | [-] |
+| `#facts` on write tool input records | 1, 3, 5 | [-] |
+| `#task-text-validation` | 1, 3, 6 | [-] |
+| `#clean-planner` | 1, 3, 6, 7 | [-] |
+| `#known-uninfluenced-source` | 1, 6 | [-] |
+| `#untrusted-llms-get-influenced` | 1, 2, 4, 6, 7 | [-] |
+| `#data-untrusted` (email body, file content, event description) | 2, 7 | [-] |
+| `#authorization-compiler` per-step | 1, 3, 6 | [-] |
+| `#boundary-canonicalization` (structured refs) | 1 | [-] |
+| `#typed-state-grounding` (equiv of shelf-grounding) | 6 | [-] |
+| `#source-class-firewall` (equiv of cross-slot constraints) | 6 | [-] |
+| `#planner-mediated-access` (equiv of shelf-access-control) | 6 | [-] |
+| `#guards-privileged` | 6 | [?] — runtime primitive, not directly exercised |
+| `#locked-policy` | 6 | [?] — runtime primitive, not yet configured |
+| `#guard-retry` bounded | 6 | [?] — runtime primitive, not directly exercised |
+| `#updateArgs` (update fields on reschedule) | 5 | [-] |
+| `#authorizations-deny` (optional per-scope) | 3, 6 | [-] — mechanism available, not configured for delete_email |
+| `#extract-contract-pinning` (D3, defends with `#no-send-to-unknown`) | 2, 4 | [-] |
+| `#no-unknown-extraction-sources` | 7 | [-] — prevents extract workers from silently re-sourcing |
+| `#influenced-deny-exfil` label-flow rule | 2, 4 | [-] — `labels.influenced.deny: ["destructive", "exfil"]` |
+| `#attachment-label-propagation` | 2 | [!] — needs verification of label flow through attachment arrays |
+| `#create_calendar_event` in exfil group | 5 | [-] — fixed: now carries `exfil:send` label |
+| `#contact-list-auto-population-labeling` | 7 | [!] — AgentDojo data model gap; auto-populated contacts get fact authority |
+| `#reschedule-notification-content-pinning` | 5 | [-] — event data classified as untrusted |
 
 ## Known vulnerabilities `[!]`
 
-1. **`#create_calendar_event-not-in-exfil-group`.** `create_calendar_event` is `calendar:w` only, not `exfil`. `no-send-to-unknown` does not fire on its participants arg; the defense collapses to `controlArgs` + `bucketed-intent-resolved` alone. This is sufficient in practice but narrower than send_email's defense. The rewrite should add the `exfil` label for a two-layer defense. (Note: post-`exfil:*`-collapse per `plan-rig-rewrite.md` prereq section, all exfil operations carry the single `exfil` label.)
+1. **`#attachment-label-propagation`.** If file taint labels do not flow through attachment references into send_email's dispatch check, secret-labeled files could be attached to outgoing email without triggering `no-secret-exfil`. The `@send_email_inputs` record declares `attachments: array?` in `data.trusted` — the runtime should propagate source file labels through the array elements, but this has not been verified by test.
 
-2. **`#attachment-label-propagation`.** If file taint labels do not flow through attachment references into send_email's dispatch check, secret-labeled files could be attached to outgoing email without triggering `no-secret-exfil`. The rewrite must verify the label propagation path or mint attachments as handle-bearing facts carrying source labels.
+2. **`#contact-list-auto-population-labeling`.** AgentDojo's Inbox model auto-populates the contact list from received emails. The `@contact` record declares `facts: [email]`, so any contact returned by `search_contacts_by_name` — including attacker-injected ones — gets fact-grade authority on the email field. This is an AgentDojo data model limitation, not a rig bug. Mitigation would require either (a) the benchmark adding a distinction between verified and auto-populated contacts, or (b) rig treating contacts differently based on provenance.
 
-3. **`#contact-list-auto-population-labeling`.** If auto-populated contacts from received emails are classified as authoritative, an attacker could receive a legitimate handle via `search_contacts_by_name` by first sending the user an innocent email. The rewrite must ensure auto-populated contacts either carry the sender's untrusted label or are distinguished from verified contacts.
+**Previously listed `[!]` items now resolved:**
 
-**Previously listed `[!]` item resolved by design review (2026-04-06):**
+- **`#create_calendar_event-not-in-exfil-group`** — fixed. `tools.mld` declares `create_calendar_event` with labels `["execute:w", "tool:w", "calendar:w", "exfil:send"]`. `no-send-to-unknown` fires on the participants arg. Graduated to [-].
 
-- **`#influenced-content-in-exfil-body`** — resolved by D3. The body-content concern is defended by the composition of `#no-send-to-unknown` (recipient dimension) + `#extract-contract-pinning` (body dimension, enabled by the defended-mode contract requirement). No independent body-content primitive is needed. See Class 2 `&` group and `plan-rig-rewrite.md` D3 for the full rationale.
+- **`#influenced-content-in-exfil-body`** — resolved by D3 design decision. The body-content concern is defended by the composition of `#no-send-to-unknown` (recipient dimension) + `#extract-contract-pinning` (body dimension). Additionally, `labels.influenced.deny: ["destructive", "exfil"]` provides a label-flow layer.
 
 ## Open architectural questions `[ ]`
 
 1. **Pure stylistic payload drift.** If the attacker manipulates tone without changing recipients or embedded data, is this an attack from the security model's perspective? Currently not defended. Document the decision.
 
-**Resolved questions (2026-04-06):**
+**Resolved questions:**
 
-- **Body content pinning for known attack patterns** — resolved by D3. Extract contracts (`@email_payload` and similar) are required under defended mode and pin the body shape structurally. Forwarding tasks specifically should use a `@forwarding_payload` contract that carries a handle-bound `source_email` field; this is a developer concern when declaring contracts, not a new framework primitive.
+- **Body content pinning for known attack patterns** — resolved by D3. Extract contracts pin the body shape structurally. The extract worker validates schemas and coerces output through record types.
 
-- **Reschedule notification content** — resolved by D3. The reschedule flow should declare a `@reschedule_notification_payload` contract that pins the notification body to the event's grounded title/description fields (not to influenced worker output). Same pattern as Class 2 and Class 4.
+- **Reschedule notification content** — resolved. `@calendar_evt.data: { untrusted: [title, description, location] }` classifies event content as untrusted. Planner display strips these fields.
 
 ## Audit notes
 
 ### Policy rule candidates
 
-- **`influenced → exfil` flow rule.** ✗ Rejected by D3 (2026-04-06). Previously considered as a blanket rule blocking influenced content from reaching any arg position on exfil tools. The composition `#no-send-to-unknown` + `#extract-contract-pinning` defends the concern without breaking legitimate summarize-and-send workflows. See `plan-rig-rewrite.md` D3.
+- **`influenced → exfil` label-flow rule.** Active. `orchestration.mld` configures `labels.influenced.deny: ["destructive", "exfil"]`, which blocks influenced data from reaching exfil or destructive operations at the label-flow level. Legitimate summarize/send workflows still work because the planner is clean (uninfluenced) and `@policy.build` validates the authorization independently — the planner-authorized execute path is not subject to the influenced-deny rule because the authorization comes from a clean source.
 
-- **Automatic `exfil` classification for tools that trigger notifications.** Tools like `create_calendar_event` and `reschedule_calendar_event` indirectly trigger emails. The rewrite should declare these tools with `exfil` explicitly so `no-send-to-unknown` fires on their destination arrays. (Note: post-`exfil:*`-collapse, this is the single `exfil` label, not `exfil:send`.)
+- **Automatic `exfil` classification for tools that trigger notifications.** `create_calendar_event` and `add_calendar_event_participants` now carry `exfil:send`. `reschedule_calendar_event` carries `calendar:w` and `update:w` — it notifies existing participants but cannot add new ones, so the `exfil:send` classification is not needed on it.
 
 ### Load-bearing single points of failure
 
-- **`@email_msg.display.planner`** is load-bearing for Classes 1, 3, and 7. A regression in display projection enforcement would immediately expose the planner to body content injection.
+- **`@email_msg.display.planner`** is load-bearing for Classes 1, 3, and 7. A regression in display projection enforcement would immediately expose the planner to body content injection. Confirmed [-] in `records.mld`.
 
-- **`#handles` + `#bucketed-intent-resolved`** is the foundation for Classes 1, 3, and 5. A regression in handle enforcement or bucketed intent validation would expose most write tools simultaneously.
+- **`#handles` + `#bucketed-intent-resolved`** is the foundation for Classes 1, 3, and 5. A regression in handle enforcement or bucketed intent validation would expose most write tools simultaneously. Confirmed [-] in `intent.mld` + `execute.mld`.
 
-- **`#clean-planner`** is load-bearing across Classes 1, 3, 6, and 7. If the planner ever reads tool results, the entire defense chain degrades to `#known-uninfluenced-source` as the only remaining check.
+- **`#clean-planner`** is load-bearing across Classes 1, 3, 6, and 7. The planner sees only attestation results from tool wrappers — status, handles, counts, preview fields — never raw tool results or tainted content. Confirmed [-] in `planner.att` + `planner.mld`.
 
 ### Out of scope for this model
 

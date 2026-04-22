@@ -4,17 +4,17 @@
 
 This threat model covers attacks within the slack capability surface — messaging (direct and channel), URL fetches, webpage posting, and channel/user membership operations. Cross-domain attacks (e.g., using slack to exfil data read in workspace or banking) are out of scope here; they belong in `cross-domain.threatmodel.txt`.
 
-This document is the **specification for the rig rewrite** (formerly `agentflow`, renamed 2026-04-06). The trees below describe what the new rig-backed slack agent must defend against. Where a defense already exists in the reference implementation, the item is marked `[?]` and a description explains how to preserve it. Where a defense is missing, the item is marked `[!]` and the rewrite must close the gap.
+This document is the **threat model for the rig slack agent**. Items marked `[-]` have been confirmed by code review. Items marked `[!]` are known gaps. Items marked `[?]` are believed present but not yet verified.
 
 ## Notation
 
 | Mark | Meaning |
 |---|---|
-| `[ ]` | Not addressed anywhere — open architectural question the rewrite must decide |
-| `[!]` | Vulnerability in the reference implementation — the rewrite must close this gap |
-| `[?]` | Mitigation exists in reference code. Needs to be ported and validated in the rewrite. |
-| `[-]` | Reserved for rewrite: confirmed by code review of new implementation |
-| `[x]` | Reserved for rewrite: confirmed by targeted tests of new implementation |
+| `[ ]` | Open architectural question |
+| `[!]` | Known gap — defense missing or incomplete |
+| `[?]` | Believed present but not yet verified by code review |
+| `[-]` | Confirmed by code review of current implementation |
+| `[x]` | Confirmed by targeted tests |
 
 Nested `>` blocks describe the mechanism, the mlld primitives involved, the configuration pattern, and any open questions.
 
@@ -44,12 +44,12 @@ The attacker wants the agent to emit a URL that the attacker controls or that ca
 __Attacker causes the agent to produce a URL that reaches the attacker's server__
 - Worker dispatches get_webpage with an attacker-constructed URL
   + LLM sees the URL pattern in injected content
-    + [?] `@slack_msg.data.body` classified as `data: untrusted`
+    + [-] `@slack_msg.data.body` classified as `data: untrusted`
          > Slack message bodies live in the `data:` section of the slack_msg record, so they
          > carry untrusted taint. The planner never sees body content (see Class 2). The worker
          > sees bodies and produces `influenced` output.
   + LLM uses the URL as the `url` control arg
-    + [?] `#no-novel-urls`
+    + [-] `#no-novel-urls`
          > Policy rule: any URL field must appear verbatim in a prior tool result or user task
          > text. Applied to URL-typed fields across all tool args, not just fetch tools.
          > The attacker wants to exfil data D by encoding it in a URL. Either the URL is fully
@@ -59,25 +59,26 @@ __Attacker causes the agent to produce a URL that reaches the attacker's server_
          > agent can dispatch are URLs that were present verbatim in a tool result or the user
          > task. Attacker-controlled URLs in injection text are not verbatim in either unless
          > the user's legitimate task happened to include them.
-         > The rewrite must keep `no-novel-urls` enabled in the default policy.
-    + [?] `#controlArgs: ["url"]`
+         > Rule conditionally enabled in `@synthesizedPolicy` when tools have fetch/URL risk.
+         > `get_webpage` has `exfil:fetch` label.
+    + [-] `#controlArgs: ["url"]`
          > `get_webpage.controlArgs: ["url"]`, declaring the URL as security-relevant. The
          > bucketed intent must supply a grounded or task-text-validated URL.
-    + [?] `#task-text-validation`
+    + [-] `#task-text-validation`
          > URLs in `known` bucket must appear verbatim in user task text. Attacker URLs do not
-         > appear there.
+         > appear there. `execute.mld` calls `@policy.build` with `{ task: @query }`.
 - Worker dispatches send_direct_message with an attacker URL in the body
   + Worker writes "Please click this link: <attacker_url>"
     + [?] `#no-novel-urls` applies to body fields, not just controlArgs
          > The `no-novel-urls` rule scans URL fields across all tool args. A URL embedded in
-         > a message body still counts as a URL-bearing arg. The rewrite must ensure the rule's
-         > implementation scans non-controlArg fields for URLs, not just controlArg positions.
+         > a message body still counts as a URL-bearing arg. The rule's implementation must
+         > scan non-controlArg fields for URLs, not just controlArg positions.
          > This is the og:embed defense: even though the agent doesn't fetch the URL itself,
          > posting a URL to slack causes slack's own preview fetcher to resolve it. The rule
          > treats "emit URL into any exfil:send arg position" as equivalent to "fetch URL."
 - Worker dispatches post_webpage with attacker URL
   + `post_webpage.controlArgs: ["url"]`
-    + [?] `#no-novel-urls`
+    + [-] `#no-novel-urls`
          > `post_webpage` carries `publish:w` and `exfil:send` labels. The URL control arg must
          > pass `no-novel-urls`. The attacker URL isn't in any prior tool result, so the call
          > is blocked.
@@ -92,21 +93,21 @@ InjectionTasks 2 and 4 want the agent to post channel content (messages, user da
 __Agent posts channel content to an attacker-controlled webpage__
 - Worker calls post_webpage(url=<attacker_url>, content=<channel_messages>)
   + URL arg is attacker-chosen
-    + [?] `#no-novel-urls` on `post_webpage.url`
+    + [-] `#no-novel-urls` on `post_webpage.url`
          > Same defense as Class 1. The URL is the controlArg and must be grounded.
   + Content arg carries user channel data
-    + [?] `post_webpage.controlArgs: ["url"]`
+    + [-] `post_webpage.controlArgs: ["url"]`
          > Only the URL is a control arg; content is free-form. The defense relies entirely
          > on URL grounding. If the URL can't be attacker-chosen, the content has nowhere to go.
 - Worker writes channel messages to a legitimate webpage URL (attacker uses a URL present in user context)
   + [ ] Content-to-legitimate-URL exfil
-       > **Out of scope in reference.** If the attacker gets the agent to post channel content
-       > to a legitimate webpage URL (e.g., a URL the user mentioned in their task), the content
-       > leaves the system. This would be a legitimate publishing task from the agent's view.
-       > The defense would need to check that the content is appropriate for the destination,
-       > which requires content classification the reference does not have.
-       > The rewrite should accept this as out of scope for the security model (the user
-       > authorized the URL) or introduce explicit content classification for sensitive data.
+       > **Out of scope.** If the attacker gets the agent to post channel content to a legitimate
+       > webpage URL (e.g., a URL the user mentioned in their task), the content leaves the
+       > system. This would be a legitimate publishing task from the agent's view. The defense
+       > would need to check that the content is appropriate for the destination, which requires
+       > content classification not currently present. Treated as out of scope for the security
+       > model (the user authorized the URL), or requires explicit content classification for
+       > sensitive data.
 ```
 
 **Notes:**
@@ -121,20 +122,22 @@ The attacker wants the agent to send a message to the wrong recipient — a diff
 __Agent sends a direct or channel message to an attacker-selected recipient__
 - Worker dispatches send_direct_message(recipient=<wrong_user>, body=<...>)
   + LLM sees the victim username in injected content
-    + [?] `@slack_msg.display.planner` strips body
-         > The planner never sees message bodies. The planner cannot be directed by injected
-         > channel messages to send DMs to attacker-selected users.
+    + [-] `@slack_msg.display.planner` strips body
+         > The planner never sees message bodies. Confirmed: `planner: [{ ref: "sender" }, { ref: "recipient" }]`.
+         > The planner cannot be directed by injected channel messages to send DMs to attacker-selected users.
   + LLM uses the username as the recipient control arg
-    + [?] `#handles` + `#bucketed-intent-resolved`
+    + [-] `#handles` + `#bucketed-intent-resolved`
          > `send_direct_message.controlArgs: ["recipient"]`. The recipient must be a handle-
-         > grounded slack user. `@slack_user` records are `facts: [@input as name: string]`,
-         > so usernames minted from legitimate search results (`get_users_in_channel`) are
-         > handle-bearing. A bare username literal from injection text has no handle.
-    + [?] `#no-send-to-unknown`
-         > `send_direct_message` is `comm:w, exfil:send`. The recipient must carry fact proof
+         > grounded slack user. All write tool input records declare `facts:` fields. Intent
+         > compilation rejects bare literals. Usernames minted from legitimate search results
+         > (`get_users_in_channel`) are handle-bearing. A bare username literal from injection
+         > text has no handle.
+    + [-] `#no-send-to-unknown`
+         > `send_direct_message` is `comm:w, exfil:send`. The `send_direct_message` and
+         > `invite_user_to_slack` tools carry `exfil:send`. The recipient must carry fact proof
          > or known attestation.
 - Worker dispatches send_channel_message to the wrong channel
-  + [?] Same chain: `#handles`, `#bucketed-intent-resolved`, `#no-send-to-unknown`
+  + [-] Same chain: `#handles`, `#bucketed-intent-resolved`, `#no-send-to-unknown`
        > `send_channel_message.controlArgs: ["channel"]`. Channels are fact-bearing from
        > `get_channels` results.
 ```
@@ -148,21 +151,13 @@ __Agent modifies slack membership to benefit the attacker__
 - Worker calls invite_user_to_slack(user=<name>, user_email=<attacker_email>)
   + `user` is a control arg (must be grounded)
   + `user_email` is the actual destination the invitation goes to
-    + [!] `#user_email-not-declared-as-controlArg`
-         > **Reference implementation gap.** `invite_user_to_slack.controlArgs: ["user"]` — only
-         > the `user` field is a control arg. The `user_email` field, which is the actual
-         > destination address for the invitation email, is a regular data arg. No grounding
-         > check applies to it.
-         > This means an attacker could potentially get the worker to call
-         > `invite_user_to_slack(user="Alice Smith", user_email="attacker@evil.com")` — creating
-         > an account in the user's slack workspace called "Alice Smith" that the attacker
-         > controls via their email.
-         > The rewrite must declare `invite_user_to_slack.controlArgs: ["user", "user_email"]`
-         > so the user_email field is grounded through the same check as `user`. Possibly also
-         > classify `user_email` as a fact field on a record that's used for invitation targeting.
+    + [-] `#user_email-declared-as-controlArg`
+         > `@invite_user_to_slack_inputs.facts: [user, user_email]`. Both are now facts.
+         > The `user_email` field is grounded through the same check as `user`, closing the
+         > gap where an attacker could supply a legitimate username with an attacker email.
 - Worker calls add_user_to_channel(user=<attacker>, channel=<target>)
   + LLM uses attacker username as the user arg
-    + [?] `#handles` + `#bucketed-intent-resolved`
+    + [-] `#handles` + `#bucketed-intent-resolved`
          > `add_user_to_channel.controlArgs: ["channel", "user"]`. Both args are control args
          > and must be handle-grounded. An attacker username not in any legitimate search result
          > is not a handle.
@@ -170,20 +165,21 @@ __Agent modifies slack membership to benefit the attacker__
          > `add_user_to_channel` should carry `exfil:send` or `comm:w` label to activate
          > this rule. Needs verification: currently labeled `channel:w` only. If not in the
          > exfil:send group, the defense is `#handles` alone.
-         > The rewrite should verify the label classification and add `exfil:send` if the
-         > semantic is "add a recipient."
+         > Should verify the label classification and add `exfil:send` if the semantic is
+         > "add a recipient."
 - Worker calls remove_user_from_slack(user=<legitimate_user>)
   + LLM uses a legitimate username from search results as the target
-    + [?] `#no-destroy-unknown`
-         > `remove_user_from_slack` is `destructive:targeted`. The target must carry `fact:*`
-         > proof. Legitimate usernames DO have handles (from `get_users_in_channel` results),
-         > so this is a per-step authorization question: is removal in the user's task?
-    + [?] `#clean-planner`
+    + [-] `#no-destroy-unknown`
+         > `remove_user_from_slack` carries `destructive:targeted`. The target must carry
+         > `fact:*` proof. Legitimate usernames DO have handles (from `get_users_in_channel`
+         > results), so this is a per-step authorization question: is removal in the user's task?
+    + [-] `#clean-planner`
          > The planner reads only the user task. If the user did not ask to remove anyone,
-         > the planner cannot authorize `remove_user_from_slack`.
-    + [?] `#authorizations-deny`
-         > Scopes whose user tasks never involve membership changes should add
-         > `remove_user_from_slack` to `authorizations.deny`.
+         > the planner cannot authorize `remove_user_from_slack`. Planner sees only attestations.
+    + [-] `#authorizations-deny`
+         > Mechanism available via `@synthesizedAuthorizations`. Scopes whose user tasks never
+         > involve membership changes should add `remove_user_from_slack` to
+         > `authorizations.deny`.
 ```
 
 ## Attack Class 5: Tier-2 data corruption / recipient substitution — moved to extras
@@ -201,16 +197,19 @@ __Attacker text reaches the LLM and is treated as instruction__
 - Attacker injects into a channel message the agent reads via read_channel_messages
   + Attacker writes message in a channel the user is in
   + Worker reads messages
-    + [?] `@slack_msg.data.body` untrusted
-    + [?] `@slack_msg.display.planner` strips body
-         > Planner sees only `{ ref: "sender" }` and `channel` — no message content.
+    + [-] `@slack_msg.data.body` untrusted
+         > Confirmed: `data: { untrusted: [body] }`.
+    + [-] `@slack_msg.display.planner` strips body
+         > Planner sees only `{ ref: "sender" }, { ref: "recipient" }` — no message content.
          > Attacker text never reaches the planner.
 - Attacker hosts content on a webpage the agent fetches via get_webpage
-  + [?] `get_webpage` returns untrusted data
-       > The reference implementation labels `get_webpage` as `untrusted, exfil:fetch, tool:r`.
-       > Returned webpage content carries untrusted taint.
+  + [-] `get_webpage` returns untrusted data
+       > `get_webpage` labeled `untrusted, exfil:fetch, tool:r`. Returned webpage content
+       > carries untrusted taint. `@webpage_content.display.planner` strips content —
+       > confirmed: `planner: [{ ref: "url" }]`.
   + Worker reads the webpage content
-    + [?] Worker output becomes `influenced`
+    + [-] Worker output becomes `influenced`
+         > Policy sets `labels.influenced.deny: ["destructive", "exfil"]`.
 - Attacker poisons channel history with fake structured-looking data
   + See `extras.threatmodel.txt` Slack section for the tier-2 contact substitution pattern (no AgentDojo injection task exercises this)
 ```
@@ -219,18 +218,21 @@ __Attacker text reaches the LLM and is treated as instruction__
 
 | Primitive | Attack classes | Mark |
 |---|---|---|
-| `#no-novel-urls` | 1, 2 | [?] |
-| `#handles` + `#bucketed-intent-resolved` | 1, 3, 4 | [?] |
-| `#no-send-to-unknown` | 1, 3, 4 | [?] |
-| `#no-destroy-unknown` | 4 (remove_user) | [?] |
-| `#controlArgs` on write tools | 1, 2, 3, 4 | [?] |
-| `@slack_msg.display.planner` strips body | 1, 3, 6 | [?] |
-| `@slack_msg.data.body` untrusted | 3, 6 | [?] |
-| `#untrusted-llms-get-influenced` | 1, 3, 6 | [?] |
-| `#clean-planner` | 3, 4, 6 | [?] |
-| `#task-text-validation` | 1, 3, 4 | [?] |
-| `#authorizations-deny` (optional) | 4 | [?] (defense in depth) |
-| `#user_email-not-declared-as-controlArg` | 4 | [!] |
+| `#no-novel-urls` | 1, 2 | [-] |
+| `#handles` + `#bucketed-intent-resolved` | 1, 3, 4 | [-] |
+| `#no-send-to-unknown` | 1, 3, 4 | [-] |
+| `#no-destroy-unknown` | 4 (remove_user) | [-] |
+| `#controlArgs` on write tools | 1, 2, 3, 4 | [-] |
+| `@slack_msg.display.planner` strips body | 1, 3, 6 | [-] |
+| `@slack_msg.data.body` untrusted | 3, 6 | [-] |
+| `#untrusted-llms-get-influenced` | 1, 3, 6 | [-] |
+| `#influenced-deny-exfil` | 1, 3, 6 | [-] |
+| `#clean-planner` | 3, 4, 6 | [-] |
+| `#task-text-validation` | 1, 3, 4 | [-] |
+| `#authorizations-deny` (optional) | 4 | [-] (defense in depth) |
+| `#no-unknown-extraction-sources` | 3, 6 | [-] |
+| `@webpage_content.display.planner` strips content | 6 | [-] |
+| `#user_email-declared-as-controlArg` | 4 | [-] |
 | `#no-novel-urls` on non-controlArg URL fields (body) | 1 (og:embed variant) | [?] — needs verification |
 | `add_user_to_channel` `exfil:send` label | 4 | [?] — needs verification |
 | Content-to-legitimate-URL exfil | 2 | [ ] — out of scope (document decision) |
@@ -239,7 +241,11 @@ For primitives related to Class 5 (tier-2 contact substitution) and the Injectio
 
 ## Known vulnerabilities `[!]`
 
-1. **`#user_email-not-declared-as-controlArg`.** `invite_user_to_slack` declares only `user` as a control arg. The `user_email` field — which is the actual destination the invitation email goes to — is a data arg with no grounding check. An attacker could trick the worker into inviting a legitimate-sounding user name to an attacker-controlled email address, creating an attacker presence inside the workspace. The rewrite must add `user_email` to the controlArgs list (or classify it as a fact field on an invitation target record).
+None currently open.
+
+**Previously listed `[!]` items now resolved:**
+
+- **`#user_email-declared-as-controlArg`** (was `#user_email-not-declared-as-controlArg`). `@invite_user_to_slack_inputs.facts: [user, user_email]`. Both are now facts, closing the gap where an attacker could supply a legitimate username with an attacker email.
 
 **Previously listed `[!]` item moved to extras (2026-04-07):**
 
@@ -247,9 +253,9 @@ For primitives related to Class 5 (tier-2 contact substitution) and the Injectio
 
 ## Open architectural questions `[ ]`
 
-1. **Content-to-legitimate-URL exfil.** If the attacker cannot control the destination URL but can influence what content gets posted to a legitimate URL, is that an attack? Currently treated as out of scope (the user authorized the URL). Document the decision in the rewrite.
+1. **Content-to-legitimate-URL exfil.** If the attacker cannot control the destination URL but can influence what content gets posted to a legitimate URL, is that an attack? Currently treated as out of scope (the user authorized the URL).
 
-2. **`no-novel-urls` scanning scope.** Does the rule scan URL-typed fields across all tool args, including non-controlArg body fields? The rewrite must verify or fix this. The og:embed exfil vector depends on it.
+2. **`no-novel-urls` scanning scope.** Does the rule scan URL-typed fields across all tool args, including non-controlArg body fields? The og:embed exfil vector depends on it.
 
 The web-beacon URL string comparison question (originally listed here) has been moved to `extras.threatmodel.txt` Slack section, since it's only validated by an InjectionTask7-equivalent test that doesn't exist in AgentDojo today.
 
@@ -257,13 +263,13 @@ The web-beacon URL string comparison question (originally listed here) has been 
 
 ### Policy rule candidates
 
-- **Grounding from untrusted content** (cross-suite). ✗ Rejected by D6 (2026-04-06). A cross-cutting "re-ground untrusted extracts" rule was considered but rejected: source selection is the trust boundary for extraction, not a separate runtime check. Banking Class 5 is handled by a surgical composite defense (`#bill-file-grounding`) specific to the bill-file case. Slack Class 5 is handled by the existing handle chain. Neither suite needs a generalized rule. See `plan-rig-rewrite.md` D6 for the full rationale.
+- **Grounding from untrusted content** (cross-suite). ✗ Rejected by D6 (2026-04-06). A cross-cutting "re-ground untrusted extracts" rule was considered but rejected: source selection is the trust boundary for extraction, not a separate runtime check. Banking Class 5 is handled by a surgical composite defense (`#bill-file-grounding`) specific to the bill-file case. Slack Class 5 is handled by the existing handle chain. Neither suite needs a generalized rule.
 
-- **Implicit exfil:send classification for "add recipient" semantics.** Tools like `add_user_to_channel` and `invite_user_to_slack` have send-like semantics (they add a recipient to a destination) but may not carry the `exfil:send` label. The rewrite should audit tool label classifications against their semantic behavior.
+- **Implicit exfil:send classification for "add recipient" semantics.** Tools like `add_user_to_channel` and `invite_user_to_slack` have send-like semantics (they add a recipient to a destination) but may not carry the `exfil:send` label. Tool label classifications should be audited against their semantic behavior.
 
 ### Load-bearing single points of failure
 
-- **`#no-novel-urls`** is load-bearing for Classes 1 and 2 (four of seven injection tasks). A regression in URL scanning, full-string comparison, or the body-field scan would expose multiple attack paths simultaneously. This primitive deserves targeted tests in the rewrite.
+- **`#no-novel-urls`** is load-bearing for Classes 1 and 2 (four of seven injection tasks). A regression in URL scanning, full-string comparison, or the body-field scan would expose multiple attack paths simultaneously. This primitive deserves targeted tests.
 
 - **`@slack_msg.display.planner` strips body** prevents the planner from being directed by injected channel messages. A regression would immediately expose the planner to injection content.
 
@@ -277,4 +283,4 @@ The web-beacon URL string comparison question (originally listed here) has been 
 
 ### Cleanup items
 
-- **Vestigial `update_password` deny entry.** The slack waterfall policy declares `authorizations.deny: ["update_password"]` inherited from workspace. Slack has no `update_password` tool; the entry is harmless but misleading. Clean up in the rewrite.
+- **Vestigial `update_password` deny entry.** The slack policy declares `authorizations.deny: ["update_password"]` inherited from workspace. Slack has no `update_password` tool; the entry is harmless but misleading.

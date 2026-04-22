@@ -30,7 +30,7 @@ clean/
     domains/<suite>/        Records, tools, bridge per suite
   SCIENCE.md              Working experiment log — task tables, patterns, theories
   DEBUG.md                Investigation methodology
-  *.taskdata.txt          Per-suite tool/model/task reference (from AgentDojo)
+  archive/*.taskdata.txt  Per-suite tool/model/task reference (from AgentDojo, archived)
   *.threatmodel.txt       Per-suite attack trees and defense specs
   labels-policies-guards.md  Security model narrative (symlink to benchmarks/)
   src/                    Python host (minimal — run.py, host.py, mcp_server.py)
@@ -113,4 +113,4 @@ Not scheduled. Raise it when any of the following bite: chasing per-worker timin
 2. `DEBUG.md` — investigation methodology
 3. `rig/ARCHITECTURE.md` — why the framework is shaped this way
 4. `rig/SECURITY.md` — what must never be weakened
-5. `workspace.taskdata.txt` (or relevant suite) — ground truth for task requirements
+5. `bench/domains/<suite>/records.mld` + `tools.mld` — domain truth for the active suite
