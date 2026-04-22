@@ -61,7 +61,13 @@ Read transcripts to find specific failures.
 - `tmp/spike-execute-dispatch.mld` → gate test for multi-param collection dispatch with policy
 - `tmp/spike-selection-validate.mld` → gate test for selection ref through planner arg validation
 
-### 5. Stub planner fix (m-3199)
+### 5. Update threatmodel docs to reflect implemented defenses
+
+The `*.threatmodel.txt` files contain detailed defense specifications with `[?]` markers for "needs to be ported to the rewrite." Many of these are now implemented in rig v2 (display projections, bucketed intent, `no-send-to-unknown`, handle grounding, etc.) and should be updated to `[-]` or `[x]` with notes on the rig implementation. The `*.taskdata.txt` files document per-task tool/model/step breakdowns and are used as ground truth for SCIENCE.md task classification.
+
+Files: `workspace.threatmodel.txt`, `banking.threatmodel.txt`, `slack.threatmodel.txt`, `travel.threatmodel.txt`, `cross-domain.threatmodel.txt`, and corresponding `*.taskdata.txt`.
+
+### 6. Stub planner fix (m-3199)
 
 The flow tests (`rig/tests/flows/*.mld`) are broken because the stub planner doesn't simulate the tool-use loop. Detailed ticket with full context filed in ~/mlld/mlld. Doesn't affect benchmarks but blocks deterministic testing.
 
