@@ -511,7 +511,7 @@ var @extractChainResult = @testPlannerExtractChain("test", {
   refValue: { source: "resolved", record: "contact", handle: "r_contact_alice.example", field: "email" },
   extractArgs: {
     source: { source: "resolved", record: "contact", handle: "r_contact_alice.example" },
-    schema_name: "contact",
+    schema: { email: "string", name: "string" },
     name: "contact_details",
     purpose: "inspect one resolved contact"
   }
@@ -575,7 +575,7 @@ var @deriveChainResult = @testPlannerDeriveChain("test", {
   },
   extractArgs: {
     source: { source: "derived", name: "action_items" },
-    schema_name: "action_items",
+    schema: { person_name: "string", task_description: "string", deadline: "string" },
     name: "action_items_copy",
     purpose: "inspect the derived action items"
   }
@@ -1416,8 +1416,7 @@ var @plannerExtractDispatchPretty = @plannerExtractDispatchResult | @pretty
 var @plannerExtractDispatchOk =
   @plannerExtractDispatchResult["error"] == null &&
   @plannerExtractDispatchResult.status == "extracted" &&
-  @plannerExtractDispatchResult.name == "contact_details" &&
-  @plannerExtractDispatchResult.schema_name == "contact"
+  @plannerExtractDispatchResult.name == "contact_details"
 var @plannerDeriveDispatchPretty = @plannerDeriveDispatchResult | @pretty
 var @plannerDeriveDispatchOk =
   @plannerDeriveResolveResult["error"] == null &&
