@@ -48,7 +48,7 @@ clean/
 
 ## Current Focus
 
-Prompt education (Step 12b). The framework is correct; the planner doesn't exercise it efficiently. See SCIENCE.md for the failure analysis, pattern classification, and experiment queue.
+Workspace utility: 22/40 (55%), up from 14/40 baseline. The #1 failure mode is `no_compose` (7 tasks) — the model does the work but the opencode session ends without compose. Adding `=> resume` support is the highest-leverage next step. See SCIENCE.md for full results with timing and HANDOFF.md for session context.
 
 ## Prompt Placement Rules
 
@@ -89,8 +89,8 @@ mlld clean/rig/tests/index.mld --no-checkpoint
 # Single task
 uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_11
 
-# Full suite
-uv run --project bench python3 src/run.py -s workspace -d defended -p 3
+# Full suite (default -p 20, 5s stagger)
+uv run --project bench python3 src/run.py -s workspace -d defended
 
 # Build mlld after runtime changes
 cd ~/mlld/mlld && npm run build
