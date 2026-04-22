@@ -71,6 +71,30 @@ exe @schemaRecord(agent, schema) = when [
   * => null
 ]
 
+exe @validateExtractSchema(records, schema) = [
+  let @recordNames = for @name, @rec in (@records ?? {}) => @name
+  => when [
+    !@schema.isDefined() || @schema == null => { ok: true }
+    @typeof(@schema) == "string" && @schema == "" => {
+      ok: false,
+      error: "extract_empty_schema_name",
+      issues: [{ error: "empty_schema_name", available: @recordNames }]
+    }
+    @typeof(@schema) == "string" => { ok: true, record: @records[@schema].isDefined() }
+    @typeof(@schema) == "object" && @plainObjectKeys(@schema).length > 0 => { ok: true, record: false }
+    @typeof(@schema) == "object" => {
+      ok: false,
+      error: "extract_empty_inline_schema",
+      issues: [{ error: "empty_inline_schema", available: @recordNames }]
+    }
+    * => {
+      ok: false,
+      error: "extract_invalid_schema_type",
+      issues: [{ error: "invalid_schema_type", type: @typeof(@schema), available: @recordNames }]
+    }
+  ]
+]
+
 >> Extract may not manufacture selection refs. The only valid producer
 >> is derive, which validates them against its input set.
 exe @containsSelectionRef(inputValue) = js {
@@ -154,6 +178,8 @@ exe @dispatchExtract(agent, state, decision, query) = [
   ]
   let @resolvedSource = @resolveRefValue(@state, @decision.source)
   if !@resolvedSource.ok [ => @plannerValidationFailure(@resolvedSource.error ?? "extract_source_resolution_failed", @resolvedSource, @resolvedSource.issues ?? null) ]
+  let @schemaCheck = @validateExtractSchema(@agent.records ?? {}, @decision.schema)
+  if !@schemaCheck.ok [ => @plannerValidationFailure(@schemaCheck.error, @schemaCheck, @schemaCheck.issues) ]
   let @schemaDef = @schemaRecord(@agent, @decision.schema)
   let @prompt = @extractPrompt(@query, @resolvedSource.value, @schemaDef ?? @decision.schema, @decision)
   let @raw = @llmCall(@agent.harness, @prompt, {
