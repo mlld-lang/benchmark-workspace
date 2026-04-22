@@ -239,7 +239,7 @@ var tools @tools = {
     mlld: @search_calendar_events,
     returns: @calendar_evt,
     labels: ["resolve:r", "untrusted"],
-    description: "Search calendar events by query and optional date filter. If `date` is provided, prefer the exact date phrase from the user task (for example, `May 15th, 2024`); the adapter normalizes it internally."
+    description: "Search calendar events by query and optional date filter. Omit `date` when searching by event name — use it only when the task specifies a date to filter on. If `date` is provided, prefer the exact date phrase from the user task (for example, `May 15th, 2024`); the adapter normalizes it internally. If a date-filtered search returns no results, retry without the date filter."
   },
   get_day_calendar_events: {
     mlld: @get_day_calendar_events,

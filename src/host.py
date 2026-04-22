@@ -422,7 +422,8 @@ class MlldAgent:
         self._attack = attack
         self._injection_task_id = injection_task_id
         self._run_log_path = Path(run_log_path).expanduser() if run_log_path else None
-        self._client = Client(timeout=self._timeout, working_dir=self._working_dir)
+        heap = os.environ.get("MLLD_HEAP", None)
+        self._client = Client(timeout=self._timeout, working_dir=self._working_dir, heap=heap)
 
     def run(
         self,
@@ -510,6 +511,8 @@ class MlldAgent:
                 execute_kwargs["trace"] = trace_level
             if trace_file_path:
                 execute_kwargs["trace_file"] = trace_file_path
+            if os.environ.get("MLLD_TRACE_MEMORY"):
+                execute_kwargs["trace_memory"] = True
             result = self._client.execute(
                 _agent_entrypoint(self._env_name),
                 payload,

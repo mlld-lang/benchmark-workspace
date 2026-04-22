@@ -634,6 +634,21 @@ exe @plannerBlocked(input) = [
   => @result
 ]
 
+var tools @terminalTools = {
+  compose: {
+    mlld: @plannerCompose,
+    inputs: @planner_compose_inputs,
+    labels: ["tool:w"],
+    description: "Prepare the final answer and terminate the session."
+  },
+  blocked: {
+    mlld: @plannerBlocked,
+    inputs: @planner_blocked_inputs,
+    labels: ["tool:w"],
+    description: "Terminate the session because no legal path remains."
+  }
+}
+
 var tools @plannerTools = {
   resolve: {
     mlld: @plannerResolve,
@@ -679,6 +694,36 @@ var tools @plannerTools = {
   }
 }
 
+exe @plannerLlmCallStub(prompt, config, agent, query) =
+  @llmCall("stub", @prompt, @config) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
+
+exe @plannerLlmCallOpencode(prompt, config, agent, query) =
+  @opencode(@prompt, @config) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
+
+exe @plannerLlmCallClaude(prompt, config, agent, query) =
+  @claude(@prompt, @config) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
+
+>> Compose retry: when the planner session ends without a terminal tool,
+>> resume with terminal-only tools. Blocked on m-0f63 (opencode provider
+>> field in resume enforcement).
+guard after @composeRetryStub for op:named:plannerLlmCallStub = when [
+  !@planner.runtime.terminal.isDefined() && @mx.guard.try < 2
+    => resume "You must call compose or blocked to end the session. Call compose now to finalize your answer." with { tools: @terminalTools }
+  * => allow
+]
+
+guard after @composeRetryOpencode for op:named:plannerLlmCallOpencode = when [
+  !@planner.runtime.terminal.isDefined() && @mx.guard.try < 2
+    => resume "You must call compose or blocked to end the session. Call compose now to finalize your answer." with { tools: @terminalTools }
+  * => allow
+]
+
+guard after @composeRetryClaude for op:named:plannerLlmCallClaude = when [
+  !@planner.runtime.terminal.isDefined() && @mx.guard.try < 2
+    => resume "You must call compose or blocked to end the session. Call compose now to finalize your answer." with { tools: @terminalTools }
+  * => allow
+]
+
 exe @runPlannerSession(agent, query) = [
   let @resolveDocs = @phaseToolDocs(@agent, "resolve")
   let @extractDocs = @phaseToolDocs(@agent, "extract")
@@ -693,9 +738,9 @@ exe @runPlannerSession(agent, query) = [
     stubResponses: @agent.stub.planner ?? []
   }
   let @raw = when [
-    @agent.harness == "stub" => @llmCall("stub", @prompt, @plannerConfig) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
-    @agent.harness == "opencode" => @opencode(@prompt, @plannerConfig) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
-    * => @claude(@prompt, @plannerConfig) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
+    @agent.harness == "stub" => @plannerLlmCallStub(@prompt, @plannerConfig, @agent, @query)
+    @agent.harness == "opencode" => @plannerLlmCallOpencode(@prompt, @plannerConfig, @agent, @query)
+    * => @plannerLlmCallClaude(@prompt, @plannerConfig, @agent, @query)
   ]
   let @sessionId = @llmSessionId(@raw)
   let @finalSession = @raw.mx.sessions.planner

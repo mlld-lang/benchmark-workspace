@@ -1270,12 +1270,15 @@ var @travelBenchCatalogDetail = `tools=@travelToolsText agent=@travelAgentText`
 
 var @singlePlannerArchitectureOk =
   @plannerWorkerText.includes('var tools @plannerTools = {') &&
+  @plannerWorkerText.includes('var tools @terminalTools = {') &&
   @plannerWorkerText.includes('tools: @plannerTools') &&
+  @plannerWorkerText.includes('tools: @terminalTools') &&
   @plannerWorkerText.includes('session: @planner') &&
-  (@plannerWorkerText.includes('@opencode(@prompt, @plannerConfig) with {') || @plannerWorkerText.includes('@claude(@prompt, @plannerConfig) with {')) &&
+  @plannerWorkerText.includes('exe @plannerLlmCallOpencode(') &&
+  @plannerWorkerText.includes('guard after @composeRetryOpencode for op:named:plannerLlmCallOpencode') &&
+  (@plannerWorkerText.includes('@opencode(@prompt, @config) with {') || @plannerWorkerText.includes('@claude(@prompt, @config) with {')) &&
   !@plannerWorkerText.includes('@llmCall(@agent.harness, @prompt, {') &&
   !@plannerWorkerText.includes('@dispatchPlanner') &&
-  !@plannerWorkerText.includes('resume:') &&
   !@plannerPromptText.includes('<state_summary>') &&
   !@plannerPromptText.includes('<execution_log>')
 var @singlePlannerArchitectureDetail = `planner=@plannerWorkerText prompt=@plannerPromptText`
