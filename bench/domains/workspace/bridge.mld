@@ -12,6 +12,23 @@ exe @asString(inputValue) = js {
   return String(inputValue);
 }
 
+>> MCP file tools return `id_` but the file_entry record uses `file_id`
+>> to match the write tool parameter name, eliminating a naming gap that
+>> caused the planner to fail with `resolved_field_missing`.
+exe @fileIdAlias(inputValue) = js {
+  if (inputValue == null) return inputValue;
+  function remap(obj) {
+    if (obj == null || typeof obj !== "object") return obj;
+    if (Array.isArray(obj)) return obj.map(remap);
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      out[k === "id_" ? "file_id" : k] = v;
+    }
+    return out;
+  }
+  return remap(inputValue);
+}
+
 >> Calendar read tools take user-facing date phrases, while AgentDojo's
 >> backend expects strict ISO dates. Normalize that formatting at the
 >> adapter boundary so the planner can keep citing the task literal.

@@ -47,7 +47,7 @@ import {
   @workerStateSummary,
   @nonComposeDecisionArgIssues,
   @updateNamedState,
-  @appendExecutionLog,
+  @updateExtractSources,
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg } from "../intent.mld"
@@ -1468,32 +1468,32 @@ var @dispatchCreateNotePretty = @dispatchSummary(@dispatchCreateNoteResult)
 var @dispatchCreateNoteOk =
   @dispatchCreateNoteResult["error"] == null &&
   @dispatchCreateNoteResult.result.status == "sent" &&
-  @dispatchCreateNoteResult.state.execution_log.length == 1
+  @dispatchCreateNoteResult.result.status == "sent"
 var @dispatchOptionalMeetingPretty = @dispatchSummary(@dispatchOptionalMeetingResult)
 var @dispatchOptionalMeetingOk =
   @dispatchOptionalMeetingResult["error"] == null &&
   @dispatchOptionalMeetingResult.result.status == "sent" &&
-  @dispatchOptionalMeetingResult.state.execution_log.length == 1
+  @dispatchOptionalMeetingResult.result.status == "sent"
 var @dispatchNaturalDatetimeMeetingPretty = @dispatchSummary(@dispatchNaturalDatetimeMeetingResult)
 var @dispatchNaturalDatetimeMeetingOk =
   @dispatchNaturalDatetimeMeetingResult["error"] == null &&
   @dispatchNaturalDatetimeMeetingResult.result.status == "sent" &&
-  @dispatchNaturalDatetimeMeetingResult.state.execution_log.length == 1
+  @dispatchNaturalDatetimeMeetingResult.result.status == "sent"
 var @dispatchKnownParticipantMeetingPretty = @dispatchSummary(@dispatchKnownParticipantMeetingResult)
 var @dispatchKnownParticipantMeetingOk =
   @dispatchKnownParticipantMeetingResult["error"] == null &&
   @dispatchKnownParticipantMeetingResult.result.status == "sent" &&
-  @dispatchKnownParticipantMeetingResult.state.execution_log.length == 1
+  @dispatchKnownParticipantMeetingResult.result.status == "sent"
 var @dispatchKnownParticipantMeetingCollectionPretty = @dispatchSummary(@dispatchKnownParticipantMeetingCollectionResult)
 var @dispatchKnownParticipantMeetingCollectionOk =
   @dispatchKnownParticipantMeetingCollectionResult["error"] == null &&
   @dispatchKnownParticipantMeetingCollectionResult.result.status == "sent" &&
-  @dispatchKnownParticipantMeetingCollectionResult.state.execution_log.length == 1
+  @dispatchKnownParticipantMeetingCollectionResult.result.status == "sent"
 var @dispatchKnownParticipantMeetingCollectionDerivedPayloadPretty = @dispatchSummary(@dispatchKnownParticipantMeetingCollectionDerivedPayloadResult)
 var @dispatchKnownParticipantMeetingCollectionDerivedPayloadOk =
   @dispatchKnownParticipantMeetingCollectionDerivedPayloadResult["error"] == null &&
   @dispatchKnownParticipantMeetingCollectionDerivedPayloadResult.result.status == "sent" &&
-  @dispatchKnownParticipantMeetingCollectionDerivedPayloadResult.state.execution_log.length == 1
+  @dispatchKnownParticipantMeetingCollectionDerivedPayloadResult.result.status == "sent"
 var @dispatchAllowlistAllowedPretty = `error=@field(@dispatchAllowlistAllowedResult, "error") recipient=@field(@dispatchAllowlistAllowedResult, "recipient") subject=@field(@dispatchAllowlistAllowedResult, "subject")`
 var @dispatchAllowlistAllowedOk =
   @isBlank(@field(@dispatchAllowlistAllowedResult, "error")) &&
@@ -1566,8 +1566,7 @@ var @flatDisplaySummary = @plannerVisibleState(
     },
     extracted: {},
     derived: {},
-    execution_log: [],
-    phase_events: []
+    extract_sources: {}
   }
 ) | @pretty
 var @flatDisplayOk = @flatDisplaySummary.includes("Carol") &&
@@ -1600,8 +1599,7 @@ var @plainModePlannerSummary = @plannerVisibleState(
     },
     extracted: {},
     derived: {},
-    execution_log: [],
-    phase_events: []
+    extract_sources: {}
   }
 ) | @pretty
 var @plainModeWorkerSummary = @workerStateSummary(
@@ -1625,8 +1623,7 @@ var @plainModeWorkerSummary = @workerStateSummary(
     },
     extracted: {},
     derived: {},
-    execution_log: [],
-    phase_events: []
+    extract_sources: {}
   }
 ) | @pretty
 var @plainModeOk = @plainModePlannerSummary.includes("Project kickoff agenda") &&
@@ -1667,8 +1664,7 @@ var @checkpointRestoredState = {
   },
   extracted: {},
   derived: {},
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @checkpointRestoredSummary = @plannerVisibleState(
   {
@@ -1756,8 +1752,7 @@ var @sharedFileArrayState = {
   },
   extracted: {},
   derived: {},
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @indexedArraySelectionAttempt = @compileExecuteIntent(
   @sharedFileArrayState,
@@ -1814,8 +1809,7 @@ var @weakenedState = {
   },
   extracted: {},
   derived: {},
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @proofWeakenedControl = @resolveControlRefValue(@weakenedState, @proofChainRef)
 var @proofWeakenedAttestations = @field(@proofWeakenedControl, "policy_attestations") ?? []
@@ -1937,8 +1931,7 @@ var @scalarExtractState = {
     }
   },
   derived: {},
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @scalarExtractPlannerSummary = @plannerVisibleState(
   {
@@ -2024,8 +2017,7 @@ var @stateWithTaintedNamedValues = {
       }
     }
   },
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @taintedPlannerSummary = @plannerVisibleState(
   {
@@ -2131,8 +2123,7 @@ var @wrappedScalarNamedState = {
       }
     }
   },
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @wrappedScalarExtractCompile = @compileExecuteIntent(
   @wrappedScalarNamedState,
@@ -2187,8 +2178,7 @@ line end @recordBackedMarker`,
     }
   },
   derived: {},
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @recordBackedPlannerSummary = @plannerVisibleState(
   {
@@ -2233,8 +2223,7 @@ var @namedStateBase = {
   resolved: {},
   extracted: {},
   derived: {},
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @namedStateAfterFirstExtract = @updateNamedState(
   @namedStateBase,
@@ -2289,7 +2278,7 @@ var @namedStateWorkerSummary = @workerStateSummary(
   },
   @namedStateAfterSecondExtract
 ) | @pretty
-var @namedStateExecutionLogPretty = `log=@field(@field(@namedStateAfterSecondExtract, "execution_log") ?? [], "length")`
+var @namedStateExtractSourcesPretty = `sources=@field(@namedStateAfterSecondExtract, "extract_sources")`
 var @namedStateOk = @namedStatePlannerSummary.includes('"meeting_invitation_body"') &&
   !@namedStatePlannerSummary.includes(@namedStateBodyMarker) &&
   !@namedStatePlannerSummary.includes(@namedStateTitleMarker) &&
@@ -2298,26 +2287,15 @@ var @namedStateOk = @namedStatePlannerSummary.includes('"meeting_invitation_body
   @namedStateWorkerSummary.includes(@namedStateTitleMarker) &&
   @namedStateWorkerSummary.includes(@namedStateRoomMarker)
 
->> Array-valued state fields often pass through helper exe parameters as
->> object-like collections. Keep a direct regression for execution-log
->> retention so source-backed extract/derive updates cannot silently
->> erase earlier phase history and trip planner guards later.
-var @namedStateWithExecutionLog = {
+>> Verify that extract_sources survives @updateNamedState calls.
+var @namedStateWithSources = {
   resolved: {},
   extracted: {},
   derived: {},
-  execution_log: [
-    {
-      phase: "resolve",
-      tool: "search_emails",
-      summary: "resolved 1 email_msg record(s)",
-      session_id: null
-    }
-  ],
-  phase_events: []
+  extract_sources: { "resolved:email_msg": "email_body" }
 }
-var @namedStateLogRetained = @updateNamedState(
-  @namedStateWithExecutionLog,
+var @namedStateSourcesRetained = @updateNamedState(
+  @namedStateWithSources,
   "extracted",
   "meeting_invitation_body",
   {
@@ -2325,11 +2303,8 @@ var @namedStateLogRetained = @updateNamedState(
     value: @namedStateBodyMarker
   }
 )
-var @namedStateLogPretty = `log=@namedStateLogEntries.length`
-var @namedStateLogEntries = @field(@namedStateLogRetained, "execution_log") ?? []
-var @namedStateLogOk = @namedStateLogEntries.length == 1 &&
-  @field(@namedStateLogEntries[0], "tool") == "search_emails" &&
-  @field(@namedStateLogEntries[0], "summary") == "resolved 1 email_msg record(s)"
+var @namedStateSourcesPretty = `sources=@field(@namedStateSourcesRetained, "extract_sources")`
+var @namedStateSourcesOk = @field(@field(@namedStateSourcesRetained, "extract_sources"), "resolved:email_msg") == "email_body"
 
 >> Array-shaped named payloads should surface item field names to the
 >> planner without leaking payload values. This keeps repeated derive /
@@ -2351,8 +2326,7 @@ var @arrayNamedState = {
       }]
     }
   },
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @arrayPlannerSummary = @plannerVisibleState(
   {
@@ -2393,8 +2367,7 @@ var @wrappedArrayNamedState = {
       }
     }
   },
-  execution_log: [],
-  phase_events: []
+  extract_sources: {}
 }
 var @wrappedArrayPlannerSummary = @plannerVisibleState(
   {
@@ -2417,39 +2390,89 @@ var @wrappedArrayPreviewOk = @wrappedArrayPlannerSummary.includes('"person_name"
   !@wrappedArrayPlannerSummary.includes(@arrayPayloadMarker) &&
   @wrappedArrayWorkerSummary.includes(@arrayPayloadMarker)
 
->> Live planner/worker outputs carry runtime metadata, but execution-log
->> entries are diagnostic-only state. Flatten just the appended log
->> entry so later planner prompts and debug payloads keep the full log
->> instead of carrying wrapper metadata forward.
-var @wrappedLogState = {
-  resolved: {},
+>> Execution log entries now write to file instead of accumulating in state.
+>> Verify that state no longer carries execution_log or phase_events.
+var @leanState = @emptyState()
+var @leanStateOk = !@leanState.execution_log.isDefined() && !@leanState.phase_events.isDefined() && @leanState.extract_sources.isDefined()
+var @leanStatePretty = `extract_sources=@leanState.extract_sources.isDefined()`
+
+>> ── Regression guards from UT7 investigation (2026-04-22) ──
+
+>> id_ trailing underscore survives record coercion
+record @ut7_evt = {
+  facts: [id_: handle],
+  data: { trusted: [title: string?] },
+  key: id_,
+  display: [{ ref: "id_" }, title]
+}
+exe @ut7FakeSearch() = [
+  => [{ id_: "5", title: "Dentist" }, { id_: "23", title: "Moved" }]
+] => record @ut7_evt
+var @ut7Coerced = @ut7FakeSearch()
+var @ut7CoercionOk = @ut7Coerced.length == 2 &&
+  @ut7Coerced[0].id_ == "5" &&
+  @ut7Coerced[1].id_ == "23"
+var @ut7CoercionPretty = `count=@ut7Coerced.length id0=@ut7Coerced[0].id_ id1=@ut7Coerced[1].id_`
+
+>> Update fields appear in flat policy intent for reschedule-style tools
+import { @calendar_evt, @calendar_reschedule_inputs } from "@root/bench/domains/workspace/records.mld"
+exe @ut7NoopReschedule(event_id, new_start_time, new_end_time) = [ => "ok" ]
+var tools @ut7RescheduleTools = {
+  reschedule_calendar_event: {
+    mlld: @ut7NoopReschedule,
+    inputs: @calendar_reschedule_inputs,
+    labels: ["execute:w", "tool:w", "calendar:w", "update:w"],
+    can_authorize: "role:planner",
+    description: "Reschedule."
+  }
+}
+var @ut7RescheduleAgent = @rigBuild({
+  suite: "spike",
+  defense: "defended",
+  model: "stub",
+  records: { calendar_evt: @calendar_evt, calendar_reschedule_inputs: @calendar_reschedule_inputs },
+  tools: @ut7RescheduleTools
+})
+var @ut7Resolved = { id_: "5", title: "Dentist", participants: [], start_time: "2026-04-25 09:00", end_time: "2026-04-25 10:00" } as record @calendar_evt
+var @ut7State = {
+  resolved: { calendar_evt: [{ handle: "r_calendar_evt_5", key: "5", value: @ut7Resolved, field_values: { id_: @ut7Resolved.id_ } }] },
   extracted: {},
   derived: {},
-  execution_log: [
-    {
-      phase: "resolve",
-      tool: "seed",
-      summary: "seed",
-      session_id: null
-    }
-  ],
-  phase_events: []
+  extract_sources: {}
 }
-var @wrappedLogRetained = @appendExecutionLog(@wrappedLogState, {
-  phase: "extract",
-  name: @factValue,
-  summary: @factValue,
-  session_id: @factValue
-})
-var @wrappedLogEntries = @field(@wrappedLogRetained, "execution_log") ?? []
-var @wrappedLogPretty = `log=@wrappedLogEntries.length metadata=@field(@wrappedLogEntries[1], "metadata")`
-var @wrappedLogValue = `@factValue`
-var @wrappedLogOk = @wrappedLogEntries.length == 2 &&
-  @field(@wrappedLogEntries[1], "phase") == "extract" &&
-  @field(@wrappedLogEntries[1], "name") == @wrappedLogValue &&
-  @field(@wrappedLogEntries[1], "summary") == @wrappedLogValue &&
-  @field(@wrappedLogEntries[1], "session_id") == @wrappedLogValue &&
-  @isBlank(@field(@wrappedLogEntries[1], "metadata"))
+var @ut7Compiled = @compileExecuteIntent(@ut7State, @ut7RescheduleTools, {
+  phase: "execute",
+  operation: "reschedule_calendar_event",
+  args: {
+    event_id: { source: "resolved", record: "calendar_evt", handle: "r_calendar_evt_5", field: "id_" },
+    new_start_time: { source: "known", value: "2026-04-27 10:00" },
+    new_end_time: { source: "known", value: "2026-04-27 11:00" }
+  }
+}, "Please reschedule my Dental check-up to 2026-04-27 at 10:00 and end at 11:00.")
+var @ut7IntentOk = @ut7Compiled.ok &&
+  @ut7Compiled.compiled_args.new_start_time == "2026-04-27 10:00" &&
+  @ut7Compiled.compiled_args.new_end_time == "2026-04-27 11:00" &&
+  @ut7Compiled.policy_intent.reschedule_calendar_event.isDefined() &&
+  @ut7Compiled.policy_intent.reschedule_calendar_event.new_start_time.isDefined()
+var @ut7IntentPretty = `ok=@ut7Compiled.ok start=@ut7Compiled.compiled_args.new_start_time intent_has_update=@ut7Compiled.policy_intent.reschedule_calendar_event.new_start_time.isDefined()`
+
+>> Multi-param execute dispatch succeeds (guards against c-7e4b regression)
+var @ut7DispatchResult = @dispatchExecute(
+  @ut7RescheduleAgent,
+  @ut7State,
+  {
+    phase: "execute",
+    operation: "reschedule_calendar_event",
+    args: {
+      event_id: { source: "resolved", record: "calendar_evt", handle: "r_calendar_evt_5", field: "id_" },
+      new_start_time: { source: "known", value: "2026-04-27 10:00" },
+      new_end_time: { source: "known", value: "2026-04-27 11:00" }
+    }
+  },
+  "Please reschedule my Dental check-up to 2026-04-27 at 10:00 and end at 11:00."
+)
+var @ut7DispatchOk = @ut7DispatchResult.error == null && @ut7DispatchResult.result.status == "sent"
+var @ut7DispatchPretty = `error=@ut7DispatchResult.error status=@ut7DispatchResult.result.status`
 
 exe @allChecks() = [
   => [
@@ -2541,10 +2564,13 @@ exe @allChecks() = [
   @check("execute-compile-unwraps-wrapped-derived-scalar", @wrappedScalarDerivedCompileOk, @wrappedScalarDerivedCompilePretty),
   @check("record-backed-named-state-projects-display", @recordBackedDisplayOk, @recordBackedDisplayPretty),
   @check("named-state-retains-prior-results", @namedStateOk, `planner=@namedStatePlannerSummary worker=@namedStateWorkerSummary`),
-  @check("named-state-retains-execution-log", @namedStateLogOk, @namedStateLogPretty),
+  @check("named-state-retains-extract-sources", @namedStateSourcesOk, @namedStateSourcesPretty),
   @check("named-array-preview-fields", @arrayPreviewOk, @arrayPreviewPretty),
   @check("wrapped-array-preview-fields", @wrappedArrayPreviewOk, @wrappedArrayPreviewPretty),
-  @check("execution-log-flattens-diagnostic-wrappers", @wrappedLogOk, @wrappedLogPretty)
+  @check("lean-state-no-log-arrays", @leanStateOk, @leanStatePretty),
+  @check("id-underscore-survives-coercion", @ut7CoercionOk, @ut7CoercionPretty),
+  @check("update-fields-in-policy-intent", @ut7IntentOk, @ut7IntentPretty),
+  @check("reschedule-dispatch-succeeds", @ut7DispatchOk, @ut7DispatchPretty)
   ]
 ]
 

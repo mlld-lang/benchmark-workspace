@@ -1,0 +1,127 @@
+>> Worker test runner. Runs all tests in parallel, writes scoreboard.
+
+import { @allCases as @extractCases, @runOneExtract } from "./extract.mld"
+import { @allCases as @deriveCases, @runOneDerive } from "./derive.mld"
+import { @allCases as @composeCases, @runOneCompose } from "./compose.mld"
+import { @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
+
+var @model = @payload.model ?? "openrouter/z-ai/glm-5.1"
+var @commit = cmd { git rev-parse --short HEAD }
+var @scoreboardFile = `@root/rig/tests/workers/scoreboard.jsonl`
+
+show `Worker tests | model: @model | commit: @commit`
+show "---"
+
+var @runStartMs = @timestamp()
+
+var @taggedExtract = for @tc in @extractCases => { tc: @tc, worker: "extract" }
+var @taggedDerive = for @tc in @deriveCases => { tc: @tc, worker: "derive" }
+var @taggedCompose = for @tc in @composeCases => { tc: @tc, worker: "compose" }
+var @taggedCases = @taggedExtract.concat(@taggedDerive).concat(@taggedCompose)
+
+var @allResults = for parallel(17) @tagged in @taggedCases [
+  => when [
+    @tagged.worker == "extract" => @runOneExtract(@tagged.tc, @model)
+    @tagged.worker == "derive" => @runOneDerive(@tagged.tc, @model)
+    * => @runOneCompose(@tagged.tc, @model)
+  ]
+]
+
+var @ts = @isoTimestamp()
+
+for @r in @allResults [
+  let @resultLine = {
+    timestamp: @ts,
+    commit: @commit,
+    model: @model,
+    worker: @r.worker,
+    test: @r.test,
+    difficulty: @r.difficulty,
+    pass: @r.pass,
+    time_ms: @r.time_ms,
+    assertions: @r.assertions,
+    failures: @r.failures
+  }
+  @recordResult(@scoreboardFile, @resultLine)
+]
+
+show ""
+show "=== RESULTS ==="
+show ""
+
+exe @statusIcon(pass) = when [
+  @pass => "PASS"
+  * => "FAIL"
+]
+
+for @r in @allResults [
+  let @status = @statusIcon(@r.pass)
+  let @failInfo = when [
+    @r.pass => ""
+    * => `  | @r.failures.join("; ")`
+  ]
+  show `[@status] @r.worker/@r.test (@r.difficulty) @r.time_ms\ms @r.assertions.passed/@r.assertions.total@failInfo`
+]
+
+>> Per-worker summaries
+exe @sumTimes(timeValues) = js {
+  return timeValues.reduce((a, b) => a + Number(b), 0);
+}
+
+exe @avgTime(totalMs, count) = js {
+  if (count <= 0) return 0;
+  return Math.round(totalMs / count);
+}
+
+exe @workerSummary(results, workerName) = [
+  let @workerResults = for @r in @results when @r.worker == @workerName => @r
+  let @passed = for @r in @workerResults when @r.pass => @r
+  let @times = for @r in @workerResults => @r.time_ms
+  let @totalMs = @sumTimes(@times)
+  let @avgMs = @avgTime(@totalMs, @workerResults.length)
+  let @lowTotal = for @r in @workerResults when @r.difficulty == "low" => @r
+  let @lowPassed = for @r in @lowTotal when @r.pass => @r
+  let @medTotal = for @r in @workerResults when @r.difficulty == "medium" => @r
+  let @medPassed = for @r in @medTotal when @r.pass => @r
+  let @highTotal = for @r in @workerResults when @r.difficulty == "high" => @r
+  let @highPassed = for @r in @highTotal when @r.pass => @r
+  => {
+    total: @workerResults.length,
+    passed: @passed.length,
+    avg_ms: @avgMs,
+    by_difficulty: {
+      low: `@lowPassed.length/@lowTotal.length`,
+      medium: `@medPassed.length/@medTotal.length`,
+      high: `@highPassed.length/@highTotal.length`
+    }
+  }
+]
+
+var @extractSummary = @workerSummary(@allResults, "extract")
+var @deriveSummary = @workerSummary(@allResults, "derive")
+var @composeSummary = @workerSummary(@allResults, "compose")
+
+var @totalPassed = for @r in @allResults when @r.pass => @r
+var @runEndMs = @timestamp()
+var @totalMs = @runEndMs - @runStartMs
+
+show ""
+show "=== SUMMARY ==="
+show `Extract:  @extractSummary.passed/@extractSummary.total  avg @extractSummary.avg_ms\ms`
+show `Derive:   @deriveSummary.passed/@deriveSummary.total  avg @deriveSummary.avg_ms\ms`
+show `Compose:  @composeSummary.passed/@composeSummary.total  avg @composeSummary.avg_ms\ms`
+show `Total:    @totalPassed.length/@allResults.length  wall @totalMs\ms`
+
+var @runSummaryLine = {
+  timestamp: @ts,
+  commit: @commit,
+  model: @model,
+  type: "run_summary",
+  extract: @extractSummary,
+  derive: @deriveSummary,
+  compose: @composeSummary
+}
+@recordResult(@scoreboardFile, @runSummaryLine)
+
+show ""
+show `Results written to @scoreboardFile`

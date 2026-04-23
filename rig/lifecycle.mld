@@ -54,6 +54,29 @@ exe @truncatePhaseLog(phaseLogFile) = sh {
   fi
 }
 
+exe @appendExecutionLogEntry(executionLogFile, entryJson) = sh {
+  if [ -n "$executionLogFile" ] && [ -n "$entryJson" ]; then
+    printf '%s\n' "$entryJson" >> "$executionLogFile"
+  fi
+}
+
+exe @truncateExecutionLog(executionLogFile) = sh {
+  if [ -n "$executionLogFile" ]; then
+    : > "$executionLogFile"
+  fi
+}
+
+exe @readExecutionLogFile(executionLogFile) = js {
+  if (!executionLogFile) return [];
+  const fs = require('fs');
+  if (!fs.existsSync(executionLogFile)) return [];
+  const content = fs.readFileSync(executionLogFile, 'utf8').trim();
+  if (!content) return [];
+  return content.split('\n').map(line => {
+    try { return JSON.parse(line); } catch { return null; }
+  }).filter(Boolean);
+}
+
 exe @plannerIterationEvent(iteration, phase) = [
   => {
     event: "planner_iteration",
@@ -98,6 +121,9 @@ export {
   @serializeLifecycleJson,
   @appendPhaseEvent,
   @appendLlmCall,
+  @appendExecutionLogEntry,
+  @truncateExecutionLog,
+  @readExecutionLogFile,
   @writePhaseStateFile,
   @truncatePhaseLog,
   @truncateLlmCallLog,

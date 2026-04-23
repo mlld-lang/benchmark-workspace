@@ -12,6 +12,8 @@ This document is intentionally operational. It is not a design manifesto. It tel
 
 **C. Never over-eagerly blame model capability.** GLM 5.1 outperforms Sonnet 4.6. The same underlying model has hit 80%+ utility on these suites in prior architectures. When current results are worse, the problem is prompts, attestation shapes, error messages, or framework bugs — not "the model is weak." Prompt education is the variable; model capability is the constant.
 
+**D. Never underestimate the value of clear, educational error messages, clear tool instructions, and clear prompts.** Don't overindex on the orchestrator code. Always double-check the prompts. Just make sure to avoid overfitting and keep proper separation of concerns: no benchmark domain related stuff in rig. No overfitting to the benchmarks anywhere. 
+
 ## Core Position
 
 Do not blame the base model.
@@ -582,6 +584,46 @@ What to avoid:
 - Filing a runtime bug without a concrete local reproduction
 
 If the minimal repro passes but the benchmark still fails, that is valuable information. It means the remaining problem is in whatever extra layer the repro did not yet include.
+
+## Policy / Intent Boundary Probes
+
+Policy failures need a boundary-by-boundary probe, not just one isolated `@policy.build` call. The same printed JSON can behave differently after a rebind, merge, or role change because wrapper/proof metadata can be lost while the visible data stays identical.
+
+When debugging execute authorization, print this matrix before changing runtime code:
+
+- `@compiled.compiled_args`
+- `@compiled.policy_intent`
+- per `@compiled.compiled_entries`: `arg`, `role`, `source_class`, `auth_bucket`, `flat_eq`, `flat_attestations.length`
+- tool-derived surfaces: `@toolControlArgs(@compiled.tool)`, `@toolPayloadArgs(@compiled.tool)`, `@toolUpdateArgs(@compiled.tool)`, `@toolExactArgs(@compiled.tool)`
+- the exact `@built.issues`, not just `valid`
+- `@built.report.strippedArgs`, `repairedArgs`, and `droppedEntries`
+
+Run policy-build probes in the same role/context as dispatch. A top-level `@policy.build(...)` result can be misleading when the live path calls it inside `exe role:planner`. Prefer:
+
+```mlld
+exe role:planner @probePolicyBuild() = [
+  let @compiled = @compileExecuteIntent(@state, @tools, @decision, @query)
+  let @built = @policy.build(@compiled.policy_intent, @tools, {
+    task: @query,
+    basePolicy: @agent.basePolicy
+  })
+  => {
+    policy_intent: @compiled.policy_intent,
+    valid: @built.valid,
+    issues: @built.issues,
+    report: @built.report
+  }
+]
+```
+
+For `updateArgs` failures, the key question is not "did `compiled_args` contain the update value?" It is "did the intent handed to `@policy.build` contain at least one declared update field?" The runtime checks update-field presence in the raw intent before stripping payload/update args from the final policy. A good result looks like:
+
+- `policy_intent.<tool>.<control_arg>` has an attested constraint
+- `policy_intent.<tool>.<update_arg>` has the raw update value
+- `@policy.build` returns `valid: true`
+- `@built.report.strippedArgs` includes the update arg
+
+If an intermediate helper returns `null` to mean "no constraint", compare with `!= null` before accepting it. In mlld, a local variable whose value is `null` may still satisfy `.isDefined()`, so `@constraint.isDefined()` can accidentally treat "no constraint" as present and drop the fallback value.
 
 ## Native mlld value inspection
 

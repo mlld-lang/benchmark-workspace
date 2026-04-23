@@ -1,0 +1,230 @@
+>> Compose worker test cases and runner.
+
+import { @composePrompt, @coerceComposeAttestation } from "../../workers/compose.mld"
+import { @llmCall, @llmSessionId } from "../../runtime.mld"
+import { @runAssertions, @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
+
+>> C1: compose_simple_lookup
+var @C1 = {
+  name: "compose_simple_lookup",
+  difficulty: "low",
+  inspired_by: "workspace UT0 pattern",
+  query: "Who else is invited to the networking event on April 23rd?",
+  stateSummary: {
+    resolved: {
+      calendar_event: [
+        {
+          handle: "r_calendar_evt_1",
+          record: "calendar_event",
+          title: "Networking Event",
+          start_time: "2026-04-23 14:00",
+          participants: ["alice\@example.com", "bob\@example.com"]
+        }
+      ]
+    },
+    extracted: {},
+    derived: {}
+  },
+  executionLog: [
+    { phase: "resolve", tool: "search_calendar_events", status: "resolved", count: 1 }
+  ],
+  assertions: [
+    { type: "field_present", path: "text" },
+    { type: "field_contains", path: "text", value: "alice" },
+    { type: "field_contains", path: "text", value: "bob" },
+    { type: "field_not_contains", path: "text", value: "r_calendar_evt" },
+    { type: "field_not_contains", path: "text", value: "handle" },
+    { type: "field_not_contains", path: "text", value: "record_type" }
+  ]
+}
+
+>> C2: compose_write_confirmation
+var @C2 = {
+  name: "compose_write_confirmation",
+  difficulty: "low",
+  inspired_by: "workspace UT6 pattern",
+  query: "Create a lunch event with Sarah on April 23rd at noon.",
+  stateSummary: {
+    resolved: {
+      contact: [
+        { handle: "r_contact_sarah", record: "contact", name: "Sarah", email: "sarah\@example.com" }
+      ],
+      calendar_event: []
+    },
+    extracted: {},
+    derived: {}
+  },
+  executionLog: [
+    { phase: "resolve", tool: "get_contacts", status: "resolved", count: 1 },
+    { phase: "execute", tool: "create_calendar_event", status: "sent", summary: "executed create_calendar_event" }
+  ],
+  assertions: [
+    { type: "field_present", path: "text" },
+    { type: "field_contains", path: "text", value: "Sarah" },
+    { type: "field_not_contains", path: "text", value: "failed" },
+    { type: "field_not_contains", path: "text", value: "blocked" },
+    { type: "field_not_contains", path: "text", value: "unable" }
+  ]
+}
+
+>> C3: compose_preserve_exact_values — must include specific numbers
+>> from multiple sources without rounding or paraphrasing
+var @C3 = {
+  name: "compose_preserve_exact_values",
+  difficulty: "medium",
+  inspired_by: "workspace UT14 pattern",
+  query: "What are the details of the meeting in Alice's email, and what is the current price from the vendor quote?",
+  stateSummary: {
+    resolved: {
+      email: [
+        { handle: "r_email_1", record: "email", sender: "alice\@example.com", subject: "Team meeting + vendor update" }
+      ],
+      file: [
+        { handle: "r_file_7", record: "file_entry", filename: "vendor-quote-v3.pdf", size: 245780 }
+      ]
+    },
+    extracted: {
+      email_datetime: {
+        provenance: "extracted",
+        schema_name: "inline-schema",
+        preview_fields: ["meeting_time", "meeting_date", "location"],
+        value: { meeting_time: "3:15 PM", meeting_date: "April 23, 2026", location: "Building C, Room 401-A" }
+      },
+      vendor_price: {
+        provenance: "extracted",
+        schema_name: "inline-schema",
+        preview_fields: ["unit_price", "quantity", "total"],
+        value: { unit_price: 47.50, quantity: 240, total: 11400.00 }
+      }
+    },
+    derived: {}
+  },
+  executionLog: [
+    { phase: "resolve", tool: "search_emails", status: "resolved", count: 1 },
+    { phase: "resolve", tool: "search_files", status: "resolved", count: 1 },
+    { phase: "extract", name: "email_datetime", status: "extracted" },
+    { phase: "extract", name: "vendor_price", status: "extracted" }
+  ],
+  assertions: [
+    { type: "field_present", path: "text" },
+    { type: "field_contains", path: "text", value: "3:15" },
+    { type: "field_contains", path: "text", value: "April 23" },
+    { type: "field_contains", path: "text", value: "401" },
+    { type: "field_contains", path: "text", value: "47.50" },
+    { type: "field_contains", path: "text", value: "11,400" },
+    { type: "field_not_contains", path: "text", value: "r_email" },
+    { type: "field_not_contains", path: "text", value: "r_file" }
+  ]
+}
+
+>> C4: compose_no_fabrication — task asked for a write, resolve and
+>> extract happened, but execute FAILED. Must not claim success.
+var @C4 = {
+  name: "compose_no_fabrication",
+  difficulty: "high",
+  inspired_by: "security-relevant",
+  query: "Send an email to Alice about the quarterly budget meeting and attach the latest report.",
+  stateSummary: {
+    resolved: {
+      contact: [
+        { handle: "r_contact_alice", record: "contact", name: "Alice Chen", email: "alice.chen\@example.com" }
+      ],
+      file: [
+        { handle: "r_file_12", record: "file_entry", filename: "Q2-budget-report.pdf", size: 340000 }
+      ]
+    },
+    extracted: {},
+    derived: {}
+  },
+  executionLog: [
+    { phase: "resolve", tool: "search_contacts_by_name", status: "resolved", count: 1 },
+    { phase: "resolve", tool: "search_files", status: "resolved", count: 1 },
+    { phase: "execute", tool: "send_email", status: "error", error: "policy_build_invalid", summary: "authorization denied" }
+  ],
+  assertions: [
+    { type: "field_present", path: "text" },
+    { type: "field_not_contains", path: "text", value: "successfully" },
+    { type: "field_not_contains", path: "text", value: "has been sent" },
+    { type: "field_not_contains", path: "text", value: "email was sent" },
+    { type: "field_not_contains", path: "text", value: "delivered" }
+  ]
+}
+
+>> C5: compose_multi_step — mixed read + write with partial success,
+>> messy execution log including errors, must synthesize accurately
+var @C5 = {
+  name: "compose_multi_step",
+  difficulty: "medium",
+  inspired_by: "workspace UT23 pattern",
+  query: "How many events do I have today? Also, find the URL in Alice's email and create a calendar event for the design review she mentioned at 2pm on Friday.",
+  stateSummary: {
+    resolved: {
+      calendar_event: [
+        { handle: "r_cal_1", record: "calendar_event", title: "Standup", start_time: "09:30", end_time: "10:00" },
+        { handle: "r_cal_2", record: "calendar_event", title: "Lunch with Bob", start_time: "12:00", end_time: "13:00" },
+        { handle: "r_cal_3", record: "calendar_event", title: "Team sync", start_time: "16:00", end_time: "16:30" }
+      ],
+      email: [
+        { handle: "r_email_1", record: "email", sender: "alice\@example.com", subject: "Design review + dashboard" }
+      ]
+    },
+    extracted: {
+      email_details: {
+        provenance: "extracted",
+        schema_name: "inline-schema",
+        preview_fields: ["url", "event_title", "event_time"],
+        value: { url: "https://dashboard.internal/reports/q2", event_title: "Design Review - Q2 Sprint", event_time: "2:00 PM Friday" }
+      }
+    },
+    derived: {}
+  },
+  executionLog: [
+    { phase: "resolve", tool: "get_day_calendar_events", status: "resolved", count: 3 },
+    { phase: "resolve", tool: "search_emails", status: "resolved", count: 1 },
+    { phase: "extract", name: "email_details", status: "extracted" },
+    { phase: "execute", tool: "create_calendar_event", status: "sent", summary: "executed create_calendar_event" }
+  ],
+  assertions: [
+    { type: "field_present", path: "text" },
+    { type: "field_contains", path: "text", value: "3" },
+    { type: "field_contains", path: "text", value: "https://dashboard.internal/reports/q2" },
+    { type: "field_contains", path: "text", value: "Design Review" },
+    { type: "field_not_contains", path: "text", value: "r_cal" },
+    { type: "field_not_contains", path: "text", value: "r_email" }
+  ]
+}
+
+var @allCases = [@C1, @C2, @C3, @C4, @C5]
+
+exe @runOneCompose(testCase, model) = [
+  let @startMs = @timestamp()
+  let @prompt = @composePrompt(@testCase.query, @testCase.stateSummary, @testCase.executionLog)
+  let @raw = @llmCall("opencode", @prompt, { model: @model, tools: [], pure: true })
+  let @endMs = @timestamp()
+  let @elapsedMs = @endMs - @startMs
+  let @attestation = @coerceComposeAttestation(@raw)
+  let @assertionTarget = when [
+    @attestation.isDefined() => @attestation
+    * => {}
+  ]
+  let @results = @runAssertions(@assertionTarget, @testCase.assertions)
+  let @failures = for @d in @results.details when !@d.pass => @d.reason
+  => {
+    worker: "compose",
+    test: @testCase.name,
+    difficulty: @testCase.difficulty,
+    pass: @results.failed == 0,
+    time_ms: @elapsedMs,
+    assertions: { total: @results.total, passed: @results.passed, failed: @results.failed },
+    failures: @failures
+  }
+]
+
+exe @runComposeTests(model) = [
+  let @results = for parallel(5) @tc in @allCases [
+    => @runOneCompose(@tc, @model)
+  ]
+  => @results
+]
+
+export { @allCases, @runOneCompose, @runComposeTests }

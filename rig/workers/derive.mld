@@ -4,9 +4,9 @@ import {
   @llmSessionId,
   @arrayItems,
   @previewFields,
-  @updateNamedState,
-  @appendExecutionLog
+  @updateNamedState
 } from "../runtime.mld"
+import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @lowerSelectionRef, @resolveRefValue, @resolvedEntries } from "../intent.mld"
 import { @deriveAttestation } from "../records.mld"
 import {
@@ -122,21 +122,19 @@ exe @dispatchDerive(agent, state, decision, query) = [
   ]
   let @summary = @attestation.summary ?? `derived @decision.name`
   let @schemaName = @attestation.schema_name ?? "inline-schema"
-  let @nextState = @appendExecutionLog(
-    @updateNamedState(@state, "derived", @decision.name, {
-      provenance: "derived",
-      schema_name: @schemaName,
-      preview_fields: @previewFields(@attestation.payload),
-      value: @attestation.payload,
-      selection_refs: @selectionCheck.refs
-    }),
-    {
-      phase: "derive",
-      name: @decision.name,
-      summary: @summary,
-      session_id: @sessionId
-    }
-  )
+  let @nextState = @updateNamedState(@state, "derived", @decision.name, {
+    provenance: "derived",
+    schema_name: @schemaName,
+    preview_fields: @previewFields(@attestation.payload),
+    value: @attestation.payload,
+    selection_refs: @selectionCheck.refs
+  })
+  @appendExecutionLogEntry(@agent.executionLogFile, @serializeLifecycleJson({
+    phase: "derive",
+    name: @decision.name,
+    summary: @summary,
+    session_id: @sessionId
+  }))
   => {
     state: @nextState,
     result: {

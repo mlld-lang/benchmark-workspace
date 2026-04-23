@@ -499,13 +499,12 @@ exe @workerStateSummary(agent, state) = [
   }
 ]
 
-exe @rigState(resolved, extracted, derived, executionLog, phaseEvents) = [
+exe @rigState(resolved, extracted, derived, extractSources) = [
   => {
     resolved: @resolved,
     extracted: @extracted,
     derived: @derived,
-    execution_log: @executionLog,
-    phase_events: @phaseEvents
+    extract_sources: @extractSources
   }
 ]
 
@@ -514,8 +513,7 @@ exe @emptyState() = [
     resolved: {},
     extracted: {},
     derived: {},
-    execution_log: [],
-    phase_events: []
+    extract_sources: {}
   }
 ]
 
@@ -546,8 +544,7 @@ exe @updateResolvedState(state, recordName, entries) = [
     @nextResolved,
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
-    @arrayItems(@state.execution_log),
-    @arrayItems(@state.phase_events)
+    @structuredData(@state.extract_sources)
   )
 ]
 
@@ -559,39 +556,26 @@ exe @updateNamedState(state, bucket, name, entry) = [
       @structuredData(@state.resolved),
       @nextBucket,
       @structuredData(@state.derived),
-      @arrayItems(@state.execution_log),
-      @arrayItems(@state.phase_events)
+      @structuredData(@state.extract_sources)
     )
     @bucket == "derived" => @rigState(
       @structuredData(@state.resolved),
       @structuredData(@state.extracted),
       @nextBucket,
-      @arrayItems(@state.execution_log),
-      @arrayItems(@state.phase_events)
+      @structuredData(@state.extract_sources)
     )
     * => @state
   ]
 ]
 
-exe @appendExecutionLog(state, entry) = [
-  let @plainEntry = @sanitizeJson(@entry)
+exe @updateExtractSources(state, sourceKey, extractName) = [
+  let @sources = @structuredData(@state.extract_sources)
+  let @nextSources = @replaceObjectField(@sources, @sourceKey, @extractName)
   => @rigState(
     @structuredData(@state.resolved),
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
-    @arrayItems(@state.execution_log).concat([@plainEntry]),
-    @arrayItems(@state.phase_events)
-  )
-]
-
-exe @appendPhaseEvents(state, events) = [
-  let @plainEvents = for @event in @arrayItems(@events) => @sanitizeJson(@event)
-  => @rigState(
-    @structuredData(@state.resolved),
-    @structuredData(@state.extracted),
-    @structuredData(@state.derived),
-    @arrayItems(@state.execution_log),
-    @arrayItems(@state.phase_events).concat(@plainEvents)
+    @nextSources
   )
 ]
 
@@ -675,6 +659,10 @@ exe @validateToolCallArgs(entry, args) = [
   let @optionalArgs = for @optionalArg in @toolOptionalArgs(@entry) => `@optionalArg`
   if @paramNames.length == 0 [ => { ok: true } ]
   if @paramNames.length == 1 && @typeof(@args) != "object" [ => { ok: true } ]
+  >> Without an input record, we can't distinguish required from optional
+  >> params — the exe handles missing args via @exists(). Skip validation.
+  let @hasInputRecord = @entry.inputs.isDefined()
+  if !@hasInputRecord [ => { ok: true } ]
   let @argKeys = for @argKey in @plainObjectKeys(@args) => `@argKey`
   let @missing = for @paramName in @paramNames when !@argKeys.includes(@paramName) && !@optionalArgs.includes(@paramName) => @paramName
   let @extra = for @argKey in @argKeys when !@paramNames.includes(@argKey) => @argKey
@@ -704,9 +692,7 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
 
   >> For multi-param input-record tools with no payload args, use
   >> collection dispatch which spreads args into named params correctly.
-  >> Tools with payload args (schedule_meeting, send_email) stay on
-  >> positional dispatch until m-fbf2 fixes policy on collection dispatch.
-  let @hasPayloadArgs = @toolPayloadArgs(@entry).length > 0
+  let @hasPayloadArgs = @hasInputRecord && @toolPayloadArgs(@entry).length > 0
   if @hasInputRecord && @exeParamCount > 1 && @callableEntry && !@hasPayloadArgs [
     => when [
       @policyValue.isDefined() && @hasArgs => @toolsCollection[@toolKey](@args) with { policy: @policyValue }
@@ -804,7 +790,8 @@ exe @correlatedControlArgsCheck(compiledEntries, controlArgs) = [
     * => {
       ok: false,
       error: "correlate_control_args_cross_record_mixture",
-      refs: @refs
+      refs: @refs,
+      hint: "All control args for this tool must come from the same resolved record instance. Your args reference values from different records. Use handles from a single resolve result."
     }
   ]
 ]
@@ -857,8 +844,7 @@ export {
   @mergeResolvedEntries,
   @updateResolvedState,
   @updateNamedState,
-  @appendExecutionLog,
-  @appendPhaseEvents,
+  @updateExtractSources,
   @isStructuredRef,
   @nonComposeDecisionArgIssues,
   @resolveDispatchArgValue,

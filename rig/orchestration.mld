@@ -8,7 +8,8 @@ import {
 } from "./tooling.mld"
 import {
   @resetLifecycleFiles,
-  @truncateLlmCallLog
+  @truncateLlmCallLog,
+  @truncateExecutionLog
 } from "./lifecycle.mld"
 import {
   @defaultHarness,
@@ -16,7 +17,7 @@ import {
   @workerStateSummary,
   @nonComposeDecisionArgIssues,
   @updateNamedState,
-  @appendExecutionLog,
+  @updateExtractSources,
   @correlatedControlArgsCheck
 } from "./runtime.mld"
 import { @runPlannerSession } from "./workers/planner.mld"
@@ -155,6 +156,7 @@ exe @validateConfig(config) = [
     stub: @overrides.stub ?? {},
     phaseLogFile: @config.phaseLogFile ?? null,
     phaseStateFile: @config.phaseStateFile ?? null,
+    executionLogFile: @config.executionLogFile ?? "/tmp/mlld-rig-execution-log.jsonl",
     llmCallLogFile: @config.llmCallLogFile ?? null,
     logLlmCalls: @config.logLlmCalls ?? false,
     innerWorkerDir: @config.innerWorkerDir ?? "/tmp/mlld-rig-inner-workers",
@@ -168,6 +170,7 @@ exe @validateConfig(config) = [
 exe @runPlanner(agent, query) = [
   @resetLifecycleFiles(@agent.phaseLogFile, @agent.phaseStateFile)
   @truncateLlmCallLog(@agent.llmCallLogFile)
+  @truncateExecutionLog(@agent.executionLogFile)
   if @agent.harness == "opencode" [
     @prepareOpencodeInnerWorkerHome(@agent.innerWorkerDataHome, @agent.innerWorkerStateHome, @agent.innerWorkerDir)
   ]
@@ -182,6 +185,6 @@ export {
   @workerStateSummary,
   @nonComposeDecisionArgIssues,
   @updateNamedState,
-  @appendExecutionLog,
+  @updateExtractSources,
   @correlatedControlArgsCheck
 }

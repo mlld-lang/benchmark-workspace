@@ -2,12 +2,13 @@
 id: c-3edc
 status: open
 deps: []
-links: []
+links: [c-d862]
 created: 2026-04-21T22:00:57Z
 type: epic
 priority: 2
 assignee: Adam
 tags: [logging, observability, refactor]
+updated: 2026-04-23T03:16:44Z
 ---
 # Rig logging refactor: --trace + var session + curated hooks
 

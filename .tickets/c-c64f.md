@@ -5,10 +5,10 @@ deps: []
 links: []
 created: 2026-04-21T14:15:19Z
 type: task
-priority: 2
+priority: 1
 assignee: Adam
 tags: [infra, records]
-updated: 2026-04-22T21:23:11Z
+updated: 2026-04-23T03:20:33Z
 ---
 # Investigate null id_ in resolved calendar records
 
@@ -64,3 +64,20 @@ Updated search_calendar_events tool description in bench/domains/workspace/tools
 This is a layer 3 fix (tool description) per the prompt placement rules — true for any caller of this tool.
 
 **2026-04-22T21:23:11Z** Definitive spike (tmp/spike-calendar-id-runner.py) confirms the full MCP → YAML → record coercion → normalize → planner projection path is clean. id_ is '5', handle is 'r_calendar_evt_5', planner projection shows all fields correctly. The null id_ in prior runs was caused by MCP connection drops (OOM or timeout), not a data path bug. Closing as infrastructure-caused — the real blockers are m-1841 (OOM) and the tool description fix (already landed).
+
+**2026-04-23T00:21:48Z** Reopening. The null id_ is NOT an infrastructure artifact — it reproduces consistently in live bench runs (without --debug, no OOM) while the standalone spike returns id_='5' correctly through the exact same MCP path. The MCP server returns correct YAML (id_: '5', 2 events) but the rig framework resolve dispatcher produces r_calendar_evt_null with count=1 and null fields. Something between the MCP bridge result and the => record coercion in the rig framework context is losing the data. Needs tracing through the resolve dispatcher to find the exact boundary where id_ becomes null.
+
+**2026-04-23T00:26:41Z** Root cause found via spike-live-dispatch.mld. The bug is in @callTool positional dispatch for multi-param read tools.
+
+Direct call: @search_calendar_events("Dental check-up", null) → array of 2 events, id_='5' ✓
+Via @callTool: @directExe({ query: "Dental check-up" }) → single mangled object, id_=null ✗
+
+@callTool passes the args object as a single positional arg. The exe has 2 params (query, date), so @query receives the whole { query: "..." } object instead of the string, and @date is undefined. The MCP call then sends a stringified object as the query, getting a wrong result.
+
+This is the same class of bug as c-7e4b (collection dispatch arg passthrough). Read tools with >1 param need their args spread to named params, not passed as a single object.
+
+**2026-04-23T01:40:38Z** UT7 run with all fixes: id_ is '5', handle is r_calendar_evt_5. The data path is fully fixed. Model found the event, derived reschedule times, attempted reschedule_calendar_event 3x (failed: no_update_fields — derived/known sources not recognized as update args by the intent compiler). Fell back to cancel + create_calendar_event. Compose succeeded. Utility: FAIL — likely because evaluator expects a reschedule (same event_id with changed start_time) not a cancel+create (new event_id).
+
+Two remaining issues for UT7:
+1. reschedule_calendar_event's update field validation rejects derived/known sources — the intent compiler needs to recognize these as valid update fields
+2. The tool description fix (omit date filter) is working — model searched without date and found the event

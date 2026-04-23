@@ -10,13 +10,14 @@ import {
   @arrayItems,
   @stringValue,
   @appendLlmDebug,
-  @appendExecutionLog,
-  @appendPhaseEvents,
+  @updateExtractSources,
   @projectResolvedEntry
 } from "../runtime.mld"
 import {
   @serializeLifecycleJson,
   @appendPhaseEvent,
+  @appendExecutionLogEntry,
+  @readExecutionLogFile,
   @writePhaseStateFile,
   @betweenState,
   @plannerIterationEvent,
@@ -241,10 +242,9 @@ exe @finishPlannerTool(ctx, nextState, nextRuntime, workerSessionId, outcome, su
   )
   @appendPhaseEvent(@ctx.agent.phaseLogFile, @serializeLifecycleJson(@endEvent))
   @writePhaseStateFile(@ctx.agent.phaseStateFile, @serializeLifecycleJson(@betweenState()))
-  let @stateWithEvents = @appendPhaseEvents(@nextState, [@ctx.planner_event, @ctx.start_event, @endEvent])
-  @planner.set({ state: @stateWithEvents, runtime: @nextRuntime })
+  @planner.set({ state: @nextState, runtime: @nextRuntime })
   => {
-    state: @stateWithEvents,
+    state: @nextState,
     runtime: @nextRuntime
   }
 ]
@@ -252,21 +252,25 @@ exe @finishPlannerTool(ctx, nextState, nextRuntime, workerSessionId, outcome, su
 exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
   let @workerSessionId = @normalizeSessionId(@phaseResult.session_id)
   let @nextState = when [
-    @phaseResult.error.isDefined() => @appendExecutionLog(
-      @phaseResult.state ?? @toolCtx.state,
-      {
-        phase: @decision.phase,
-        tool: @decision.tool ?? @decision.operation ?? null,
-        name: @decision.name ?? null,
-        status: "error",
-        error: @phaseResult.error,
-        summary: @phaseResult.summary ?? @phaseResult.error,
-        issues: @phaseResult.issues ?? null,
-        raw_error: @phaseResult.raw_error ?? null,
-        worker_session_id: @workerSessionId
-      }
-    )
+    @phaseResult.error.isDefined() => @phaseResult.state ?? @toolCtx.state
     * => @phaseResult.state
+  ]
+  let @logEntry = when [
+    @phaseResult.error.isDefined() => {
+      phase: @decision.phase,
+      tool: @decision.tool ?? @decision.operation ?? null,
+      name: @decision.name ?? null,
+      status: "error",
+      error: @phaseResult.error,
+      summary: @phaseResult.summary ?? @phaseResult.error,
+      issues: @phaseResult.issues ?? null,
+      raw_error: @phaseResult.raw_error ?? null,
+      worker_session_id: @workerSessionId
+    }
+    * => null
+  ]
+  if @logEntry.isDefined() [
+    @appendExecutionLogEntry(@toolCtx.agent.executionLogFile, @serializeLifecycleJson(@logEntry))
   ]
   let @invalidCalls = when [
     @phaseResult.error.isDefined() => @toolCtx.runtime.invalid_calls + 1
@@ -303,8 +307,8 @@ exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
   let @remaining = @budget - (@toolCtx.runtime.tool_calls + 1)
   let @halfBudget = @budget / 2
   let @budgetWarning = when [
-    @remaining <= 3 => `You have @remaining tool call(s) remaining. Call compose or execute now.`
-    @remaining <= @halfBudget => `You have used @toolCtx.runtime.tool_calls of @budget tool calls. If you have the information you need, proceed to execute or compose. Do not re-extract or re-derive.`
+    @remaining <= 3 => `URGENT: @remaining call(s) remaining. You MUST call compose (to answer) or execute (to write) on your next call. If you cannot complete the task, call blocked.`
+    @remaining <= @halfBudget => `Budget checkpoint: @toolCtx.runtime.tool_calls of @budget calls used. If you can answer the question or perform the write from current data, do it now. Each additional resolve/extract/derive costs a call.`
     * => null
   ]
   => {
@@ -422,13 +426,14 @@ exe @plannerExtract(input) = [
     => @toolCtx.result
   ]
   if !@tool.isDefined() && !@source.isDefined() [
-    let @missingState = @appendExecutionLog(@toolCtx.state, {
+    @appendExecutionLogEntry(@toolCtx.agent.executionLogFile, @serializeLifecycleJson({
       phase: "extract",
       name: @name,
       status: "error",
       error: "extract_requires_tool_or_source",
       summary: "extract_requires_tool_or_source"
-    })
+    }))
+    let @missingState = @toolCtx.state
     let @missingInvalidCalls = @toolCtx.runtime.invalid_calls + 1
     let @missingTerminal = when [
       @missingInvalidCalls >= @plannerInvalidBudget() => {
@@ -556,13 +561,14 @@ exe @plannerCompose(input) = [
   ]
   let @phaseResult = @dispatchCompose(@toolCtx.agent, @toolCtx.state, @toolCtx.query)
   let @workerSessionId = @normalizeSessionId(@phaseResult.session_id)
-  let @nextState = @appendExecutionLog(@toolCtx.state, {
+  @appendExecutionLogEntry(@toolCtx.agent.executionLogFile, @serializeLifecycleJson({
     phase: "compose",
     status: "complete",
     summary: "final answer prepared",
     worker_session_id: @workerSessionId,
     session_id: @workerSessionId
-  })
+  }))
+  let @nextState = @toolCtx.state
   let @nextRuntime = @plannerRuntimeState(
     @toolCtx.runtime.tool_calls + 1,
     0,
@@ -602,11 +608,12 @@ exe @plannerBlocked(input) = [
     -> @toolCtx.result
     => @toolCtx.result
   ]
-  let @nextState = @appendExecutionLog(@toolCtx.state, {
+  @appendExecutionLogEntry(@toolCtx.agent.executionLogFile, @serializeLifecycleJson({
     phase: "blocked",
     status: "blocked",
     summary: @reason
-  })
+  }))
+  let @nextState = @toolCtx.state
   let @nextRuntime = @plannerRuntimeState(
     @toolCtx.runtime.tool_calls + 1,
     0,
@@ -639,13 +646,13 @@ var tools @terminalTools = {
     mlld: @plannerCompose,
     inputs: @planner_compose_inputs,
     labels: ["tool:w"],
-    description: "Prepare the final answer and terminate the session."
+    description: "Write the final answer for the user and end the session."
   },
   blocked: {
     mlld: @plannerBlocked,
     inputs: @planner_blocked_inputs,
     labels: ["tool:w"],
-    description: "Terminate the session because no legal path remains."
+    description: "Stop and explain why the task cannot be completed."
   }
 }
 
@@ -654,43 +661,43 @@ var tools @plannerTools = {
     mlld: @plannerResolve,
     inputs: @planner_resolve_inputs,
     labels: ["tool:w"],
-    description: "Ground records into planner-visible state with one resolve tool."
+    description: "Look up information using a read tool. Returns structured records with handles you can reference later."
   },
   resolve_batch: {
     mlld: @plannerResolveBatch,
     inputs: @planner_resolve_batch_inputs,
     labels: ["tool:w"],
-    description: "Ground multiple independent record types in one call. Each entry in the resolves array is { tool, args?, purpose? }. Saves round-trips when you need data from multiple tools."
+    description: "Look up multiple independent record types in one call. Each entry in the resolves array is { tool, args?, purpose? }. Saves round-trips."
   },
   extract: {
     mlld: @plannerExtract,
     inputs: @planner_extract_inputs,
     labels: ["tool:w"],
-    description: "Fetch literal untrusted content or extract typed payload from grounded state."
+    description: "Read hidden content from a resolved record (like an email body or file content) and extract specific fields into a named result."
   },
   derive: {
     mlld: @plannerDerive,
     inputs: @planner_derive_inputs,
     labels: ["tool:w"],
-    description: "Compute a typed named result from grounded inputs."
+    description: "Compute a result from data you already have — ranking, selection, comparison, arithmetic, or summarization. Returns a named result."
   },
   execute: {
     mlld: @plannerExecute,
     inputs: @planner_execute_inputs,
     labels: ["tool:w"],
-    description: "Perform one concrete write through the defended execute path."
+    description: "Perform a write operation (send email, create event, update record, etc.). Target values must come from prior resolves or exact task text."
   },
   compose: {
     mlld: @plannerCompose,
     inputs: @planner_compose_inputs,
     labels: ["tool:w"],
-    description: "Prepare the final answer and terminate the session."
+    description: "Write the final answer for the user and end the session."
   },
   blocked: {
     mlld: @plannerBlocked,
     inputs: @planner_blocked_inputs,
     labels: ["tool:w"],
-    description: "Terminate the session because no legal path remains."
+    description: "Stop and explain why the task cannot be completed."
   }
 }
 
@@ -708,19 +715,19 @@ exe @plannerLlmCallClaude(prompt, config, agent, query) =
 >> field in resume enforcement).
 guard after @composeRetryStub for op:named:plannerLlmCallStub = when [
   !@planner.runtime.terminal.isDefined() && @mx.guard.try < 2
-    => resume "You must call compose or blocked to end the session. Call compose now to finalize your answer." with { tools: @terminalTools }
+    => resume "You completed work but didn't write a final answer. Call compose now — it will read your execution log and resolved data to write the user's answer. If the task cannot be completed, call blocked with a reason." with { tools: @terminalTools }
   * => allow
 ]
 
 guard after @composeRetryOpencode for op:named:plannerLlmCallOpencode = when [
   !@planner.runtime.terminal.isDefined() && @mx.guard.try < 2
-    => resume "You must call compose or blocked to end the session. Call compose now to finalize your answer." with { tools: @terminalTools }
+    => resume "You completed work but didn't write a final answer. Call compose now — it will read your execution log and resolved data to write the user's answer. If the task cannot be completed, call blocked with a reason." with { tools: @terminalTools }
   * => allow
 ]
 
 guard after @composeRetryClaude for op:named:plannerLlmCallClaude = when [
   !@planner.runtime.terminal.isDefined() && @mx.guard.try < 2
-    => resume "You must call compose or blocked to end the session. Call compose now to finalize your answer." with { tools: @terminalTools }
+    => resume "You completed work but didn't write a final answer. Call compose now — it will read your execution log and resolved data to write the user's answer. If the task cannot be completed, call blocked with a reason." with { tools: @terminalTools }
   * => allow
 ]
 
@@ -769,11 +776,12 @@ exe @runPlannerSession(agent, query) = [
       reason: "planner_session_ended_without_terminal_tool"
     }
   ]
+  let @finalExecutionLog = @readExecutionLogFile(@agent.executionLogFile)
   => {
     terminal: @terminal.status,
     final: { text: @terminal.text },
-    execution_log: @sessionState.execution_log ?? [],
-    phase_events: @sessionState.phase_events ?? [],
+    execution_log: @finalExecutionLog,
+    phase_events: [],
     last_decision: @runtime.last_decision ?? null
   }
 ]

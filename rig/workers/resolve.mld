@@ -2,9 +2,9 @@ import { @recordTypeName, @toolRuntimeMessage, @toolFailureDetail, @toolCallErro
 import {
   @callTool,
   @normalizeResolvedValues,
-  @updateResolvedState,
-  @appendExecutionLog
+  @updateResolvedState
 } from "../runtime.mld"
+import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @resolveAttestation } from "../records.mld"
 import { @compileToolArgs } from "../intent.mld"
 import { @phaseToolEntry, @wrongPhaseToolFailure } from "../tooling.mld"
@@ -75,16 +75,7 @@ exe @dispatchResolve(agent, state, decision, query) = [
   let @entries = @normalizeResolvedValues(@recordType, @recordDef, @raw)
   let @handles = for @entry in @entries => @entry.handle
   let @summary = `resolved @entries.length @recordType record(s)`
-  let @nextState = @appendExecutionLog(
-    @updateResolvedState(@state, @recordType, @entries),
-    {
-      phase: "resolve",
-      tool: @decision.tool,
-      handles: @handles,
-      summary: @summary,
-      session_id: null
-    }
-  )
+  let @nextState = @updateResolvedState(@state, @recordType, @entries)
   => {
     state: @nextState,
     result: {

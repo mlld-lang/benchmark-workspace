@@ -1,0 +1,204 @@
+>> Assertion engine and result recording for worker tests.
+
+exe @timestamp() = cmd { python3 -c "import time; print(int(time.time()*1000))" }
+
+exe @isoTimestamp() = cmd { python3 -c "from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'))" }
+
+exe @getAtPath(obj, path) = js {
+  if (obj == null) return null;
+  const parts = path.split(".");
+  let current = obj;
+  for (const part of parts) {
+    if (current == null) return null;
+    if (Array.isArray(current) && /^\d+$/.test(part)) {
+      current = current[parseInt(part, 10)];
+    } else if (typeof current === "object") {
+      current = current[part];
+    } else {
+      return null;
+    }
+  }
+  return current === undefined ? null : current;
+}
+
+exe @fieldPresent(obj, path) = [
+  let @val = @getAtPath(@obj, @path)
+  => when [
+    @val != null => { pass: true, assertion: "field_present", path: @path, reason: null }
+    * => { pass: false, assertion: "field_present", path: @path, reason: `field at @path is null or absent` }
+  ]
+]
+
+exe @isNullish(inputValue) = js {
+  return inputValue === null || inputValue === undefined || inputValue === "";
+}
+
+exe @fieldNull(obj, path) = [
+  let @val = @getAtPath(@obj, @path)
+  => when [
+    @isNullish(@val) => { pass: true, assertion: "field_null", path: @path, reason: null }
+    * => { pass: false, assertion: "field_null", path: @path, reason: `expected null at @path, got: @val` }
+  ]
+]
+
+exe @checkExactMatch(actual, expected) = js {
+  function unwrap(v) {
+    if (v == null) return v;
+    if (typeof v === "object" && v.value !== undefined && v.valueType !== undefined) return v.value;
+    if (typeof v === "object" && v.data !== undefined) return v.data;
+    return v;
+  }
+  const a = unwrap(actual);
+  const e = unwrap(expected);
+  if (typeof a === "number" && typeof e === "number") return a === e;
+  return String(a) === String(e);
+}
+
+exe @formatValue(inputValue) = js {
+  function unwrap(v) {
+    if (v == null) return v;
+    if (typeof v === "object" && v.value !== undefined && v.valueType !== undefined) return v.value;
+    if (typeof v === "object" && v.data !== undefined) return v.data;
+    return v;
+  }
+  return String(unwrap(inputValue));
+}
+
+exe @fieldExact(obj, path, expected) = [
+  let @val = @getAtPath(@obj, @path)
+  if @val == null [ => { pass: false, assertion: "field_exact", path: @path, reason: `field at @path is null` } ]
+  let @matched = @checkExactMatch(@val, @expected)
+  if @matched [ => { pass: true, assertion: "field_exact", path: @path, reason: null } ]
+  let @expStr = @formatValue(@expected)
+  let @valStr = @formatValue(@val)
+  => { pass: false, assertion: "field_exact", path: @path, reason: `expected "@expStr", got "@valStr"` }
+]
+
+exe @checkStringContains(strVal, subVal) = js {
+  const s = String(strVal).toLowerCase();
+  const sub = String(subVal).toLowerCase();
+  return s.includes(sub);
+}
+
+exe @fieldContains(obj, path, substring) = [
+  let @val = @getAtPath(@obj, @path)
+  if @val == null [ => { pass: false, assertion: "field_contains", path: @path, reason: `field at @path is null` } ]
+  let @found = @checkStringContains(@val, @substring)
+  => when [
+    @found => { pass: true, assertion: "field_contains", path: @path, reason: null }
+    * => { pass: false, assertion: "field_contains", path: @path, reason: `"@val" does not contain "@substring"` }
+  ]
+]
+
+exe @fieldNotContains(obj, path, substring) = [
+  let @val = @getAtPath(@obj, @path)
+  if @val == null [ => { pass: true, assertion: "field_not_contains", path: @path, reason: null } ]
+  let @found = @checkStringContains(@val, @substring)
+  => when [
+    !@found => { pass: true, assertion: "field_not_contains", path: @path, reason: null }
+    * => { pass: false, assertion: "field_not_contains", path: @path, reason: `"@val" contains "@substring"` }
+  ]
+]
+
+exe @checkLengthGte(arr, minLen) = js {
+  function unwrap(v) {
+    if (v == null) return 0;
+    if (typeof v === "object" && v.value !== undefined && v.valueType !== undefined) return v.value;
+    if (typeof v === "object" && v.data !== undefined) return v.data;
+    return v;
+  }
+  return arr.length >= Number(unwrap(minLen));
+}
+
+exe @arrayLengthGte(obj, path, n) = [
+  let @val = @getAtPath(@obj, @path)
+  if @val == null [ => { pass: false, assertion: "array_length_gte", path: @path, reason: `field at @path is null` } ]
+  if @typeof(@val) != "array" [ => { pass: false, assertion: "array_length_gte", path: @path, reason: `field at @path is not an array` } ]
+  let @nStr = @formatValue(@n)
+  let @ok = @checkLengthGte(@val, @n)
+  => when [
+    @ok => { pass: true, assertion: "array_length_gte", path: @path, reason: null }
+    * => { pass: false, assertion: "array_length_gte", path: @path, reason: `array length @val.length < @nStr` }
+  ]
+]
+
+exe @checkArrayContains(arr, subVal) = js {
+  const sub = String(subVal).toLowerCase();
+  return arr.some(item => String(item).toLowerCase().includes(sub));
+}
+
+exe @arrayContains(obj, path, substring) = [
+  let @val = @getAtPath(@obj, @path)
+  if @val == null [ => { pass: false, assertion: "array_contains", path: @path, reason: `field at @path is null` } ]
+  if @typeof(@val) != "array" [ => { pass: false, assertion: "array_contains", path: @path, reason: `field at @path is not an array` } ]
+  let @found = @checkArrayContains(@val, @substring)
+  => when [
+    @found => { pass: true, assertion: "array_contains", path: @path, reason: null }
+    * => { pass: false, assertion: "array_contains", path: @path, reason: `no element contains "@substring"` }
+  ]
+]
+
+exe @deepContainsCheck(val, substring) = js {
+  const json = JSON.stringify(val).toLowerCase();
+  return json.includes(String(substring).toLowerCase());
+}
+
+exe @deepContains(obj, path, substring) = [
+  let @val = @getAtPath(@obj, @path)
+  if @val == null [ => { pass: false, assertion: "deep_contains", path: @path, reason: `field at @path is null` } ]
+  let @found = @deepContainsCheck(@val, @substring)
+  => when [
+    @found => { pass: true, assertion: "deep_contains", path: @path, reason: null }
+    * => { pass: false, assertion: "deep_contains", path: @path, reason: `serialized value at @path does not contain "@substring"` }
+  ]
+]
+
+exe @runOneAssertion(obj, spec) = when [
+  @spec.type == "field_present" => @fieldPresent(@obj, @spec.path)
+  @spec.type == "field_null" => @fieldNull(@obj, @spec.path)
+  @spec.type == "field_exact" => @fieldExact(@obj, @spec.path, @spec.value)
+  @spec.type == "field_contains" => @fieldContains(@obj, @spec.path, @spec.value)
+  @spec.type == "field_not_contains" => @fieldNotContains(@obj, @spec.path, @spec.value)
+  @spec.type == "array_length_gte" => @arrayLengthGte(@obj, @spec.path, @spec.value)
+  @spec.type == "array_contains" => @arrayContains(@obj, @spec.path, @spec.value)
+  @spec.type == "deep_contains" => @deepContains(@obj, @spec.path, @spec.value)
+  * => { pass: false, assertion: @spec.type, path: @spec.path ?? "?", reason: `unknown assertion type: @spec.type` }
+]
+
+exe @runAssertions(attestation, assertions) = [
+  let @details = for @spec in @assertions => @runOneAssertion(@attestation, @spec)
+  let @passed = for @d in @details when @d.pass => @d
+  let @failedDetails = for @d in @details when !@d.pass => @d
+  => {
+    total: @details.length,
+    passed: @passed.length,
+    failed: @failedDetails.length,
+    details: @details
+  }
+]
+
+exe @appendLine(filePath, lineContent) = sh {
+  printf '%s\n' "$lineContent" >> "$filePath"
+}
+
+exe @recordResult(resultFile, resultEntry) = [
+  let @line = @resultEntry | @pretty
+  @appendLine(@resultFile, @line)
+]
+
+export {
+  @timestamp,
+  @isoTimestamp,
+  @getAtPath,
+  @fieldPresent,
+  @fieldNull,
+  @fieldExact,
+  @fieldContains,
+  @fieldNotContains,
+  @arrayLengthGte,
+  @arrayContains,
+  @deepContains,
+  @runOneAssertion,
+  @runAssertions,
+  @recordResult
+}

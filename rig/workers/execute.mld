@@ -11,9 +11,9 @@ import {
   @callToolWithPolicy,
   @toolCallError,
   @toolRuntimeMessage,
-  @correlatedControlArgsCheck,
-  @appendExecutionLog
+  @correlatedControlArgsCheck
 } from "../runtime.mld"
+import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @compileExecuteIntent } from "../intent.mld"
 import { @executeAttestation } from "../records.mld"
 import { @validatePlannerArgRefs, @plannerValidationFailure } from "../planner_inputs.mld"
@@ -89,7 +89,7 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   >> already validates shape against `inputs:` at call time.
   let @preparedArgs = @inputValues
   if @updateFields.length > 0 && !@hasNonNullFieldValue(@preparedArgs, @updateFields) [
-    => @plannerValidationFailure("no_update_fields", { update_fields: @updateFields }, null)
+    => @plannerValidationFailure("no_update_fields", { update_fields: @updateFields, hint: `This is an update tool. You must include at least one changed field. Updatable fields: @updateFields.join(", "). Pass the new value for at least one of these in your args.` }, null)
   ]
   if @toolCorrelateControlArgs(@tool) [
     let @correlated = @correlatedControlArgsCheck(@compiled.compiled_entries, @controlArgs)
@@ -128,12 +128,13 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   let @toolMessage = @toolRuntimeMessage(@operationName, @raw)
   if @toolMessage != null [ => { error: "tool_runtime_error", summary: @toolMessage } ]
   let @summary = `executed @operationName`
-  let @nextState = @appendExecutionLog(@state, {
+  @appendExecutionLogEntry(@agent.executionLogFile, @serializeLifecycleJson({
     phase: "execute",
     tool: @operationName,
     summary: @summary,
     session_id: null
-  })
+  }))
+  let @nextState = @state
   => {
     state: @nextState,
     result: {

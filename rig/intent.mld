@@ -3,6 +3,7 @@ import {
   @toolControlArgs,
   @toolPayloadArgs,
   @toolExactArgs,
+  @toolUpdateArgs,
   @toolBind
 } from "./tooling.mld"
 
@@ -574,12 +575,13 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
   if @resolved.source == "resolved" [
     if @role == "control" && !@ref.handle.isDefined() && @ref.source != "selection" [
       let @available = for @e in @resolvedEntries(@state, @ref.record) => @name(@e.handle)
+      let @exampleHandle = @available[0] ?? "<handle>"
       => {
         ok: false,
         arg: @arg,
         error: "control_ref_requires_specific_instance",
         source_class: "resolved",
-        hint: "You passed a family ref. Pick a specific handle from your prior resolve results.",
+        hint: `You passed a family ref without a handle. Pick a specific instance. Example: { "source": "resolved", "record": "@ref.record", "handle": "@exampleHandle", "field": "<field>" }`,
         available_handles: @available
       }
     ]
@@ -588,7 +590,8 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
         ok: false,
         arg: @arg,
         error: "non_task_source_in_exact_payload_arg",
-        source_class: "resolved"
+        source_class: "resolved",
+        hint: `This arg must contain the exact literal from the user's task text. Use { "source": "known", "value": "<verbatim text from task>" }.`
       }
     ]
     let @backingRef = when [
@@ -627,7 +630,8 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
         ok: false,
         arg: @arg,
         error: "payload_only_source_in_control_arg",
-        source_class: @resolved.source
+        source_class: @resolved.source,
+        hint: `Control args require "resolved" or "known" source. Use { "source": "resolved", "record": "<type>", "handle": "<handle>", "field": "<field>" } with a handle from a prior resolve, or { "source": "known", "value": "<exact text from task>" } for user-provided literals.`
       }
     ]
     if @exactArg [
@@ -635,7 +639,8 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
         ok: false,
         arg: @arg,
         error: "non_task_source_in_exact_payload_arg",
-        source_class: @resolved.source
+        source_class: @resolved.source,
+        hint: `This arg must contain the exact literal from the user's task text. Use { "source": "known", "value": "<verbatim text from task>" }.`
       }
     ]
     => {
@@ -769,17 +774,23 @@ exe @builderConstraint(eqValue, attestations) = [
 exe @policyIntentValue(compiledEntry) = [
   let @constraint = @builderConstraint(@compiledEntry.flat_eq, @compiledEntry.flat_attestations)
   => when [
-    @constraint.isDefined() => @constraint
+    @constraint != null => @constraint
     @compiledEntry.flat_eq.isDefined() => @compiledEntry.flat_eq
     * => null
   ]
 ]
 
-exe @flatPolicyIntent(operationName, compiledEntries) = [
-  let @pairs = for @entry in @compiledEntries when @entry.arg.isDefined() && @entry.auth_bucket != "allow" => {
+exe @flatPolicyIntent(operationName, compiledEntries, updateArgs) = [
+  let @updateArgNames = for @argName in (@updateArgs ?? []) => @name(@argName)
+  let @authPairs = for @entry in @compiledEntries when @entry.arg.isDefined() && @entry.auth_bucket.isDefined() && @entry.auth_bucket != "allow" => {
     key: @entry.arg,
     value: @policyIntentValue(@entry)
   }
+  let @updatePairs = for @entry in @compiledEntries when @entry.arg.isDefined() && @updateArgNames.includes(@name(@entry.arg)) => {
+    key: @entry.arg,
+    value: @policyIntentValue(@entry)
+  }
+  let @pairs = @authPairs.concat(@updatePairs)
   let @validPairs = for @pair in @pairs when @pair.value.isDefined() => @pair
   let @flatArgs = @pairsToObject(@validPairs)
   => when [
@@ -816,7 +827,7 @@ exe @compileExecuteIntent(state, tools, decision, query) = [
       known: @bucketEntries(@decision.operation, @compiledEntries, "known"),
       allow: @allowBucket
     },
-    policy_intent: @flatPolicyIntent(@decision.operation, @compiledEntries)
+    policy_intent: @flatPolicyIntent(@decision.operation, @compiledEntries, @toolUpdateArgs(@tool))
   }
 ]
 

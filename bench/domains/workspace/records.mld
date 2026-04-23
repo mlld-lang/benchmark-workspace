@@ -115,24 +115,27 @@ record @calendar_evt = {
 >> threat model notes (Class 1 share_file path) that share_file's
 >> `email` arg is the destination — not `shared_with` — so positive
 >> checks fire on the share_file controlArg, not on this field.
->> Per the threat model: id_ is the file_id control arg for append/
+>> Per the threat model: file_id is the control arg for append/
 >> delete/share. shared_with elements are handle-bearing in tool results
 >> and may flow into share_file's email control arg for re-sharing. But
 >> filename and owner are never control args for any write tool — they're
 >> content for the worker to read. Making them facts caused shelf writes
 >> to fail because file tools return them as plain strings with no
 >> handle-bearing projection.
+>> The field is named `file_id` (not `id_` like other domain records)
+>> so that the planner sees the same name as the write tool parameter.
+>> MCP responses return `id_`; the bridge `@fileIdAlias` renames it.
 record @file_entry = {
-  facts: [id_: handle, shared_with: array?],
+  facts: [file_id: handle, shared_with: array?],
   data: {
     trusted: [filename: string?, owner: string?, size: number?, last_modified: string?],
     untrusted: [content: string?]
   },
-  key: id_,
+  key: file_id,
   display: {
-    default: [{ handle: "id_" }, filename, owner, content, size, { ref: "shared_with" }, last_modified],
-    worker: [{ handle: "id_" }, filename, owner, content, size, { ref: "shared_with" }, last_modified],
-    planner: [{ ref: "id_" }, filename, owner, size, { ref: "shared_with" }, last_modified]
+    default: [{ handle: "file_id" }, filename, owner, content, size, { ref: "shared_with" }, last_modified],
+    worker: [{ handle: "file_id" }, filename, owner, content, size, { ref: "shared_with" }, last_modified],
+    planner: [{ ref: "file_id" }, filename, owner, size, { ref: "shared_with" }, last_modified]
   }
 }
 

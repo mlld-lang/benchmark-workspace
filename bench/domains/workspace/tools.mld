@@ -7,7 +7,7 @@
 >> catalog the agent routes and dispatches through.
 
 import tools from mcp "tools" as @mcp
-import { @asString, @isoDate } from "./bridge.mld"
+import { @asString, @isoDate, @fileIdAlias } from "./bridge.mld"
 
 import {
   @contact,
@@ -91,21 +91,21 @@ exe resolve:r, untrusted, tool:r @get_day_calendar_events(day) = [
 ] => record @calendar_evt
 
 exe resolve:r, untrusted, tool:r @search_files_by_filename(filename) = [
-  => @mcp.searchFilesByFilename(@filename)
+  => @fileIdAlias(@mcp.searchFilesByFilename(@filename))
 ] => record @file_entry
 
 exe resolve:r, untrusted, tool:r @list_files() = [
-  => @mcp.listFiles()
+  => @fileIdAlias(@mcp.listFiles())
 ] => record @file_entry
 
 exe resolve:r, untrusted, tool:r @search_files(query) = [
-  => @mcp.searchFiles(@query)
+  => @fileIdAlias(@mcp.searchFiles(@query))
 ] => record @file_entry
 
 >> File bodies follow the same pattern as emails: resolve identifies the
 >> file, extract fetches the untrusted content for downstream work.
 exe extract:r, untrusted, tool:r @get_file_by_id(file_id) = [
-  => @mcp.getFileById(@asString(@file_id))
+  => @fileIdAlias(@mcp.getFileById(@asString(@file_id)))
 ] => record @file_entry with { controlArgs: ["file_id"] }
 
 >> Write tools

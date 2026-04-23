@@ -10,8 +10,9 @@ import {
   @extractToolResultValue,
   @previewFields,
   @updateNamedState,
-  @appendExecutionLog
+  @updateExtractSources
 } from "../runtime.mld"
+import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @compileToolArgs, @resolveRefValue } from "../intent.mld"
 import { @extractAttestation } from "../records.mld"
 import { @phaseToolEntry, @wrongPhaseToolFailure } from "../tooling.mld"
@@ -33,35 +34,55 @@ exe @extractSourceKey(source) = when [
   * => null
 ]
 
->> Only block re-extraction when a prior extract from the same source
->> produced actual content (non-empty preview_fields). If the prior
->> extract returned null/empty (e.g., MCP timeout), allow retry.
-exe @findPriorExtractForSource(executionLog, sourceKey) = [
-  if @sourceKey == null [ => null ]
-  let @matches = for @entry in @arrayItems(@executionLog) when @entry.phase == "extract" && @entry.status != "error" && @entry.source_key != null && @entry.source_key == @sourceKey && @entry.has_content == true => @entry.name
-  => @matches.length > 0 ? @matches[0] : null
+exe @findPriorExtractForSource(extractSources, sourceKey) = when [
+  @sourceKey == null => null
+  @extractSources[@sourceKey].isDefined() => @extractSources[@sourceKey]
+  * => null
 ]
 
 exe @coerceExtractEnvelope(parsed) = [
   => @parsed
 ] => record @extractAttestation
 
+exe @normalizeEmptyStrings(inputValue) = js {
+  function walk(v) {
+    if (v === "") return null;
+    if (v == null || typeof v !== "object") return v;
+    if (Array.isArray(v)) return v.map(walk);
+    const out = {};
+    for (const [k, val] of Object.entries(v)) out[k] = walk(val);
+    return out;
+  }
+  return walk(inputValue);
+}
+
 exe @coerceExtractAttestation(raw) = [
   if @raw == null [ => null ]
   let @parsed = @raw | @parse.llm
   let @coerced = @coerceExtractEnvelope(@parsed)
   let @parsedPayloadType = @typeof(@parsed.payload)
+  let @normalizedPayload = when [
+    @parsed.payload.isDefined() => @normalizeEmptyStrings(@parsed.payload)
+    * => null
+  ]
   let @result = when [
     !@coerced => null
-    @parsed.payload.isDefined() && (@parsedPayloadType == "array" || @parsedPayloadType != "object") => {
+    @normalizedPayload.isDefined() && (@parsedPayloadType == "array" || @parsedPayloadType != "object") => {
       status: @coerced.status,
       schema_name: @coerced.schema_name,
       name: @coerced.name,
       provenance: @coerced.provenance,
       preview_fields: @coerced.preview_fields,
-      payload: @parsed.payload
+      payload: @normalizedPayload
     }
-    * => @coerced
+    * => {
+      status: @coerced.status,
+      schema_name: @coerced.schema_name,
+      name: @coerced.name,
+      provenance: @coerced.provenance,
+      preview_fields: @coerced.preview_fields,
+      payload: @normalizeEmptyStrings(@coerced.payload)
+    }
   ]
   => @result
 ]
@@ -134,22 +155,12 @@ exe @dispatchExtract(agent, state, decision, query) = [
     let @recordType = @recordTypeName(@recordDef)
     let @typed = @extractToolResultValue(@recordType, @recordDef, @raw)
     let @summary = `fetched @decision.tool into @decision.name`
-    let @nextState = @appendExecutionLog(
-      @updateNamedState(@state, "extracted", @decision.name, {
-        provenance: "extracted",
-        schema_name: @recordType,
-        preview_fields: @previewFields(@typed),
-        value: @typed
-      }),
-      {
-        phase: "extract",
-        tool: @decision.tool,
-        name: @decision.name,
-        source_key: @extractSourceKey({ source: "tool", tool: @decision.tool }),
-        summary: @summary,
-        session_id: null
-      }
-    )
+    let @nextState = @updateNamedState(@state, "extracted", @decision.name, {
+      provenance: "extracted",
+      schema_name: @recordType,
+      preview_fields: @previewFields(@typed),
+      value: @typed
+    })
     => {
       state: @nextState,
       result: {
@@ -168,7 +179,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
   if !@sourceCheck.ok [ => @plannerValidationFailure("planner_source_validation_failed", @sourceCheck, @sourceCheck.issues) ]
   let @srcKey = @extractSourceKey(@decision.source)
   if @srcKey != null [
-    let @priorName = @findPriorExtractForSource(@state.execution_log ?? [], @srcKey)
+    let @priorName = @findPriorExtractForSource(@state.extract_sources ?? {}, @srcKey)
     if @priorName != null [
       => {
         error: "extract_source_already_extracted",
@@ -191,7 +202,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
     tools: [],
     stubPhase: "extract",
     stubResponses: @agent.stub.extract ?? [],
-    stubIndex: @arrayItems(@state.execution_log).length
+    stubIndex: 0
   })
   let @attestation = @coerceExtractAttestation(@raw)
   let @sessionId = @llmSessionId(@raw)
@@ -215,22 +226,24 @@ exe @dispatchExtract(agent, state, decision, query) = [
     * => "inline-schema"
   ]
   let @extractedPreviewFields = @previewFields(@typed)
-  let @nextState = @appendExecutionLog(
-    @updateNamedState(@state, "extracted", @decision.name, {
-      provenance: "extracted",
-      schema_name: @schemaName,
-      preview_fields: @extractedPreviewFields,
-      value: @typed
-    }),
-    {
-      phase: "extract",
-      name: @decision.name,
-      source_key: @srcKey,
-      has_content: @extractedPreviewFields.length > 0,
-      summary: @summary,
-      session_id: @sessionId
-    }
-  )
+  let @dataState = @updateNamedState(@state, "extracted", @decision.name, {
+    provenance: "extracted",
+    schema_name: @schemaName,
+    preview_fields: @extractedPreviewFields,
+    value: @typed
+  })
+  let @nextState = when [
+    @srcKey != null && @extractedPreviewFields.length > 0 => @updateExtractSources(@dataState, @srcKey, @decision.name)
+    * => @dataState
+  ]
+  @appendExecutionLogEntry(@agent.executionLogFile, @serializeLifecycleJson({
+    phase: "extract",
+    name: @decision.name,
+    source_key: @srcKey,
+    has_content: @extractedPreviewFields.length > 0,
+    summary: @summary,
+    session_id: @sessionId
+  }))
   => {
     state: @nextState,
     result: {

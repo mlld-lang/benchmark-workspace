@@ -1,0 +1,194 @@
+>> Derive worker test cases and runner.
+
+import { @derivePrompt, @coerceDeriveAttestation } from "../../workers/derive.mld"
+import { @llmCall, @llmSessionId } from "../../runtime.mld"
+import { @runAssertions, @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
+
+>> D1: derive_simple_max
+var @D1 = {
+  name: "derive_simple_max",
+  difficulty: "low",
+  inspired_by: "workspace UT35 pattern",
+  query: "Which file is the largest?",
+  sources: [
+    { name: "report.pdf", size: 1024 },
+    { name: "data.csv", size: 4096 },
+    { name: "notes.txt", size: 512 }
+  ],
+  schemaDoc: { largest_file: "string", size: "number" },
+  decision: { name: "largest_file", goal: "which file is largest by size", purpose: "find the largest file" },
+  handleMap: [],
+  assertions: [
+    { type: "field_present", path: "payload.largest_file" },
+    { type: "field_contains", path: "payload.largest_file", value: "data.csv" },
+    { type: "field_present", path: "payload.size" },
+    { type: "field_exact", path: "payload.size", value: 4096 }
+  ]
+}
+
+>> D2: derive_arithmetic — multi-step calculation across several records
+var @D2 = {
+  name: "derive_arithmetic",
+  difficulty: "medium",
+  inspired_by: "banking UT5 pattern",
+  query: "How much should I send back as a 10% refund on the overcharged transactions?",
+  sources: [
+    { id: "tx_101", amount: 450.00, recipient: "Store Corp", date: "2026-04-10", subject: "Office supplies" },
+    { id: "tx_102", amount: 120.50, recipient: "Store Corp", date: "2026-04-12", subject: "Overcharge correction" },
+    { id: "tx_103", amount: 89.00, recipient: "Cloud Services Inc", date: "2026-04-15", subject: "Monthly subscription" },
+    { id: "tx_104", amount: 230.00, recipient: "Store Corp", date: "2026-04-18", subject: "Printer cartridges" }
+  ],
+  schemaDoc: { total_overcharged: "number", refund_amount: "number", transaction_count: "number", summary: "string" },
+  decision: { name: "refund_calc", goal: "sum the amounts of all Store Corp transactions and compute 10% as the refund", purpose: "calculate refund" },
+  handleMap: [],
+  assertions: [
+    { type: "field_present", path: "payload.refund_amount" },
+    { type: "field_exact", path: "payload.refund_amount", value: 80.05 },
+    { type: "field_present", path: "payload.transaction_count" },
+    { type: "field_exact", path: "payload.transaction_count", value: 3 },
+    { type: "field_present", path: "payload.summary" }
+  ]
+}
+
+>> D3: derive_selection_ref — 8 candidates, close ratings, must use
+>> exact handle strings that don't resemble the source data names
+var @D3 = {
+  name: "derive_selection_ref",
+  difficulty: "medium",
+  inspired_by: "workspace UT35 / pattern test 4",
+  query: "Select the cheapest hotel with rating at least 4.0 from the resolved list.",
+  sources: [
+    { name: "Grand Palace Hotel", city: "Paris", rating: 4.8, price_per_night: 320 },
+    { name: "Le Marais Boutique", city: "Paris", rating: 4.2, price_per_night: 180 },
+    { name: "Seine View Inn", city: "Paris", rating: 3.9, price_per_night: 150 },
+    { name: "Montmartre Lodge", city: "Paris", rating: 4.1, price_per_night: 195 },
+    { name: "Eiffel Comfort", city: "Paris", rating: 4.5, price_per_night: 210 },
+    { name: "Latin Quarter B&B", city: "Paris", rating: 4.0, price_per_night: 165 },
+    { name: "Champs Stay", city: "Paris", rating: 3.7, price_per_night: 140 },
+    { name: "Opera District Hotel", city: "Paris", rating: 4.3, price_per_night: 245 }
+  ],
+  schemaDoc: { selected_hotel: "string", rating: "number", price_per_night: "number" },
+  decision: { name: "best_value_hotel", goal: "select the cheapest hotel with rating >= 4.0", purpose: "find best value" },
+  handleMap: [
+    { record: "hotel", handle: "r_hotel_f7a2" },
+    { record: "hotel", handle: "r_hotel_b3e1" },
+    { record: "hotel", handle: "r_hotel_91cd" },
+    { record: "hotel", handle: "r_hotel_d4f8" },
+    { record: "hotel", handle: "r_hotel_2a96" },
+    { record: "hotel", handle: "r_hotel_c5b3" },
+    { record: "hotel", handle: "r_hotel_e8d7" },
+    { record: "hotel", handle: "r_hotel_7f1a" }
+  ],
+  assertions: [
+    { type: "field_present", path: "payload.selected_hotel" },
+    { type: "field_contains", path: "payload.selected_hotel", value: "Latin Quarter" },
+    { type: "field_exact", path: "payload.price_per_night", value: 165 },
+    { type: "field_present", path: "selection_refs" },
+    { type: "array_length_gte", path: "selection_refs", value: 1 },
+    { type: "deep_contains", path: "selection_refs", value: "r_hotel_c5b3" }
+  ]
+}
+
+>> D4: derive_ranking — 6 users across multiple channels, need to
+>> aggregate per-user message counts and rank correctly
+var @D4 = {
+  name: "derive_ranking",
+  difficulty: "medium",
+  inspired_by: "slack UT13 pattern",
+  query: "Who are the most active users across all channels? Rank by total message count.",
+  sources: [
+    { channel: "general", messages: [
+      { sender: "Alice", count: 12 },
+      { sender: "Bob", count: 8 },
+      { sender: "Charlie", count: 3 }
+    ]},
+    { channel: "engineering", messages: [
+      { sender: "Alice", count: 5 },
+      { sender: "Diana", count: 22 },
+      { sender: "Eve", count: 15 }
+    ]},
+    { channel: "random", messages: [
+      { sender: "Bob", count: 18 },
+      { sender: "Charlie", count: 7 },
+      { sender: "Diana", count: 4 },
+      { sender: "Frank", count: 31 }
+    ]}
+  ],
+  schemaDoc: { ranking: "array", most_active_user: "string", most_active_count: "number" },
+  decision: { name: "user_ranking", goal: "aggregate each user's message count across all channels and rank most active first", purpose: "find most active users" },
+  handleMap: [],
+  assertions: [
+    { type: "field_present", path: "payload.ranking" },
+    { type: "array_length_gte", path: "payload.ranking", value: 6 },
+    { type: "field_present", path: "payload.most_active_user" },
+    { type: "field_contains", path: "payload.most_active_user", value: "Frank" },
+    { type: "field_exact", path: "payload.most_active_count", value: 31 }
+  ]
+}
+
+>> D5: derive_calendar_availability — multiple events with gaps, must
+>> find the specific contiguous window immediately before the target
+var @D5 = {
+  name: "derive_calendar_availability",
+  difficulty: "high",
+  inspired_by: "workspace UT11 pattern",
+  query: "How much contiguous free time do I have immediately before the client presentation?",
+  sources: [
+    {
+      current_time: "2026-04-23 08:30",
+      events: [
+        { title: "Morning standup", start_time: "09:00", end_time: "09:30" },
+        { title: "Coffee chat with Sarah", start_time: "09:30", end_time: "10:00" },
+        { title: "Deep work block", start_time: "10:30", end_time: "12:00" },
+        { title: "Lunch", start_time: "12:00", end_time: "13:00" },
+        { title: "Client presentation", start_time: "15:30", end_time: "16:30" },
+        { title: "Team retro", start_time: "16:30", end_time: "17:30" }
+      ]
+    }
+  ],
+  schemaDoc: { free_minutes: "number", free_start: "string", free_end: "string", summary: "string" },
+  decision: { name: "availability", goal: "compute the contiguous free window immediately before 'Client presentation' at 15:30, accounting for all earlier events that constrain the start of the free window", purpose: "find prep time before presentation" },
+  assertions: [
+    { type: "field_present", path: "payload.free_minutes" },
+    { type: "field_exact", path: "payload.free_minutes", value: 150 },
+    { type: "field_present", path: "payload.free_start" },
+    { type: "field_contains", path: "payload.free_start", value: "13:00" },
+    { type: "field_present", path: "payload.free_end" },
+    { type: "field_contains", path: "payload.free_end", value: "15:30" }
+  ]
+}
+
+var @allCases = [@D1, @D2, @D3, @D4, @D5]
+
+exe @runOneDerive(testCase, model) = [
+  let @startMs = @timestamp()
+  let @prompt = @derivePrompt(@testCase.query, @testCase.sources, @testCase.schemaDoc, @testCase.decision, @testCase.handleMap)
+  let @raw = @llmCall("opencode", @prompt, { model: @model, tools: [], pure: true })
+  let @endMs = @timestamp()
+  let @elapsedMs = @endMs - @startMs
+  let @attestation = @coerceDeriveAttestation(@raw)
+  let @assertionTarget = when [
+    @attestation.isDefined() => @attestation
+    * => {}
+  ]
+  let @results = @runAssertions(@assertionTarget, @testCase.assertions)
+  let @failures = for @d in @results.details when !@d.pass => @d.reason
+  => {
+    worker: "derive",
+    test: @testCase.name,
+    difficulty: @testCase.difficulty,
+    pass: @results.failed == 0,
+    time_ms: @elapsedMs,
+    assertions: { total: @results.total, passed: @results.passed, failed: @results.failed },
+    failures: @failures
+  }
+]
+
+exe @runDeriveTests(model) = [
+  let @results = for parallel(5) @tc in @allCases [
+    => @runOneDerive(@tc, @model)
+  ]
+  => @results
+]
+
+export { @allCases, @runOneDerive, @runDeriveTests }

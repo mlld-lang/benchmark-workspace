@@ -22,8 +22,14 @@ Return only JSON.
 @handleMap
 </resolved_handles>
 
-Compute the requested derived result from the typed inputs only.
-If you need to point back to a resolved record, return a selection ref using the EXACT handle from <resolved_handles>:
+Compute the requested derived result from the typed inputs only. Do not invent data not present in the inputs.
+
+Rules:
+- If the goal requires arithmetic (sums, percentages, differences), show your calculation in the summary field.
+- Preserve exact scalar values from the inputs: dates, amounts, times, names. Do not round or paraphrase.
+- When selecting among candidates, return a selection ref using the EXACT handle string from <resolved_handles>. Do not use the candidate's name or data value as the handle — use the opaque `r_*` string.
+
+Selection ref format:
 { "source": "selection", "backing": { "record": "<record>", "handle": "<exact handle from resolved_handles>" } }
 
 {
