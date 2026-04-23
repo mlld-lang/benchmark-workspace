@@ -5,8 +5,8 @@ Rig v2 framework + AgentDojo benchmark implementation for mlld.
 ## First Actions
 
 ```bash
-mlld clean/rig/tests/index.mld --no-checkpoint   # invariant gate (must be 96/0)
-mlld rig/tests/workers/run.mld --no-checkpoint   # worker LLM tests (must be 17/17)
+mlld clean/rig/tests/index.mld --no-checkpoint   # invariant gate (must pass 100%)
+mlld rig/tests/workers/run.mld --no-checkpoint   # worker LLM tests (must pass 100%)
 tk ready                                          # active work items
 ```
 
@@ -24,7 +24,7 @@ clean/
     intent.mld              Authorization intent compilation
     tooling.mld             Catalog helpers, policy synthesis
     prompts/planner.att     THE MAIN ITERATION TARGET for utility work
-    tests/index.mld         Zero-LLM invariant gate (96 assertions)
+    tests/index.mld         Zero-LLM invariant gate (must pass 100%)
     tests/workers/          Live LLM worker tests (17 tests, ~50s)
   bench/                  Benchmark (consumes rig, suite-specific)
     ARCHITECTURE.md         How bench consumes rig
@@ -50,9 +50,7 @@ clean/
 
 ## Current Focus
 
-Workspace utility: 31/40 (77.5%), up from 14/40 baseline. Ceiling is 35-36/40 (87-90%). 4 remaining failures have tickets with transcript evidence and fix paths. Next priorities: UT8 handle metadata fix (c-ut8r), execute result handles (c-6c90r), then sweep slack/banking/travel. See SCIENCE.md for full results and HANDOFF.md for session context.
-
-Use `/rig` at the start of each session to load all required context docs.
+See SCIENCE.md for current results and HANDOFF.md for session context. Use `/rig` at the start of each session to load all required context docs.
 
 ## Prompt Placement Rules
 
@@ -87,10 +85,10 @@ Per-tool usage guidance in the tool catalog entry. Arg format constraints, scala
 ## Commands
 
 ```bash
-# Invariant gate (must be 96/0)
+# Invariant gate (must pass 100%)
 mlld clean/rig/tests/index.mld --no-checkpoint
 
-# Worker LLM tests (must be 17/17, ~50s)
+# Worker LLM tests (must pass 100%, ~50s)
 mlld rig/tests/workers/run.mld --no-checkpoint
 
 # Single task
