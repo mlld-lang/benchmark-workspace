@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: Adam
 tags: [execute, dispatch, field-mapping]
-updated: 2026-04-23T17:46:16Z
+updated: 2026-04-23T19:33:23Z
 ---
 # share_file file_id control arg can't map from record id_ field
 
@@ -29,3 +29,7 @@ The record field name (id_) and the tool parameter name (file_id) don't match. E
 ## Notes
 
 **2026-04-23T17:46:16Z** Renamed file_entry record field id_ -> file_id to match write tool parameter names. Added @fileIdAlias bridge to remap MCP responses. Applied to all 4 file read tools. Rig gate 95/0.
+
+**2026-04-23T19:28:28Z** The field-rename approach was wrong — it broke all file tasks because the bridge alias couldn't preserve StructuredValue metadata. Reverted. The real fix: the planner needs to use file_id as the arg key but id_ as the field name. The error messages and tool descriptions should guide this. Alternatively, add field-name aliasing to the input record spec so inputs: can map file_id -> id_ at dispatch time.
+
+**2026-04-23T19:33:23Z** Confirmed: reverting to id_ fixes UT26 and UT35 (both pass on defended.57). The original id_ field name works because the intent compiler maps arg key (file_id) to resolved value (from id_ field) — they don't need to match. The c-ac6f ticket is now a non-issue. Closing.
