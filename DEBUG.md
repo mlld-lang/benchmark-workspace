@@ -908,6 +908,45 @@ Do not do that.
 
 Prioritize structural rig framework + runtime correctness first. **Spike before sweep, every time.** Once the framework path is clean, planner prompt iteration and model selection become measurable concerns, not confounders.
 
+## Lessons from the prompt/error audit (session 3)
+
+These are hard-won lessons from the c-pe00 through c-pe08 prompt audit work. They apply to all suites.
+
+### Worker test infrastructure catches real gaps
+
+`rig/tests/workers/` contains 17 isolated LLM tests for extract/derive/compose workers. Each test calls one worker prompt directly with synthetic data — no planner, no MCP, no bench host. Runs in ~50s total. Use these BEFORE and AFTER any prompt change to catch regressions and measure improvement.
+
+```bash
+mlld rig/tests/workers/run.mld --no-checkpoint
+mlld rig/tests/workers/run.mld --no-checkpoint --model claude-haiku-4-5-20251001
+```
+
+Results append to `rig/tests/workers/scoreboard.jsonl`. When the tests pass too easily, the assertions are too weak — the session 3 audit found 17/17 passing on the initial run because the test inputs were short and unambiguous. Hardened tests with realistic multi-paragraph sources and edge cases brought the baseline to 14/17, giving the prompt changes something to actually fix.
+
+### Never use `show` inside exe functions during bench runs
+
+`show` writes to stdout. The bench host reads stdout for the JSON result. `show` inside any exe that runs during a task corrupts the host's output parsing. The task "fails" even though the agent did the right work.
+
+Use `log` instead — it goes to stderr. Or use `MLLD_TRACE` with a trace file. `show` is safe in standalone spike scripts and test files but never in bench-adjacent code.
+
+### Field renaming across the MCP boundary destroys metadata
+
+The c-ac6f attempt to rename `id_` → `file_id` in the file_entry record broke all file tasks (8 regressions). Both JS-based and mlld-native field remapping approaches failed because building a new object from field accesses strips StructuredValue metadata. The original `id_` field name works correctly — the intent compiler maps the planner's arg key (`file_id`) to the resolved value (from the `id_` field) without needing the names to match.
+
+The lesson: do not rename record fields to match MCP parameter names. The intent compiler handles the mapping. If the planner is confused about which field name to use, fix the error messages or tool descriptions, not the record schema.
+
+### The planner doesn't understand that compose reads state
+
+The planner sees `preview_fields: ["appointment_count", "summary"]` after a successful derive but cannot see the actual values. Without explicit guidance, it re-derives repeatedly trying to "see" the values. The fix was one sentence in planner.att:
+
+> After extract or derive succeeds, the results are stored in state. You will see field names (preview_fields) but not the actual values — that is expected. Call compose to render the final answer; the compose worker reads the full state including all extracted and derived values. Do not re-derive trying to "see" the values.
+
+This fixed UT1 (previously a consistent regression). When investigating an over-derive loop, check whether this guidance is reaching the planner before looking for deeper issues.
+
+### Suite addendums are the right place for domain workflow patterns
+
+Travel's Pattern C (resolve loop) was the dominant failure mode. Adding a suite addendum that documents the family→metadata→derive workflow is the correct fix — not adding travel-specific rules to the rig planner prompt. The rule from CLAUDE.md: "Would this be true in a completely different domain?" If yes → rig. If no → suite addendum.
+
 ## See Also
 
 - `CLAUDE.md` for the cardinal rules and project layout
