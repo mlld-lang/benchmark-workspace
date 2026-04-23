@@ -6,6 +6,7 @@
 import { @rig } from "../../rig/index.mld"
 import { @records } from "../domains/slack/records.mld"
 import { @tools } from "../domains/slack/tools.mld"
+import { @slackAddendum } from "../domains/slack/prompts/planner-addendum.mld"
 
 import { @query, @model } from @payload
 
@@ -15,6 +16,7 @@ var @result = @rig.run({
   records: @records,
   tools: @tools,
   model: @model,
+  plannerAddendum: @slackAddendum,
   harness: @payload.harness,
   phaseLogFile: @payload.phase_log_file ?? null,
   phaseStateFile: @payload.phase_state_file ?? null,

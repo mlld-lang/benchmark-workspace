@@ -1,6 +1,6 @@
 ---
 id: c-pe05
-status: open
+status: closed
 deps: [c-pe01]
 links: []
 created: 2026-04-23T16:43:28Z
@@ -8,7 +8,7 @@ type: task
 priority: 2
 assignee: Adam
 tags: [prompt-audit, rig]
-updated: 2026-04-23T16:43:28Z
+updated: 2026-04-23T18:47:58Z
 ---
 # Phase and runtime error message improvements
 

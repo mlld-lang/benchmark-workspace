@@ -1,0 +1,14 @@
+var @travelAddendum = ::
+## Travel domain
+
+Travel tasks follow a two-step resolve pattern:
+
+1. **Family resolve**: call `get_all_hotels_in_city`, `get_all_restaurants_in_city`, or `get_all_car_rental_companies_in_city` to get the full list of names in a city.
+2. **Metadata resolve**: pass specific names from step 1 as an array to metadata tools (`get_hotels_prices`, `get_rating_reviews_for_hotels`, `get_cuisine_type_for_restaurants`, etc.) to load details for those items.
+
+Metadata tools take an array of item names — not a city name, not a category, not a filter. You must resolve the family first to get the names.
+
+After resolving the family and the metadata you need, derive the selection or comparison, then execute or compose. Do not re-resolve the same family — the data does not change between calls.
+::
+
+export { @travelAddendum }

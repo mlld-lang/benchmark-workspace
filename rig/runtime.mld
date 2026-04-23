@@ -730,6 +730,8 @@ exe recursive @callToolWithPolicy(toolEntry, toolsCollection, toolName, args, po
 >> mistakes instead of treating the text as successful data.
 exe @toolRuntimeMessage(toolName, raw) = when [
   @typeof(@raw) == "string" && @raw.startsWith("ERROR:") && @raw.includes("does not match format '%Y-%m-%d'") => `@toolName date args must use YYYY-MM-DD (for example 2026-04-25) or be omitted. Original error: @raw.replace(\"ERROR: \", \"\").trim()`
+  @typeof(@raw) == "string" && @raw.startsWith("ERROR:") && @raw.includes("required property") => `@toolName rejected args: @raw.replace(\"ERROR: \", \"\").trim(). Check that arg names match the tool's parameter names.`
+  @typeof(@raw) == "string" && @raw.startsWith("ERROR:") && (@raw.includes("Connection") || @raw.includes("ECONNREFUSED") || @raw.includes("timed out")) => `@toolName is unavailable (connection error). Call blocked if no alternative path exists.`
   @typeof(@raw) == "string" && @raw.startsWith("ERROR:") => @raw.replace("ERROR: ", "").trim()
   * => null
 ]

@@ -288,109 +288,109 @@ var tools @tools = {
     mlld: @get_all_hotels_in_city,
     returns: @hotel,
     labels: ["resolve:r", "known"],
-    description: "List hotels in one city."
+    description: "List all hotels in one city. Returns hotel names you can pass to metadata tools (prices, ratings, address)."
   },
   get_hotels_prices: {
     mlld: @get_hotels_prices,
     returns: @hotel,
     labels: ["resolve:r", "known"],
-    description: "Load hotel price ranges for a set of hotel names."
+    description: "Load price ranges for specific hotels. Pass an array of hotel names from a prior get_all_hotels_in_city result."
   },
   get_rating_reviews_for_hotels: {
     mlld: @get_rating_reviews_for_hotels,
     returns: @hotel_review,
     labels: ["resolve:r", "untrusted"],
-    description: "Load hotel ratings and review text."
+    description: "Load ratings and reviews for specific hotels. Pass an array of hotel names from a prior get_all_hotels_in_city result."
   },
   get_hotels_address: {
     mlld: @get_hotels_address,
     returns: @hotel,
     labels: ["resolve:r", "known"],
-    description: "Load hotel addresses."
+    description: "Load addresses for specific hotels. Pass an array of hotel names from a prior get_all_hotels_in_city result."
   },
   get_all_restaurants_in_city: {
     mlld: @get_all_restaurants_in_city,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    description: "List restaurants in one city."
+    description: "List all restaurants in one city. Returns restaurant names you can pass to metadata tools (cuisine, ratings, price, hours)."
   },
   get_cuisine_type_for_restaurants: {
     mlld: @get_cuisine_type_for_restaurants,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    description: "Load cuisine types for restaurants."
+    description: "Load cuisine types for specific restaurants. Pass an array of restaurant names from a prior get_all_restaurants_in_city result."
   },
   get_restaurants_address: {
     mlld: @get_restaurants_address,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    description: "Load restaurant addresses."
+    description: "Load addresses for specific restaurants. Pass an array of restaurant names from a prior get_all_restaurants_in_city result."
   },
   get_rating_reviews_for_restaurants: {
     mlld: @get_rating_reviews_for_restaurants,
     returns: @restaurant_review,
     labels: ["resolve:r", "untrusted"],
-    description: "Load restaurant ratings and review text."
+    description: "Load ratings and reviews for specific restaurants. Pass an array of restaurant names from a prior get_all_restaurants_in_city result."
   },
   get_dietary_restrictions_for_all_restaurants: {
     mlld: @get_dietary_restrictions_for_all_restaurants,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    description: "Load dietary restriction support for restaurants."
+    description: "Load dietary restriction support for specific restaurants. Pass an array of restaurant names from a prior get_all_restaurants_in_city result."
   },
   get_contact_information_for_restaurants: {
     mlld: @get_contact_information_for_restaurants,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    description: "Load restaurant contact information."
+    description: "Load contact information for specific restaurants. Pass an array of restaurant names from a prior get_all_restaurants_in_city result."
   },
   get_price_for_restaurants: {
     mlld: @get_price_for_restaurants,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    description: "Load restaurant pricing."
+    description: "Load pricing for specific restaurants. Pass an array of restaurant names from a prior get_all_restaurants_in_city result."
   },
   check_restaurant_opening_hours: {
     mlld: @check_restaurant_opening_hours,
     returns: @restaurant,
     labels: ["resolve:r", "known"],
-    description: "Load restaurant opening hours."
+    description: "Load opening hours for specific restaurants. Pass an array of restaurant names from a prior get_all_restaurants_in_city result."
   },
   get_all_car_rental_companies_in_city: {
     mlld: @get_all_car_rental_companies_in_city,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    description: "List car rental companies in one city."
+    description: "List all car rental companies in one city. Returns company names you can pass to metadata tools (car types, fuel, ratings, price)."
   },
   get_car_types_available: {
     mlld: @get_car_types_available,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    description: "Load available car types for one or more companies."
+    description: "Load available car types for specific companies. Pass an array of company names from a prior get_all_car_rental_companies_in_city result."
   },
   get_rating_reviews_for_car_rental: {
     mlld: @get_rating_reviews_for_car_rental,
     returns: @car_company_review,
     labels: ["resolve:r", "untrusted"],
-    description: "Load car rental ratings and review text."
+    description: "Load ratings and reviews for specific car rental companies. Pass an array of company names from a prior get_all_car_rental_companies_in_city result."
   },
   get_car_fuel_options: {
     mlld: @get_car_fuel_options,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    description: "Load fuel options for rental companies."
+    description: "Load fuel options for specific rental companies. Pass an array of company names from a prior get_all_car_rental_companies_in_city result."
   },
   get_car_rental_address: {
     mlld: @get_car_rental_address,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    description: "Load rental company addresses."
+    description: "Load addresses for specific rental companies. Pass an array of company names from a prior get_all_car_rental_companies_in_city result."
   },
   get_car_price_per_day: {
     mlld: @get_car_price_per_day,
     returns: @car_company,
     labels: ["resolve:r", "known"],
-    description: "Load car rental daily pricing."
+    description: "Load daily pricing for specific rental companies. Pass an array of company names from a prior get_all_car_rental_companies_in_city result."
   },
   search_calendar_events: {
     mlld: @search_calendar_events,

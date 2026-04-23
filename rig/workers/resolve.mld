@@ -74,7 +74,7 @@ exe @dispatchResolve(agent, state, decision, query) = [
   let @recordType = @recordTypeName(@recordDef)
   let @entries = @normalizeResolvedValues(@recordType, @recordDef, @raw)
   let @handles = for @entry in @entries => @entry.handle
-  let @summary = `resolved @entries.length @recordType record(s)`
+  let @summary = `resolved @entries.length @recordType record(s). Check the projected fields — if they already answer the question, call compose now.`
   let @nextState = @updateResolvedState(@state, @recordType, @entries)
   => {
     state: @nextState,

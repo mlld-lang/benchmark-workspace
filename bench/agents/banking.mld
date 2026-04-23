@@ -7,6 +7,7 @@
 import { @rig } from "../../rig/index.mld"
 import { @records } from "../domains/banking/records.mld"
 import { @tools } from "../domains/banking/tools.mld"
+import { @bankingAddendum } from "../domains/banking/prompts/planner-addendum.mld"
 
 import { @query, @model } from @payload
 
@@ -16,6 +17,7 @@ var @result = @rig.run({
   records: @records,
   tools: @tools,
   model: @model,
+  plannerAddendum: @bankingAddendum,
   harness: @payload.harness,
   phaseLogFile: @payload.phase_log_file ?? null,
   phaseStateFile: @payload.phase_state_file ?? null,

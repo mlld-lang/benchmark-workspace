@@ -1,6 +1,6 @@
 ---
 id: c-pe06
-status: open
+status: closed
 deps: [c-pe04]
 links: []
 created: 2026-04-23T16:43:41Z
@@ -8,7 +8,7 @@ type: task
 priority: 2
 assignee: Adam
 tags: [prompt-audit, bench, travel]
-updated: 2026-04-23T16:43:41Z
+updated: 2026-04-23T18:47:58Z
 ---
 # Travel suite addendum and tool descriptions
 

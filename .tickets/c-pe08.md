@@ -1,6 +1,6 @@
 ---
 id: c-pe08
-status: open
+status: closed
 deps: [c-pe05]
 links: []
 created: 2026-04-23T16:44:02Z
@@ -8,7 +8,7 @@ type: task
 priority: 2
 assignee: Adam
 tags: [prompt-audit, rig]
-updated: 2026-04-23T16:44:02Z
+updated: 2026-04-23T18:47:58Z
 ---
 # Resolve attestation and extract dedup refinements
 

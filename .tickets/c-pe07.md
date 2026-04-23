@@ -1,6 +1,6 @@
 ---
 id: c-pe07
-status: open
+status: closed
 deps: [c-pe06]
 links: []
 created: 2026-04-23T16:43:52Z
@@ -8,7 +8,7 @@ type: task
 priority: 2
 assignee: Adam
 tags: [prompt-audit, bench, banking, slack]
-updated: 2026-04-23T16:43:52Z
+updated: 2026-04-23T18:47:58Z
 ---
 # Banking and Slack suite addendums
 

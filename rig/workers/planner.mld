@@ -188,9 +188,10 @@ exe @plannerToolContext(phase, decision) = [
     }
   ]
   if @runtime.invalid_calls >= @plannerInvalidBudget() [
+    let @lastPhase = @runtime.last_decision.phase ?? @phase
     let @terminal = {
       status: "blocked",
-      text: "blocked: planner_error_budget_exhausted",
+      text: `blocked: @runtime.invalid_calls consecutive errors (last phase: @lastPhase). Check the error messages above and fix the call shape, or call blocked if the task cannot be completed.`,
       reason: "planner_error_budget_exhausted"
     }
     @planner.set({ runtime: @plannerRuntimeState(@runtime.tool_calls, @runtime.invalid_calls, @terminal, @decision) })
@@ -198,7 +199,7 @@ exe @plannerToolContext(phase, decision) = [
       ok: false,
       result: {
         status: "blocked",
-        reason: "planner_error_budget_exhausted"
+        reason: `planner_error_budget_exhausted: @runtime.invalid_calls consecutive errors, last phase: @lastPhase`
       }
     }
   ]

@@ -181,9 +181,11 @@ exe @dispatchExtract(agent, state, decision, query) = [
   if @srcKey != null [
     let @priorName = @findPriorExtractForSource(@state.extract_sources ?? {}, @srcKey)
     if @priorName != null [
+      let @priorEntry = @state.extracted[@priorName]
+      let @priorFields = @priorEntry.preview_fields ?? []
       => {
         error: "extract_source_already_extracted",
-        summary: `You already extracted from this source as "@priorName". Reference it with { "source": "extracted", "name": "@priorName" } instead of re-extracting. Proceed to derive or execute.`
+        summary: `You already extracted from this source as "@priorName" (fields: @priorFields.join(", ")). Reference it with { "source": "extracted", "name": "@priorName" } instead of re-extracting. Proceed to derive or execute.`
       }
     ]
   ]
@@ -214,7 +216,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
   })
   if !@attestation.isDefined() [ => { error: "extract_empty_response", summary: "extract_empty_response", session_id: @sessionId, llm_log: @logEntry } ]
   if @containsSelectionRef(@attestation.payload) [
-    => { error: "extract_may_not_emit_selection_refs", summary: "extract_may_not_emit_selection_refs", session_id: @sessionId, llm_log: @logEntry }
+    => { error: "extract_may_not_emit_selection_refs", summary: "Extract cannot produce selection refs — only derive can. If you need to select among resolved records, call derive instead of extract.", session_id: @sessionId, llm_log: @logEntry }
   ]
   let @typed = when [
     @schemaDef => @cast(@attestation.payload, @schemaDef)

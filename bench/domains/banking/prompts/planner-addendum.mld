@@ -1,0 +1,11 @@
+var @bankingAddendum = ::
+## Banking domain
+
+When updating a scheduled transaction, resolve it first to get the transaction id and current field values. Include at least one changed field (amount, date, subject, or recurring) in the execute args — the tool rejects updates with no changes.
+
+Transaction id and recipient are control args that must come from the same resolved transaction record. Do not mix the id from one transaction with the recipient from another.
+
+For payment tasks that reference a file (like a bill or notice), resolve the file first, then extract the relevant amounts or dates from its content.
+::
+
+export { @bankingAddendum }

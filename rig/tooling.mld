@@ -468,7 +468,7 @@ exe @wrongPhaseToolFailure(agent, requestedPhase, toolName) = [
     @correctPhase == @requestedPhase => null
     * => {
       error: "wrong_phase_tool",
-      summary: `@toolName is a @correctPhase tool, not a @requestedPhase tool. @repair`,
+      summary: `@toolName is a @correctPhase tool, not a @requestedPhase tool. Resolve tools look up records and return handles for later reference. Extract reads hidden content from already-resolved records. @repair`,
       issues: [{
         code: "wrong_phase_tool",
         tool: @toolName,
