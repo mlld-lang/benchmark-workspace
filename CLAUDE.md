@@ -5,7 +5,8 @@ Rig v2 framework + AgentDojo benchmark implementation for mlld.
 ## First Actions
 
 ```bash
-mlld clean/rig/tests/index.mld --no-checkpoint   # invariant gate (must be 92/0+)
+mlld clean/rig/tests/index.mld --no-checkpoint   # invariant gate (must be 96/0)
+mlld rig/tests/workers/run.mld --no-checkpoint   # worker LLM tests (must be 17/17)
 tk ready                                          # active work items
 ```
 
@@ -23,7 +24,8 @@ clean/
     intent.mld              Authorization intent compilation
     tooling.mld             Catalog helpers, policy synthesis
     prompts/planner.att     THE MAIN ITERATION TARGET for utility work
-    tests/index.mld         Zero-LLM invariant gate (92 assertions)
+    tests/index.mld         Zero-LLM invariant gate (96 assertions)
+    tests/workers/          Live LLM worker tests (17 tests, ~50s)
   bench/                  Benchmark (consumes rig, suite-specific)
     ARCHITECTURE.md         How bench consumes rig
     agents/<suite>.mld      Agent entrypoints (~20 lines each)
@@ -48,7 +50,9 @@ clean/
 
 ## Current Focus
 
-Workspace utility: 22/40 (55%), up from 14/40 baseline. The #1 failure mode is `no_compose` (7 tasks) — the model does the work but the opencode session ends without compose. Adding `=> resume` support is the highest-leverage next step. See SCIENCE.md for full results with timing and HANDOFF.md for session context.
+Workspace utility: 31/40 (77.5%), up from 14/40 baseline. Ceiling is 35-36/40 (87-90%). 4 remaining failures have tickets with transcript evidence and fix paths. Next priorities: UT8 handle metadata fix (c-ut8r), execute result handles (c-6c90r), then sweep slack/banking/travel. See SCIENCE.md for full results and HANDOFF.md for session context.
+
+Use `/rig` at the start of each session to load all required context docs.
 
 ## Prompt Placement Rules
 
@@ -83,8 +87,11 @@ Per-tool usage guidance in the tool catalog entry. Arg format constraints, scala
 ## Commands
 
 ```bash
-# Invariant gate
+# Invariant gate (must be 96/0)
 mlld clean/rig/tests/index.mld --no-checkpoint
+
+# Worker LLM tests (must be 17/17, ~50s)
+mlld rig/tests/workers/run.mld --no-checkpoint
 
 # Single task
 uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_11
@@ -101,16 +108,25 @@ tk ls             # all open
 tk show <id>      # details
 ```
 
+## Rules learned the hard way
+
+- **Never use `show` in exe functions during bench runs.** It writes to stdout and corrupts the host's JSON parsing. Use `log` (stderr) or `MLLD_TRACE` instead.
+- **Never rename record fields to match MCP parameter names.** The intent compiler maps arg keys to resolved values — the names don't need to match. Field renaming across the MCP boundary destroys StructuredValue metadata.
+- **Run worker tests before and after prompt changes.** `mlld rig/tests/workers/run.mld --no-checkpoint` catches regressions in ~50s. If tests pass too easily, the assertions are too weak.
+
 ## Deferred: Logging Refactor (ticket c-3edc)
 
 A designed but unstarted refactor of rig's logging stack to lean on the runtime trace subsystem (`--trace effects` via SDK) plus `var session @planner` plus a small curated hook layer. Net effect: `lifecycle.mld` + `runtime.mld @appendLlmCall` + per-wrapper boilerplate shrink; rig gets parent/child LLM-call timing for free; the m-5683 / UT14 bug classes disappear structurally.
 
 Not scheduled. Raise it when any of the following bite: chasing per-worker timing bottlenecks by hand, another lifecycle emission seam getting added manually, shelf-based session state producing an aliasing/null-callback regression, or the bench analyzer wanting a structured call tree. Full plan lives in ticket c-3edc.
 
-## Key Docs (read order for new session)
+## Key Docs
 
-1. `SCIENCE.md` — current state, task tables, failure patterns, theories
-2. `DEBUG.md` — investigation methodology
-3. `rig/ARCHITECTURE.md` — why the framework is shaped this way
-4. `rig/SECURITY.md` — what must never be weakened
-5. `bench/domains/<suite>/records.mld` + `tools.mld` — domain truth for the active suite
+Use `/rig` at session start to load these with instructions to read them all. See `.claude/skills/rig.md` for the full onboarding sequence.
+
+1. `labels-policies-guards.md` — security model narrative
+2. `rig/ARCHITECTURE.md` — framework architecture and separation of concerns
+3. `bench/ARCHITECTURE.md` — how bench consumes rig
+4. `DEBUG.md` — investigation methodology
+5. `SCIENCE.md` — experiment log, task tables, failure analysis
+6. `HANDOFF.md` — session-to-session context and next steps
