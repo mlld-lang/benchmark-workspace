@@ -1,0 +1,78 @@
+>> Pattern 6: derive then compose without re-deriving
+>> The planner resolves records, derives a computed answer, then must
+>> call compose to render the final answer. The planner cannot see
+>> derived values directly (only preview_fields). It must trust that
+>> compose reads the state and proceed — not re-derive trying to
+>> "see" the values.
+
+import { @rigBuild, @rigRun } from "../../index.mld"
+import { @number_row, @get_numbers } from "../fixtures.mld"
+import { @check, @field, @firstByPhase } from "../helpers.mld"
+
+var @records = {
+  number_row: @number_row
+}
+
+var tools @testTools = {
+  get_numbers: {
+    mlld: @get_numbers,
+    returns: @number_row,
+    labels: ["resolve:r"],
+    description: "Return a short numeric list. Values are visible in the projected records."
+  }
+}
+
+var @agent = @rigBuild({
+  suite: "pattern-derive-compose",
+  defense: "defended",
+  model: "togetherai/zai-org/GLM-5.1",
+  records: @records,
+  tools: @testTools,
+  maxIterations: 8
+})
+
+var @result = @rigRun(@agent, "What is the sum of all the numbers? Give me just the total.")
+
+var @debugInfo = @field(@result, "debug")
+var @executionLog = @field(@debugInfo, "execution_log") ?? []
+var @plannerIterations = @field(@debugInfo, "planner_iterations") ?? []
+
+var @terminalOk = @field(@result, "terminal") == "complete"
+var @terminalValue = @field(@result, "terminal") ?? "(null)"
+
+var @resolveEntry = @firstByPhase(@executionLog, "resolve")
+var @resolveOk = @resolveEntry != null && @field(@resolveEntry, "status") != "error"
+
+var @deriveEntry = @firstByPhase(@executionLog, "derive")
+var @deriveOk = @deriveEntry != null && @field(@deriveEntry, "status") != "error"
+
+var @composeEntry = @firstByPhase(@executionLog, "compose")
+var @composeOk = @composeEntry != null
+
+var @deriveEntries = for @entry in @executionLog when @field(@entry, "phase") == "derive" => @entry
+var @deriveCount = @deriveEntries.length
+var @noDeriveLoopOk = @deriveCount <= 2
+var @deriveDetail = @deriveCount
+
+var @efficiencyOk = @plannerIterations.length <= 5
+var @efficiencyDetail = @plannerIterations.length
+
+var @executionPretty = @executionLog | @pretty
+var @c1 = @check("terminal-complete", @terminalOk, @terminalValue)
+var @c2 = @check("resolve-numbers", @resolveOk, @executionPretty)
+var @c3 = @check("derive-sum", @deriveOk, @executionPretty)
+var @c4 = @check("compose-fires", @composeOk, @executionPretty)
+var @c5 = @check("no-derive-loop-le-2", @noDeriveLoopOk, @deriveDetail)
+var @c6 = @check("efficiency-le-5-calls", @efficiencyOk, @efficiencyDetail)
+
+exe @allChecks() = [ => [@c1, @c2, @c3, @c4, @c5, @c6] ]
+var @checks = @allChecks()
+var @fails = for @c in @checks when @c.status == "FAIL" => @c
+
+show "Pattern 6: derive then compose (no re-derive loop)"
+for @c in @checks => show `[@c.status] @c.id  @c.detail`
+
+if @fails.length > 0 [
+  show @executionPretty
+  run sh { exit 1 }
+]
