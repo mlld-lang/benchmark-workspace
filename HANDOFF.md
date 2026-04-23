@@ -24,7 +24,7 @@ Major changes landed:
 - **Compose retry message** — explains what compose does instead of generic "finalize your answer"
 - **Phase error messages** — wrong-phase explains WHY, error budget includes count and last phase, MCP error subcategories, extract selection ref redirect
 - **Resolve summary** — reminds planner to check projected fields before over-resolving
-- **MCP idle timeout root cause found** — 60s default in McpImportManager.ts kills connections during long planner sessions (m-e5e4 filed in ~/mlld/mlld)
+- **MCP idle timeout fixed** (m-e5e4) — was 60s, now 300s with retain/release holds during LLM calls
 
 ### Infrastructure built
 
@@ -67,11 +67,9 @@ The file exists as ID 19 in the shifted data. The model searched but only found 
 
 Start by reading the opencode transcript for the UT33 session from the defended.59 run.
 
-#### m-e5e4 (P0, filed in ~/mlld/mlld): MCP 60s idle timeout → recovers UT32 flakes
+#### ~~m-e5e4~~ ✓ MCP idle timeout — FIXED
 
-`McpImportManager.ts:55` defaults `idleTimeoutMs: 60_000`. Agent sessions routinely exceed 60s between MCP calls (derive 10-30s + planner thinking 10-30s = 40-60s gap). The host passes `timeout: 900` but this may not flow to the MCP idle timer.
-
-This affects ALL suites, not just workspace. Fixing it before the other suite sweeps will eliminate an entire class of intermittent failures.
+Idle timeout was 60s, now 300s with retain/release holds during LLM calls. This class of MCP connection death should no longer occur across any suite. UT32 still needs c-6c90r (execute result handles) to fully recover.
 
 ### Priority 2: Investigate remaining 2 failures
 
@@ -162,7 +160,7 @@ uv run --project bench python3 src/run.py -s workspace -d defended
 | Status | Count | Tasks |
 |--------|-------|-------|
 | Passing | 31 | UT0-7,9-12,14-17,20-24,26-30,34-36,38,39 |
-| Recoverable by known fixes | 4 | UT8 (c-ut8r), UT32 (c-6c90r+m-e5e4), UT33 (c-ut33), UT37 (c-6c90r) |
+| Recoverable by known fixes | 4 | UT8 (c-ut8r), UT32 (c-6c90r), UT33 (c-ut33), UT37 (c-6c90r) |
 | Under investigation | 1 | UT18 (c-ut18, relative date) |
 | Non-gating | 1 | UT31 (evaluator synonym rejection) |
 | Out of scope | 3 | UT13, UT19, UT25 |

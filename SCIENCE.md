@@ -587,9 +587,10 @@ Changes landed:
 - Root cause: evaluator expects specific item names from the source file. The compose/derive workers paraphrase ("swimwear" vs "bathing suit", etc).
 - Previously classified as non-gating. The extract prompt's "preserve exact literals" rule may help but this depends on the evaluator's tolerance.
 
-**UT32: MCP connection died during share_file step**
+**UT32: create_file succeeds but share_file fails — MCP death + missing result handles**
 - Transcript (nimble-cabin): model creates hawaii-packing-list.docx successfully, then attempts share_file. MCP connection dies ("Not connected"). All subsequent tool calls return null.
-- Root cause: MCP server process died or timed out during the session. Infrastructure flake. Additionally, even if the connection survived, the model would need the created file's id to share it — `create_file` returns no result handles (c-6c90).
+- MCP timeout root cause fixed (m-e5e4, closed): idle timeout was 60s, now 300s with retain/release holds during LLM calls. This class of MCP connection death should no longer occur.
+- Remaining blocker: even with the connection alive, `create_file` returns no result handles so the model can't chain to `share_file` (c-6c90).
 - Partial fix: c-6c90 (execute result handles) would let the model chain create → share. But the MCP death is separate.
 
 **UT33: couldn't find client-meeting-minutes.docx**
@@ -622,8 +623,9 @@ Priority order:
 14. ~~Full workspace suite run~~ ✓ (31/40 on defended.59)
 15. ~~Prompt/error audit (c-pe00 through c-pe08)~~ ✓
 16. ~~Suite addendums (travel, banking, slack)~~ ✓
-17. **UT8 fix: @normalizeResolvedValues handle preservation** — spike exists, fix localized
-18. **c-6c90: execute result handles** — unblocks UT32, UT37
+17. ~~MCP idle timeout (m-e5e4)~~ ✓ — retain/release holds during LLM calls + 300s default
+18. **UT8 fix: @normalizeResolvedValues handle preservation** — spike exists, fix localized
+19. **c-6c90: execute result handles** — unblocks UT32, UT37
 19. **UT33 investigation: search_files_by_filename matching** — file exists, search fails
 20. **UT18 investigation: relative date resolution in derive** — "Saturday" → wrong absolute date
 21. **Slack + banking + travel suite runs**
