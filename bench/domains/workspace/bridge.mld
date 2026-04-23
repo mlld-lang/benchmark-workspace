@@ -13,21 +13,25 @@ exe @asString(inputValue) = js {
 }
 
 >> MCP file tools return `id_` but the file_entry record uses `file_id`
->> to match the write tool parameter name, eliminating a naming gap that
->> caused the planner to fail with `resolved_field_missing`.
-exe @fileIdAlias(inputValue) = js {
-  if (inputValue == null) return inputValue;
-  function remap(obj) {
-    if (obj == null || typeof obj !== "object") return obj;
-    if (Array.isArray(obj)) return obj.map(remap);
-    const out = {};
-    for (const [k, v] of Object.entries(obj)) {
-      out[k === "id_" ? "file_id" : k] = v;
-    }
-    return out;
+>> to match the write tool parameter name. Remap using mlld-native
+>> field access to preserve StructuredValue metadata through the boundary.
+exe @fileIdAliasOne(item) = [
+  => {
+    file_id: @item.id_,
+    filename: @item.filename,
+    content: @item.content,
+    owner: @item.owner,
+    size: @item.size,
+    last_modified: @item.last_modified,
+    shared_with: @item.shared_with
   }
-  return remap(inputValue);
-}
+]
+
+exe @fileIdAlias(inputValue) = when [
+  @typeof(@inputValue) == "array" => for @item in @inputValue => @fileIdAliasOne(@item)
+  @inputValue.id_.isDefined() => @fileIdAliasOne(@inputValue)
+  * => @inputValue
+]
 
 >> Calendar read tools take user-facing date phrases, while AgentDojo's
 >> backend expects strict ISO dates. Normalize that formatting at the

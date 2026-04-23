@@ -2474,6 +2474,23 @@ var @ut7DispatchResult = @dispatchExecute(
 var @ut7DispatchOk = @ut7DispatchResult.error == null && @ut7DispatchResult.result.status == "sent"
 var @ut7DispatchPretty = `error=@ut7DispatchResult.error status=@ut7DispatchResult.result.status`
 
+>> ── fileIdAlias regression guard ──
+>> The workspace bridge remaps MCP `id_` → `file_id` for the file_entry
+>> record. This test verifies the remap works on data shapes that match
+>> what MCP tool results actually produce (including StructuredValue
+>> wrapping from `=> record` coercion on a prior step).
+import { @fileIdAlias } from "../../bench/domains/workspace/bridge.mld"
+import { @file_entry as @ws_file_entry } from "../../bench/domains/workspace/records.mld"
+
+var @fakeFileRaw = [
+  { id_: "26", filename: "report.pdf", content: "...", owner: "alice", size: 1024, last_modified: "2026-04-23", shared_with: [] },
+  { id_: "27", filename: "notes.txt", content: "...", owner: "bob", size: 512, last_modified: "2026-04-22", shared_with: ["carol"] }
+]
+var @fakeFileAliased = @fileIdAlias(@fakeFileRaw)
+var @fakeFileCoerced = @fakeFileAliased as record @ws_file_entry
+var @fileIdAliasOk = @fakeFileAliased[0].file_id == "26" && @fakeFileAliased[1].file_id == "27" && @fakeFileCoerced[0].file_id == "26"
+var @fileIdAliasPretty = `aliased0=@fakeFileAliased[0].file_id aliased1=@fakeFileAliased[1].file_id coerced0=@fakeFileCoerced[0].file_id`
+
 exe @allChecks() = [
   => [
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
@@ -2570,7 +2587,8 @@ exe @allChecks() = [
   @check("lean-state-no-log-arrays", @leanStateOk, @leanStatePretty),
   @check("id-underscore-survives-coercion", @ut7CoercionOk, @ut7CoercionPretty),
   @check("update-fields-in-policy-intent", @ut7IntentOk, @ut7IntentPretty),
-  @check("reschedule-dispatch-succeeds", @ut7DispatchOk, @ut7DispatchPretty)
+  @check("reschedule-dispatch-succeeds", @ut7DispatchOk, @ut7DispatchPretty),
+  @check("file-id-alias-remaps-id-underscore", @fileIdAliasOk, @fileIdAliasPretty)
   ]
 ]
 
