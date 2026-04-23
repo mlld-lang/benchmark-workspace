@@ -1,3 +1,9 @@
+---
+name: rig
+description: Start a new rig/bench working session. Loads security model, architecture, debug guide, experiment log, and handoff context. Use at the start of every session.
+user-invocable: true
+---
+
 # Start a rig/bench working session
 
 Use this skill at the start of every session working on the rig framework or AgentDojo benchmarks. It loads the context you need to work effectively without crossing separation-of-concerns boundaries or repeating mistakes from prior sessions.
