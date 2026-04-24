@@ -419,8 +419,12 @@ exe @phaseCatalog(agent, phase) = [
 
 exe @phaseToolNames(agent, phase) = [
   let @catalog = @phaseCatalog(@agent, @phase)
-  let @names = for @name, @tool in @catalog => @name
-  => @names
+  let @allNames = for @name, @tool in @catalog => @name
+  let @filter = @agent.toolFilter
+  => when [
+    @filter.isDefined() && @filter.length > 0 => for @name in @allNames when @filter.includes(`@name`) => @name
+    * => @allNames
+  ]
 ]
 
 exe @phaseToolEntry(agent, phase, toolName) = [

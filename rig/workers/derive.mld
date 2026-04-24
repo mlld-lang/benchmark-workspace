@@ -89,7 +89,7 @@ exe @dispatchDerive(agent, state, decision, query) = [
   let @flatHandles = @handleMap.flat()
   let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision, @flatHandles)
   let @raw = @llmCall(@agent.harness, @prompt, {
-    model: @agent.model,
+    model: @agent.workerModel ?? @agent.model,
     pure: @agent.opencodePure,
     dir: @agent.innerWorkerDir,
     dataHome: @agent.innerWorkerDataHome,

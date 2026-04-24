@@ -75,9 +75,8 @@ exe @fieldExact(obj, path, expected) = [
 ]
 
 exe @checkStringContains(strVal, subVal) = js {
-  const s = String(strVal).toLowerCase();
-  const sub = String(subVal).toLowerCase();
-  return s.includes(sub);
+  const norm = s => String(s).toLowerCase().replace(/\s+/gu, ' ');
+  return norm(strVal).includes(norm(subVal));
 }
 
 exe @fieldContains(obj, path, substring) = [
@@ -87,6 +86,16 @@ exe @fieldContains(obj, path, substring) = [
   => when [
     @found => { pass: true, assertion: "field_contains", path: @path, reason: null }
     * => { pass: false, assertion: "field_contains", path: @path, reason: `"@val" does not contain "@substring"` }
+  ]
+]
+
+exe @fieldContainsAny(obj, path, alternatives) = [
+  let @val = @getAtPath(@obj, @path)
+  if @val == null [ => { pass: false, assertion: "field_contains_any", path: @path, reason: `field at @path is null` } ]
+  let @matches = for @alt in @alternatives when @checkStringContains(@val, @alt) => @alt
+  => when [
+    @matches.length > 0 => { pass: true, assertion: "field_contains_any", path: @path, reason: null }
+    * => { pass: false, assertion: "field_contains_any", path: @path, reason: `"@val" does not contain any of @alternatives` }
   ]
 ]
 
@@ -158,6 +167,7 @@ exe @runOneAssertion(obj, spec) = when [
   @spec.type == "field_null" => @fieldNull(@obj, @spec.path)
   @spec.type == "field_exact" => @fieldExact(@obj, @spec.path, @spec.value)
   @spec.type == "field_contains" => @fieldContains(@obj, @spec.path, @spec.value)
+  @spec.type == "field_contains_any" => @fieldContainsAny(@obj, @spec.path, @spec.values)
   @spec.type == "field_not_contains" => @fieldNotContains(@obj, @spec.path, @spec.value)
   @spec.type == "array_length_gte" => @arrayLengthGte(@obj, @spec.path, @spec.value)
   @spec.type == "array_contains" => @arrayContains(@obj, @spec.path, @spec.value)
@@ -175,6 +185,14 @@ exe @runAssertions(attestation, assertions) = [
     failed: @failedDetails.length,
     details: @details
   }
+]
+
+exe @isEmptyResponse(raw) = when [
+  !@raw.isDefined() => true
+  @raw == null => true
+  @raw == "" => true
+  @typeof(@raw) == "string" && @raw.trim() == "" => true
+  * => false
 ]
 
 exe @appendLine(filePath, lineContent) = sh {
@@ -200,5 +218,6 @@ export {
   @deepContains,
   @runOneAssertion,
   @runAssertions,
+  @isEmptyResponse,
   @recordResult
 }

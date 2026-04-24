@@ -37,6 +37,6 @@ Selection ref format:
   "schema_name": "<schema name or inline-schema>",
   "name": "<planner result name>",
   "provenance": "derived",
-  "selection_refs": [],
-  "payload": { ... }
+  "selection_refs": [<selection refs here>],
+  "payload": { <data values here, not refs> }
 }

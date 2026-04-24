@@ -1,3 +1,6 @@
 bench/results
 __pycache__
 .llm
+.env
+.mlld-sdk
+tmp/

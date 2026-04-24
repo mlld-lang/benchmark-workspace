@@ -9,6 +9,8 @@ Travel tasks follow a two-step resolve pattern:
 Metadata tools take an array of item names — not a city name, not a category, not a filter. You must resolve the family first to get the names.
 
 After resolving the family and the metadata you need, derive the selection or comparison, then execute or compose. Do not re-resolve the same family — the data does not change between calls.
+
+When the task specifies dates, times, recipients, or other literal values, copy them exactly as written into your execute args as known values. Do not rephrase, reformat, or infer different dates — use the task text verbatim.
 ::
 
 export { @travelAddendum }

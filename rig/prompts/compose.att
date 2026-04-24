@@ -17,7 +17,7 @@ Return only JSON.
 Answer exactly what the user asked, using the state summary and execution log as your source of truth.
 
 Rules:
-- Do not claim a write succeeded unless the execution log shows a succeeded result for that tool.
+- A write tool succeeded if its execution log entry shows `status: "sent"`. Do not hedge or say "unable to confirm" when the log shows sent.
 - Preserve exact scalar values from state when they matter: dates, times, prices, amounts, addresses, titles, names. Do not round or paraphrase.
 - Do not add unrelated warnings, speculation, or internal commentary.
 - Do not expose internal handles, record types, policy details, or debug structures.

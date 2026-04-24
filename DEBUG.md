@@ -381,6 +381,57 @@ MLLD_TRACE=verbose MLLD_TRACE_FILE=tmp/workspace-ut0-trace.jsonl \
   uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --debug
 ```
 
+### Dispatch boundary diagnostics
+
+`rig/diagnostics.mld` provides hook-based inspection of every dispatch boundary in the rig framework. It is imported by `rig/workers/planner.mld` and is on by default. The hooks observe `@input` and `@output` on named exe functions and log shape summaries to stderr with a `[rig:diag:*]` prefix. They do not modify any values or affect dispatch behavior.
+
+To disable: remove `import "../diagnostics.mld"` from `rig/workers/planner.mld`.
+
+#### What each hook logs
+
+The four crash-prone boundaries (`dispatchResolve`, `dispatchExtract`, `dispatchExecute`, `callToolWithOptionalPolicy`) also have `hook before` variants that log an ENTER line with the key input args. These fire even when the exe crashes, so you always see what was attempted.
+
+| Hook | Fires after | What it shows |
+|---|---|---|
+| `dispatchResolve` | resolve worker returns | record_type, count, handles; or error + summary |
+| `dispatchExtract` | extract worker returns | name, schema_name, provenance, preview_fields; or error |
+| `dispatchExecute` | execute worker returns | tool, status, result_handles; or error + per-issue detail |
+| `compileExecuteIntent` | intent compilation for execute | per-arg: role, source_class, auth_bucket, attestation count, backing ref count; policy_intent keys with constraint types (has_eq, has_attestations) |
+| `compileToolArgs` | arg compilation for resolve/extract | per-arg: role, source_class, auth_bucket |
+| `callToolWithOptionalPolicy` | every tool dispatch | tool name, result type, has_error, has_policy |
+| `normalizeResolvedValues` | raw output → rig state entries | record_type, entry count, per-entry handle/key/identity_field/identity_value |
+| `validateToolCallArgs` | tool arg shape check | only on failure: missing args, extra args |
+| `resolveRefValue` | each ref resolution | source, record, handle, value_type; or error + detail |
+
+#### Filtering diagnostic output
+
+Diagnostic lines go to stderr. During bench runs the host captures stderr, so use `grep` on the task's stderr output or redirect explicitly:
+
+```bash
+# Single task, capture diagnostics to a file
+uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_11 2>tmp/diag-ut11.log
+
+# Filter just the diagnostic lines
+grep '\[rig:diag' tmp/diag-ut11.log
+
+# Filter one boundary
+grep '\[rig:diag:compileExecuteIntent\]' tmp/diag-ut11.log
+
+# Show only errors across all boundaries
+grep '\[rig:diag.*ERROR\|FAILED' tmp/diag-ut11.log
+```
+
+#### When to use diagnostics vs other tools
+
+| Question | Tool |
+|---|---|
+| "What value crossed the compile→policy→dispatch boundary?" | Diagnostics — `compileExecuteIntent` + `callTool` hooks show the full chain |
+| "Why did `@policy.build` reject this intent?" | Runtime trace (`MLLD_TRACE=effects`) — trace shows `policy.compile_drop` events with reasons |
+| "What did the planner actually call?" | Opencode transcript — shows the raw tool-call JSON the planner emitted |
+| "Did the tool bridge return the right shape?" | Diagnostics — `callTool` hook shows result type; `normalizeResolvedValues` shows how it was coerced |
+| "Is the ref pointing at a real resolved entry?" | Diagnostics — `resolveRefValue` hook shows resolution success/failure per ref |
+| "Multiple bugs are stacked across layers and each fix reveals the next" | Diagnostics — this is what it was built for. Read the full boundary chain to see which layer dropped or transformed a value |
+
 ### Inspect latest result rows
 
 ```bash

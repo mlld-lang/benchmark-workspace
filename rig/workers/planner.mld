@@ -31,6 +31,7 @@ import { @dispatchExtract } from "./extract.mld"
 import { @dispatchDerive } from "./derive.mld"
 import { @dispatchExecute } from "./execute.mld"
 import { @dispatchCompose } from "./compose.mld"
+import "../diagnostics.mld"
 
 record @planner_resolve_inputs = {
   data: [tool: string, args: object?, purpose: string?],

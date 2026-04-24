@@ -2,7 +2,7 @@
 
 import { @derivePrompt, @coerceDeriveAttestation } from "../../workers/derive.mld"
 import { @llmCall, @llmSessionId } from "../../runtime.mld"
-import { @runAssertions, @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
+import { @runAssertions, @isEmptyResponse, @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
 
 >> D1: derive_simple_max
 var @D1 = {
@@ -160,10 +160,14 @@ var @D5 = {
 
 var @allCases = [@D1, @D2, @D3, @D4, @D5]
 
-exe @runOneDerive(testCase, model) = [
+exe @runOneDerive(testCase, model, harness) = [
   let @startMs = @timestamp()
   let @prompt = @derivePrompt(@testCase.query, @testCase.sources, @testCase.schemaDoc, @testCase.decision, @testCase.handleMap)
-  let @raw = @llmCall("opencode", @prompt, { model: @model, tools: [], pure: true })
+  let @raw1 = @llmCall(@harness ?? "opencode", @prompt, { model: @model, tools: [], pure: true })
+  let @raw = when [
+    @isEmptyResponse(@raw1) => @llmCall(@harness ?? "opencode", @prompt, { model: @model, tools: [], pure: true })
+    * => @raw1
+  ]
   let @endMs = @timestamp()
   let @elapsedMs = @endMs - @startMs
   let @attestation = @coerceDeriveAttestation(@raw)

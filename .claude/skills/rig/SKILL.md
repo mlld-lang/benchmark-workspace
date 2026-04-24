@@ -81,6 +81,29 @@ Reference these documents when making decisions:
 Always run these before and after changes:
 
 ```bash
-mlld clean/rig/tests/index.mld --no-checkpoint    # structural gate (96 assertions)
-mlld rig/tests/workers/run.mld --no-checkpoint     # worker LLM tests (17 tests, ~50s)
+mlld clean/rig/tests/index.mld --no-checkpoint    # structural gate (100 assertions)
+mlld rig/tests/workers/run.mld --no-checkpoint     # worker LLM tests (17 tests, ~14s on Cerebras)
 ```
+
+## Running benchmarks
+
+Default hybrid config: GLM 5.1 planner + Cerebras gpt-oss-120b workers. OOS/non-gating tasks are auto-skipped.
+
+```bash
+# Single task
+uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_11
+
+# Full suite (auto-skips oos tasks)
+uv run --project bench python3 src/run.py -s workspace -d defended -p 10
+
+# Override models
+uv run --project bench python3 src/run.py --model cerebras/gpt-oss-120b  # same model for both
+uv run --project bench python3 src/run.py --planner togetherai/zai-org/GLM-5.1 --worker cerebras/gpt-oss-120b
+
+# Claude harness (Sonnet 4 for both)
+uv run --project bench python3 src/run.py --harness claude -s workspace -d defended
+```
+
+Never use `--debug` — it triggers OOM. Use `MLLD_TRACE=effects MLLD_TRACE_FILE=tmp/trace.jsonl` for tracing.
+
+See `CLAUDE.md` for the model comparison table (12 models tested, timing and scores).

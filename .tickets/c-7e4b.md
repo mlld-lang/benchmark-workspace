@@ -2,13 +2,13 @@
 id: c-7e4b
 status: closed
 deps: []
-links: []
+links: [c-0589, c-859f]
 created: 2026-04-22T10:21:14Z
 type: task
 priority: 1
 assignee: Adam
 tags: [rig, dispatch, mcp]
-updated: 2026-04-23T03:55:06Z
+updated: 2026-04-24T20:17:05Z
 ---
 # UT8/UT32: collection dispatch exe runs but MCP call doesn't fire
 

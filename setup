@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+
+ENV_FILE=".env"
+EXAMPLE_FILE=".env.example"
+LINK=".mlld-sdk"
+
+if [ ! -f "$ENV_FILE" ]; then
+  cp "$EXAMPLE_FILE" "$ENV_FILE"
+  echo "Created .env from .env.example"
+fi
+
+# shellcheck source=.env.example
+source "$ENV_FILE"
+
+if [ -z "${MLLD_SDK_PATH:-}" ]; then
+  echo "error: MLLD_SDK_PATH not set in .env" >&2
+  exit 1
+fi
+
+if [ ! -d "$MLLD_SDK_PATH" ]; then
+  echo "error: MLLD_SDK_PATH=$MLLD_SDK_PATH does not exist" >&2
+  exit 1
+fi
+
+ln -sfn "$MLLD_SDK_PATH" "$LINK"
+echo "Linked .mlld-sdk -> $(readlink "$LINK")"
+
+cd bench
+uv sync
+echo "Done. Run benchmarks with: uv run --project bench python3 src/run.py ..."

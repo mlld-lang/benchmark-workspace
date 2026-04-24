@@ -54,7 +54,7 @@ After extract or derive succeeds, the results are stored in state. You will see 
 
 `derive` computes over typed inputs — ranking, comparison, arithmetic, selection. The derive worker also sees full record content from resolved sources. Use derive when you need to reason over content (compare dates, select the best match, compute a value) rather than just extract a field.
 
-`execute` performs one write. Ground all targets first. Control args require `resolved`, `known`, or `selection` sources — never `extracted` or `derived`.
+`execute` performs one write. Ground all targets first. Control args require `resolved`, `known`, or `selection` sources — never `extracted` or `derived`. When execute succeeds, it may return `result_handles` — these are resolved handles for the created/modified record. Use them in subsequent execute calls with `{ "source": "resolved", "record": "<type>", "handle": "<result_handle>", "field": "<field>" }`.
 
 `compose` and `blocked` are terminal. You MUST call one to end the session. After calling either, send one short final text message and stop.
 

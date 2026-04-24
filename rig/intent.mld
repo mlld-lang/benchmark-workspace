@@ -313,7 +313,10 @@ exe @lookupResolvedControlValue(state, recordName, handle, fieldName) = [
     let @fieldValue = @resolvedEntryFieldValue(@entry, @fieldName)
     => when [
       @fieldValue.isDefined() && @fieldValue != null => @resolvedControlResult(@fieldName, @fieldValue)
-      * => { ok: false, error: "resolved_field_missing", field: @fieldName }
+      * => [
+        let @availableFields = for @k, @v in (@entry.field_values ?? {}) when @v != null => `@k`
+        => { ok: false, error: "resolved_field_missing", field: @fieldName, hint: `Field "@fieldName" not found on this record. Available fields: @availableFields.join(", ")` }
+      ]
     ]
   ]
 
@@ -429,13 +432,21 @@ exe @resolveRefValue(state, ref) = [
           handle: @ref.handle,
           value: @value
         }
-        * => {
-          ok: false,
-          error: "resolved_field_missing",
-          record: @ref.record,
-          handle: @ref.handle,
-          field: @ref.field
-        }
+        * => [
+          let @refEntry = @lookupResolvedEntry(@state, @ref.record, @ref.handle)
+          let @refFields = when [
+            @refEntry.isDefined() => for @k, @v in (@refEntry.field_values ?? {}) when @v != null => `@k`
+            * => []
+          ]
+          => {
+            ok: false,
+            error: "resolved_field_missing",
+            record: @ref.record,
+            handle: @ref.handle,
+            field: @ref.field,
+            hint: `Field "@ref.field" not found. Available fields: @refFields.join(", ")`
+          }
+        ]
       ]
     ]
 
@@ -471,6 +482,17 @@ exe @knownInTask(query, literalValue) = js {
   const queryText = String(query ?? "");
   const literal = String(literalValue ?? "");
   if (!literal) return false;
+
+  // Purely numeric literals must appear as a distinct token, not as a
+  // substring of a longer number or date component. Without this, a
+  // two-digit id like "24" matches inside "2026-04-24" and launders
+  // past task-text verification.
+  if (/^\d+$/.test(literal)) {
+    const escaped = literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const tokenRe = new RegExp(`(^|[^\\w\\-/:.])${escaped}($|[^\\w\\-/:.])`);
+    return tokenRe.test(queryText);
+  }
+
   if (queryText.includes(literal)) return true;
 
   const datetimeMatch = literal.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})$/);

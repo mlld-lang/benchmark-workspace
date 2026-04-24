@@ -20,7 +20,7 @@ exe @dispatchCompose(agent, state, query) = [
   let @executionLog = @readExecutionLogFile(@agent.executionLogFile)
   let @prompt = @composePrompt(@query, @workerStateSummary(@agent, @state), @executionLog)
   let @raw = @llmCall(@agent.harness, @prompt, {
-    model: @agent.model,
+    model: @agent.workerModel ?? @agent.model,
     pure: @agent.opencodePure,
     dir: @agent.innerWorkerDir,
     dataHome: @agent.innerWorkerDataHome,

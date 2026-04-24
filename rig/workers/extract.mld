@@ -15,7 +15,7 @@ import {
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @compileToolArgs, @resolveRefValue } from "../intent.mld"
 import { @extractAttestation } from "../records.mld"
-import { @phaseToolEntry, @wrongPhaseToolFailure } from "../tooling.mld"
+import { @phaseToolEntry, @phaseToolNames, @wrongPhaseToolFailure } from "../tooling.mld"
 import {
   @validatePlannerArgRefs,
   @validatePlannerSourceRef,
@@ -136,7 +136,8 @@ exe @dispatchExtract(agent, state, decision, query) = [
     if !@tool [
       let @wrongPhase = @wrongPhaseToolFailure(@agent, "extract", @decision.tool)
       if @wrongPhase [ => @wrongPhase ]
-      => { error: "unknown_extract_tool", summary: @decision.tool }
+      let @availableExtract = @phaseToolNames(@agent, "extract")
+      => { error: "unknown_extract_tool", summary: `Tool '@decision.tool' does not exist. Available extract tools: @availableExtract.join(", ")` }
     ]
     let @shapeCheck = @validatePlannerArgRefs(@decision.args ?? {})
     if !@shapeCheck.ok [ => @plannerValidationFailure("planner_ref_validation_failed", @shapeCheck, @shapeCheck.issues) ]
@@ -196,7 +197,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
   let @schemaDef = @schemaRecord(@agent, @decision.schema)
   let @prompt = @extractPrompt(@query, @resolvedSource.value, @schemaDef ?? @decision.schema, @decision)
   let @raw = @llmCall(@agent.harness, @prompt, {
-    model: @agent.model,
+    model: @agent.workerModel ?? @agent.model,
     pure: @agent.opencodePure,
     dir: @agent.innerWorkerDir,
     dataHome: @agent.innerWorkerDataHome,

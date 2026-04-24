@@ -1,6 +1,6 @@
 ---
 id: c-sweep
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-23T20:10:47Z
@@ -8,6 +8,7 @@ type: task
 priority: 1
 assignee: Adam
 tags: [measurement, suites]
+updated: 2026-04-24T00:14:22Z
 ---
 # Run other suite sweeps: slack, banking, travel
 

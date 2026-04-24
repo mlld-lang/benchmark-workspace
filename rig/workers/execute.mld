@@ -11,7 +11,10 @@ import {
   @callToolWithPolicy,
   @toolCallError,
   @toolRuntimeMessage,
-  @correlatedControlArgsCheck
+  @correlatedControlArgsCheck,
+  @recordTypeName,
+  @normalizeResolvedValues,
+  @updateResolvedState
 } from "../runtime.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @compileExecuteIntent } from "../intent.mld"
@@ -127,6 +130,19 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   if @toolError != null [ => @toolError ]
   let @toolMessage = @toolRuntimeMessage(@operationName, @raw)
   if @toolMessage != null [ => { error: "tool_runtime_error", summary: @toolMessage } ]
+  let @returnsRecord = @tool.returns
+  let @executeResultState = when [
+    @returnsRecord.isDefined() && @raw.isDefined() && @typeof(@raw) != "string" => [
+      let @recordType = @recordTypeName(@returnsRecord)
+      let @coerced = @raw as record @returnsRecord
+      let @entries = @normalizeResolvedValues(@recordType, @returnsRecord, @coerced)
+      let @handles = for @entry in @entries => @entry.handle
+      => { handles: @handles, state: @updateResolvedState(@state, @recordType, @entries) }
+    ]
+    * => { handles: [], state: @state }
+  ]
+  let @resultHandles = @executeResultState.handles
+  let @nextState = @executeResultState.state
   let @summary = `executed @operationName`
   @appendExecutionLogEntry(@agent.executionLogFile, @serializeLifecycleJson({
     phase: "execute",
@@ -134,13 +150,12 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
     summary: @summary,
     session_id: null
   }))
-  let @nextState = @state
   => {
     state: @nextState,
     result: {
       status: "sent",
       tool: @operationName,
-      result_handles: [],
+      result_handles: @resultHandles,
       summary: @summary
     },
     session_id: null

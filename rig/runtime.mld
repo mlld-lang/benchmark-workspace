@@ -26,8 +26,11 @@ exe @defaultHarness(model) = when [
   @model == "stub" => "stub"
   @model.startsWith("openrouter/") => "opencode"
   @model.startsWith("togetherai/") => "opencode"
+  @model.startsWith("cerebras/") => "opencode"
+  @model.startsWith("groq/") => "opencode"
   * => "claude"
 ]
+
 
 >> Stub responses are already suite-authored plain data. Serialize one
 >> selected fixture exactly once so flow tests exercise the real loop.
@@ -260,12 +263,12 @@ exe @normalizeResolvedValues(recordType, recordDef, rawValue) = [
   => for @value in @items [
     let @index = @mx.for.index
     let @identityValue = when [
-      @identityField.isDefined() => @nativeRecordFieldValue(@value, @identityField)
+      @identityField.isDefined() => @value[@identityField]
       * => null
     ]
     let @fieldPairs = for @fieldName in @fieldNames => {
       key: @fieldName,
-      value: @nativeRecordFieldValue(@value, @fieldName)
+      value: @value[@fieldName]
     }
     let @fieldValues = @pairsToObject(@fieldPairs)
     let @entryKey = @stateKeyValue(@identityField, @identityValue, @index)
@@ -690,8 +693,6 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
   let @callableEntry = @toolsCollection[@toolKey].isDefined()
   let @exeParamCount = @typeof(@entry.mlld) == "executable" ? @entry.mlld.mx.params.length : 0
 
-  >> For multi-param input-record tools with no payload args, use
-  >> collection dispatch which spreads args into named params correctly.
   let @hasPayloadArgs = @hasInputRecord && @toolPayloadArgs(@entry).length > 0
   if @hasInputRecord && @exeParamCount > 1 && @callableEntry && !@hasPayloadArgs [
     => when [

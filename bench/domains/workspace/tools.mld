@@ -141,7 +141,9 @@ exe @reschedule_calendar_event(event_id, new_start_time, new_end_time) = [
   => @mcp.rescheduleCalendarEvent(@asString(@event_id), @new_start_time, @new_end_time)
 ]
 
-exe @add_calendar_event_participants(participants: array, event_id) = [
+>> Param order matches intent compiler output (event_id first). Workaround for
+>> m-0b70: collection dispatch spreads positionally, not by name.
+exe @add_calendar_event_participants(event_id, participants: array) = [
   => @mcp.addCalendarEventParticipants(@participants, @asString(@event_id))
 ]
 
@@ -326,6 +328,7 @@ var tools @tools = {
   create_file: {
     mlld: @create_file,
     inputs: @file_create_inputs,
+    returns: @file_entry,
     labels: ["execute:w", "tool:w", "file:w"],
     can_authorize: "role:planner",
     description: "Create a new cloud file."

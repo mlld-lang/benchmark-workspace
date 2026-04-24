@@ -16,11 +16,13 @@ var @result = @rig.run({
   records: @records,
   tools: @tools,
   model: @model,
+  workerModel: @payload.worker_model,
   plannerAddendum: @slackAddendum,
   harness: @payload.harness,
   phaseLogFile: @payload.phase_log_file ?? null,
   phaseStateFile: @payload.phase_state_file ?? null,
   llmCallLogFile: @payload.llm_call_log_file ?? null,
+  executionLogFile: @payload.execution_log_file ?? null,
   logLlmCalls: @payload.log_llm_calls ?? false,
   maxIterations: 25
 }, @query)

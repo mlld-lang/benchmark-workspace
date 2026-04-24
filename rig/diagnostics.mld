@@ -1,0 +1,152 @@
+>> Diagnostic hook layer for rig dispatch boundary inspection.
+>> Import this module to activate. Hooks observe @input/@output on named
+>> exe functions at each dispatch boundary. Output goes to stderr via log.
+>>
+>> Activate: import "./diagnostics.mld" (or "../rig/diagnostics.mld")
+>> Filter:  mlld ... 2>&1 1>/dev/null | grep '\[rig:diag'
+
+>> ── dispatchResolve ─────────────────────────────────────────────────
+
+hook before op:named:dispatchResolve = [
+  log "[rig:diag:dispatchResolve] ENTER tool=@input[2].tool"
+]
+
+hook after op:named:dispatchResolve = [
+  if @output.error.isDefined() [
+    log "[rig:diag:dispatchResolve] ERROR error=@output.error summary=@output.summary"
+  ]
+  if @output.result.isDefined() [
+    log "[rig:diag:dispatchResolve] record_type=@output.result.record_type count=@output.result.count"
+    for @handle in (@output.result.handles ?? []) [
+      log "[rig:diag:dispatchResolve]   handle=@handle"
+    ]
+  ]
+]
+
+>> ── dispatchExtract ─────────────────────────────────────────────────
+
+hook before op:named:dispatchExtract = [
+  log "[rig:diag:dispatchExtract] ENTER name=@input[2].name tool=@input[2].tool"
+]
+
+hook after op:named:dispatchExtract = [
+  if @output.error.isDefined() [
+    log "[rig:diag:dispatchExtract] ERROR error=@output.error summary=@output.summary"
+  ]
+  if @output.result.isDefined() [
+    log "[rig:diag:dispatchExtract] name=@output.result.name schema=@output.result.schema_name provenance=@output.result.provenance"
+    for @field in (@output.result.preview_fields ?? []) [
+      log "[rig:diag:dispatchExtract]   field=@field"
+    ]
+  ]
+]
+
+>> ── dispatchExecute ─────────────────────────────────────────────────
+
+hook before op:named:dispatchExecute = [
+  log "[rig:diag:dispatchExecute] ENTER operation=@input[2].operation"
+]
+
+hook after op:named:dispatchExecute = [
+  if @output.error.isDefined() [
+    log "[rig:diag:dispatchExecute] ERROR error=@output.error summary=@output.summary"
+    for @issue in (@output.issues ?? []) [
+      log "[rig:diag:dispatchExecute]   issue arg=@issue.arg error=@issue.error source=@issue.source_class hint=@issue.hint"
+    ]
+  ]
+  if @output.result.isDefined() [
+    log "[rig:diag:dispatchExecute] tool=@output.result.tool status=@output.result.status"
+    for @handle in (@output.result.result_handles ?? []) [
+      log "[rig:diag:dispatchExecute]   result_handle=@handle"
+    ]
+  ]
+]
+
+>> ── compileExecuteIntent ────────────────────────────────────────────
+>> Fires after intent compilation for execute phase. Per-arg summaries
+>> show role, source class, auth bucket, attestation count. Policy intent
+>> keys show what constraints will be sent to @policy.build.
+
+hook after op:named:compileExecuteIntent = [
+  if !@output.ok [
+    log "[rig:diag:compileExecuteIntent] FAILED error=@output.error"
+    for @issue in (@output.issues ?? []) [
+      log "[rig:diag:compileExecuteIntent]   issue arg=@issue.arg error=@issue.error source=@issue.source_class"
+    ]
+  ]
+  if @output.ok [
+    log "[rig:diag:compileExecuteIntent] ok=true entries=@output.compiled_entries.length"
+    for @entry in (@output.compiled_entries ?? []) [
+      log "[rig:diag:compileExecuteIntent]   arg=@entry.arg role=@entry.role source=@entry.source_class bucket=@entry.auth_bucket attestations=@entry.flat_attestations.length has_backing=@entry.backing_refs.length"
+    ]
+    for @op, @constraints in (@output.policy_intent ?? {}) [
+      log "[rig:diag:compileExecuteIntent]   intent_op=@op"
+      for @argName, @argConstraint in (@constraints ?? {}) [
+        log "[rig:diag:compileExecuteIntent]     intent_arg=@argName type=@typeof(@argConstraint) has_eq=@argConstraint.eq.isDefined() has_attestations=@argConstraint.attestations.isDefined()"
+      ]
+    ]
+  ]
+]
+
+>> ── compileToolArgs ─────────────────────────────────────────────────
+>> Fires after arg compilation for resolve/extract phases. Same per-arg
+>> detail as compileExecuteIntent but without the policy intent layer.
+
+hook after op:named:compileToolArgs = [
+  if !@output.ok [
+    log "[rig:diag:compileToolArgs] FAILED error=@output.error"
+    for @issue in (@output.issues ?? []) [
+      log "[rig:diag:compileToolArgs]   issue arg=@issue.arg error=@issue.error source=@issue.source_class"
+    ]
+  ]
+  if @output.ok [
+    log "[rig:diag:compileToolArgs] ok=true entries=@output.compiled_entries.length"
+    for @entry in (@output.compiled_entries ?? []) [
+      log "[rig:diag:compileToolArgs]   arg=@entry.arg role=@entry.role source=@entry.source_class bucket=@entry.auth_bucket"
+    ]
+  ]
+]
+
+>> ── callToolWithOptionalPolicy ──────────────────────────────────────
+
+hook before op:named:callToolWithOptionalPolicy = [
+  log "[rig:diag:callTool] ENTER tool=@input[2] has_policy=@input[4].isDefined()"
+]
+
+hook after op:named:callToolWithOptionalPolicy = [
+  log "[rig:diag:callTool] tool=@input[2] result_type=@typeof(@output) has_error=@output.error.isDefined() has_policy=@input[4].isDefined()"
+]
+
+>> ── normalizeResolvedValues ─────────────────────────────────────────
+>> Fires after raw tool output is coerced into rig state entries.
+>> Shows record type, entry count, per-entry handle/key/identity.
+
+hook after op:named:normalizeResolvedValues = [
+  log "[rig:diag:normalize] record_type=@input[0] entry_count=@output.length"
+  for @entry in (@output ?? []) [
+    log "[rig:diag:normalize]   handle=@entry.handle key=@entry.key identity_field=@entry.identity_field identity_value=@entry.identity_value"
+  ]
+]
+
+>> ── validateToolCallArgs ────────────────────────────────────────────
+>> Fires after tool arg shape validation. Only logs on failure to avoid
+>> noise on the happy path.
+
+hook after op:named:validateToolCallArgs = [
+  if !@output.ok [
+    log "[rig:diag:validateArgs] FAILED error=@output.error missing=@output.summary.missing extra=@output.summary.extra"
+  ]
+]
+
+>> ── resolveRefValue ─────────────────────────────────────────────────
+>> Fires after each ref resolution. Shows source, resolution status,
+>> and for resolved refs the record/handle/field path.
+
+hook after op:named:resolveRefValue = [
+  if !@output.ok [
+    log "[rig:diag:resolveRef] FAILED error=@output.error record=@output.record handle=@output.handle field=@output.field"
+  ]
+  if @output.ok [
+    log "[rig:diag:resolveRef] source=@output.source record=@output.record handle=@output.handle name=@output.name value_type=@typeof(@output.value)"
+  ]
+]

@@ -401,6 +401,7 @@ class MlldAgent:
         self,
         *,
         model: str = "sonnet",
+        fast_model: str | None = None,
         harness: str | None = None,
         working_dir: str | None = None,
         timeout: float = 900.0,
@@ -412,6 +413,7 @@ class MlldAgent:
         run_log_path: str | None = None,
     ):
         self._model = model
+        self._fast_model = fast_model
         self._harness = harness
         self.name = self._MODEL_NAMES.get(model, model)
         self._working_dir = working_dir or str(ROOT_DIR)
@@ -455,6 +457,8 @@ class MlldAgent:
         os.close(llm_log_fd)
         phase_state_fd, phase_state_file = tempfile.mkstemp(suffix=".json", prefix="phase_state_")
         os.close(phase_state_fd)
+        exec_log_fd, execution_log_file = tempfile.mkstemp(suffix=".jsonl", prefix="exec_log_")
+        os.close(exec_log_fd)
         runner_mcp_config["phase_state_file"] = phase_state_file
 
         task_id = getattr(self, "_current_task_id", "user_task_0")
@@ -468,8 +472,11 @@ class MlldAgent:
             "phase_log_file": phase_log_file,
             "phase_state_file": phase_state_file,
             "llm_call_log_file": llm_call_log_file,
+            "execution_log_file": execution_log_file,
             "log_llm_calls": bool(self._debug),
         }
+        if self._fast_model:
+            payload["worker_model"] = self._fast_model
         if self._harness:
             payload["harness"] = self._harness
         if tools is not None:
@@ -574,6 +581,10 @@ class MlldAgent:
                 pass
             try:
                 os.unlink(phase_state_file)
+            except OSError:
+                pass
+            try:
+                os.unlink(execution_log_file)
             except OSError:
                 pass
 

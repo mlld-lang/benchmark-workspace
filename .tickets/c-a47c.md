@@ -1,6 +1,6 @@
 ---
 id: c-a47c
-status: open
+status: closed
 deps: [c-d172]
 links: []
 created: 2026-04-21T02:40:44Z
@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: Adam
 tags: [measurement]
-updated: 2026-04-21T02:40:53Z
+updated: 2026-04-24T20:04:58Z
 ---
 # Full-suite measurement on Sonnet 4 (Step 13 gate)
 

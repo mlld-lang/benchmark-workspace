@@ -32,6 +32,29 @@ from date_shift import get_shifted_suite
 
 BENCHMARK_VERSION = "v1.1.1"
 SUITES = ["workspace", "slack", "banking", "travel"]
+
+# Tasks excluded from benign runs. Out-of-scope (oos) tasks require capabilities
+# the defended architecture structurally cannot provide (instruction-following over
+# untrusted content, recipient from untrusted file, etc). Non-gating tasks fail on
+# evaluator wording, not agent behavior.
+SKIP_TASKS: dict[str, set[str]] = {
+    "workspace": {
+        "user_task_13",   # oos: instruction-following over untrusted email
+        "user_task_19",   # oos: combined UT1 + UT13
+        "user_task_25",   # oos: instruction-following over untrusted file
+        "user_task_31",   # non-gating: evaluator rejects synonym wording
+    },
+    "banking": {
+        "user_task_0",    # oos: recipient from untrusted bill file
+    },
+    "slack": {
+        "user_task_17",   # oos: email from untrusted webpage
+        "user_task_18",   # oos: instructions from external URL
+        "user_task_19",   # oos: instructions from external URL
+    },
+    "travel": {},
+}
+
 ATTACKS = [
     "direct", "ignore_previous", "important_instructions", "injecagent",
     "system_message", "tool_knowledge",
@@ -95,9 +118,10 @@ def _prepare_run_log(model, suite, defense, attack=None):
         return run_log_path
 
 
-def _make_agent(model, debug, suite_name, defense, attack=None, injection_task_id=None, run_log_path=None, harness=None):
+def _make_agent(model, debug, suite_name, defense, attack=None, injection_task_id=None, run_log_path=None, harness=None, fast_model=None):
     return MlldAgent(
         model=model,
+        fast_model=fast_model,
         harness=harness,
         debug=debug,
         env_name=suite_name,
@@ -108,8 +132,8 @@ def _make_agent(model, debug, suite_name, defense, attack=None, injection_task_i
     )
 
 
-def _run_task(suite_name, task, model, debug, defense, run_log_path, harness=None):
-    agent = _make_agent(model, debug, suite_name, defense, run_log_path=run_log_path, harness=harness)
+def _run_task(suite_name, task, model, debug, defense, run_log_path, harness=None, fast_model=None):
+    agent = _make_agent(model, debug, suite_name, defense, run_log_path=run_log_path, harness=harness, fast_model=fast_model)
     agent._current_task_id = task.ID
     suite = get_shifted_suite(BENCHMARK_VERSION, suite_name)
     t0 = time.time()
@@ -131,10 +155,10 @@ def _run_task(suite_name, task, model, debug, defense, run_log_path, harness=Non
         agent.close()
 
 
-def _run_attack_task(suite_name, user_task, injection_task, model, debug, defense, attack_name, run_log_path, harness=None):
+def _run_attack_task(suite_name, user_task, injection_task, model, debug, defense, attack_name, run_log_path, harness=None, fast_model=None):
     agent = _make_agent(model, debug, suite_name, defense,
                         attack=attack_name, injection_task_id=injection_task.ID,
-                        run_log_path=run_log_path, harness=harness)
+                        run_log_path=run_log_path, harness=harness, fast_model=fast_model)
     agent._current_task_id = user_task.ID
     suite = get_shifted_suite(BENCHMARK_VERSION, suite_name)
     case_id = f"{user_task.ID}×{injection_task.ID}"
@@ -181,7 +205,7 @@ def _run_benign(args, suite, tasks):
     with ThreadPoolExecutor(max_workers=n) as pool:
         futures = {}
         for i, task in enumerate(tasks):
-            futures[pool.submit(_run_task, args.suite, task, args.model, args.debug, args.defense, run_log_path, getattr(args, 'harness', None))] = task
+            futures[pool.submit(_run_task, args.suite, task, args.model, args.debug, args.defense, run_log_path, getattr(args, 'harness', None), getattr(args, 'fast_model', None))] = task
             if stagger > 0 and i < len(tasks) - 1:
                 time.sleep(stagger)
         done_count = 0
@@ -263,7 +287,7 @@ def _run_attacks(args, suite):
         futures = {
             pool.submit(
                 _run_attack_task, args.suite, ut, it,
-                args.model, args.debug, args.defense, args.attack, run_log_path, getattr(args, 'harness', None)
+                args.model, args.debug, args.defense, args.attack, run_log_path, getattr(args, 'harness', None), getattr(args, 'fast_model', None)
             ): (ut, it)
             for ut, it in cases
         }
@@ -330,11 +354,16 @@ def main():
     parser.add_argument("-s", "--suite", choices=SUITES, default="workspace")
     parser.add_argument("-t", "--task", nargs="+", help="Run specific user task(s)")
     parser.add_argument("--injection-task", nargs="+", help="Run specific injection task(s) when using --attack")
-    # Default dev model is GLM 5.1 via Together AI. clean/rig/runtime.mld
-    # routes togetherai/* models through the opencode harness by default.
-    parser.add_argument("--model", default="togetherai/zai-org/GLM-5.1")
+    # See CLAUDE.md model comparison table for alternatives tested.
+    # --model sets both planner and worker. --planner/--worker override individually.
+    parser.add_argument("--model", default=None,
+                        help="Set both planner and worker model (overridden by --planner/--worker)")
+    parser.add_argument("--planner", default=None,
+                        help="Planner model (default: togetherai/zai-org/GLM-5.1 for opencode, claude-sonnet-4-20250514 for claude)")
+    parser.add_argument("--worker", default=None,
+                        help="Worker model for extract/derive/compose (default: cerebras/gpt-oss-120b for opencode, claude-sonnet-4-20250514 for claude)")
     parser.add_argument("--harness", choices=["claude", "opencode"],
-                        help="LLM harness override; if omitted, runtime picks from --model")
+                        help="LLM harness override; if omitted, runtime picks from planner model")
     parser.add_argument("-p", "--parallel", type=int, default=20)
     parser.add_argument("--stagger", type=float, default=5.0,
                         help="Seconds between launching parallel tasks (default: 2.0)")
@@ -344,6 +373,26 @@ def main():
                         help="Run attack suite")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
+
+    # Resolve model defaults: --model sets both, --planner/--worker override individually.
+    # Claude harness defaults to sonnet 4; opencode defaults to GLM 5.1 planner + cerebras worker.
+    if args.harness == "claude":
+        _default_planner = "claude-sonnet-4-20250514"
+        _default_worker = "claude-sonnet-4-20250514"
+    else:
+        _default_planner = "togetherai/zai-org/GLM-5.1"
+        _default_worker = "cerebras/gpt-oss-120b"
+
+    if args.model:
+        args.planner = args.planner or args.model
+        args.worker = args.worker or args.model
+    else:
+        args.planner = args.planner or _default_planner
+        args.worker = args.worker or _default_worker
+
+    # Legacy compat: args.model used for result paths and logging
+    args.model = args.planner
+    args.fast_model = args.worker
 
     suite = get_shifted_suite(BENCHMARK_VERSION, args.suite)
 
@@ -358,7 +407,7 @@ def main():
             print(f"Task '{task_id}' not found in {args.suite}")
             sys.exit(1)
         run_log_path = _prepare_run_log(args.model, args.suite, args.defense)
-        agent = _make_agent(args.model, args.debug, args.suite, args.defense, run_log_path=run_log_path, harness=getattr(args, 'harness', None))
+        agent = _make_agent(args.model, args.debug, args.suite, args.defense, run_log_path=run_log_path, harness=getattr(args, 'harness', None), fast_model=getattr(args, 'fast_model', None))
         agent._current_task_id = task_id
         try:
             print(
@@ -394,7 +443,10 @@ def main():
             tasks.append(task)
         _run_benign(args, suite, tasks)
     else:
-        tasks = list(suite.user_tasks.values())
+        skip = SKIP_TASKS.get(args.suite, set())
+        tasks = [t for t in suite.user_tasks.values() if t.ID not in skip]
+        if skip:
+            print(f"Skipping {len(skip)} oos/non-gating tasks: {', '.join(sorted(skip))}")
         _run_benign(args, suite, tasks)
 
 

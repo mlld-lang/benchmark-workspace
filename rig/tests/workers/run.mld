@@ -4,12 +4,14 @@ import { @allCases as @extractCases, @runOneExtract } from "./extract.mld"
 import { @allCases as @deriveCases, @runOneDerive } from "./derive.mld"
 import { @allCases as @composeCases, @runOneCompose } from "./compose.mld"
 import { @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
+import { @defaultHarness } from "../../runtime.mld"
 
 var @model = @payload.model ?? "openrouter/z-ai/glm-5.1"
+var @harness = @payload.harness ?? @defaultHarness(@model)
 var @commit = cmd { git rev-parse --short HEAD }
 var @scoreboardFile = `@root/rig/tests/workers/scoreboard.jsonl`
 
-show `Worker tests | model: @model | commit: @commit`
+show `Worker tests | model: @model | harness: @harness | commit: @commit`
 show "---"
 
 var @runStartMs = @timestamp()
@@ -21,9 +23,9 @@ var @taggedCases = @taggedExtract.concat(@taggedDerive).concat(@taggedCompose)
 
 var @allResults = for parallel(17) @tagged in @taggedCases [
   => when [
-    @tagged.worker == "extract" => @runOneExtract(@tagged.tc, @model)
-    @tagged.worker == "derive" => @runOneDerive(@tagged.tc, @model)
-    * => @runOneCompose(@tagged.tc, @model)
+    @tagged.worker == "extract" => @runOneExtract(@tagged.tc, @model, @harness)
+    @tagged.worker == "derive" => @runOneDerive(@tagged.tc, @model, @harness)
+    * => @runOneCompose(@tagged.tc, @model, @harness)
   ]
 ]
 

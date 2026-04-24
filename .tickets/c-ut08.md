@@ -1,6 +1,6 @@
 ---
 id: c-ut08
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-23T19:45:05Z
@@ -8,6 +8,7 @@ type: bug
 priority: 1
 assignee: Adam
 tags: [dispatch, runtime]
+updated: 2026-04-24T00:14:22Z
 ---
 # add_calendar_event_participants dispatch fails: mlld field undefined
 

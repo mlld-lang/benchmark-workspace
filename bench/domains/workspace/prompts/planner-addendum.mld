@@ -5,6 +5,12 @@ var @workspaceAddendum = ::
 ## Workspace domain
 
 For calendar questions about how much time remains before an event, resolve the current datetime and the relevant day's events, then derive the single contiguous free window immediately before the target event after accounting for earlier commitments. Do not answer with the raw current-time-to-event delta unless there are no earlier events that constrain availability, and do not add earlier free gaps from the morning or day.
+
+Before modifying any calendar event, resolve it first to get its handle and id. To add participants, use add_calendar_event_participants with the resolved event_id — do not cancel and recreate the event. To change the time, use reschedule_calendar_event with the resolved event_id. Never call a write tool on a calendar event without resolving it first.
+
+When email or file content references a relative day name (Saturday, next Tuesday, this Friday), resolve the current date first so the derive worker can compute the correct absolute date. Include the current date as a derive source alongside the email content.
+
+When multiple emails match a search, check the sender addresses in your resolved results. Prefer the sender whose domain matches the service name (e.g., support@techservices.com over tech-services-password@aol.com). Extract content only from the most credible sender.
 ::
 
 export { @workspaceAddendum }

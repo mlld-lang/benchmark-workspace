@@ -145,6 +145,7 @@ exe @validateConfig(config) = [
     suite: @config.suite,
     defense: @defense,
     model: @config.model,
+    workerModel: @config.workerModel ?? null,
     harness: @config.harness ?? @defaultHarness(@config.model),
     records: @config.records,
     tools: @config.tools,
@@ -163,7 +164,8 @@ exe @validateConfig(config) = [
     innerWorkerDataHome: @config.innerWorkerDataHome ?? "/tmp/mlld-rig-inner-worker-data",
     innerWorkerStateHome: @config.innerWorkerStateHome ?? "/tmp/mlld-rig-inner-worker-state",
     opencodePure: @config.opencodePure ?? true,
-    plannerAddendum: @config.plannerAddendum ?? ""
+    plannerAddendum: @config.plannerAddendum ?? "",
+    toolFilter: @config.toolFilter ?? null
   }
 ]
 

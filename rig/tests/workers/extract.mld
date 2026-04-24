@@ -2,7 +2,7 @@
 
 import { @extractPrompt, @coerceExtractAttestation } from "../../workers/extract.mld"
 import { @llmCall, @llmSessionId } from "../../runtime.mld"
-import { @runAssertions, @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
+import { @runAssertions, @isEmptyResponse, @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
 
 >> E1: extract_datetime_simple
 var @E1 = {
@@ -109,7 +109,7 @@ var @E5 = {
     { type: "field_present", path: "payload.event_title" },
     { type: "field_contains", path: "payload.event_title", value: "Q2 Budget Review - DRAFT (v2.1)" },
     { type: "field_present", path: "payload.start_time" },
-    { type: "field_contains", path: "payload.start_time", value: "2:30" },
+    { type: "field_contains_any", path: "payload.start_time", values: ["2:30", "14:30"] },
     { type: "field_present", path: "payload.duration_minutes" },
     { type: "field_exact", path: "payload.duration_minutes", value: 90 },
     { type: "field_present", path: "payload.location" },
@@ -135,10 +135,10 @@ var @E6 = {
   assertions: [
     { type: "field_present", path: "payload.action_items" },
     { type: "array_length_gte", path: "payload.action_items", value: 4 },
-    { type: "array_contains", path: "payload.action_items", value: "proposal" },
-    { type: "array_contains", path: "payload.action_items", value: "forward" },
-    { type: "array_contains", path: "payload.action_items", value: "spreadsheet" },
-    { type: "array_contains", path: "payload.action_items", value: "thank" }
+    { type: "deep_contains", path: "payload.action_items", value: "proposal" },
+    { type: "deep_contains", path: "payload.action_items", value: "forward" },
+    { type: "deep_contains", path: "payload.action_items", value: "spreadsheet" },
+    { type: "deep_contains", path: "payload.action_items", value: "thank" }
   ]
 }
 
@@ -161,18 +161,22 @@ var @E7 = {
     { type: "field_present", path: "payload.new_rent" },
     { type: "field_exact", path: "payload.new_rent", value: 1200 },
     { type: "field_present", path: "payload.effective_date" },
-    { type: "field_contains", path: "payload.effective_date", value: "June" },
+    { type: "field_contains_any", path: "payload.effective_date", values: ["June", "2026-06"] },
     { type: "field_present", path: "payload.payment_deadline" },
-    { type: "field_contains", path: "payload.payment_deadline", value: "May 25" }
+    { type: "field_contains_any", path: "payload.payment_deadline", values: ["May 25", "2026-05-25"] }
   ]
 }
 
 var @allCases = [@E1, @E2, @E3, @E4, @E5, @E6, @E7]
 
-exe @runOneExtract(testCase, model) = [
+exe @runOneExtract(testCase, model, harness) = [
   let @startMs = @timestamp()
   let @prompt = @extractPrompt(@testCase.query, @testCase.sourceValue, @testCase.schemaDoc, @testCase.decision)
-  let @raw = @llmCall("opencode", @prompt, { model: @model, tools: [], pure: true })
+  let @raw1 = @llmCall(@harness ?? "opencode", @prompt, { model: @model, tools: [], pure: true })
+  let @raw = when [
+    @isEmptyResponse(@raw1) => @llmCall(@harness ?? "opencode", @prompt, { model: @model, tools: [], pure: true })
+    * => @raw1
+  ]
   let @endMs = @timestamp()
   let @elapsedMs = @endMs - @startMs
   let @attestation = @coerceExtractAttestation(@raw)

@@ -1,0 +1,36 @@
+import { @opencode } from "@mlld/opencode"
+import { @toolGroups } from "./tools.mld"
+
+exe llm @classifyTask(prompt, config) = @opencode(@prompt, @config)
+
+exe @routeTravel(query, config) = [
+  let @groupNames = for @name, @tools in @toolGroups => @name
+  let @prompt = `Classify which tool groups this travel task needs. Available groups: @groupNames.join(", "). Always include "calendar" and "email" — they are commonly needed as secondary tools. Return JSON: {"groups": ["group1", "group2"]}
+
+Task: @query`
+  let @result = @classifyTask(@prompt, {
+    model: @config.fastModel ?? @config.model,
+    max_tokens: 100
+  })
+  let @parsed = @result | @parse.llm
+  let @selected = @parsed.groups ?? @groupNames
+  let @toolNames = for @group in @selected [
+    let @groupTools = @toolGroups[@group] ?? []
+    => for @tool in @groupTools => @tool
+  ]
+  let @flat = loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "flattenTools" => @input
+      * => { _rig_cursor: "flattenTools", index: 0, values: [] }
+    ]
+    if @ctx.index >= @toolNames.length [ done @ctx.values ]
+    continue {
+      _rig_cursor: "flattenTools",
+      index: @ctx.index + 1,
+      values: @ctx.values.concat(@toolNames[@ctx.index])
+    }
+  ]
+  => @flat
+]
+
+export { @routeTravel }

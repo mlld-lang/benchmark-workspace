@@ -7,7 +7,7 @@ import {
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @resolveAttestation } from "../records.mld"
 import { @compileToolArgs } from "../intent.mld"
-import { @phaseToolEntry, @wrongPhaseToolFailure } from "../tooling.mld"
+import { @phaseToolEntry, @phaseToolNames, @wrongPhaseToolFailure } from "../tooling.mld"
 import { @validatePlannerArgRefs, @plannerValidationFailure } from "../planner_inputs.mld"
 
 exe @resolvePrompt(query, decision, toolDocs, stateSummary) = template "../prompts/resolve.att"
@@ -35,7 +35,8 @@ exe @dispatchResolve(agent, state, decision, query) = [
   if !@tool [
     let @wrongPhase = @wrongPhaseToolFailure(@agent, "resolve", @decision.tool)
     if @wrongPhase [ => @wrongPhase ]
-    => { error: "unknown_resolve_tool", summary: @decision.tool }
+    let @availableResolve = @phaseToolNames(@agent, "resolve")
+    => { error: "unknown_resolve_tool", summary: `Tool '@decision.tool' does not exist. Available resolve tools: @availableResolve.join(", ")` }
   ]
   let @shapeCheck = @validatePlannerArgRefs(@decision.args ?? {})
   if !@shapeCheck.ok [ => @plannerValidationFailure("planner_ref_validation_failed", @shapeCheck, @shapeCheck.issues) ]

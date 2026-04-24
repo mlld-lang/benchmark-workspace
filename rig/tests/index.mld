@@ -51,7 +51,7 @@ import {
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg } from "../intent.mld"
-import { @callTool, @toolCallError, @emptyState } from "../runtime.mld"
+import { @callTool, @toolCallError, @emptyState, @recordTypeName } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
@@ -529,6 +529,22 @@ var @sessionFinalStateOk =
   @sessionFinalState.isDefined() &&
   @sessionFinalState.runtime.tool_calls == 2 &&
   @sessionFinalState.state.resolved.contact.length == 2
+
+>> c-ut8r / m-5178: resolved values must retain factsources after session boundary.
+>> The session stores state via @planner.set(); reading it back via @planner.state
+>> must preserve StructuredValue metadata on identity_value, field_values, and value
+>> fields. Without this, handle-type input records reject control args at dispatch.
+var @sessionResolvedEntry = @sessionFinalState.state.resolved.contact[0]
+var @sessionIdentityFs = @sessionResolvedEntry.identity_value.mx.factsources ?? []
+var @sessionFieldFs = @sessionResolvedEntry.field_values.email.mx.factsources ?? []
+var @sessionValueFs = @sessionResolvedEntry.value.email.mx.factsources ?? []
+var @sessionResolvedEmailFs = @plannerResolvedContactEmail.value.mx.factsources ?? []
+var @sessionFsOk =
+  @sessionIdentityFs.length > 0 &&
+  @sessionFieldFs.length > 0 &&
+  @sessionValueFs.length > 0 &&
+  @sessionResolvedEmailFs.length > 0
+var @sessionFsPretty = `identity=@sessionIdentityFs.length field=@sessionFieldFs.length value=@sessionValueFs.length resolved=@sessionResolvedEmailFs.length`
 var @plannerDeriveFixtureAgent = @rigBuild({
   suite: "fixture-planner-derive",
   defense: "defended",
@@ -2488,6 +2504,191 @@ var @fakeFileCoerced = @fakeFileRaw as record @ws_file_entry
 var @fileCoercionOk = @fakeFileCoerced[0].id_ == "26" && @fakeFileCoerced[1].id_ == "27"
 var @fileCoercionPretty = `id0=@fakeFileCoerced[0].id_ id1=@fakeFileCoerced[1].id_`
 
+>> ── c-6c90r: execute result handles ──
+>> Write tools with `returns:` produce result_handles and update resolved state.
+import { @file_create_inputs as @test_file_create_inputs } from "../../bench/domains/workspace/records.mld"
+
+exe tool:w, file:w @stubCreateFile(filename, content) = [
+  => { id_: "42", filename: @filename, content: @content, owner: "test", size: 100, last_modified: "2026-04-23" }
+]
+
+var tools @executeResultHandleTools = {
+  create_file: {
+    mlld: @stubCreateFile,
+    inputs: @test_file_create_inputs,
+    returns: @ws_file_entry,
+    labels: ["execute:w", "tool:w", "file:w"],
+    can_authorize: "role:planner",
+    description: "Stub create file."
+  }
+}
+
+var @executeResultHandleAgent = @rigBuild({
+  suite: "fixture-result-handles",
+  defense: "defended",
+  model: "stub",
+  records: { file_entry: @ws_file_entry, file_create_inputs: @test_file_create_inputs },
+  tools: @executeResultHandleTools
+})
+
+var @executeResultHandleDecision = {
+  phase: "execute",
+  operation: "create_file",
+  args: {
+    filename: { source: "known", value: "test.txt" },
+    content: { source: "known", value: "hello world" }
+  }
+}
+
+exe role:planner @probeExecuteResultHandles(agent, state, decision, query) = [
+  => @dispatchExecute(@agent, @state, @decision, @query)
+]
+
+var @executeResultHandleResult = @probeExecuteResultHandles(
+  @executeResultHandleAgent,
+  @emptyState(),
+  @executeResultHandleDecision,
+  "Create a file called test.txt with hello world"
+)
+var @executeResultRecordType = @recordTypeName(@ws_file_entry)
+var @executeResultStateEntries = @executeResultHandleResult.state.resolved[@executeResultRecordType]
+var @executeResultHandleOk =
+  @executeResultHandleResult.result.status == "sent" &&
+  @executeResultHandleResult.result.result_handles.length > 0 &&
+  @executeResultStateEntries.isDefined() &&
+  @executeResultStateEntries.length > 0 &&
+  @executeResultStateEntries[0].identity_value == "42"
+var @executeResultHandlePretty = `status=@executeResultHandleResult.result.status handles=@executeResultHandleResult.result.result_handles.length first=@executeResultHandleResult.result.result_handles[0] state_entries=@executeResultStateEntries.length id=@executeResultStateEntries[0].identity_value`
+
+>> ── m-5178: collection dispatch for all-facts multi-param tools ──
+>> add_calendar_event_participants has inputs with ONLY facts (no data),
+>> triggering the collection dispatch path (runtime.mld:696) instead of
+>> direct dispatch. This verifies proof survives the full execute pipeline
+>> through collection dispatch.
+import { @add_calendar_event_participants_inputs as @ut8_add_parts_inputs } from "../../bench/domains/workspace/records.mld"
+
+exe tool:w @ut8AddParticipants(participants: array, event_id) = `added:@event_id:@participants.length`
+
+var tools @ut8CollectionTools = {
+  search_calendar_events: {
+    mlld: @ut7FakeSearch,
+    returns: @calendar_evt,
+    labels: ["resolve:r"],
+    description: "Search events."
+  },
+  add_calendar_event_participants: {
+    mlld: @ut8AddParticipants,
+    inputs: @ut8_add_parts_inputs,
+    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Add participants to an existing calendar event."
+  }
+}
+
+var @ut8Agent = @rigBuild({
+  suite: "m-5178-collection-dispatch",
+  defense: "defended",
+  model: "stub",
+  records: { calendar_evt: @calendar_evt, add_calendar_event_participants_inputs: @ut8_add_parts_inputs },
+  tools: @ut8CollectionTools
+})
+var @ut8Resolved = { id_: "24", title: "Introductory meeting", participants: [], start_time: "2026-04-25 09:00", end_time: "2026-04-25 10:00" } as record @calendar_evt
+var @ut8State = {
+  resolved: { calendar_evt: [{ handle: "r_calendar_evt_24", key: "24", value: @ut8Resolved, identity_field: "id_", identity_value: @ut8Resolved.id_, field_values: { id_: @ut8Resolved.id_ } }] },
+  extracted: {},
+  derived: {},
+  extract_sources: {}
+}
+>> Direct collection dispatch test with manual agent
+var @ut8ManualAgent = {
+  defense: "defended",
+  tools: @ut8CollectionTools,
+  toolsCollection: @ut8CollectionTools,
+  basePolicy: @synthesizedPolicy(@ut8CollectionTools, null)
+}
+var @ut8Decision = {
+  phase: "execute",
+  operation: "add_calendar_event_participants",
+  args: {
+    event_id: { source: "resolved", record: "calendar_evt", handle: "r_calendar_evt_24", field: "id_" },
+    participants: [{ source: "known", value: "bob@test.com" }]
+  }
+}
+var @ut8Query = "Add bob@test.com to the Introductory meeting."
+
+>> Test 1: policy build + direct collection call for all-facts tool
+exe role:planner @ut8BuildAndDispatch() = [
+  let @builtPolicy = @policy.build(
+    {
+      known: { add_calendar_event_participants: { participants: ["bob@test.com"] } },
+      resolved: { add_calendar_event_participants: { event_id: @ut8Resolved.id_ } }
+    },
+    @ut8CollectionTools,
+    { task: @ut8Query }
+  )
+  if !@builtPolicy.valid [ => { valid: false, issues: @builtPolicy.issues, dispatch: null } ]
+  let @result = @ut8CollectionTools["add_calendar_event_participants"]({
+    participants: ["bob@test.com"],
+    event_id: @ut8Resolved.id_
+  }) with { policy: @builtPolicy.policy }
+  => { valid: true, issues: [], dispatch: @result }
+]
+var @ut8DirectResult = @ut8BuildAndDispatch()
+var @ut8DirectOk = @ut8DirectResult.valid && @ut8DirectResult.dispatch == "added:24:1"
+var @ut8DirectPretty = `valid=@ut8DirectResult.valid dispatch=@ut8DirectResult.dispatch`
+
+>> Test 2: full dispatch through the rig's execute worker (m-5178)
+exe role:planner @ut8ProbeDispatch(agent, state, decision, query) = [
+  => @dispatchExecute(@agent, @state, @decision, @query)
+]
+var @ut8DispatchResult = @ut8ProbeDispatch(
+  @ut8ManualAgent, @ut8State, @ut8Decision, @ut8Query
+)
+var @ut8DispatchOk = @ut8DispatchResult.error == null && @ut8DispatchResult.result.status == "sent"
+var @ut8DispatchPretty = `error=@ut8DispatchResult.error status=@ut8DispatchResult.result.status`
+
+>> ── c-0a6b: known-value task-text token match ──
+>> A 2-digit numeric literal must not launder past @knownInTask by
+>> matching inside a longer number or date component. The failing bug:
+>> planner passed { source: "known", value: "24" } for event_id, and the
+>> substring "24" appeared only inside the date "2026-04-24". Fix enforces
+>> token-boundary matching for numeric literals.
+var @c0a6bSubstringCompile = @compileExecuteIntent(
+  @ut8State,
+  @ut8CollectionTools,
+  {
+    phase: "execute",
+    operation: "add_calendar_event_participants",
+    args: {
+      event_id: { source: "known", value: "24" },
+      participants: [{ source: "known", value: "bob@test.com" }]
+    }
+  },
+  "Please add bob@test.com to the 'Introductory meeting' event on 2026-04-24."
+)
+var @c0a6bSubstringIssue = for @issue in (@c0a6bSubstringCompile.issues ?? []) when @issue.error == "known_value_not_in_task_text" && @issue.value == "24" => @issue
+var @c0a6bSubstringOk = @c0a6bSubstringCompile.ok == false && @c0a6bSubstringIssue.length == 1
+var @c0a6bSubstringPretty = `ok=@c0a6bSubstringCompile.ok issues=@c0a6bSubstringCompile.issues.length rejected_value=@c0a6bSubstringIssue[0].value`
+
+>> Positive case: the same numeric value is accepted when it appears as a
+>> standalone token ("event 24 now"), proving the fix does not break
+>> legitimate user-typed id intent.
+var @c0a6bTokenCompile = @compileExecuteIntent(
+  @ut8State,
+  @ut8CollectionTools,
+  {
+    phase: "execute",
+    operation: "add_calendar_event_participants",
+    args: {
+      event_id: { source: "known", value: "24" },
+      participants: [{ source: "known", value: "bob@test.com" }]
+    }
+  },
+  "Add bob@test.com to event 24 please."
+)
+var @c0a6bTokenOk = @c0a6bTokenCompile.ok == true
+var @c0a6bTokenPretty = `ok=@c0a6bTokenCompile.ok`
+
 exe @allChecks() = [
   => [
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
@@ -2526,6 +2727,7 @@ exe @allChecks() = [
   @check("planner-tool-collection-dispatch-does-not-recurse", @plannerResolveDispatchOk, @plannerResolveDispatchPretty),
   @check("planner-session-state-persists-across-direct-planner-tool-calls", @plannerResolveContactsOk, @plannerResolveContactsPretty),
   @check("session-final-state-accessible-via-mx-sessions", @sessionFinalStateOk, `runtime_calls=@sessionFinalState.runtime.tool_calls resolved=@sessionFinalState.state.resolved.contact.length`),
+  @check("session-resolved-factsources-survive-boundary", @sessionFsOk, @sessionFsPretty),
   @check("planner-session-resolved-handle-remains-readable-after-direct-resolve", @plannerResolvedContactEmailOk, @plannerResolvedContactEmailPretty),
   @check("planner-source-backed-extract-works-on-direct-planner-tool-path", @plannerExtractDispatchOk, @plannerExtractDispatchPretty),
   @check("planner-derive-exposes-preview-fields", @plannerDeriveDispatchOk, @plannerDeriveDispatchPretty),
@@ -2585,7 +2787,12 @@ exe @allChecks() = [
   @check("id-underscore-survives-coercion", @ut7CoercionOk, @ut7CoercionPretty),
   @check("update-fields-in-policy-intent", @ut7IntentOk, @ut7IntentPretty),
   @check("reschedule-dispatch-succeeds", @ut7DispatchOk, @ut7DispatchPretty),
-  @check("file-entry-id-survives-coercion", @fileCoercionOk, @fileCoercionPretty)
+  @check("file-entry-id-survives-coercion", @fileCoercionOk, @fileCoercionPretty),
+  @check("execute-result-handles-from-returns-record", @executeResultHandleOk, @executeResultHandlePretty),
+  @check("collection-dispatch-policy-build", @ut8DirectOk, @ut8DirectPretty),
+  @check("collection-dispatch-cross-module-m5178", @ut8DispatchOk, @ut8DispatchPretty),
+  @check("known-numeric-literal-requires-token-match", @c0a6bSubstringOk, @c0a6bSubstringPretty),
+  @check("known-numeric-literal-accepts-standalone-token", @c0a6bTokenOk, @c0a6bTokenPretty)
   ]
 ]
 
