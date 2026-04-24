@@ -1,6 +1,21 @@
-bench/results
-__pycache__
-.llm
+# Run artifacts / outputs
+bench/results/
+rig/tests/workers/scoreboard.jsonl
+audit.jsonl
+
+# Caches / state
+.llm/
+.mlld-sdk/
+__pycache__/
+
+# Secrets
 .env
-.mlld-sdk
+
+# Claude Code runtime
+.claude/scheduled_tasks.lock
+
+# Scratch / investigation
 tmp/
+
+# Claude auto-memory (lives in ~/.claude/projects/...)
+memory/
