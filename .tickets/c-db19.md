@@ -35,3 +35,23 @@ Same family possibility with c-aed5 (closed): compose narrating different conten
 
 Could indicate that the worker-context rule (d9aee4e) needs to extend to compose: 'when narrating an executed action, name the exact tool args used, not your independent reasoning'.
 
+
+## Notes
+
+**2026-04-25T21:48:46Z** TRANSCRIPT-GROUNDED CORRECTION (2026-04-25): My prior 'multi-derive disagreement at execute' was WRONG. Read TR-UT8 session ses_239e0d2b2ffeNWoqxQAo54tb6O. Actual:
+
+1. Planner correctly analyzes task: highest-rated vegan, tiebreak by cheapest price → New Israeli Restaurant
+2. First derive 'best_vegan_restaurant' returns Royal Panda (rating 4.2 — wrong, not even tied for highest!)
+3. Planner explicitly notes: 'the derive selected Royal Panda, but based on my analysis, that's incorrect'
+4. Re-derives 'best_vegan_pick' with stricter criteria → New Israeli Restaurant ✓
+5. Derives 'event_details' (title + location + start + end) using New Israeli's data
+6. Execute create_calendar_event uses derived.event_details — calendar event correctly titled 'Dinner at New Israeli Restaurant' at correct address ✓
+7. Compose runs and narrates: 'highest rated vegan is Royal Panda... calendar reminder titled Dinner at New Israeli Restaurant'
+
+EXECUTE IS CORRECT. The bug is in COMPOSE: state has 3 derives (best_vegan_restaurant=Royal Panda stale, best_vegan_pick=New Israeli current, event_details=New Israeli current). Compose worker has no signal which derive to narrate as 'the answer' — it picks the first by name.
+
+Real bug class: compose-worker context. Same family as TR-UT1 (compose drops max_price + address) and TR-UT9 (compose drops address). The worker-context rule (commit d9aee4e) targeted extract + derive but compose has the same problem: insufficient guidance from planner about which state to narrate.
+
+Fix direction: extend worker-context rule to compose. Planner should specify in compose's purpose field which derive name(s) are the 'authoritative' answer source. Or rig should auto-prefer the most recently-added derive when names overlap. Or rig should let planner mark a derive as 'final' for compose discovery.
+
+Cluster this ticket with new compose-drops-fields ticket.

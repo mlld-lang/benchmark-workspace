@@ -199,3 +199,5 @@ Comparison against `projection-repro.mld`:
 - 250-row batches / 1000 entries: baseline was aborted during second batch after already reaching ~1.7GB RSS; indexed prototype completed in 12.3s and ~1.04GB RSS.
 
 This gives a clear payoff signal for a real rig change, provided invariant tests prove the handle-indexed/cache shape preserves factsource/proof behavior for resolved refs, whole-record refs, family expansion, selection refs, and execute-policy compilation.
+
+**2026-04-25T21:48:32Z** Update from c-30f7 closure: TR-UT10 transcript (ses_239d672a6ffe...) confirms MCP 'Not connected' cascade under -p 20 with heap=8g. Heap-up alone insufficient. The 4 travel timeouts (UT10, UT11, UT12, UT19) are likely all the same pattern — need to verify on UT11/UT12/UT19 transcripts. May need lower concurrency cap, per-task MCP isolation, or MCP server lifecycle changes.
