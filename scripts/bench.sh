@@ -23,6 +23,14 @@ set -euo pipefail
 WORKSPACE_A=(0 1 2 3 4 5 6 7 8 9 10 11 12 14 15 16 17 18)
 WORKSPACE_B=(20 21 22 23 24 26 27 28 29 30 32 33 34 35 36 37 38 39)
 
+# Per-target shape. Workspace tasks each carry the full AgentDojo
+# TaskEnvironment in the MCP server's RAM; 18 parallel on 8x16 OOM-killed
+# the container, so workspace halves run on 16x32 (32 GB). Banking/slack/
+# travel are smaller and fit on 8x16. Total at peak fan-out:
+#   16 + 16 + 8 + 8 + 8 = 56 vCPU (under Team plan's 64 vCPU cap).
+SHAPE_WORKSPACE=nscloud-ubuntu-22.04-amd64-16x32
+SHAPE_LIGHT=nscloud-ubuntu-22.04-amd64-8x16
+
 dispatch() {
   local label=$1; shift
   printf '→ %-14s ' "$label"
@@ -40,7 +48,7 @@ dispatch_workspace() {
   for n in "$@"; do task_args+=("user_task_$n"); done
   local tasks_str
   tasks_str="${task_args[*]}"
-  dispatch "$label" -f suite=workspace -f tasks="$tasks_str"
+  dispatch "$label" -f suite=workspace -f tasks="$tasks_str" -f shape="$SHAPE_WORKSPACE"
 }
 
 run_target() {
@@ -51,9 +59,9 @@ run_target() {
       dispatch_workspace workspace-a "${WORKSPACE_A[@]}"
       dispatch_workspace workspace-b "${WORKSPACE_B[@]}"
       ;;
-    banking|b) dispatch banking -f suite=banking ;;
-    slack|s)   dispatch slack   -f suite=slack ;;
-    travel|t)  dispatch travel  -f suite=travel ;;
+    banking|b) dispatch banking -f suite=banking -f shape="$SHAPE_LIGHT" ;;
+    slack|s)   dispatch slack   -f suite=slack   -f shape="$SHAPE_LIGHT" ;;
+    travel|t)  dispatch travel  -f suite=travel  -f shape="$SHAPE_LIGHT" ;;
     *) echo "unknown target: $1" >&2
        echo "valid: workspace-a workspace-b workspace banking slack travel" >&2
        exit 1 ;;
