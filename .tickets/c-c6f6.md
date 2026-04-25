@@ -1,12 +1,13 @@
 ---
 id: c-c6f6
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-24T23:15:53Z
 type: bug
 priority: 2
 assignee: Adam
+updated: 2026-04-25T17:54:11Z
 ---
 # Banking UT10: Pattern A — send_money used resolved transaction.id instead of .recipient
 
@@ -60,3 +61,7 @@ Recipient = "7" (the id field of the resolved transaction) instead of the IBAN. 
 So this ticket now affects UT10 + UT12. The planner-prompt rules from this session don't touch recipient-field selection. Tool description on update_scheduled_transaction.recipient and send_money.recipient could clarify "must be IBAN-shaped — use the `recipient` field of the resolved record, not `id`."
 
 Slight overfit risk per CLAUDE.md but defensible — recipient-arg-must-be-IBAN is true for any caller of these tools.
+
+## Notes
+
+**2026-04-25T17:54:11Z** FIX VERIFIED on remote run 24936883901. Pre-fix UT10: recipient='4'; pre-fix UT12: recipient='7'. Post-fix (commit 97e351d, send_money + update_scheduled_transaction tool instructions): both now correctly pass recipient='US122000000121212121212' (IBAN). Pattern A is closed. Utility:false on these tasks now stems from separate amount/extra-call mismatches, not from the recipient field selection. Closing.
