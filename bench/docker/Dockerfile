@@ -49,6 +49,11 @@ RUN npm ci && npm run build && npm link
 COPY clean /workspace/clean
 WORKDIR /workspace/clean
 
+# bench/pyproject.toml resolves mlld-sdk via `../.mlld-sdk` (a local symlink
+# pointing into the mlld checkout). Recreate it inside the image so uv sync
+# can find the editable SDK.
+RUN ln -sfn /opt/mlld/sdk/python /workspace/clean/.mlld-sdk
+
 # Sync python deps into the bench project venv
 RUN /root/.local/bin/uv sync --project bench
 
