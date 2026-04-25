@@ -156,3 +156,14 @@ Design candidates to consider before changing code:
 6. Treat review/blob storage separately from planner-visible metadata. Travel is unusual because review-heavy metadata is needed by derive/compose workers but should not be planner-visible. Large untrusted blobs may be better stored behind handles/artifacts and materialized only for worker phases.
 
 Important non-suggestion: I do not recommend simply deleting `entry.value` from resolved state based on the current evidence. It failed to keep the run under 4 GB and may break intentional invariants around whole-record refs and factsources.
+
+**2026-04-25T19:21:04Z** mlld-side memory reductions landed in /Users/adam/mlld/mlld:
+
+- f5d720b9d: release finalized session frames, avoid document-mode completed-session history, store live session writes in one observed slot copy.
+- 98fe71171: make --trace-memory memory-only unless --trace is also set, avoid building disabled session trace/SDK payloads, skip final session trace construction when session trace is off, reuse returned final session snapshots during disposal, and structurally share unchanged subtrees across observed session writes.
+
+Validation: affected Vitest/SDK/CLI suites passed (136 pass / 1 skip), npm build passed, and rig invariant gate passed at 106/0.
+
+Travel p20 local with MLLD_TRACE_MEMORY=1 and trace file still crossed the 4GB guard after these changes. Latest structural-sharing run: trace max was ~3.79GB RSS / ~2.91GB heap at rig/runtime.mld:@projectResolvedEntry, then external monitor saw ~4.35GB before kill. Top sampled scopes were @projectResolvedEntry (~715 calls), @mergeResolvedEntries, @normalizeResolvedValues, and @finishPlannerTool.
+
+Current hypothesis: remaining spike is not mlld trace/session observer overhead. It is the rig state shape/projection path rebuilding the growing resolved state late in travel runs, especially repeated display projection and merge of resolved entries. Clear rig payoff likely comes from making planner-visible state incremental/cached/handle-indexed so @projectResolvedEntry/@normalizeResolvedValues do not rebuild all prior resolved records on every planner tool completion.
