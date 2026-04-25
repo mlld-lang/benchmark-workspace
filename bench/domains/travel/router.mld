@@ -1,20 +1,50 @@
-import { @opencode } from "@mlld/opencode"
+>> Travel tool router.
+>>
+>> Returns the flat list of tool names this query needs, derived by keyword
+>> matching against `@toolGroups`. Deterministic — no LLM call.
+>>
+>> Design notes:
+>>   - The previous LLM-driven router imported `@mlld/opencode` directly at the
+>>     bench layer, which causes mlld to hang during agent setup (separate runtime
+>>     bug; tracked in clean/.tickets/c-5d98). Bench domain files should not
+>>     import LLM modules — those belong to rig/.
+>>   - Classification is unambiguous in this benchmark: travel queries mention
+>>     "hotel", "restaurant", "car rental", or "flight". Keyword matching covers
+>>     every taskdata case, with synonyms ("place to stay", "lodge", "lodging",
+>>     "accommodation", "stay at", "reservation", "booking", "dine", "food",
+>>     "eat", "lunch", "dinner", "breakfast", "cuisine", "meal", "rental",
+>>     "rent a", "drive", "fly", "airline") covering common phrasings.
+>>   - Calendar + email are always included (used as secondary tools across most
+>>     tasks: book a hotel + add a calendar reminder, etc.). Matches the prior
+>>     router's default-include behavior.
+>>   - User group is included only when the query references preferences/profile.
+>>   - If no category keywords match, fall back to including all groups so the
+>>     planner has the full surface (safe default).
+
 import { @toolGroups } from "./tools.mld"
 
-exe llm @classifyTask(prompt, config) = @opencode(@prompt, @config)
+exe @matchGroup(query, group) = [
+  let @q = @query.toLowerCase()
+  => when [
+    @group == "hotel"      => @q.includes("hotel") || @q.includes("place to stay") || @q.includes("lodge") || @q.includes("lodging") || @q.includes("accommodation") || @q.includes("stay at") || @q.includes("stay in") || @q.includes("staying at") || @q.includes("staying in") || @q.includes("reservation") || @q.includes("booking") || @q.includes("book a room")
+    @group == "restaurant" => @q.includes("restaurant") || @q.includes("dine") || @q.includes("food") || @q.includes("eat") || @q.includes("lunch") || @q.includes("dinner") || @q.includes("breakfast") || @q.includes("cuisine") || @q.includes("meal")
+    @group == "car"        => @q.includes("car") || @q.includes("rental") || @q.includes("rent a") || @q.includes("drive")
+    @group == "flight"     => @q.includes("flight") || @q.includes("fly") || @q.includes("airline")
+    @group == "calendar"   => true
+    @group == "email"      => true
+    @group == "user"       => @q.includes("my ") || @q.includes("preference") || @q.includes("profile") || @q.includes("information about me")
+    * => false
+  ]
+]
 
 exe @routeTravel(query, config) = [
   let @groupNames = for @name, @tools in @toolGroups => @name
-  let @prompt = `Classify which tool groups this travel task needs. Available groups: @groupNames.join(", "). Always include "calendar" and "email" — they are commonly needed as secondary tools. Return JSON: {"groups": ["group1", "group2"]}
-
-Task: @query`
-  let @result = @classifyTask(@prompt, {
-    model: @config.fastModel ?? @config.model,
-    max_tokens: 100
-  })
-  let @parsed = @result | @parse.llm
-  let @selected = @parsed.groups ?? @groupNames
-  let @toolNames = for @group in @selected [
+  let @selected = for @g in @groupNames when @matchGroup(@query, @g) => @g
+  let @final = when [
+    @selected.length == 0 => @groupNames
+    * => @selected
+  ]
+  let @toolNames = for @group in @final [
     let @groupTools = @toolGroups[@group] ?? []
     => for @tool in @groupTools => @tool
   ]

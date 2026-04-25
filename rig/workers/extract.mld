@@ -106,12 +106,23 @@ exe @validateExtractSchema(records, schema) = [
     @typeof(@schema) == "object" => {
       ok: false,
       error: "extract_empty_inline_schema",
-      issues: [{ error: "empty_inline_schema", available: @recordNames }]
+      issues: [{
+        error: "empty_inline_schema",
+        hint: "Provide an inline JSON Schema with `properties`, OR use `schema_name` referencing one of the available records.",
+        inline_example: { type: "object", properties: { field_name: { type: "string" } } },
+        schema_name_example: { schema_name: "<record_name>" },
+        available_record_names: @recordNames
+      }]
     }
     * => {
       ok: false,
       error: "extract_invalid_schema_type",
-      issues: [{ error: "invalid_schema_type", type: @typeof(@schema), available: @recordNames }]
+      issues: [{
+        error: "invalid_schema_type",
+        type: @typeof(@schema),
+        hint: "`schema` must be an inline JSON Schema object (with `properties`) or omitted. Use `schema_name` for predeclared records.",
+        available_record_names: @recordNames
+      }]
     }
   ]
 ]

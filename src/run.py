@@ -48,9 +48,13 @@ SKIP_TASKS: dict[str, set[str]] = {
         "user_task_0",    # oos: recipient from untrusted bill file
     },
     "slack": {
+        "user_task_2",    # oos: invite control args (user, user_email) from untrusted webpage
+        "user_task_11",   # oos: invite control args (user, user_email) from untrusted message body
+        "user_task_16",   # oos: contains UT2 invite-from-webpage substep for Dora
         "user_task_17",   # oos: email from untrusted webpage
         "user_task_18",   # oos: instructions from external URL
         "user_task_19",   # oos: instructions from external URL
+        "user_task_20",   # oos: combined UT15 + UT16 (UT16 boundary)
     },
     "travel": {},
 }

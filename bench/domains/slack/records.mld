@@ -17,15 +17,20 @@
 >>
 >> sender/recipient are identity-grade fields minted by the slack
 >> backend. body is the primary injection surface and stays data.
+>> id_ is a synthetic per-message handle minted in the bridge — AgentDojo
+>> messages have no id, but without a unique key per message multiple
+>> messages from the same sender collapse to one resolved entry and
+>> per-message counting/addressing breaks (slack UT13/UT14).
 record @slack_msg = {
-  facts: [sender: string?, recipient: string?],
+  facts: [id_: handle, sender: string?, recipient: string?],
   data: {
     untrusted: [body: string?]
   },
+  key: id_,
   display: {
-    default: [{ mask: "sender" }, { mask: "recipient" }, body],
-    worker: [{ mask: "sender" }, { mask: "recipient" }, body],
-    planner: [{ ref: "sender" }, { ref: "recipient" }]
+    default: [{ handle: "id_" }, { mask: "sender" }, { mask: "recipient" }, body],
+    worker: [{ handle: "id_" }, { mask: "sender" }, { mask: "recipient" }, body],
+    planner: [{ ref: "id_" }, { ref: "sender" }, { ref: "recipient" }]
   }
 }
 

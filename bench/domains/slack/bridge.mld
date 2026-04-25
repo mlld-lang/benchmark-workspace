@@ -18,10 +18,20 @@ exe @stringListItems(raw) = js {
 }
 
 exe @messageItems(raw) = js {
+  // AgentDojo's slack messages have no id. Synthesize a unique id_ per
+  // message so slack_msg can `key: id_` and the runtime mints a distinct
+  // handle per message. Without this, multiple messages from the same
+  // sender collapse to one resolved entry (sender becomes the implicit
+  // key) and counting / addressing per message breaks (slack UT13/14).
+  const callId = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+  let counter = 0;
+  const nextId = () => `${callId}_${counter++}`;
+
   if (Array.isArray(raw)) {
     return raw
       .filter((value) => value && typeof value === "object")
       .map((value) => ({
+        id_: nextId(),
         sender: value.sender == null ? null : String(value.sender),
         recipient: value.recipient == null ? null : String(value.recipient),
         body: value.body == null ? null : String(value.body),
@@ -40,6 +50,7 @@ exe @messageItems(raw) = js {
   const pushCurrent = () => {
     if (!current) return;
     items.push({
+      id_: nextId(),
       sender: current.sender ?? null,
       recipient: current.recipient ?? null,
       body: current.body ?? null,
