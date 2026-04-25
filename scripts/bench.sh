@@ -61,10 +61,17 @@ run_target() {
       # concurrency cap. Solo travel takes 32x64 with -p 20 — 64 GB has
       # the memory headroom even if MCP errors are still expected on
       # some tasks until c-63fe lands.
+      #
+      # MLLD_HEAP=8g: the local repro showed the mlld Node process
+      # spiking to ~5 GB heap during travel; without an explicit limit
+      # the default Node heap cap can OOM the process before the
+      # container itself OOMs. 8g gives headroom and avoids the
+      # spurious MCP-disconnect failure mode while we keep digging
+      # into the underlying travel memory growth.
       if "$WORKSPACE_PLANNED"; then
-        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_FANOUT" -f parallelism=5
+        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_FANOUT" -f parallelism=5  -f heap=8g
       else
-        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_SOLO"   -f parallelism=20
+        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_SOLO"   -f parallelism=20 -f heap=8g
       fi
       ;;
     *) echo "unknown target: $1" >&2
