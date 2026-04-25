@@ -14,7 +14,7 @@ on:
     inputs:
       mlld_ref:
         description: 'mlld runtime ref (branch, tag, or sha)'
-        default: 'main'
+        default: '2.1.0'
         required: false
       tag:
         description: 'Image tag suffix (e.g., main, sha-abc1234)'
@@ -42,7 +42,7 @@ jobs:
         with:
           repository: mlld-lang/mlld
           path: mlld
-          ref: ${{ inputs.mlld_ref || 'main' }}
+          ref: ${{ inputs.mlld_ref || '2.1.0' }}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -74,7 +74,7 @@ jobs:
             ${{ steps.tags.outputs.sha }}
           build-args: |
             IMAGE_SHA=${{ github.sha }}
-            MLLD_REF=${{ inputs.mlld_ref || 'main' }}
+            MLLD_REF=${{ inputs.mlld_ref || '2.1.0' }}
             CLEAN_REF=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
