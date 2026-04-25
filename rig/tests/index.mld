@@ -2961,6 +2961,67 @@ var @spD3Ok =
   `@spD3FieldOne.value` == "20"
 var @spD3Pretty = `items[0].name=@spD3FieldZero.value items[1].price=@spD3FieldOne.value`
 
+>> #7 worker-summary-no-planner-cache-leak — explicit contract that
+>> planner-visible state hides worker-only fields. After indexed
+>> rework, planner_cache must store ONLY this projection (never the
+>> worker view, which contains untrusted/raw content). @message_entry
+>> has facts: [id_, sender] and data: [body, subject]. role:planner
+>> sees [{ref:id_}, {ref:sender}]; role:worker also sees subject + body.
+var @spE1MsgState = @updateResolvedState(@emptyState(), "message_entry", [
+  { handle: "spe1-h1", key: "m1", identity_field: "id_", identity_value: "m1",
+    field_values: { id_: "m1", sender: "alice", subject: "Hi there", body: "secret-body-content" },
+    value: { id_: "m1", sender: "alice", subject: "Hi there", body: "secret-body-content" } }
+])
+var @spE1Planner = @plannerVisibleState(@builtFixtureAgent, @spE1MsgState)
+var @spE1Worker = @workerStateSummary(@builtFixtureAgent, @spE1MsgState)
+var @spE1PlMsgs = @spE1Planner.resolved.message_entry ?? []
+var @spE1WkMsgs = @spE1Worker.resolved.message_entry ?? []
+var @spE1PlMsg = @spE1PlMsgs[0]
+var @spE1WkMsg = @spE1WkMsgs[0]
+var @spE1PlannerKeys = @spE1PlMsg.mx.keys
+var @spE1WorkerKeys = @spE1WkMsg.mx.keys
+var @spE1Ok =
+  @spE1PlMsgs.length == 1 &&
+  @spE1WkMsgs.length == 1 &&
+  @spE1PlannerKeys.includes("id_") &&
+  @spE1PlannerKeys.includes("sender") &&
+  !@spE1PlannerKeys.includes("body") &&
+  !@spE1PlannerKeys.includes("subject") &&
+  @spE1WorkerKeys.includes("body") &&
+  @spE1WorkerKeys.includes("subject")
+var @spE1Pretty = `planner_keys=@spE1PlannerKeys worker_keys=@spE1WorkerKeys`
+
+>> #9 legacy-array-bucket-compatible — current state.resolved buckets
+>> are plain arrays. After indexed rework lands with adapter helpers,
+>> the SAME array-shaped input must still flow through @resolvedEntries
+>> + @lookupResolvedEntry + family expansion. This test runs against
+>> the current shape today; once indexed bucket lands, it serves as
+>> the regression guard for the legacy adapter path.
+var @spE2LegacyBucket = [
+  { handle: "spe2-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com" }, value: { name: "alice", email: "a@x.com" } },
+  { handle: "spe2-h2", key: "bob",   identity_field: "name", identity_value: "bob",   field_values: { name: "bob",   email: "b@x.com" }, value: { name: "bob",   email: "b@x.com" } }
+]
+var @spE2State = {
+  resolved: { contact: @spE2LegacyBucket },
+  extracted: {},
+  derived: {},
+  extract_sources: {}
+}
+var @spE2Whole = @resolveRefValue(@spE2State, { source: "resolved", record: "contact", handle: "spe2-h1" })
+var @spE2Field = @resolveRefValue(@spE2State, { source: "resolved", record: "contact", handle: "spe2-h2", field: "email" })
+var @spE2Family = @resolveRefValue(@spE2State, { source: "resolved", record: "contact" })
+var @spE2FamilyEmails = for @v in (@spE2Family.value ?? []) => `@v.email`
+var @spE2Ok =
+  @spE2Whole.ok == true &&
+  `@spE2Whole.value.name` == "alice" &&
+  @spE2Field.ok == true &&
+  `@spE2Field.value` == "b@x.com" &&
+  @spE2Family.ok == true &&
+  @spE2FamilyEmails.length == 2 &&
+  @spE2FamilyEmails.includes("a@x.com") &&
+  @spE2FamilyEmails.includes("b@x.com")
+var @spE2Pretty = `whole=@spE2Whole.value.name field=@spE2Field.value family_emails=@spE2FamilyEmails`
+
 exe @allChecks() = [
   => [
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
@@ -3078,7 +3139,9 @@ exe @allChecks() = [
   @check("state-projection/C2-planner-visible-state-invalidates-on-update", @spC2Ok, @spC2Pretty),
   @check("state-projection/D1-family-expansion-up-to-date-after-multiple-updates", @spD1Ok, @spD1Pretty),
   @check("state-projection/D2-whole-record-ref-returns-full-value", @spD2Ok, @spD2Pretty),
-  @check("state-projection/D3-field-path-with-array-index", @spD3Ok, @spD3Pretty)
+  @check("state-projection/D3-field-path-with-array-index", @spD3Ok, @spD3Pretty),
+  @check("state-projection/E1-worker-summary-no-planner-cache-leak", @spE1Ok, @spE1Pretty),
+  @check("state-projection/E2-legacy-array-bucket-compatible", @spE2Ok, @spE2Pretty)
   ]
 ]
 
