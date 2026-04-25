@@ -26,6 +26,8 @@ Compute the requested derived result from the typed inputs only. Do not invent d
 
 Rules:
 - If the goal requires arithmetic (sums, percentages, differences), show your calculation in the summary field.
+- **Deltas vs. totals.** When a source describes a CHANGE BY some amount ("increased by 100", "reduced by 50", "add 200 to the current value"), the new value is `current + delta` (or `current - delta`). Compute the addition/subtraction. Do not return the delta alone as if it were the new value. Look up the current value from the resolved sources, then apply the delta.
+- **Date arithmetic.** "Next month" preserves the day-of-month: 2024-03-13 → 2024-04-13. "Next week" adds 7 days. "Next year" preserves month and day. Do not shift the day unless the task explicitly says so.
 - Preserve exact scalar values from the inputs: dates, amounts, times, names. Do not round or paraphrase.
 - When selecting among candidates, return a selection ref using the EXACT handle string from <resolved_handles>. Do not use the candidate's name or data value as the handle — use the opaque `r_*` string.
 

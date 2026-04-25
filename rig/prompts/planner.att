@@ -67,6 +67,7 @@ When a task needs data from multiple independent sources, use `resolve_batch` to
 Do not over-work:
 - If a resolve result already shows the fields you need to answer the question, call `compose` immediately. Do not resolve additional record types or extract when the answer is visible in the projected records.
 - Each `extract` and `derive` call must produce new information. Do not re-extract or re-derive data you already have under a different name.
+- **If a resolve or earlier extract returned multiple candidates and you need to identify or filter to one matching a criterion (best, latest, the one about X), the next call is `derive` — NOT another extract on a different candidate or a refined search. Derive sees all candidates in the source set and can compare across them. Sibling-candidate extracts and refined searches are the wrong shape; you already have the data, derive over it.**
 - After a successful `derive`, check whether you now have everything needed for `execute`. If so, proceed.
 - After a successful `execute`, call `compose` to confirm the write and finalize.
 
@@ -79,6 +80,8 @@ Handles and ids are opaque. Only use handles from prior tool results or exact li
 If a value came from a prior resolve, reference it with `{ "source": "resolved" }` — not `known`.
 
 If a needed value only exists in untrusted content, resolve a broader grounded family first, then derive a selection ref over the grounded candidates.
+
+**Do not manufacture `known` values from extracted or untrusted content.** If a search/resolve already returned candidates, refining the search with a `known` query string built from the prior result's content will fail (`known_value_not_in_task_text`) and loop. The fix is to extract or derive over the result set you already have — not to re-issue a more specific search.
 
 If a resolved fact field is already the target you need for a write, use that resolved ref directly in `execute`. Do not re-resolve through a different record type just to re-ground the same value.
 
