@@ -332,6 +332,116 @@ Typical fixes:
 - Compose phase should always wrap output as `=> { content: @result.final.text }`
 - Ensure no `show` / `output` directives in the agent file produce stdout that competes with the JSON return
 
+## Remote runs (Namespace)
+
+Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this over local for any sweep larger than 3-5 tasks: local CPU pegs out around 10 parallel tasks; the remote 32x64 runners handle 40 parallel without breaking a sweat, and you can fan out to 5 runners (one per suite group) so the full bench surface finishes in ~10-15 min wall time.
+
+### When to use remote vs local
+
+| Situation | Where |
+|---|---|
+| Single-task debugging with `--debug` and trace | Local |
+| 1-3 task verification of a fix | Local |
+| Full suite sweep | **Remote** |
+| All 4 suites (e.g., before/after a runtime fix) | **Remote**, fan-out via `bench-all.sh` |
+| Iterating on a prompt change after spike-driven fix | Remote single-suite at first, fan-out for the final measurement |
+| Anything reading a live opencode session as it runs | Local (remote opencode DB isn't reachable until the run finishes and you fetch artifacts) |
+
+### Standard sweep flow
+
+```bash
+# 1. Push your changes to main (image rebuilds automatically on bench/, rig/, src/, agents/ paths)
+git push
+
+# 2. Fan out the full bench surface — 5 separate Namespace 32x64 runners, all in parallel
+scripts/bench-all.sh
+
+# 3. Watch the dispatched runs
+gh run list --workflow=bench-run.yml --limit 8
+
+# 4. Once a run completes, fetch its artifacts to runs/<id>/
+uv run --project bench python3 src/fetch_run.py <run-id>
+
+# 5. Inspect the result row + transcripts
+jq -c '. | {task: .task_id, util: .utility, err: ((.execute_error // "") | .[0:200])}' \
+  runs/<run-id>/results/bench/results/*/workspace/defended.jsonl
+
+uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions
+uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode parts --session <session-id>
+```
+
+`scripts/bench-all.sh` targets:
+
+| Target | Tasks | Notes |
+|---|---|---|
+| `workspace-a` | UT0..18 minus oos (UT13, UT19) — 18 tasks | First half |
+| `workspace-b` | UT20..39 minus oos (UT25, UT31) — 18 tasks | Second half |
+| `workspace` | both halves above | Two separate runs |
+| `banking` | full suite, oos auto-skipped | 15 active |
+| `slack` | full suite, oos auto-skipped | 14 active |
+| `travel` | full suite | 20 |
+| (default, no args) | all 5 above | The full sweep |
+
+You can also pass a subset: `scripts/bench-all.sh banking slack travel`.
+
+### Subset and one-off runs
+
+For specific tasks (debug repros, single-task validation), trigger `bench-run.yml` directly:
+
+```bash
+gh workflow run bench-run.yml -f suite=workspace -f tasks=user_task_8
+gh workflow run bench-run.yml -f suite=workspace -f tasks="user_task_8 user_task_32 user_task_37"
+gh workflow run bench-run.yml -f suite=banking -f tasks=user_task_2 -f trace=true
+```
+
+Available `bench-run.yml` inputs: `suite`, `tasks` (space-separated), `planner`, `worker`, `harness`, `parallelism` (default 40), `stagger`, `defense`, `trace`, `image_tag`, `shape`.
+
+### Auto-rebuild gate
+
+bench-run.yml inspects the pulled image's `mlld.sha` Docker label and compares it to the current HEAD of the labeled mlld branch (default `2.1.0`) via the GitHub API:
+
+- Match → run starts immediately.
+- Mismatch → workflow joins any in-flight `bench-image.yml` run (or dispatches one), waits for it to finish, repulls, then proceeds.
+
+Adds ~3-4 min to the first run after a mlld push. Zero overhead on a fresh image. So the full-sweep flow after pushing both clean and mlld is just `scripts/bench-all.sh` — the gate handles staleness.
+
+### Reading remote results
+
+Fetched artifacts unpack to `runs/<run-id>/`:
+
+```
+runs/<run-id>/
+  manifest.json        # suite, defense, planner, worker, elapsed, exit_code, image_sha, mlld_ref
+  console.log          # full stdout from src/run.py inside the container
+  results/             # bench/results/<model>/<suite>/defended.jsonl etc.
+  exec_logs/           # bench/.llm — per-task execution log files
+  opencode/            # storage/, log/, opencode.db — full opencode session data
+```
+
+The `opencode_debug.py --home <path>` flag points at the per-run opencode dir, so the existing transcript-debugging workflow works against fetched runs:
+
+```bash
+uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions
+uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode parts --session <session-id> --limit 50
+```
+
+For tracing across a fan-out sweep:
+
+```bash
+# Cross-suite pass/fail summary from manifests + jsonl
+for d in runs/24920*/; do
+  jq -r '"\(.suite)\t\(.elapsed_sec)s\texit=\(.exit_code)"' "$d/manifest.json"
+  jq -c 'select(.utility == false) | .task_id' "$d"/results/bench/results/*/*/defended.jsonl 2>/dev/null
+done
+```
+
+### Recommended discipline
+
+- **Push to main, then sweep.** Don't run partial fixes locally as a substitute for a clean main-branch sweep — the artifacts are the canonical record of "this commit produced these numbers."
+- **Run multiples in parallel.** Five concurrent Namespace runners cost the same wall-clock time as one. Use the fan-out for any "did this change affect other suites?" question.
+- **Save run IDs in SCIENCE.md** when documenting a result — `runs/<run-id>/` becomes the citation. Future debugging can re-fetch and inspect transcripts.
+- **Don't sweep when a spike will do.** The Namespace cost is the inference provider's bill, not zero. Spike-first discipline still applies (see "Spike First. Sweep Last." above).
+
 ## Commands You Should Use
 
 ### Validate the framework + benchmark

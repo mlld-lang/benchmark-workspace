@@ -130,12 +130,23 @@ tk ready          # what's actionable
 tk ls             # all open
 tk show <id>      # details
 
-# Remote runs (Namespace-hosted GH Actions runner, full-parallel)
-uv run --project bench python3 src/remote.py -s workspace
-uv run --project bench python3 src/remote.py -s workspace -t user_task_8 user_task_32
+# Remote sweep on Namespace (preferred for full suites — see DEBUG.md "Remote runs")
+scripts/bench-all.sh                                              # all 5 groups in parallel (~10-15 min)
+scripts/bench-all.sh workspace-a workspace-b                      # workspace only, both halves
+scripts/bench-all.sh banking slack                                # specific suites
+gh workflow run bench-run.yml -f suite=workspace -f tasks=user_task_8   # one task
+
+# Watch + fetch
+gh run list --workflow=bench-run.yml --limit 8
 uv run --project bench python3 src/fetch_run.py <run-id>
 uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions
 ```
+
+## Recommended workflow for full suites
+
+Use remote runs. Local CPU is the bottleneck for full-parallel sweeps; Namespace 32x64 runners aren't. The image bakes mlld + clean + agentdojo from main; bench-run.yml has a freshness gate that auto-rebuilds the image if `mlld-lang/mlld:2.1.0` HEAD has moved since the last image build.
+
+Standard flow: push your changes to `main`, run `scripts/bench-all.sh`, fetch each run with `src/fetch_run.py`, browse opencode transcripts via `--home runs/<id>/opencode`. See DEBUG.md "Remote runs (Namespace)" for the full workflow including transcript correlation, debugging failures from artifacts, and the auto-rebuild gate.
 
 ## Rules learned the hard way
 
