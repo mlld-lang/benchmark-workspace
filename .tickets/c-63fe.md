@@ -188,3 +188,14 @@ Rig-specific payoff candidates:
 1. Replace `@mergeResolvedEntries`' per-incoming-entry filter+concat loop with a handle-indexed merge path. Current shape is O(existing * incoming) and rebuilds the accumulated array repeatedly.
 2. Cache planner-visible projections per `(record_type, handle, role)` or per resolved bucket version. `@plannerVisibleState` currently rebuilds all visible resolved summaries every iteration.
 3. Keep full proof-bearing resolved state durable, but pass planner sessions compact handles/projections rather than repeatedly serializing/reprojecting the full growing state graph.
+
+**2026-04-25T20:34:00Z** indexed projection-cache prototype results:
+
+Added `/Users/adam/mlld/mlld/tmp/rig-memory-repro/indexed-prototype.mld`. This is not production rig code; it hardcodes the synthetic display projection and uses JS to model a possible runtime shape: merge resolved entries by handle once per batch, cache planner-visible projections with the resolved bucket, and return cached visible arrays.
+
+Comparison against `projection-repro.mld`:
+- 40-row batches / 160 entries: baseline 25.2s and ~1.34GB RSS; indexed prototype 2.3s and ~0.84GB RSS.
+- 80-row batches / 320 entries: baseline 219.1s and 2.55GB RSS; indexed prototype 4.2s and ~0.88GB RSS.
+- 250-row batches / 1000 entries: baseline was aborted during second batch after already reaching ~1.7GB RSS; indexed prototype completed in 12.3s and ~1.04GB RSS.
+
+This gives a clear payoff signal for a real rig change, provided invariant tests prove the handle-indexed/cache shape preserves factsource/proof behavior for resolved refs, whole-record refs, family expansion, selection refs, and execute-policy compilation.
