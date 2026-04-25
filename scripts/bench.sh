@@ -1,19 +1,34 @@
 #!/usr/bin/env bash
-# Dispatch one or more bench-run.yml workflow_dispatch invocations on Namespace.
+# Dispatch one or more bench-run.yml workflow_dispatch invocations.
 #
 # Usage:
-#   scripts/bench.sh                          # all 4 suites in parallel
+#   scripts/bench.sh                          # all 4 suites in parallel (Namespace)
 #   scripts/bench.sh workspace                # just workspace
 #   scripts/bench.sh banking slack            # subset
+#   PUZL=1 scripts/bench.sh                   # use puzl.cloud runners (trial)
 #
-# Each invocation triggers a separate Namespace runner. All 4 fan out at
-# once on Team plan (workspace 32x64 + others 8x16 = 56 vCPU, fits under
-# the 64 vCPU cap). Wall time ~10-15 min for the full bench surface.
+# Each invocation triggers a separate runner. By default, dispatches to
+# bench-run.yml (Namespace runners with per-shape sizing). Set PUZL=1 to
+# dispatch to bench-run-puzl.yml (puzl.cloud runners with per-runner
+# sizing in their console — no shape arg passed).
 #
 # Skip lists (oos/non-gating) are honored by src/run.py's SKIP_TASKS
 # when no -t is passed.
 
 set -euo pipefail
+
+# Workflow + sizing knobs differ between providers. Namespace needs an
+# explicit -f shape per dispatch. puzl.cloud sizes runners in its
+# console and ignores the shape arg, so we don't pass it. puzl-Business
+# allows up to 48 vCPU / 96 GB per job which fits everything — no
+# throttling, no fan-out math required.
+if [ -n "${PUZL:-}" ]; then
+  WORKFLOW=bench-run-puzl.yml
+  USE_SHAPES=false
+else
+  WORKFLOW=bench-run.yml
+  USE_SHAPES=true
+fi
 
 # Per-target shape and parallelism. Each task carries the AgentDojo
 # TaskEnvironment + an mlld + MCP process in RAM (~1.5-2 GB at peak).
@@ -38,7 +53,7 @@ SHAPE_LIGHT=nscloud-ubuntu-22.04-amd64-8x16
 dispatch() {
   local label=$1; shift
   printf '→ %-14s ' "$label"
-  if gh workflow run bench-run.yml "$@" >/dev/null 2>&1; then
+  if gh workflow run "$WORKFLOW" "$@" >/dev/null 2>&1; then
     printf 'dispatched\n'
   else
     printf 'FAILED\n' >&2
@@ -46,21 +61,37 @@ dispatch() {
   fi
 }
 
+# Build the shape arg list — empty when sizing is handled by the runner
+# provider (puzl).
+shape_arg() {
+  $USE_SHAPES && printf -- '-f shape=%s' "$1" || true
+}
+
 run_target() {
   case "$1" in
-    workspace|w) dispatch workspace -f suite=workspace -f shape="$SHAPE_WORKSPACE" ;;
-    banking|b)   dispatch banking   -f suite=banking   -f shape="$SHAPE_LIGHT" ;;
-    slack|s)     dispatch slack     -f suite=slack     -f shape="$SHAPE_LIGHT" ;;
+    workspace|w)
+      # shellcheck disable=SC2046
+      dispatch workspace -f suite=workspace $(shape_arg "$SHAPE_WORKSPACE")
+      ;;
+    banking|b)
+      # shellcheck disable=SC2046
+      dispatch banking -f suite=banking $(shape_arg "$SHAPE_LIGHT")
+      ;;
+    slack|s)
+      # shellcheck disable=SC2046
+      dispatch slack -f suite=slack $(shape_arg "$SHAPE_LIGHT")
+      ;;
     travel|t)
-      # c-63fe: MCP server destabilizes under travel's tool load. In
-      # fan-out mode we throttle to -p 5 because the smaller 16x32 shape
-      # also bumps into the 64 vCPU cap. Solo travel takes 32x64 with
-      # full -p 20 — 64 GB has the memory headroom even if MCP errors
-      # are still expected on some tasks until c-63fe lands.
-      if "$WORKSPACE_PLANNED"; then
+      # c-63fe: MCP server destabilizes under travel's tool load. On
+      # Namespace, fan-out mode throttles to -p 5 (16x32 shape) because
+      # of the 64 vCPU concurrency cap; solo mode runs -p 20 on 32x64.
+      # On puzl, no throttling — runners are 48x96, no aggregate cap.
+      if $USE_SHAPES && "$WORKSPACE_PLANNED"; then
         dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_FANOUT" -f parallelism=5
+      elif $USE_SHAPES; then
+        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_SOLO" -f parallelism=20
       else
-        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_SOLO"   -f parallelism=20
+        dispatch travel -f suite=travel -f parallelism=20
       fi
       ;;
     *) echo "unknown target: $1" >&2
@@ -86,6 +117,6 @@ for arg in "$@"; do
 done
 
 echo
-echo "Watch:    gh run list --workflow=bench-run.yml --limit 8"
+echo "Watch:    gh run list --workflow=$WORKFLOW --limit 8"
 echo "Fetch:    uv run --project bench python3 src/fetch_run.py <run-id>"
 echo "Browse:   uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions"
