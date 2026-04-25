@@ -35,11 +35,19 @@ RUN curl -fsSL https://get.namespace.so/install.sh | bash || \
     echo "WARN: nsc install failed; container can still run without it"
 
 ARG MLLD_REF=main
+ARG MLLD_SHA=unknown
 ARG CLEAN_REF=main
 ARG IMAGE_SHA=unknown
 ENV IMAGE_SHA=${IMAGE_SHA}
 ENV MLLD_REF=${MLLD_REF}
+ENV MLLD_SHA=${MLLD_SHA}
 ENV CLEAN_REF=${CLEAN_REF}
+
+# Labels are inspectable via `docker inspect` — bench-run.yml uses these
+# to detect if the image's baked mlld is stale relative to the branch HEAD.
+LABEL mlld.ref="${MLLD_REF}"
+LABEL mlld.sha="${MLLD_SHA}"
+LABEL clean.sha="${CLEAN_REF}"
 
 # Build mlld runtime
 COPY mlld /opt/mlld

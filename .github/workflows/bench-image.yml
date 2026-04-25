@@ -69,6 +69,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Capture mlld SHA
+        id: mlld_sha
+        run: echo "sha=$(git -C mlld rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Resolve tags
         id: tags
         run: |
@@ -90,6 +94,7 @@ jobs:
           build-args: |
             IMAGE_SHA=${{ github.sha }}
             MLLD_REF=${{ inputs.mlld_ref || '2.1.0' }}
+            MLLD_SHA=${{ steps.mlld_sha.outputs.sha }}
             CLEAN_REF=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
