@@ -1,0 +1,118 @@
+name: bench-run
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Suite'
+        required: true
+        type: choice
+        options: [workspace, banking, slack, travel]
+      tasks:
+        description: 'Space-separated task ids (empty = full suite, oos skipped)'
+        required: false
+        default: ''
+      planner:
+        description: 'Planner model (default: togetherai/zai-org/GLM-5.1)'
+        required: false
+        default: ''
+      worker:
+        description: 'Worker model (default: cerebras/gpt-oss-120b)'
+        required: false
+        default: ''
+      harness:
+        description: 'LLM harness (default: opencode)'
+        required: false
+        type: choice
+        options: ['', opencode, claude]
+        default: ''
+      parallelism:
+        description: 'Max parallel tasks'
+        required: false
+        default: '40'
+      stagger:
+        description: 'Seconds between launches'
+        required: false
+        default: '2'
+      defense:
+        description: 'Defense level'
+        required: false
+        type: choice
+        options: [defended, undefended]
+        default: defended
+      trace:
+        description: 'Enable MLLD_TRACE=effects'
+        required: false
+        type: boolean
+        default: false
+      image_tag:
+        description: 'Image tag (e.g., main, sha-abc1234)'
+        required: false
+        default: main
+      shape:
+        description: 'Namespace runner shape'
+        required: false
+        type: choice
+        options:
+          - nscloud-ubuntu-22.04-amd64-32x64
+          - nscloud-ubuntu-22.04-amd64-16x32
+          - nscloud-ubuntu-22.04-amd64-8x16
+        default: nscloud-ubuntu-22.04-amd64-32x64
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  IMAGE: ghcr.io/mlld-lang/benchmark-workspace
+
+jobs:
+  bench:
+    runs-on: ${{ inputs.shape }}
+    timeout-minutes: 60
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull ${{ env.IMAGE }}:${{ inputs.image_tag }}
+
+      - name: Prepare artifacts dir
+        run: mkdir -p ${{ github.workspace }}/artifacts
+
+      - name: Run bench
+        env:
+          IMAGE_REF: ${{ env.IMAGE }}:${{ inputs.image_tag }}
+          RUN_ID: ${{ github.run_id }}
+          SUITE: ${{ inputs.suite }}
+          TASKS: ${{ inputs.tasks }}
+          PLANNER: ${{ inputs.planner }}
+          WORKER: ${{ inputs.worker }}
+          HARNESS: ${{ inputs.harness }}
+          PARALLELISM: ${{ inputs.parallelism }}
+          STAGGER: ${{ inputs.stagger }}
+          DEFENSE: ${{ inputs.defense }}
+          MLLD_TRACE_VAL: ${{ inputs.trace && 'effects' || '' }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/artifacts:/artifacts" \
+            -e RUN_ID -e SUITE -e TASKS -e PLANNER -e WORKER -e HARNESS \
+            -e PARALLELISM -e STAGGER -e DEFENSE \
+            -e MLLD_TRACE="$MLLD_TRACE_VAL" \
+            -e CEREBRAS_API_KEY -e TOGETHER_API_KEY \
+            "$IMAGE_REF"
+
+      - name: Upload artifacts
+        if: always()
+        uses: namespace-actions/upload-artifact@v0
+        with:
+          name: bench-${{ github.run_id }}
+          path: artifacts/
+          retention-days: 30
+          if-no-files-found: warn

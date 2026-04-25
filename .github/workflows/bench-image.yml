@@ -1,0 +1,77 @@
+name: bench-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bench/**'
+      - 'rig/**'
+      - 'src/**'
+      - 'agents/**'
+      - 'bench/docker/**'
+      - '.github/workflows/bench-image.yml'
+  workflow_dispatch:
+    inputs:
+      mlld_ref:
+        description: 'mlld runtime ref (branch, tag, or sha)'
+        default: 'main'
+        required: false
+      tag:
+        description: 'Image tag suffix (e.g., main, sha-abc1234)'
+        default: 'main'
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/mlld-lang/benchmark-workspace
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout bench (clean)
+        uses: actions/checkout@v4
+        with:
+          path: clean
+
+      - name: Checkout mlld runtime
+        uses: actions/checkout@v4
+        with:
+          repository: mlld-lang/mlld
+          path: mlld
+          ref: ${{ inputs.mlld_ref || 'main' }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve tags
+        id: tags
+        run: |
+          PRIMARY="${{ inputs.tag || 'main' }}"
+          {
+            echo "primary=${{ env.IMAGE }}:${PRIMARY}"
+            echo "sha=${{ env.IMAGE }}:sha-${{ github.sha }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: clean/bench/docker/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.primary }}
+            ${{ steps.tags.outputs.sha }}
+          build-args: |
+            IMAGE_SHA=${{ github.sha }}
+            MLLD_REF=${{ inputs.mlld_ref || 'main' }}
+            CLEAN_REF=${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max

@@ -17,5 +17,9 @@ __pycache__/
 # Scratch / investigation
 tmp/
 
+# Remote run artifacts (fetched via src/fetch_run.py)
+runs/*
+!runs/.gitignore
+
 # Claude auto-memory (lives in ~/.claude/projects/...)
 memory/

@@ -1,0 +1,13 @@
+**/.git
+**/node_modules
+**/__pycache__
+**/.venv
+**/dist
+**/build
+clean/bench/results
+clean/bench/.llm
+clean/tmp
+clean/runs
+clean/.mlld-sdk
+mlld/node_modules
+mlld/dist
