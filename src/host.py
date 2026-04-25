@@ -431,7 +431,21 @@ class MlldAgent:
         self._injection_task_id = injection_task_id
         self._run_log_path = Path(run_log_path).expanduser() if run_log_path else None
         heap = os.environ.get("MLLD_HEAP", None)
-        self._client = Client(timeout=self._timeout, working_dir=self._working_dir, heap=heap)
+        heap_snapshot_near_limit = os.environ.get("MLLD_HEAP_SNAPSHOT_NEAR_LIMIT")
+        heap_snapshot_count = None
+        if heap_snapshot_near_limit:
+            try:
+                heap_snapshot_count = int(heap_snapshot_near_limit)
+            except ValueError as error:
+                raise ValueError("MLLD_HEAP_SNAPSHOT_NEAR_LIMIT must be a positive integer") from error
+            if heap_snapshot_count <= 0:
+                raise ValueError("MLLD_HEAP_SNAPSHOT_NEAR_LIMIT must be a positive integer")
+        self._client = Client(
+            timeout=self._timeout,
+            working_dir=self._working_dir,
+            heap=heap,
+            heap_snapshot_near_limit=heap_snapshot_count,
+        )
 
     def run(
         self,

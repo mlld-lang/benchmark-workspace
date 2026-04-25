@@ -131,12 +131,43 @@ exe @jsonSummary(inputValue) = js {
   }
 }
 
+exe @llmLogText(inputValue) = [
+  let @text = @stringValue(@inputValue)
+  => when [
+    @text == null => null
+    !@text.isDefined() => null
+    @text.length > 20000 => `@text.slice(0, 20000)
+...[truncated @text.length chars]`
+    * => @text
+  ]
+]
+
+exe @llmParsedSummary(parsed) = when [
+  @parsed == null => null
+  !@parsed.isDefined() => null
+  @typeof(@parsed) == "string" => @llmLogText(@parsed)
+  @parsed.text.isDefined() => @llmLogText(@parsed.text)
+  * => {
+    status: @parsed.status ?? null,
+    schema_name: @parsed.schema_name ?? null,
+    name: @parsed.name ?? null,
+    provenance: @parsed.provenance ?? null,
+    summary: @parsed.summary ?? null,
+    count: @parsed.count ?? null,
+    record_type: @parsed.record_type ?? null
+  }
+]
+
 exe @llmCallEntry(phase, prompt, raw, parsed, sessionId, extra) = [
+  >> LLM debug entries must stay bounded. Structured raw values can carry
+  >> `.mx.sessions`, and parsed worker payloads can carry full tool results.
+  >> Log text/previews only; execution logs and opencode sessions remain the
+  >> source of truth for deep transcript inspection.
   => {
     phase: @phase,
-    prompt: @prompt,
-    raw: @sanitizeJson(@raw),
-    parsed: @sanitizeJson(@parsed),
+    prompt: @llmLogText(@prompt),
+    raw: @llmLogText(@raw),
+    parsed: @llmParsedSummary(@parsed),
     call_kind: @extra.call_kind ?? null,
     session_id: @normalizeSessionId(@sessionId),
     outer_planner_session_id: @normalizeSessionId(@extra.outer_planner_session_id),

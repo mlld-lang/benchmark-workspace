@@ -51,7 +51,7 @@ import {
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg } from "../intent.mld"
-import { @callTool, @toolCallError, @emptyState, @recordTypeName } from "../runtime.mld"
+import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
@@ -530,6 +530,28 @@ var @sessionFinalStateOk =
   @sessionFinalState.isDefined() &&
   @sessionFinalState.runtime.tool_calls == 2 &&
   @sessionFinalState.state.resolved.contact.length == 2
+
+exe llm @testPlannerTextResult(prompt, config) = [
+  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.args)
+  => "planner final text"
+]
+var @plannerTextResult = @testPlannerTextResult("test", {
+  args: { tool: "get_today", args: {}, purpose: "ground one synthetic day context" }
+}) with {
+  session: @planner,
+  seed: { agent: @builtFixtureAgent, query: "What day is it?", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+var @llmCallEntrySessionLog = @llmCallEntry("planner", "prompt", @plannerTextResult, null, "ses_debug", {
+  call_kind: "outer_planner",
+  outer_planner_session_id: "ses_debug"
+})
+var @llmCallEntrySessionLogPretty = @llmCallEntrySessionLog | @pretty
+var @llmCallEntryOmitsSessionSnapshotOk =
+  @field(@llmCallEntrySessionLog, "raw") == "planner final text" &&
+  @field(@llmCallEntrySessionLog, "session_id") == "ses_debug" &&
+  !@llmCallEntrySessionLogPretty.includes("sessions")
+var @llmCallEntryOmitsSessionSnapshotDetail =
+  `raw=@field(@llmCallEntrySessionLog, "raw") log=@llmCallEntrySessionLogPretty`
 
 >> c-ut8r / m-5178: resolved values must retain factsources after session boundary.
 >> The session stores state via @planner.set(); reading it back via @planner.state
@@ -2799,6 +2821,7 @@ exe @allChecks() = [
   @check("planner-tool-collection-dispatch-does-not-recurse", @plannerResolveDispatchOk, @plannerResolveDispatchPretty),
   @check("planner-session-state-persists-across-direct-planner-tool-calls", @plannerResolveContactsOk, @plannerResolveContactsPretty),
   @check("session-final-state-accessible-via-mx-sessions", @sessionFinalStateOk, `runtime_calls=@sessionFinalState.runtime.tool_calls resolved=@sessionFinalState.state.resolved.contact.length`),
+  @check("llm-call-log-omits-session-snapshot", @llmCallEntryOmitsSessionSnapshotOk, @llmCallEntryOmitsSessionSnapshotDetail),
   @check("session-resolved-factsources-survive-boundary", @sessionFsOk, @sessionFsPretty),
   @check("planner-session-resolved-handle-remains-readable-after-direct-resolve", @plannerResolvedContactEmailOk, @plannerResolvedContactEmailPretty),
   @check("planner-source-backed-extract-works-on-direct-planner-tool-path", @plannerExtractDispatchOk, @plannerExtractDispatchPretty),

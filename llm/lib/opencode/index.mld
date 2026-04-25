@@ -313,6 +313,7 @@ exe @opencodeInlineConfig(configPath, allowedTools, requestedAgent, hasToolSurfa
 >> bug for interpolated values (see ticket m-8694).
 exe @runOpencodeSh(prompt, dir, model, agent, variant, bypass, inlineConfig, doResume, resumeId, dataHome, stateHome, pure, escapePrompt) = sh {
   set -e
+  set -o pipefail
 
   if [ -n "$dataHome" ]; then
     export XDG_DATA_HOME="$dataHome"
@@ -366,7 +367,78 @@ exe @runOpencodeSh(prompt, dir, model, agent, variant, bypass, inlineConfig, doR
     promptArg=$(printf '%s' "$prompt" | perl -0pe 's/\r//g; s/\n+/ /g')
   fi
 
-  opencode run "${pureFlag[@]}" --format json "${dirFlag[@]}" "${modelFlag[@]}" "${agentFlag[@]}" "${variantFlag[@]}" "${bypassFlag[@]}" "${sessionFlag[@]}" "$promptArg"
+  opencode run "${pureFlag[@]}" --format json "${dirFlag[@]}" "${modelFlag[@]}" "${agentFlag[@]}" "${variantFlag[@]}" "${bypassFlag[@]}" "${sessionFlag[@]}" "$promptArg" | node -e '
+const readline = require("readline");
+const MAX_TOOL_OUTPUT_CHARS = 2000;
+const MAX_REASONING_CHARS = 4000;
+
+function summarizeValue(value, maxChars, label) {
+  if (value == null) return value;
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (text.length <= maxChars) return value;
+  return text.slice(0, maxChars) + "\n...[truncated " + label + " " + text.length + " chars]";
+}
+
+function compactToolUse(event) {
+  const part = event && event.part && typeof event.part === "object" ? event.part : {};
+  const state = part.state && typeof part.state === "object" ? part.state : {};
+  return {
+    type: "tool_use",
+    sessionID: event.sessionID,
+    part: {
+      tool: part.tool,
+      callID: part.callID,
+      state: {
+        status: state.status,
+        input: summarizeValue(state.input, MAX_TOOL_OUTPUT_CHARS, "tool input"),
+        output: summarizeValue(state.output, MAX_TOOL_OUTPUT_CHARS, "tool output")
+      }
+    }
+  };
+}
+
+function compactEvent(event) {
+  if (!event || typeof event !== "object") return event;
+  if (event.type === "tool_use") return compactToolUse(event);
+  if (event.type === "text") {
+    return { type: "text", sessionID: event.sessionID, part: { text: event.part && event.part.text } };
+  }
+  if (event.type === "reasoning") {
+    return {
+      type: "reasoning",
+      sessionID: event.sessionID,
+      part: { text: summarizeValue(event.part && event.part.text, MAX_REASONING_CHARS, "reasoning") }
+    };
+  }
+  if (event.type === "step_start") {
+    return { type: "step_start", sessionID: event.sessionID };
+  }
+  if (event.type === "step_finish") {
+    const part = event.part && typeof event.part === "object" ? event.part : {};
+    return {
+      type: "step_finish",
+      sessionID: event.sessionID,
+      part: {
+        tokens: part.tokens,
+        cost: part.cost,
+        reason: part.reason
+      }
+    };
+  }
+  return { type: event.type, sessionID: event.sessionID };
+}
+
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+  if (!line.trim()) return;
+  try {
+    const event = JSON.parse(line);
+    console.log(JSON.stringify(compactEvent(event)));
+  } catch (_error) {
+    console.log(line);
+  }
+});
+'
 }
 
 >> ── Core invocation ──
