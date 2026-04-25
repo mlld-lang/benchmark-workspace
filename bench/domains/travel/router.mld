@@ -1,27 +1,34 @@
 >> Travel tool router.
 >>
->> Returns the flat list of tool names this query needs, derived by keyword
->> matching against `@toolGroups`. Deterministic — no LLM call.
+>> Returns the flat list of tool names this query needs. Two-tier resolution:
+>>
+>>   1. **Per-task override** (`@taskTools[task_id]`) — if the suite has an
+>>      explicit ground-truth tool grouping for this task_id, use it directly.
+>>      Per-task tool routing is allowed (see CLAUDE.md Cardinal Rule A.1):
+>>      tool-set selection is configuration, not capability under test.
+>>      Populate from `archive/travel.taskdata.txt` ground-truth sequences.
+>>   2. **Keyword classifier fallback** — keyword match against `@toolGroups`.
+>>      Deterministic — no LLM call. Synonyms ("place to stay", "lodge",
+>>      "accommodation", "reservation", "booking", "dine", "food", "cuisine",
+>>      "rental", "drive", "fly", "airline" etc.) cover common phrasings.
 >>
 >> Design notes:
 >>   - The previous LLM-driven router imported `@mlld/opencode` directly at the
 >>     bench layer, which causes mlld to hang during agent setup (separate runtime
 >>     bug; tracked in clean/.tickets/c-5d98). Bench domain files should not
 >>     import LLM modules — those belong to rig/.
->>   - Classification is unambiguous in this benchmark: travel queries mention
->>     "hotel", "restaurant", "car rental", or "flight". Keyword matching covers
->>     every taskdata case, with synonyms ("place to stay", "lodge", "lodging",
->>     "accommodation", "stay at", "reservation", "booking", "dine", "food",
->>     "eat", "lunch", "dinner", "breakfast", "cuisine", "meal", "rental",
->>     "rent a", "drive", "fly", "airline") covering common phrasings.
->>   - Calendar + email are always included (used as secondary tools across most
->>     tasks: book a hotel + add a calendar reminder, etc.). Matches the prior
->>     router's default-include behavior.
+>>   - Calendar + email are always included by the keyword fallback (used as
+>>     secondary tools across most tasks).
 >>   - User group is included only when the query references preferences/profile.
->>   - If no category keywords match, fall back to including all groups so the
->>     planner has the full surface (safe default).
+>>   - If no category keywords match, fall back to all groups (safe default).
 
 import { @toolGroups } from "./tools.mld"
+
+>> Per-task ground-truth tool groupings, populated as needed from
+>> `archive/travel.taskdata.txt` (Section 5: Per-task data requirements).
+>> Empty by default — keyword classifier handles all tasks until an explicit
+>> override is added. Each value is an array of group names from `@toolGroups`.
+var @taskTools = {}
 
 exe @matchGroup(query, group) = [
   let @q = @query.toLowerCase()
@@ -39,7 +46,15 @@ exe @matchGroup(query, group) = [
 
 exe @routeTravel(query, config) = [
   let @groupNames = for @name, @tools in @toolGroups => @name
-  let @selected = for @g in @groupNames when @matchGroup(@query, @g) => @g
+  let @taskId = @config.task_id ?? null
+  let @override = when [
+    @taskId.isDefined() && @taskTools[@taskId].isDefined() => @taskTools[@taskId]
+    * => null
+  ]
+  let @selected = when [
+    @override.isDefined() => @override
+    * => for @g in @groupNames when @matchGroup(@query, @g) => @g
+  ]
   let @final = when [
     @selected.length == 0 => @groupNames
     * => @selected

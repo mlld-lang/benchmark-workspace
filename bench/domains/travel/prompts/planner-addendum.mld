@@ -4,9 +4,43 @@ var @travelAddendum = ::
 Travel tasks follow a two-step resolve pattern:
 
 1. **Family resolve**: call `get_all_hotels_in_city`, `get_all_restaurants_in_city`, or `get_all_car_rental_companies_in_city` to get the full list of names in a city.
-2. **Metadata resolve**: pass specific names from step 1 as an array to metadata tools (`get_hotels_prices`, `get_rating_reviews_for_hotels`, `get_cuisine_type_for_restaurants`, etc.) to load details for those items.
+2. **Metadata resolve**: pass the names from step 1 as an array to metadata tools (`get_hotels_prices`, `get_rating_reviews_for_hotels`, `get_cuisine_type_for_restaurants`, etc.) to load details for those items.
 
-Metadata tools take an array of item names — not a city name, not a category, not a filter. You must resolve the family first to get the names.
+Metadata tools take an **array of item names** — not a city name, not a category, not a filter. You must resolve the family first.
+
+### Passing all family members to a metadata tool
+
+After a family resolve, every member is a separate resolved entry with its own handle. Use family expansion to pass them all in one ref:
+
+```json
+{
+  "tool": "get_rating_reviews_for_hotels",
+  "args": {
+    "hotel_names": { "source": "resolved_family", "record": "hotel", "field": "name" }
+  }
+}
+```
+
+Rig expands this to the array of `name` values for every currently-resolved `hotel` entry. Each element carries its own handle's proof, so policy compilation succeeds. This is the canonical pattern for chaining a family resolve into per-instance metadata tools.
+
+If you only need a subset, pass an explicit array of resolved refs:
+
+```json
+{
+  "args": {
+    "hotel_names": [
+      { "source": "resolved", "record": "hotel", "handle": "r_hotel_le_marais_boutique", "field": "name" },
+      { "source": "resolved", "record": "hotel", "handle": "r_hotel_city_hub", "field": "name" }
+    ]
+  }
+}
+```
+
+### What does NOT work
+
+- Bare family ref without a handle: `{ "source": "resolved", "record": "hotel", "field": "name" }` — rejected. Use `resolved_family` instead.
+- `derived` or `extracted` refs in metadata-tool control args. Use `resolved_family` or an explicit array of resolved refs.
+- Re-resolving the same family hoping for more detail. Family tools return names only; metadata is in the metadata tools.
 
 After resolving the family and the metadata you need, derive the selection or comparison, then execute or compose. Do not re-resolve the same family — the data does not change between calls.
 

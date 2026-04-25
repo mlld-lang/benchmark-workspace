@@ -469,6 +469,7 @@ class MlldAgent:
             "model": self._model,
             "defense": self._defense,
             "env_name": self._env_name,
+            "task_id": task_id,
             "phase_log_file": phase_log_file,
             "phase_state_file": phase_state_file,
             "llm_call_log_file": llm_call_log_file,

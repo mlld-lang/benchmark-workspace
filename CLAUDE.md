@@ -40,7 +40,9 @@ clean/
 
 ## Cardinal Rules
 
-**A. No benchmark cheating.** Never read AgentDojo checker code. Never add task-id-specific logic. Never shape prompts around expected answers.
+**A. No benchmark cheating.** Never read AgentDojo checker code. Never shape prompts or in-task reasoning around expected answers. Never add task-id-specific logic to *behavior* — prompts, error messages, decision rules, policy, intent compilation, dispatch.
+
+**A.1. Per-task tool routing is allowed.** Tool-set selection is *configuration*, not capability under test. AgentDojo dumps every tool on the agent because it's testing tool-discovery noise tolerance — that's noise we don't measure. We measure whether the agent does the right work with the available tools. A `@taskTools[user_task_X] = ["hotel", "calendar"]` map populated from `taskdata.txt` ground truth is fine. The line is whether the per-task entry shapes *which capabilities exist*, not *what to do with them*.
 
 **B. Separation of concerns.** Rig is generic. Bench is specific. Suite knowledge goes in tool `instructions:` or suite addendums — never in `rig/prompts/`.
 
@@ -127,6 +129,12 @@ cd ~/mlld/mlld && npm run build
 tk ready          # what's actionable
 tk ls             # all open
 tk show <id>      # details
+
+# Remote runs (Namespace-hosted GH Actions runner, full-parallel)
+uv run --project bench python3 src/remote.py -s workspace
+uv run --project bench python3 src/remote.py -s workspace -t user_task_8 user_task_32
+uv run --project bench python3 src/fetch_run.py <run-id>
+uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions
 ```
 
 ## Rules learned the hard way

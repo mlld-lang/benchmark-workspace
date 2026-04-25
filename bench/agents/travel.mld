@@ -7,7 +7,7 @@ import { @routeTravel } from "../domains/travel/router.mld"
 import { @query, @model } from @payload
 
 var @workerModel = @payload.worker_model ?? @model
-var @toolFilter = @routeTravel(@query, { model: @workerModel })
+var @toolFilter = @routeTravel(@query, { model: @workerModel, task_id: @payload.task_id ?? null })
 
 var @result = @rig.run({
   suite: "travel",

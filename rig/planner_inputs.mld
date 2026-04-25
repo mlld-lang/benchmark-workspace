@@ -24,6 +24,17 @@ record @planner_resolved_ref = {
   validate: "demote"
 }
 
+>> Family expansion: { source: "resolved_family", record: "<type>", field: "<field>" }
+>> Expanded in `intent.mld @compileArgRef` to the array of all currently-
+>> resolved entries of `record` projected through `field`. Each expanded
+>> element carries its own handle's factsources, so policy compilation
+>> gets N proof-bearing values. Canonical use: metadata tools that take
+>> an array of family members.
+record @planner_resolved_family_ref = {
+  data: [source: string, record: string, field: string?],
+  validate: "demote"
+}
+
 record @planner_selection_backing = {
   data: [record: string, handle: string],
   validate: "demote"
@@ -124,6 +135,10 @@ exe @plannerValidateResolvedRef(path, ref) = [
   => @plannerCastOk(@path, @cast(@ref, @planner_resolved_ref))
 ]
 
+exe @plannerValidateResolvedFamilyRef(path, ref) = [
+  => @plannerCastOk(@path, @cast(@ref, @planner_resolved_family_ref))
+]
+
 exe @plannerValidateNamedRef(path, ref) = [
   => @plannerCastOk(@path, @cast(@ref, @planner_named_ref))
 ]
@@ -161,7 +176,7 @@ exe @plannerUnsupportedSource(path, source) = [
         @path,
         "unsupported_ref_source",
         `unsupported ref source '@source'`,
-        ["known", "resolved", "selection", "extracted", "derived", "allow"],
+        ["known", "resolved", "resolved_family", "selection", "extracted", "derived", "allow"],
         @source ?? null
       )
     ]
@@ -191,6 +206,7 @@ exe @plannerValidateRef(path, ref) = [
   => when [
     @source == "known" => @plannerValidateKnownRef(@path, @ref)
     @source == "resolved" => @plannerValidateResolvedRef(@path, @ref)
+    @source == "resolved_family" => @plannerValidateResolvedFamilyRef(@path, @ref)
     @source == "selection" => @plannerValidateSelectionRef(@path, @ref)
     @source == "extracted" || @source == "derived" => @plannerValidateNamedRef(@path, @ref)
     @source == "allow" => @plannerValidateAllowRef(@path, @ref)

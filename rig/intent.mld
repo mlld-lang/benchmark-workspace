@@ -603,7 +603,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
         arg: @arg,
         error: "control_ref_requires_specific_instance",
         source_class: "resolved",
-        hint: `You passed a family ref without a handle. Pick a specific instance. Example: { "source": "resolved", "record": "@ref.record", "handle": "@exampleHandle", "field": "<field>" }`,
+        hint: `You passed a family ref without a handle. For one instance, pick a handle: { "source": "resolved", "record": "@ref.record", "handle": "@exampleHandle", "field": "<field>" }. For metadata/array tools that take all family members at once (e.g. get_rating_reviews_for_<family>), use family expansion: { "source": "resolved_family", "record": "@ref.record", "field": "<field>" } — rig expands to the array of all currently-resolved @ref.record entries projected through <field>.`,
         available_handles: @available
       }
     ]
@@ -685,8 +685,35 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
   }
 ]
 
+>> Pre-expansion: { source: "resolved_family", record: "<type>", field: "<field>" }
+>> expands to the array of per-instance resolved refs before @compileArgRef
+>> runs, so each element compiles through the normal `resolved` path and
+>> carries its own handle's factsources. Canonical use: metadata tools like
+>> `get_rating_reviews_for_hotels(hotel_names: array)` after a family
+>> resolve like `get_all_hotels_in_city`. Pre-expansion (vs. recursive call
+>> from inside @compileArgRef) avoids mlld's self-recursion guard.
+exe @expandFamilyRef(state, ref) = [
+  let @entries = @resolvedEntries(@state, @ref.record)
+  if @entries.length == 0 [
+    => { ok: false, error: "resolved_family_empty", record: @ref.record }
+  ]
+  let @expanded = for @e in @entries => {
+    source: "resolved",
+    record: @ref.record,
+    handle: @e.handle,
+    field: @ref.field
+  }
+  => { ok: true, expanded: @expanded }
+]
+
+exe @maybeExpandFamilyRef(state, ref) = when [
+  @typeof(@ref) == "object" && @ref.source == "resolved_family" => @expandFamilyRef(@state, @ref)
+  * => { ok: true, expanded: @ref }
+]
+
 exe @compileArgRef(state, tool, argName, ref, query) = [
   let @arg = @name(@argName)
+
   if @typeof(@ref) == "array" [
     let @compiled = for @item in @ref => @compileScalarRef(@state, @tool, @arg, @item, @query)
     let @errors = for @entry in @compiled when !@entry.ok => @entry
@@ -753,7 +780,7 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
 >> control args. Compile them through the shared ref checker, then hand
 >> the original native values to the runtime dispatch layer.
 exe @compileToolArgs(state, tool, args, query) = [
-  let @compiledEntries = for @argName, @argValue in (@args ?? {}) => @compileArgRef(@state, @tool, @argName, @argValue, @query)
+  let @compiledEntries = for @argName, @argValue in (@args ?? {}) => @compileFamilyOrArg(@state, @tool, @argName, @argValue, @query)
   let @errors = for @entry in @compiledEntries when !@entry.ok => @entry
   if @errors.length > 0 [
     => { ok: false, error: "intent_compile_failed", issues: @errors }
@@ -763,6 +790,27 @@ exe @compileToolArgs(state, tool, args, query) = [
     args: @payloadEntries(@compiledEntries),
     compiled_entries: @compiledEntries
   }
+]
+
+>> Wrapper that pre-expands `resolved_family` refs before delegating to
+>> @compileArgRef. Expansion lives here (not inside @compileArgRef) because
+>> mlld's self-recursion guard rejects @compileArgRef calling itself with
+>> the expanded array.
+exe @compileFamilyOrArg(state, tool, argName, ref, query) = [
+  if @typeof(@ref) == "object" && @ref.source == "resolved_family" [
+    let @expansion = @expandFamilyRef(@state, @ref)
+    if !@expansion.ok [
+      => {
+        ok: false,
+        arg: @name(@argName),
+        error: @expansion.error ?? "resolved_family_invalid",
+        record: @expansion.record,
+        hint: `No resolved entries of record "@expansion.record" yet. Resolve the family first (e.g. a get_all_* tool) before using { source: "resolved_family", ... }.`
+      }
+    ]
+    => @compileArgRef(@state, @tool, @argName, @expansion.expanded, @query)
+  ]
+  => @compileArgRef(@state, @tool, @argName, @ref, @query)
 ]
 
 exe @bucketEntries(operationName, compiledArgs, bucketName) = [
@@ -827,7 +875,7 @@ exe @compileExecuteIntent(state, tools, decision, query) = [
 
   let @tool = @lookup.tool
   let @args = @decision.args ?? {}
-  let @compiledEntries = for @argName, @argValue in @args => @compileArgRef(@state, @tool, @argName, @argValue, @query)
+  let @compiledEntries = for @argName, @argValue in @args => @compileFamilyOrArg(@state, @tool, @argName, @argValue, @query)
   let @errors = for @entry in @compiledEntries when !@entry.ok => @entry
   if @errors.length > 0 [
     => { ok: false, error: "intent_compile_failed", issues: @errors }
