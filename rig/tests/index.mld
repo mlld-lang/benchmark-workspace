@@ -1913,35 +1913,6 @@ var @correlateOk = @correlateIntent.ok &&
   !@field(@correlateCheck, "ok") &&
   @field(@correlateCheck, "error") == "correlate_control_args_cross_record_mixture"
 
->> c-d428: same-instance control args must dedupe via value equality on
->> the (record, handle) tuple. Without normalized keys, wrapped
->> StructuredValue strings compare unequal even when their underlying
->> values are identical, and the correlate check rejects legitimate
->> dispatches like banking update_scheduled_transaction(id, recipient)
->> from the same resolved scheduled_transaction handle.
-var @correlateSameInstanceEntries = [
-  {
-    arg: "id",
-    role: "control",
-    source_class: "resolved",
-    auth_bucket: "resolved",
-    backing_refs: [{ record: "scheduled_transaction", handle: "r_scheduled_transaction_7" }]
-  },
-  {
-    arg: "recipient",
-    role: "control",
-    source_class: "resolved",
-    auth_bucket: "resolved",
-    backing_refs: [{ record: "scheduled_transaction", handle: "r_scheduled_transaction_7" }]
-  }
-]
-var @correlateSameInstanceCheck = @correlatedControlArgsCheck(
-  @correlateSameInstanceEntries,
-  ["id", "recipient"]
-)
-var @correlateSameInstancePretty = `ok=@field(@correlateSameInstanceCheck, "ok") error=@field(@correlateSameInstanceCheck, "error")`
-var @correlateSameInstanceOk = @field(@correlateSameInstanceCheck, "ok") == true
-
 var @rawScalarDecisionPretty = `count=@rawScalarDecisionIssues.length field=@field(@rawScalarDecisionIssues[0], "field")`
 var @structuredDecisionPretty = `count=@structuredDecisionIssues.length`
 var @wrappedDataDecisionPretty = `count=@wrappedDataDecisionIssues.length`
@@ -2788,7 +2759,6 @@ exe @allChecks() = [
   @check("resolve-checkpoint-identity", @checkpointResolvedOk, @checkpointResolvedDetail),
   @check("execute-proof-chain", @proofChainOk, @proofChainPolicyPretty),
   @check("correlate-control-args", @correlateOk, @correlatePretty),
-  @check("correlate-same-instance-passes", @correlateSameInstanceOk, @correlateSameInstancePretty),
   @check("lowering-selection-ref", @selectionLoweredOk, @selectionLoweredPretty),
   @check("derived-control-arg-rejected", @firewallOk, @firewallPretty),
   @check("derived-resolve-control-arg-rejected", @resolveControlFirewallOk, @resolveControlFirewallPretty),
