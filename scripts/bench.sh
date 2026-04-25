@@ -24,11 +24,17 @@ set -euo pipefail
 #   - banking   15 parallel on 8x16  → fine
 #   - slack     14 parallel on 8x16  → fine (run 24922900581)
 #
+# Travel parallelism is also throttled (c-63fe): MCP server destabilizes
+# at higher concurrency with travel's 28-tool surface. Even with no
+# container OOM, ~50% of tool calls fail with "Not connected". Run with
+# -p 5 (fan-out) or -p 10 (solo) until c-63fe is fixed.
+#
 # Two modes:
 #   - Fan-out (workspace alongside others): travel constrained to 16x32
-#     and -p 10 so total fits Team's 64 vCPU cap (32+16+8+8 = 64).
+#     and -p 5 so total fits Team's 64 vCPU cap (32+16+8+8 = 64).
 #   - Solo travel (workspace not in the dispatch set): bump to 32x64 +
-#     full parallelism — no concurrent budget pressure.
+#     -p 10. Less aggressive than the suite size would allow because of
+#     c-63fe.
 SHAPE_WORKSPACE=nscloud-ubuntu-22.04-amd64-32x64
 SHAPE_TRAVEL_FANOUT=nscloud-ubuntu-22.04-amd64-16x32
 SHAPE_TRAVEL_SOLO=nscloud-ubuntu-22.04-amd64-32x64
@@ -51,10 +57,13 @@ run_target() {
     banking|b)   dispatch banking   -f suite=banking   -f shape="$SHAPE_LIGHT" ;;
     slack|s)     dispatch slack     -f suite=slack     -f shape="$SHAPE_LIGHT" ;;
     travel|t)
+      # c-63fe: MCP server destabilizes under travel's tool load — even
+      # without OOM-kill, ~50% of tool calls fail with "Not connected".
+      # Keep parallelism low while the ticket is open.
       if "$WORKSPACE_PLANNED"; then
-        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_FANOUT" -f parallelism=10
+        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_FANOUT" -f parallelism=5
       else
-        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_SOLO"   -f parallelism=20
+        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_SOLO"   -f parallelism=10
       fi
       ;;
     *) echo "unknown target: $1" >&2
