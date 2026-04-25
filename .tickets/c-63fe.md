@@ -167,3 +167,12 @@ Validation: affected Vitest/SDK/CLI suites passed (136 pass / 1 skip), npm build
 Travel p20 local with MLLD_TRACE_MEMORY=1 and trace file still crossed the 4GB guard after these changes. Latest structural-sharing run: trace max was ~3.79GB RSS / ~2.91GB heap at rig/runtime.mld:@projectResolvedEntry, then external monitor saw ~4.35GB before kill. Top sampled scopes were @projectResolvedEntry (~715 calls), @mergeResolvedEntries, @normalizeResolvedValues, and @finishPlannerTool.
 
 Current hypothesis: remaining spike is not mlld trace/session observer overhead. It is the rig state shape/projection path rebuilding the growing resolved state late in travel runs, especially repeated display projection and merge of resolved entries. Clear rig payoff likely comes from making planner-visible state incremental/cached/handle-indexed so @projectResolvedEntry/@normalizeResolvedValues do not rebuild all prior resolved records on every planner tool completion.
+
+**2026-04-25T20:00:21Z** WORKAROUND IN PLACE (2026-04-25, OOM agent session). Travel runs reliably with MLLD_HEAP=6g (8g headroom). scripts/bench.sh now passes -f heap=8g for travel dispatches automatically. With 6 GB heap on -p 20:
+- bench_exit=0, no OOM/MCP-disconnect/fatal-heap errors
+- Peak external monitor RSS 6383 MB
+- mlld trace max 5133 MB RSS / 4546 MB heapUsed at @directExe llm.call:finish
+
+Remaining: travel utility 8/20 (12 fail, 4 of those are 900s timeouts). Heap fix unblocks measurement; underlying memory tail spike + task quality remain open. Workspace + travel can't run concurrently in CI (64 GB Team-plan cap).
+
+Per-task failures filed as separate tickets — see TR-UT* tickets for transcript-grounded analysis on each.
