@@ -133,3 +133,26 @@ counts are better-behaved than the container under -p 10+).
 4. Consider running each MCP tool dispatch as a fresh subprocess
    instead of long-lived stdio (heavyweight but isolates failures
    per-call).
+
+## Notes
+
+**2026-04-25T17:19:11Z** needs-human-design: rig memory reduction candidates from local travel trace work
+
+Context: I experimented briefly with removing duplicate resolved-state `entry.value` storage, then reverted it. That was too invasive without a stronger understanding of rig's state contract. It also did not solve the failure: the high-risk local travel subset still crossed the 4 GB line and was killed.
+
+Evidence from local run:
+- Command shape: travel defended high-risk subset (`user_task_10 user_task_11 user_task_12 user_task_18 user_task_19`) with `-p 5`, `MLLD_TRACE_MEMORY=1`, `MLLD_TRACE=effects`.
+- Trace max after the experimental state-shape change: ~4.78 GiB RSS / ~3.69 GiB heap at late planner/tool execution (`@plannerToolContext`).
+- Largest traced session writes were `planner.state` writes, peaking around 335 MB even after the experiment.
+- Hot scopes near the peak included late planner context/projection/tool metadata paths: `@plannerToolContext`, `@toolLabels`, `@recordDisplayMode`, `@projectResolvedEntry`, `@toolDeclaredParamNames`, and `@plannerValidateResolvedFamilyRef`.
+- This suggests the remaining pressure is not only the Python MCP server; mlld's planner session is repeatedly serializing / retaining very large proof-bearing state during long travel tasks.
+
+Design candidates to consider before changing code:
+1. Add a regression/measurement harness first. Capture max RSS, max heap, and max `planner.state` session write size for the travel high-risk subset. This gives us a safe way to compare proposed fixes without relying on remote OOM symptoms.
+2. Clarify the resolved-state contract. `entry.value`, `identity_value`, and `field_values` may intentionally preserve different wrapper/factsource behavior. Removing one copy ad hoc is risky and should be treated as a design change, not a local optimization.
+3. Consider separating durable proof-bearing state from planner session state. The planner session may only need compact handles plus planner-visible projections; full wrapped state could live in a side store/checkpoint that ref resolution and policy compilation can read without forcing each planner session write to serialize the entire object graph.
+4. Consider compact factsource representation. Instead of storing full StructuredValue metadata on every duplicated field wrapper, store scalar field values plus compact source attestations keyed by `(record, handle, field)`, then reconstruct/check attestations only where policy/ref compilation needs them. This needs careful invariant tests for c-aed5 / c-4a08 / c-ut8r behavior.
+5. Avoid full summary reprojection on every tool result where possible. Travel's family -> metadata pattern creates many repeated records. Returning only newly-resolved handles/projections, or caching planner-visible projections until state changes, may reduce late `@projectResolvedEntry` pressure.
+6. Treat review/blob storage separately from planner-visible metadata. Travel is unusual because review-heavy metadata is needed by derive/compose workers but should not be planner-visible. Large untrusted blobs may be better stored behind handles/artifacts and materialized only for worker phases.
+
+Important non-suggestion: I do not recommend simply deleting `entry.value` from resolved state based on the current evidence. It failed to keep the run under 4 GB and may break intentional invariants around whole-record refs and factsources.
