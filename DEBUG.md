@@ -380,13 +380,14 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 
 `scripts/bench.sh` targets:
 
-| Target | Shape | Tasks | Notes |
-|---|---|---|---|
-| `workspace` | 32x64 | 36 active (UT13/19/25/31 oos) | Heaviest — OOMs below 64 GB |
-| `travel`    | 16x32 | 20                            | OOMs at 8x16; 32 GB needed |
-| `banking`   | 8x16  | 15 active (UT0 oos)           | Survives 8x16 |
-| `slack`     | 8x16  | 14 active (oos UT2/11/16/17/18/19/20) | Survives 8x16 |
-| (default, no args) | per-target | all 4 above | Peak 64 vCPU — exact fit on Team plan |
+| Target | Shape | Parallelism | Tasks | Notes |
+|---|---|---|---|---|
+| `workspace` | 32x64 | -p 40 (caps at 36) | 36 active (UT13/19/25/31 oos) | Heaviest — OOMs below 64 GB |
+| `travel` (with workspace) | 16x32 | -p 10 | 20 | Constrained so all 4 fit Team's 64 vCPU cap |
+| `travel` (solo, no workspace) | **32x64** | -p 20 | 20 | Auto-bumped when workspace not in the dispatch set |
+| `banking`   | 8x16 | -p 40 (caps at 15) | 15 active (UT0 oos) | Survives 8x16 |
+| `slack`     | 8x16 | -p 40 (caps at 14) | 14 active (oos UT2/11/16/17/18/19/20) | Survives 8x16 |
+| (default, no args) | per-target | per-target | all 4 above | Peak 64 vCPU — exact fit on Team plan |
 
 You can also pass a subset: `scripts/bench.sh banking slack travel`.
 
