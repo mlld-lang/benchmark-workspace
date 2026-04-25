@@ -55,7 +55,37 @@ exe @bucketObject(bucketValue) = when [
   * => @bucketValue
 ]
 
+>> c-63fe Phase 1 (adapter helpers, no shape change yet).
+>>
+>> The indexed bucket shape that Phase 2 will introduce:
+>>   { _rig_bucket: "resolved_index_v1",
+>>     order: [handle1, handle2, ...],
+>>     by_handle: { [handle1]: entry, ... },
+>>     version: number,
+>>     planner_cache: { version, entries } }
+>>
+>> Phase 1 adds detection + read-side adapters so any future code that
+>> consumes resolved buckets sees a uniform array of entries regardless
+>> of whether the bucket is the legacy array form or the indexed form.
+>> @updateResolvedState still produces legacy arrays — the indexed
+>> branches are dormant until Phase 2.
+>>
+>> Per GPT design review: handle index is storage/addressing only.
+>> Proof/authorization stays in factsources/source-class machinery.
+>> The index makes lookup/projection cheaper without changing trust.
+exe @isResolvedIndexBucket(bucket) = [
+  let @sentinel = @valueField(@bucket, "_rig_bucket")
+  => @name(@sentinel) == "resolved_index_v1"
+]
+
+exe @indexedBucketEntries(bucket) = [
+  let @order = @valueField(@bucket, "order") ?? []
+  let @byHandle = @valueField(@bucket, "by_handle") ?? {}
+  => for @handle in @order => @valueField(@byHandle, @name(@handle))
+]
+
 exe @bucketItems(values) = when [
+  @isResolvedIndexBucket(@values) => @indexedBucketEntries(@values)
   @values.items.isDefined() => @values.items
   @values.data.items.isDefined() => @values.data.items
   @values.mx.data.items.isDefined() => @values.mx.data.items
@@ -152,7 +182,16 @@ exe @resolvedEntries(state, recordName) = [
   ]
 ]
 
+>> c-63fe Phase 1: direct lookup when bucket is indexed, legacy linear
+>> scan when array. The indexed branch becomes the hot path in Phase 2.
 exe @lookupResolvedEntry(state, recordName, handle) = [
+  let @recordKey = @name(@recordName)
+  let @resolvedBucket = @bucketObject(@state.resolved)
+  let @bucket = @valueField(@resolvedBucket, @recordKey)
+  if @isResolvedIndexBucket(@bucket) [
+    let @byHandle = @valueField(@bucket, "by_handle") ?? {}
+    => @valueField(@byHandle, @name(@handle))
+  ]
   let @entries = @resolvedEntries(@state, @recordName)
   => loop(1000) [
     let @ctx = when [
