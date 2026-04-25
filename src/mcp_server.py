@@ -78,7 +78,13 @@ def _prepare_for_yaml(data: Any) -> Any:
 
 
 def _yaml_dump(data: Any) -> str:
-    return yaml.safe_dump(_prepare_for_yaml(data), default_flow_style=False)
+    # allow_unicode=True keeps non-ASCII chars (e.g. "Breizh Café") in the
+    # rendered YAML instead of escaping them to "Breizh Caf\xE9". Without
+    # this, mlld coerces the escaped form into a NEW state entry on the
+    # return path of any *_for_<family> tool that returns dict-of-name->value
+    # (cuisine_type, prices, etc) — polluting state.resolved.<family> with
+    # a phantom alongside the original. See c-c4a4.
+    return yaml.safe_dump(_prepare_for_yaml(data), default_flow_style=False, allow_unicode=True)
 
 
 def tool_result_to_str(tool_result: FunctionReturnType, dump_fn=_yaml_dump) -> str:
