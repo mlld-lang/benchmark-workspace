@@ -2,12 +2,13 @@
 id: c-25af
 status: open
 deps: []
-links: []
+links: [c-aed5]
 created: 2026-04-23T04:39:52Z
 type: bug
 priority: 1
 assignee: Adam
 tags: [extract, mcp, tool-bridge]
+updated: 2026-04-25T17:38:02Z
 ---
 # Tool-backed extract (get_email_by_id) silently returns null
 
@@ -28,3 +29,5 @@ The silent null is the problem — the model gets no error to act on, just nothi
 ## Notes
 
 **2026-04-25T03:44:39Z** NOT closed by the c-ad66 fix. This is the tool-bridge null path (MCP returning null silently), not the LLM worker null path. Different layer. The c-ad66 hardening is for the @llmCall result; tool-backed extract goes through @callTool and skips coercExtractAttestation entirely (extract.mld lines 144-187).
+
+**2026-04-25T17:38:02Z** Workspace UT36 (closed c-aed5) is a manifestation of this bug. Extract on resolved file content (vacation-plans.docx file_id=7) returns extract_empty_response. Downstream derive cascades empty, and create_file dispatches with content='', triggering compose-fabrication of packing-list narrative.

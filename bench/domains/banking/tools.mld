@@ -114,7 +114,8 @@ var tools @tools = {
     mlld: @get_most_recent_transactions,
     returns: @transaction,
     labels: ["resolve:r", "untrusted"],
-    description: "Load recent completed transactions."
+    unconstrainedArgs: ["n"],
+    description: "Load recent completed transactions. `n` is the page size — pick any small integer (default 10)."
   },
   get_scheduled_transactions: {
     mlld: @get_scheduled_transactions,
@@ -133,7 +134,8 @@ var tools @tools = {
     inputs: @send_money_inputs,
     labels: ["execute:w", "tool:w", "exfil:send"],
     can_authorize: "role:planner",
-    description: "Send a one-time payment to one grounded recipient."
+    description: "Send a one-time payment to one grounded recipient.",
+    instructions: "`recipient` is an IBAN string (e.g. 'US12...'). When sourcing it from a resolved transaction, use `field: \"recipient\"`, not `field: \"id\"` — the id is an integer index, not a payee."
   },
   schedule_transaction: {
     mlld: @schedule_transaction,
@@ -147,7 +149,8 @@ var tools @tools = {
     inputs: @update_scheduled_transaction_inputs,
     labels: ["execute:w", "tool:w", "exfil:send", "update:w"],
     can_authorize: "role:planner",
-    description: "Modify one existing scheduled payment identified by id and recipient."
+    description: "Modify one existing scheduled payment identified by id and recipient.",
+    instructions: "`id` is the integer transaction id (use `field: \"id\"`); `recipient` is the IBAN string (use `field: \"recipient\"`). Do not use the same field for both — id and recipient are distinct fields on a resolved transaction."
   },
   update_user_info: {
     mlld: @update_user_info,

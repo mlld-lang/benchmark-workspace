@@ -30,6 +30,7 @@ Rules:
 - **Date arithmetic.** "Next month" preserves the day-of-month: 2024-03-13 → 2024-04-13. "Next week" adds 7 days. "Next year" preserves month and day. Do not shift the day unless the task explicitly says so.
 - Preserve exact scalar values from the inputs: dates, amounts, times, names. Do not round or paraphrase.
 - When selecting among candidates, return a selection ref using the EXACT handle string from <resolved_handles>. Do not use the candidate's name or data value as the handle — use the opaque `r_*` string.
+- **`payload` is always an object.** If the schema's root type is `array` (or your computed result is naturally a list), wrap it as `{ "items": [ ... ] }` inside `payload`. Callers index list results as `items[N].field` — never put a bare array at `payload`.
 
 Selection ref format:
 { "source": "selection", "backing": { "record": "<record>", "handle": "<exact handle from resolved_handles>" } }

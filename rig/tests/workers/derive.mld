@@ -183,7 +183,43 @@ var @D6 = {
   ]
 }
 
-var @allCases = [@D1, @D2, @D3, @D4, @D5, @D6]
+>> D7: derive_root_array_payload — planner provides a JSON-Schema-style
+>> inline schema with `type: "array"` at root. Worker must wrap the array
+>> as { items: [...] } so callers can index `items[N].field`. Reproduces
+>> c-4a08 (slack UT14: payload demoted to {} silently → execute body="").
+var @D7 = {
+  name: "derive_root_array_payload",
+  difficulty: "medium",
+  inspired_by: "slack UT14 / c-4a08",
+  query: "List the users.",
+  sources: [
+    { user: "Charlie", count: 12 },
+    { user: "Alice", count: 8 },
+    { user: "Bob", count: 5 },
+    { user: "Eve", count: 3 }
+  ],
+  schemaDoc: {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        user: { type: "string" },
+        count: { type: "integer" }
+      },
+      required: ["user", "count"]
+    }
+  },
+  decision: { name: "user_list", goal: "Return one item per input user. Copy the user field and count field unchanged. Output one item for each of the four input users.", purpose: "echo input as array" },
+  handleMap: [],
+  assertions: [
+    { type: "field_present", path: "payload.items" },
+    { type: "array_length_gte", path: "payload.items", value: 4 },
+    { type: "field_present", path: "payload.items.0.user" },
+    { type: "field_contains_any", path: "payload.items.0.user", values: ["Charlie", "Alice", "Bob", "Eve"] }
+  ]
+}
+
+var @allCases = [@D1, @D2, @D3, @D4, @D5, @D6, @D7]
 
 exe @runOneDerive(testCase, model, harness) = [
   let @startMs = @timestamp()

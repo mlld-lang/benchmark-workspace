@@ -1,13 +1,14 @@
 ---
 id: c-aed5
-status: open
+status: closed
 deps: []
-links: []
+links: [c-25af]
 created: 2026-04-25T06:16:50Z
 type: bug
 priority: 2
 assignee: Adam
 tags: [workspace, compose, derive-execute]
+updated: 2026-04-25T17:38:02Z
 ---
 # Workspace UT36: model fabricates compose answer from empty create_file content
 
@@ -75,3 +76,5 @@ Stays open.
 ## Notes
 
 **2026-04-25T16:31:57Z** UT36 still fails post 3b05fa6. Confirmed independent of c-0ad1 (extract-loop rule didn't help — UT36's bug is data-pass through derive→execute, not extract loop). Likely c-4a08 family (silent-empty body field path). Spike: synthetic derive output → execute → check if content arg lands.
+
+**2026-04-25T17:37:37Z** Re-attribute root cause. Read run 24933533254 transcript+execution_log: actual MCP calls were [search_files, list_files, get_file_by_id(7), create_file(content='')]. The execution_log shows extract on 'vacation_plans_content' returned extract_empty_response, derive on 'may24_activity' returned derive_empty_response (cascading), then inline-schema extract was rejected. By the time create_file fired, no extract path produced content, so it dispatched with content=''. Compose then hallucinated a packing list. The bug is upstream: extract on resolved file content returns empty (c-25af family). Compose-fabrication is a downstream symptom, not the bug. Re-tagging as duplicate of c-25af. Closing as 'duplicate of c-25af'.

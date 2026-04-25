@@ -192,6 +192,19 @@ exe @toolLabels(toolEntry) = [
   ]
 ]
 
+>> Catalog entries can declare `unconstrainedArgs: [...]` for params that
+>> are pagination/limit/offset shapes — values that don't restrict
+>> identity and don't carry payload content, so they shouldn't require
+>> known-text proof or fact attestation. They get classified as payload
+>> so dispatch accepts model-supplied integers without `known` validation.
+exe @toolUnconstrainedArgs(toolEntry) = [
+  let @entry = @toolEntryObject(@toolEntry)
+  => when [
+    @entry.unconstrainedArgs.isDefined() => @stringArray(@entry.unconstrainedArgs)
+    * => []
+  ]
+]
+
 exe @toolControlArgs(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
   let @explicitControlArgs = when [
@@ -200,19 +213,23 @@ exe @toolControlArgs(toolEntry) = [
     * => []
   ]
   let @declaredParamNames = @toolDeclaredParamNames(@toolEntry)
-  => when [
+  let @unconstrained = @toolUnconstrainedArgs(@toolEntry)
+  let @raw = when [
     @toolInputFields(@toolEntry).length > 0 => @toolInputFieldNames(@toolEntry, "fact")
     @toolKind(@toolEntry) == "read" => @uniqueValues(@stringArray(@explicitControlArgs.concat(@declaredParamNames)))
     @explicitControlArgs.length > 0 => @explicitControlArgs
     * => []
   ]
+  => for @arg in @raw when !@unconstrained.includes(@arg) => @arg
 ]
 
 exe @toolPayloadArgs(toolEntry) = [
-  => when [
+  let @unconstrained = @toolUnconstrainedArgs(@toolEntry)
+  let @raw = when [
     @toolInputFields(@toolEntry).length > 0 => @toolInputFieldNames(@toolEntry, "data")
     * => []
   ]
+  => @uniqueValues(@stringArray(@raw.concat(@unconstrained)))
 ]
 
 exe @toolOptionalArgs(toolEntry) = [
@@ -632,6 +649,7 @@ export {
   @toolParamNames,
   @toolControlArgs,
   @toolPayloadArgs,
+  @toolUnconstrainedArgs,
   @toolOptionalArgs,
   @toolUpdateArgs,
   @toolExactArgs,
