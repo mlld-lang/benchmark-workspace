@@ -66,11 +66,17 @@ def _build_local_mcp_command(config: dict[str, Any]) -> str:
     command in env-json mode. We rewrite that onto the local benchmark MCP
     bridge so mlld still gets the extra workspace helper tools, date-shift
     behavior, and phase-state attribution hooks.
+
+    Linux execve has a per-arg cap of ~128KB (MAX_ARG_STRLEN). AgentDojo's
+    env_json can exceed that for large suites, so the config is written to
+    a temp file and passed by path instead of base64-on-argv.
     """
-    b64 = base64.b64encode(json.dumps(config).encode()).decode()
+    cfg_fd, cfg_path = tempfile.mkstemp(suffix=".json", prefix="mcp_cfg_")
+    with os.fdopen(cfg_fd, "w") as f:
+        json.dump(config, f)
     project_dir = shlex.quote(str(CLEAN_BENCH_PROJECT_DIR))
     script_path = shlex.quote(str(SRC_DIR / "mcp_server.py"))
-    return f"uv run --project {project_dir} python3 {script_path} {b64}"
+    return f"uv run --project {project_dir} python3 {script_path} --config-file {shlex.quote(cfg_path)}"
 
 
 def _decode_runner_mcp_command(mcp_server_cmd: str) -> dict[str, Any] | None:

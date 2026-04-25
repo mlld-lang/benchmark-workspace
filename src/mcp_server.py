@@ -411,10 +411,17 @@ def create_server(
 
 async def main():
     if len(sys.argv) < 2:
-        print("Usage: mcp_server.py <config_b64>", file=sys.stderr)
+        print("Usage: mcp_server.py <config_b64> | --config-file <path>", file=sys.stderr)
         sys.exit(1)
 
-    config = json.loads(base64.b64decode(sys.argv[1]))
+    # Linux's MAX_ARG_STRLEN caps a single argv element at 128KB. AgentDojo
+    # serializes the full TaskEnvironment into env_json, which can blow past
+    # that. The host writes the JSON config to a temp file and passes its
+    # path; we read either form.
+    if sys.argv[1] == "--config-file" and len(sys.argv) >= 3:
+        config = json.loads(Path(sys.argv[2]).read_text())
+    else:
+        config = json.loads(base64.b64decode(sys.argv[1]))
     benchmark_version = config.get("benchmark_version", "v1.1.1")
     state_file = config.get("state_file")
     suite_name = config.get("suite_name") or config.get("env_name")
