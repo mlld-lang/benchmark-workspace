@@ -50,14 +50,14 @@ on:
         required: false
         default: main
       shape:
-        description: 'Namespace runner shape'
+        description: 'Namespace runner shape (8x16 fits 5 concurrent on Team plan = full fan-out)'
         required: false
         type: choice
         options:
-          - nscloud-ubuntu-22.04-amd64-32x64
-          - nscloud-ubuntu-22.04-amd64-16x32
           - nscloud-ubuntu-22.04-amd64-8x16
-        default: nscloud-ubuntu-22.04-amd64-32x64
+          - nscloud-ubuntu-22.04-amd64-16x32
+          - nscloud-ubuntu-22.04-amd64-32x64
+        default: nscloud-ubuntu-22.04-amd64-8x16
 
 permissions:
   contents: read
