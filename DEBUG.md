@@ -355,6 +355,34 @@ That's where `bench.sh`'s shape table comes from. If you bump parallelism or cha
 
 To diagnose a fresh OOM: check `gh run view <id> --log 2>&1 | grep -E "exit code|137|Killed"`. If exit 137, drop `-p` by half or bump shape one tier.
 
+### When you see a "wrong date" in a transcript
+
+Read this before concluding "the model got the date wrong" or proposing a derive-prompt rule.
+
+**AgentDojo dates are shifted.** The original benchmark fixtures use 2024 (workspace, slack), 2022 (banking), or 2025 (travel) reference dates from when the suite was authored. Models with current world knowledge would conflict with stale "today is 2024-05-15" system messages, so `src/date_shift.py` shifts every ISO date and natural-language date in the suite YAML and task PROMPT/GROUND_TRUTH/GOAL strings by `offset = date.today() - 2024-05-15` (~711 days at time of writing). The shift is applied at suite load via `get_shifted_suite()`.
+
+Implications when reading a transcript:
+
+- A date like `2024-03-13` you see in `get_scheduled_transactions` output is **already shifted**. The original underlying fixture date is something earlier (banking shifts from a 2022 reference; the visible 2024-03-13 came from a 2022 date + 711 days).
+- Per-suite shifts:
+  - `workspace`: ISO + NL dates, default_year=2024
+  - `slack`: ISO + NL dates, default_year=2024
+  - `travel`: ISO + NL dates, default_year=2025
+  - `banking`: ISO + NL dates + month-year (`March 2022` → shifted) + month-only (`March` → shifted), default_year=2022
+- Per-task utility patches (`_patch_<suite>_utilities`) recompute hardcoded date literals in evaluator code so the agent's shifted-world answer matches the shifted-world expected answer. Not every task has one — some tasks' originals are read-only or text-content checks that don't need a patch.
+- A task without a utility patch runs the **original AgentDojo evaluator** on the shifted env. If the original evaluator hardcodes a date like `"2024-04-13"`, that string never gets shifted, and the agent's shifted-world answer of `"2024-04-13" + offset` won't match. This is rare (the patches catch most cases) but possible — banking UT9 is a known suspect.
+
+How to diagnose a "wrong date" failure honestly:
+
+1. Don't propose a derive-prompt rule yet. The agent may be doing the right arithmetic on a shifted date that the evaluator didn't expect.
+2. Check `_patch_<suite>_utilities` in `src/date_shift.py` — does this task have a patched utility? If not, the original AgentDojo utility runs.
+3. Trace the original task's expected answer in `~/mlld/agentdojo/src/agentdojo/default_suites/v1_1_1/<suite>/user_tasks.py` (you already read taskdata.txt for ground-truth tools — this is the same path for evaluator code, but **only check evaluator dates, not behavior** to stay within Cardinal Rule A).
+4. Compute `expected_shifted = original_expected + offset`. Compare against what the agent passed.
+5. If they differ by some fixed delta (e.g., one day), that's an off-by-one in the shift — possibly a missing utility patch, possibly a model arithmetic error.
+6. If they match, the agent did the right thing and the failure is somewhere else (recipient field, missing arg, etc.).
+
+We log shifts here transparently because we're adapting on top of AgentDojo. Rules learned from misreading shifted dates as "model arithmetic bug" go in this section, not in derive.att.
+
 ### When a run "succeeds" but utility is suspiciously low (c-63fe)
 
 Travel's MCP server destabilizes under load. Symptoms in the result jsonl / transcripts:
