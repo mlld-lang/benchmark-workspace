@@ -379,14 +379,13 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 
 `scripts/bench.sh` targets:
 
-| Target | Tasks | Notes |
-|---|---|---|
-| `workspace` | UT0..39 minus oos (UT13, UT19, UT25, UT31) — 36 tasks on 32x64 | Full workspace, single runner |
-| `workspace` | both halves above | Two separate runs |
-| `banking` | full suite, oos auto-skipped | 15 active |
-| `slack` | full suite, oos auto-skipped | 14 active |
-| `travel` | full suite | 20 |
-| (default, no args) | all 4 above | The full sweep |
+| Target | Shape | Tasks | Notes |
+|---|---|---|---|
+| `workspace` | 32x64 | 36 active (UT13/19/25/31 oos) | Heaviest suite — needs 64 GB to avoid OOM |
+| `banking`   | 8x16  | 15 active (UT0 oos)            | Light |
+| `slack`     | 8x16  | 14 active (UT2/11/16/17/18/19/20 oos) | Light |
+| `travel`    | 8x16  | 20                              | Light |
+| (default, no args) | per-target | all 4 above | The full sweep — 56 vCPU peak |
 
 You can also pass a subset: `scripts/bench.sh banking slack travel`.
 
