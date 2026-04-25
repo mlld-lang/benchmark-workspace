@@ -222,6 +222,18 @@ done
 - **Run worker tests before and after prompt changes.** `mlld rig/tests/workers/run.mld --no-checkpoint` catches regressions in ~50s. If tests pass too easily, the assertions are too weak.
 - **Workspace and travel remote runs need bigger shapes.** Workspace (36 parallel tasks) needs 32x64 (64 GB). Travel (20 parallel tasks) needs 16x32 (32 GB). Both OOM on 8x16 (exit 137). Banking and slack survive 8x16. `scripts/bench.sh` already sets the right shape per target; if you call `bench-run.yml` directly, pass `-f shape=nscloud-ubuntu-22.04-amd64-32x64` for workspace or `-f shape=nscloud-ubuntu-22.04-amd64-16x32` for travel.
 
+## Ticket Conventions
+
+Three rules for benchmark-failure tickets:
+
+**A. Every failing in-scope test has an open ticket.** No silent failures. If a task is failing on the latest sweep and isn't out-of-scope, there's a ticket for it. Multiple tasks failing for the same root cause cluster under one ticket. If the root cause isn't known yet, the ticket says "needs investigation" — file it anyway, don't wait until you have a theory.
+
+**B. UT-tied tickets carry the task id in the title.** Format: `[SUITE-UT<N>...] short description`. Example: `[BK-UT10] send_money recipient resolved to id field` or `[WS-UT32, WS-UT37] create_file → share_file chaining returns no result handles`. Cluster tickets list all affected ids in the title. Makes `tk ls` greppable by suite/task and makes cross-references visible.
+
+**C. Tickets get updated with transcript analysis on every new sweep.** When a sweep completes and a tracked task either changes status or produces new failure-mode info, add a timestamped note (`tk add-note <id> "..."`) with the run id and the relevant transcript-grounded findings. Don't let tickets drift away from the current behavior. If a fix lands and verifies, note the verifying run id and close. If it lands and doesn't verify, note what changed in the failure shape.
+
+These three together mean: every utility=false row in any sweep traces to a specific ticket, every ticket is current, and ticket history is the audit log of what we know about each task.
+
 ## Deferred: Logging Refactor (ticket c-3edc)
 
 A designed but unstarted refactor of rig's logging stack to lean on the runtime trace subsystem (`--trace effects` via SDK) plus `var session @planner` plus a small curated hook layer. Net effect: `lifecycle.mld` + `runtime.mld @appendLlmCall` + per-wrapper boilerplate shrink; rig gets parent/child LLM-call timing for free; the m-5683 / UT14 bug classes disappear structurally.

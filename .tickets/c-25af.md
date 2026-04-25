@@ -8,9 +8,9 @@ type: bug
 priority: 1
 assignee: Adam
 tags: [extract, mcp, tool-bridge]
-updated: 2026-04-25T17:38:02Z
+updated: 2026-04-25T18:29:08Z
 ---
-# Tool-backed extract (get_email_by_id) silently returns null
+# WS-UT36 tool-backed extract on resolved file content silently returns null
 
 UT16, UT39: When the planner calls extract with tool=get_email_by_id, the MCP call sometimes returns null silently — no error, just null. The model says the extract 'returned null' and pivots to derive.
 
@@ -31,3 +31,5 @@ The silent null is the problem — the model gets no error to act on, just nothi
 **2026-04-25T03:44:39Z** NOT closed by the c-ad66 fix. This is the tool-bridge null path (MCP returning null silently), not the LLM worker null path. Different layer. The c-ad66 hardening is for the @llmCall result; tool-backed extract goes through @callTool and skips coercExtractAttestation entirely (extract.mld lines 144-187).
 
 **2026-04-25T17:38:02Z** Workspace UT36 (closed c-aed5) is a manifestation of this bug. Extract on resolved file content (vacation-plans.docx file_id=7) returns extract_empty_response. Downstream derive cascades empty, and create_file dispatches with content='', triggering compose-fabrication of packing-list narrative.
+
+**2026-04-25T18:29:02Z** Per c-aed5 closure (linked): WS-UT36 confirmed manifestation. Extract on resolved vacation-plans.docx (file_id=7) returns extract_empty_response, downstream derive cascades empty, create_file dispatches with content='', compose fabricates packing list. May affect other workspace file/email tasks too — needs spike to confirm scope.

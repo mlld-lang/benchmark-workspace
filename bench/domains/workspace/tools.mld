@@ -151,9 +151,14 @@ exe @append_to_file(file_id, content) = [
   => @mcp.appendToFile(@asString(@file_id), @content)
 ]
 
+>> Coerce at the exe boundary so the new file's id_ is minted as a
+>> handle by record coercion. Without this, the execute worker's
+>> `as record @file_entry` step silently demotes (id_:handle rejects
+>> the plain integer MCP returns) and result_handles is empty —
+>> blocking create_file → share_file chaining (c-d52c).
 exe @create_file(filename, content) = [
   => @mcp.createFile(@filename, @content)
-]
+] => record @file_entry
 
 exe @delete_file(file_id) = [
   => @mcp.deleteFile(@asString(@file_id))
