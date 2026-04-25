@@ -56,9 +56,41 @@ exe @normalizeEmptyStrings(inputValue) = js {
   return walk(inputValue);
 }
 
+>> Treat degenerate inputs as empty responses. Without this, `@parse.llm`
+>> turns "" / "null" / non-JSON into mlld-null, `@coerceExtractEnvelope`
+>> demotes that into a defined-but-empty attestation, and the dispatcher's
+>> `if !@attestation.isDefined()` check never fires `extract_empty_response`.
+>> The planner ends up with `preview_fields: []` and no actionable error.
+exe @isDegenerateExtractRaw(raw) = js {
+  if (raw == null) return true;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "") return true;
+    if (trimmed.toLowerCase() === "null" || trimmed.toLowerCase() === "undefined") return true;
+  }
+  return false;
+}
+
+>> A payload with no extractable structure — null, empty container —
+>> gives the planner no signal. Treat as empty response so the worker
+>> is forced to either retry or surface a real error to the planner.
+>> Scalar payloads are valid (e.g. `schema: "text"` produces a bounded
+>> string). The downstream `@previewFields` correctly returns [] for
+>> scalars while the value itself is preserved in state.
+exe @isDegenerateExtractPayload(value) = js {
+  if (value == null) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
+}
+
 exe @coerceExtractAttestation(raw) = [
-  if @raw == null [ => null ]
+  if @isDegenerateExtractRaw(@raw) [ => null ]
   let @parsed = @raw | @parse.llm
+  if !@parsed.isDefined() [ => null ]
+  let @parsedType = @typeof(@parsed)
+  if @parsedType != "object" && @parsedType != "array" [ => null ]
+  if @isDegenerateExtractPayload(@parsed.payload) [ => null ]
   let @coerced = @coerceExtractEnvelope(@parsed)
   let @parsedPayloadType = @typeof(@parsed.payload)
   let @normalizedPayload = when [
@@ -226,7 +258,10 @@ exe @dispatchExtract(agent, state, decision, query) = [
     name: @decision.name,
     source: @decision.source
   })
-  if !@attestation.isDefined() [ => { error: "extract_empty_response", summary: "extract_empty_response", session_id: @sessionId, llm_log: @logEntry } ]
+  >> Use `== null` not `.isDefined()`: an exe returning null produces a
+  >> wrapper whose .isDefined() reports true, so the .isDefined() check
+  >> never fired (silent passthrough on degenerate worker output).
+  if @attestation == null [ => { error: "extract_empty_response", summary: "extract_empty_response", session_id: @sessionId, llm_log: @logEntry } ]
   if @containsSelectionRef(@attestation.payload) [
     => { error: "extract_may_not_emit_selection_refs", summary: "Extract cannot produce selection refs — only derive can. If you need to select among resolved records, call derive instead of extract.", session_id: @sessionId, llm_log: @logEntry }
   ]

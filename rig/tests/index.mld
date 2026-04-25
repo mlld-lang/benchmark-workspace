@@ -56,6 +56,7 @@ import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation, @dispatchExtract } from "../workers/extract.mld"
+import { @coerceDeriveAttestation } from "../workers/derive.mld"
 import { @planner, @plannerTools } from "../workers/planner.mld"
 
 exe @status(ok) = when [
@@ -566,6 +567,19 @@ var @plannerDeriveFixtureAgent = @rigBuild({
           }]
         },
         summary: "derived action_items"
+      }],
+      extract: [{
+        status: "extracted",
+        schema_name: "inline-schema",
+        name: "action_items_copy",
+        provenance: "extracted",
+        preview_fields: ["person_name", "task_description", "deadline"],
+        payload: {
+          person_name: "Alice",
+          task_description: "Send the launch update",
+          deadline: "2026-04-23"
+        },
+        summary: "extracted action_items_copy"
       }]
     }
   }
@@ -1969,6 +1983,64 @@ var @scalarExtractOk = @field(@scalarExtractAttestation, "payload") == "bounded 
   @scalarExtractPlannerSummary.includes('"fields": []') &&
   @scalarExtractWorkerSummary.includes('"bounded text payload"')
 
+>> Degenerate worker outputs must coerce to null so the dispatcher's
+>> `if @attestation == null` check fires `extract_empty_response`. Without
+>> this, the planner saw success-shaped envelopes with empty preview_fields
+>> and reported "extract returned null" without an actionable error
+>> (c-ad66, c-eeb6, c-32db family).
+var @rawDegenNull = null
+var @rawDegenEmpty = ""
+var @rawDegenNullStr = "null"
+var @rawDegenPayloadNull = ::{"status":"extracted","payload":null}::
+var @rawDegenPayloadEmpty = ::{"status":"extracted","payload":{}}::
+var @rawDegenPayloadMissing = ::{"status":"extracted","preview_fields":["x"]}::
+var @degenerateRawNull = @coerceExtractAttestation(@rawDegenNull)
+var @degenerateRawEmpty = @coerceExtractAttestation(@rawDegenEmpty)
+var @degenerateRawNullStr = @coerceExtractAttestation(@rawDegenNullStr)
+var @degeneratePayloadNull = @coerceExtractAttestation(@rawDegenPayloadNull)
+var @degeneratePayloadEmpty = @coerceExtractAttestation(@rawDegenPayloadEmpty)
+var @degeneratePayloadMissing = @coerceExtractAttestation(@rawDegenPayloadMissing)
+var @degenerateExtractOk =
+  @degenerateRawNull == null &&
+  @degenerateRawEmpty == null &&
+  @degenerateRawNullStr == null &&
+  @degeneratePayloadNull == null &&
+  @degeneratePayloadEmpty == null &&
+  @degeneratePayloadMissing == null
+var @degenerateExtractPretty = `null=@degenerateRawNull empty=@degenerateRawEmpty null_str=@degenerateRawNullStr payload_null=@degeneratePayloadNull payload_empty=@degeneratePayloadEmpty payload_missing=@degeneratePayloadMissing`
+
+>> Valid worker outputs must NOT be rejected by the degeneracy check.
+>> Includes scalar payload (text-shape extracts), markdown-fenced JSON,
+>> and partial envelopes (validate: "demote" on @extractAttestation).
+var @rawValidClean = ::{"status":"extracted","payload":{"description":"hi"}}::
+var @rawValidScalar = ::{"status":"extracted","preview_fields":[],"payload":"raw text body"}::
+var @rawValidFenced = "```json\n{\"status\":\"extracted\",\"payload\":{\"x\":1}}\n```"
+var @validRawClean = @coerceExtractAttestation(@rawValidClean)
+var @validRawScalar = @coerceExtractAttestation(@rawValidScalar)
+var @validRawFenced = @coerceExtractAttestation(@rawValidFenced)
+var @validExtractOk =
+  @validRawClean != null &&
+  @validRawScalar != null &&
+  @validRawFenced != null
+var @validExtractPretty = `clean=@typeof(@validRawClean) scalar=@typeof(@validRawScalar) fenced=@typeof(@validRawFenced)`
+
+>> Mirror the same hardening on derive. Selection-only goals are valid
+>> with empty payload IF selection_refs has entries.
+var @rawDegenDerive = "null"
+var @rawDegenDerivePayload = ::{"status":"derived","payload":null}::
+var @rawValidDerive = ::{"status":"derived","payload":{"x":1}}::
+var @rawValidDeriveSelOnly = ::{"status":"derived","payload":{},"selection_refs":[{"source":"selection","backing":{"record":"hotel","handle":"r_hotel_1"}}]}::
+var @degenerateDeriveRaw = @coerceDeriveAttestation(@rawDegenDerive)
+var @degenerateDerivePayload = @coerceDeriveAttestation(@rawDegenDerivePayload)
+var @validDerivePayload = @coerceDeriveAttestation(@rawValidDerive)
+var @validDeriveSelectionOnly = @coerceDeriveAttestation(@rawValidDeriveSelOnly)
+var @degenerateDeriveOk =
+  @degenerateDeriveRaw == null &&
+  @degenerateDerivePayload == null &&
+  @validDerivePayload != null &&
+  @validDeriveSelectionOnly != null
+var @degenerateDerivePretty = `raw_null=@degenerateDeriveRaw payload_null=@degenerateDerivePayload valid=@typeof(@validDerivePayload) selection_only=@typeof(@validDeriveSelectionOnly)`
+
 >> Security invariant: planner-facing named-state projection must never
 >> include payload values from extracted or derived state. The planner
 >> only needs schema/field structure so it can emit refs by name.
@@ -2770,6 +2842,9 @@ exe @allChecks() = [
   @check("selection-keyed-control", @selectionKeyedOk, @selectionKeyedPretty),
   @check("planner-arg-shape", @plannerArgShapeOk, @plannerArgShapePretty),
   @check("scalar-extract-payload", @scalarExtractOk, `attestation=@scalarExtractPretty planner=@scalarExtractPlannerSummary worker=@scalarExtractWorkerSummary`),
+  @check("coerce-extract-rejects-degenerate-output", @degenerateExtractOk, @degenerateExtractPretty),
+  @check("coerce-extract-accepts-valid-output", @validExtractOk, @validExtractPretty),
+  @check("coerce-derive-rejects-degenerate-output", @degenerateDeriveOk, @degenerateDerivePretty),
   @check("planner-named-state-hides-tainted-values", @taintedPlannerProjectionOk, @taintedPlannerSummary),
   @check("worker-named-state-retains-tainted-values", @taintedWorkerProjectionOk, @taintedWorkerSummary),
   @check("execute-compile-reads-extracted-state", @extractedPayloadCompileOk, @extractedPayloadCompilePretty),

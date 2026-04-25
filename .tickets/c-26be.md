@@ -13,3 +13,7 @@ tags: [extract]
 
 Symptom: extract from a resolved slack_msg returns 'null' to the planner even when it succeeds. Verified in transcript ses_23e9a951c (slack UT4 - post hobbies). Alice's extract returned null, Eve's returned null, Charlie's returned full attestation. On retry Eve hit extract_source_already_extracted, proving the data IS stored. Same root class as c-ad66 (already P0 ticket: 'Extract worker returns null on source-backed extraction from resolved records'). Add slack UT4 transcript as a second repro alongside the calendar-event-description case.
 
+
+## Notes
+
+**2026-04-25T03:44:39Z** NOT closed by the c-ad66 fix. Re-investigation: this ticket's symptom is the planner saying 'returned null' colloquially even when preview_fields is populated (proven by extract_source_already_extracted firing on retry, which requires preview_fields > 0). That's a planner-perception issue, not a runtime null. The c-ad66/c-eeb6 fix only addresses the case where the worker LLM produces a degenerate output — Alice/Eve in the slack UT4 transcript may not match that shape. Needs transcript re-read to confirm.

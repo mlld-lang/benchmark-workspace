@@ -21,7 +21,7 @@ var @taggedDerive = for @tc in @deriveCases => { tc: @tc, worker: "derive" }
 var @taggedCompose = for @tc in @composeCases => { tc: @tc, worker: "compose" }
 var @taggedCases = @taggedExtract.concat(@taggedDerive).concat(@taggedCompose)
 
-var @allResults = for parallel(17) @tagged in @taggedCases [
+var @allResults = for parallel(21) @tagged in @taggedCases [
   => when [
     @tagged.worker == "extract" => @runOneExtract(@tagged.tc, @model, @harness)
     @tagged.worker == "derive" => @runOneDerive(@tagged.tc, @model, @harness)

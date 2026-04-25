@@ -24,3 +24,7 @@ This may be:
 
 The silent null is the problem — the model gets no error to act on, just nothing.
 
+
+## Notes
+
+**2026-04-25T03:44:39Z** NOT closed by the c-ad66 fix. This is the tool-bridge null path (MCP returning null silently), not the LLM worker null path. Different layer. The c-ad66 hardening is for the @llmCall result; tool-backed extract goes through @callTool and skips coercExtractAttestation entirely (extract.mld lines 144-187).

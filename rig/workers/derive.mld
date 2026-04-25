@@ -16,11 +16,47 @@ import {
 
 exe @derivePrompt(query, sources, schemaDoc, decision, handleMap) = template "../prompts/derive.att"
 
-exe @coerceDeriveAttestation(raw) = [
-  if @raw == null [ => null ]
-  let @parsed = @raw | @parse.llm
+>> Mirrors the extract-side hardening (see extract.mld for rationale).
+>> Without this, `@parse.llm` turns "" / "null" / non-JSON into mlld-null,
+>> the demoted record stays defined, and `derive_empty_response` never
+>> fires. Derive accepts an empty payload IF selection_refs is non-empty
+>> (selection-only goals).
+exe @isDegenerateDeriveRaw(raw) = js {
+  if (raw == null) return true;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed === "") return true;
+    if (trimmed.toLowerCase() === "null" || trimmed.toLowerCase() === "undefined") return true;
+  }
+  return false;
+}
+
+exe @isDegenerateDerivePayload(payload, selectionRefs) = js {
+  const hasRefs = Array.isArray(selectionRefs) && selectionRefs.length > 0;
+  if (hasRefs) return false;
+  if (payload == null) return true;
+  if (Array.isArray(payload)) return payload.length === 0;
+  if (typeof payload === "object") return Object.keys(payload).length === 0;
+  return false;
+}
+
+>> The record post-coercion is applied on the envelope helper, not the
+>> outer function. Otherwise `=> null` from the outer body still flows
+>> through record coercion and returns a defined-but-empty wrapper,
+>> defeating the dispatcher's `if @attestation == null` check.
+exe @coerceDeriveEnvelope(parsed) = [
   => @parsed
 ] => record @deriveAttestation
+
+exe @coerceDeriveAttestation(raw) = [
+  if @isDegenerateDeriveRaw(@raw) [ => null ]
+  let @parsed = @raw | @parse.llm
+  if !@parsed.isDefined() [ => null ]
+  let @parsedType = @typeof(@parsed)
+  if @parsedType != "object" && @parsedType != "array" [ => null ]
+  if @isDegenerateDerivePayload(@parsed.payload, @parsed.selection_refs) [ => null ]
+  => @coerceDeriveEnvelope(@parsed)
+]
 
 exe @allowedSelectionKeys(state, sources) = [
   let @pairs = for @source in (@sources ?? []) [
@@ -107,7 +143,9 @@ exe @dispatchDerive(agent, state, decision, query) = [
     name: @decision.name,
     goal: @decision.goal ?? null
   })
-  if !@attestation.isDefined() [ => { error: "derive_empty_response", summary: "derive_empty_response", session_id: @sessionId, llm_log: @logEntry } ]
+  >> Use `== null` not `.isDefined()`: exe-returned null is a wrapper whose
+  >> .isDefined() reports true, masking degenerate worker output.
+  if @attestation == null [ => { error: "derive_empty_response", summary: "derive_empty_response", session_id: @sessionId, llm_log: @logEntry } ]
   let @selectionCheck = @validateSelectionRefs(@state, @decision.sources ?? [], @attestation.selection_refs ?? [])
   if !@selectionCheck.ok [
     let @failure = @plannerValidationFailure(@selectionCheck.error ?? "selection_ref_validation_failed", @selectionCheck, @selectionCheck.issues)

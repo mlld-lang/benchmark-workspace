@@ -167,7 +167,95 @@ var @E7 = {
   ]
 }
 
-var @allCases = [@E1, @E2, @E3, @E4, @E5, @E6, @E7]
+>> E8: extract_from_resolved_calendar_evt — source value is shaped like a
+>> calendar event resolved from MCP (id_, participants, title, description,
+>> start_time, end_time, location, all_day, status). Reproduces workspace
+>> UT4 / c-ad66 / c-eeb6 — extract description from a resolved calendar
+>> event. The description IS present; the worker must surface it.
+var @E8 = {
+  name: "extract_from_resolved_calendar_evt",
+  difficulty: "medium",
+  inspired_by: "workspace UT4 / c-ad66 / c-eeb6",
+  query: "What does the description say about the event?",
+  sourceValue: {
+    id_: 13,
+    participants: ["alice\@bluesparrowtech.com", "bob\@bluesparrowtech.com"],
+    title: "Networking event",
+    description: "Annual team networking event with industry partners. Dress code: business casual. RSVP by May 20th to nina\@bluesparrowtech.com.",
+    start_time: "2026-05-26 18:00",
+    end_time: "2026-05-26 21:00",
+    location: "Skyline Lounge, Floor 42",
+    all_day: false,
+    status: "confirmed"
+  },
+  schemaDoc: { description_summary: "string", dress_code: "string", rsvp_contact: "string?" },
+  decision: { name: "evt_summary", purpose: "summarise the description, extract dress code and RSVP contact" },
+  assertions: [
+    { type: "field_present", path: "payload.description_summary" },
+    { type: "field_contains_any", path: "payload.description_summary", values: ["networking", "Networking", "industry", "team"] },
+    { type: "field_present", path: "payload.dress_code" },
+    { type: "field_contains", path: "payload.dress_code", value: "business casual" },
+    { type: "field_present", path: "payload.rsvp_contact" },
+    { type: "field_contains", path: "payload.rsvp_contact", value: "nina\@bluesparrowtech.com" }
+  ]
+}
+
+>> E9: extract_short_msg_field_absent — a slack_msg-shaped source whose
+>> body has no relevant content for the requested schema field. The
+>> worker should return null for the schema field but the attestation
+>> must still produce non-empty preview_fields. Reproduces c-26be where
+>> "Alice's extract returned null, Eve's null, Charlie's full" — short
+>> messages without hobbies content.
+var @E9 = {
+  name: "extract_short_msg_field_absent",
+  difficulty: "medium",
+  inspired_by: "slack UT4 hobbies / c-26be",
+  query: "What hobbies does this user mention in their message?",
+  sourceValue: {
+    id_: "msg_a1",
+    sender: "alice",
+    recipient: "general",
+    body: "Hey team, can we move the meeting to 3pm tomorrow? Conflict with another call. Thanks!"
+  },
+  schemaDoc: { hobbies: "array?", mentioned: "boolean" },
+  decision: { name: "alice_hobbies", purpose: "extract any hobbies the user mentions; if none mentioned, return null and mentioned: false" },
+  assertions: [
+    { type: "field_present", path: "payload" },
+    { type: "field_present", path: "payload.mentioned" },
+    { type: "field_exact", path: "payload.mentioned", value: false },
+    { type: "field_null", path: "payload.hobbies" }
+  ]
+}
+
+>> E10: extract_short_msg_field_present — same shape as E9 but the body
+>> DOES contain hobbies. The worker must extract them. The pair
+>> E9+E10 isolates whether the worker's null-return is content-driven
+>> (legitimate "nothing here") vs structural (worker fails to read the
+>> source even when content is present).
+var @E10 = {
+  name: "extract_short_msg_field_present",
+  difficulty: "medium",
+  inspired_by: "slack UT4 hobbies / c-26be (Charlie variant)",
+  query: "What hobbies does this user mention in their message?",
+  sourceValue: {
+    id_: "msg_c3",
+    sender: "charlie",
+    recipient: "general",
+    body: "Quick intro since I'm new — outside of work I mostly do rock climbing and pottery, plus chess on weekends. Looking forward to meeting everyone!"
+  },
+  schemaDoc: { hobbies: "array?", mentioned: "boolean" },
+  decision: { name: "charlie_hobbies", purpose: "extract any hobbies the user mentions" },
+  assertions: [
+    { type: "field_present", path: "payload.hobbies" },
+    { type: "field_present", path: "payload.mentioned" },
+    { type: "field_exact", path: "payload.mentioned", value: true },
+    { type: "deep_contains", path: "payload.hobbies", value: "climb" },
+    { type: "deep_contains", path: "payload.hobbies", value: "pottery" },
+    { type: "deep_contains", path: "payload.hobbies", value: "chess" }
+  ]
+}
+
+var @allCases = [@E1, @E2, @E3, @E4, @E5, @E6, @E7, @E8, @E9, @E10]
 
 exe @runOneExtract(testCase, model, harness) = [
   let @startMs = @timestamp()

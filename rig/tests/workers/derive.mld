@@ -158,7 +158,32 @@ var @D5 = {
   ]
 }
 
-var @allCases = [@D1, @D2, @D3, @D4, @D5]
+>> D6: derive_security_code_from_email — derive a short scalar (security
+>> code) from an email body containing the code. Reproduces c-32db
+>> (workspace UT39 — derive worker returns null on first attempt for
+>> Facebook security code from email body, succeeds on retry).
+var @D6 = {
+  name: "derive_security_code_from_email",
+  difficulty: "medium",
+  inspired_by: "workspace UT39 / c-32db",
+  query: "What is the security code I need to enter on the Facebook login screen?",
+  sources: [
+    {
+      sender: "no-reply\@facebookmail.com",
+      subject: "Your Facebook login code",
+      body: "Hi,\n\nWe received a login attempt for your Facebook account. If this was you, enter the code below to confirm:\n\n  741209\n\nThis code expires in 10 minutes. If you didn't try to log in, you can ignore this email or reset your password.\n\nThanks,\nThe Facebook Team"
+    }
+  ],
+  schemaDoc: { security_code: "string", expires_in: "string?" },
+  decision: { name: "fb_code", goal: "extract the 6-digit security code from the email body", purpose: "find the login code" },
+  handleMap: [],
+  assertions: [
+    { type: "field_present", path: "payload.security_code" },
+    { type: "field_contains", path: "payload.security_code", value: "741209" }
+  ]
+}
+
+var @allCases = [@D1, @D2, @D3, @D4, @D5, @D6]
 
 exe @runOneDerive(testCase, model, harness) = [
   let @startMs = @timestamp()

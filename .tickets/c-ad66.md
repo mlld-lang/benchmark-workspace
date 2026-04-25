@@ -1,6 +1,6 @@
 ---
 id: c-ad66
-status: open
+status: closed
 deps: []
 links: [c-pe02, c-eeb6, c-32db]
 created: 2026-04-23T04:39:31Z
@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: Adam
 tags: [extract, worker, null-response]
-updated: 2026-04-23T16:44:06Z
+updated: 2026-04-25T03:44:23Z
 ---
 # Extract worker returns null on source-backed extraction from resolved records
 
@@ -25,3 +25,7 @@ Possible causes:
 
 Worth checking: does the extract worker prompt include the source record's actual content? Or is it getting the planner-projected view (which hides title/description)?
 
+
+## Notes
+
+**2026-04-25T03:44:23Z** Fixed in rig — see rig/workers/extract.mld @coerceExtractAttestation. Added @isDegenerateExtractRaw and @isDegenerateExtractPayload guards so degenerate worker outputs (null/empty/whitespace raw, null/missing/empty payload) coerce to null. Switched the dispatcher's check from !@attestation.isDefined() to @attestation == null because exe-returned null is wrapped in a way that fools .isDefined(). Mirrored on derive (c-32db). Now the planner sees extract_empty_response on degenerate worker output instead of a success-shaped envelope with empty preview_fields. Regression covered in rig/tests/index.mld: coerce-extract-rejects-degenerate-output, coerce-extract-accepts-valid-output, coerce-derive-rejects-degenerate-output. Worker LLM tests still 21/21. Out of scope for this fix: c-26be (planner colloquial 'null' on populated preview_fields — separate symptom), c-25af (MCP bridge null — different layer).
