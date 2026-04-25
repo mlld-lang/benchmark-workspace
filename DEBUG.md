@@ -343,7 +343,7 @@ Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this ove
 | Single-task debugging with `--debug` and trace | Local |
 | 1-3 task verification of a fix | Local |
 | Full suite sweep | **Remote** |
-| All 4 suites (e.g., before/after a runtime fix) | **Remote**, fan-out via `bench-all.sh` |
+| All 4 suites (e.g., before/after a runtime fix) | **Remote**, fan-out via `bench.sh` |
 | Iterating on a prompt change after spike-driven fix | Remote single-suite at first, fan-out for the final measurement |
 | Anything reading a live opencode session as it runs | Local (remote opencode DB isn't reachable until the run finishes and you fetch artifacts) |
 
@@ -354,7 +354,7 @@ Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this ove
 git push
 
 # 2. Fan out the full bench surface — 5 separate Namespace 32x64 runners, all in parallel
-scripts/bench-all.sh
+scripts/bench.sh
 
 # 3. Watch the dispatched runs
 gh run list --workflow=bench-run.yml --limit 8
@@ -370,7 +370,7 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode parts --session <session-id>
 ```
 
-`scripts/bench-all.sh` targets:
+`scripts/bench.sh` targets:
 
 | Target | Tasks | Notes |
 |---|---|---|
@@ -382,7 +382,7 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 | `travel` | full suite | 20 |
 | (default, no args) | all 5 above | The full sweep |
 
-You can also pass a subset: `scripts/bench-all.sh banking slack travel`.
+You can also pass a subset: `scripts/bench.sh banking slack travel`.
 
 ### Subset and one-off runs
 
@@ -403,7 +403,7 @@ bench-run.yml inspects the pulled image's `mlld.sha` Docker label and compares i
 - Match → run starts immediately.
 - Mismatch → workflow joins any in-flight `bench-image.yml` run (or dispatches one), waits for it to finish, repulls, then proceeds.
 
-Adds ~3-4 min to the first run after a mlld push. Zero overhead on a fresh image. So the full-sweep flow after pushing both clean and mlld is just `scripts/bench-all.sh` — the gate handles staleness.
+Adds ~3-4 min to the first run after a mlld push. Zero overhead on a fresh image. So the full-sweep flow after pushing both clean and mlld is just `scripts/bench.sh` — the gate handles staleness.
 
 ### Reading remote results
 

@@ -2,10 +2,10 @@
 # Dispatch one or more bench-run.yml workflow_dispatch invocations on Namespace.
 #
 # Usage:
-#   scripts/bench-all.sh                          # all 5 groups (workspace-a/b + banking + slack + travel)
-#   scripts/bench-all.sh workspace-a              # one group
-#   scripts/bench-all.sh banking slack            # subset
-#   scripts/bench-all.sh workspace                # both halves of workspace
+#   scripts/bench.sh                          # all 5 groups (workspace-a/b + banking + slack + travel)
+#   scripts/bench.sh workspace-a              # one group
+#   scripts/bench.sh banking slack            # subset
+#   scripts/bench.sh workspace                # both halves of workspace
 #
 # Each invocation triggers a separate Namespace 32x64 runner and runs all
 # in-scope tasks in parallel inside that runner. Five groups → 5 runners
