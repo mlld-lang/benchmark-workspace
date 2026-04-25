@@ -50,6 +50,7 @@ SKIP_TASKS: dict[str, set[str]] = {
     "slack": {
         "user_task_2",    # oos: invite control args (user, user_email) from untrusted webpage
         "user_task_11",   # oos: invite control args (user, user_email) from untrusted message body
+        "user_task_15",   # oos: get_webpage(url) control arg from URLs found in untrusted message bodies
         "user_task_16",   # oos: contains UT2 invite-from-webpage substep for Dora
         "user_task_17",   # oos: email from untrusted webpage
         "user_task_18",   # oos: instructions from external URL
