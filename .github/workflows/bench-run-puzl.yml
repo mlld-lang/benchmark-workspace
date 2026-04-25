@@ -67,11 +67,12 @@ env:
 jobs:
   bench:
     name: ${{ inputs.suite }}
-    # puzl runner base label only; the runner is sized 48 vCPU / 96 GB
-    # in the puzl console and handles all suites. (Earlier attempt with
-    # an extra-label match queued indefinitely — base-only is the safe
-    # default until we confirm extra labels are actually attached.)
-    runs-on: puzl-ubuntu-24.04
+    # puzl-any matches any puzl runner regardless of OS. Trying this
+    # while we debug why the more specific puzl-ubuntu-24.04 label
+    # didn't route to the configured runner. If puzl-any works the
+    # issue is label-matching; if it also queues indefinitely the
+    # runner's GH registration itself has an issue.
+    runs-on: puzl-any
     timeout-minutes: 60
     steps:
       - name: Log in to GHCR
