@@ -109,8 +109,13 @@ jobs:
             "$IMAGE_REF"
 
       - name: Upload artifacts
+        # actions/upload-artifact stores in GitHub's artifact API so
+        # `gh run download <run-id>` works from the local machine. The
+        # namespace-actions/upload-artifact alternative is faster but
+        # lives in a separate bucket that the local `nsc artifact` CLI
+        # can't reach without per-artifact direct download URLs.
         if: always()
-        uses: namespace-actions/upload-artifact@v0
+        uses: actions/upload-artifact@v4
         with:
           name: bench-${{ github.run_id }}
           path: artifacts/

@@ -24,22 +24,11 @@ RUNS_DIR = REPO_ROOT / "runs"
 
 
 def gh_download(run_id: str, dest: Path) -> int:
-    """Pull artifacts from Namespace's storage via `nsc artifact download`.
-
-    The bench-run workflow uploads with namespace-actions/upload-artifact,
-    which writes to Namespace's high-perf store rather than GitHub's. The
-    artifact name is `bench-<github-run-id>`. Requires `nsc login` first.
-    """
+    """Pull artifacts from GitHub's artifact API via `gh run download`."""
     dest.mkdir(parents=True, exist_ok=True)
-    artifact_name = f"bench-{run_id}"
     proc = subprocess.run(
-        ["nsc", "artifact", "download", artifact_name, str(dest), "--unpack"],
-        capture_output=True, text=True,
+        ["gh", "run", "download", run_id, "-D", str(dest)],
     )
-    if proc.returncode != 0:
-        sys.stderr.write(proc.stderr)
-        if "not logged in" in proc.stderr:
-            sys.stderr.write("\nRun `nsc login` once, then retry.\n")
     return proc.returncode
 
 
