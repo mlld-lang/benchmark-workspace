@@ -49,6 +49,18 @@ echo "[bench-remote]   env count: $(env | wc -l)  total bytes: $(env | wc -c)"
 echo "[bench-remote]   ulimit -s (kb): $(ulimit -s 2>&1)"
 echo "[bench-remote]   top 5 env vars by size:"
 env | awk '{ print length, $0 }' | sort -rn | head -5 | awk '{ printf "[bench-remote]     %d bytes: %s\n", $1, substr($0, index($0,$2), 80) }'
+# Smoke test: minimal mlld script that imports an MCP server so we can isolate
+# spawn-E2BIG from anything bench-specific.
+echo "[bench-remote] smoke: minimal MCP spawn test"
+mkdir -p /tmp/smoke
+cat > /tmp/smoke/probe.mld <<'PROBE_EOF'
+import tools from mcp "uv run --project /workspace/clean/bench python3 /workspace/clean/src/mcp_server.py eyJzdWl0ZV9uYW1lIjogIndvcmtzcGFjZSIsICJlbnZfbmFtZSI6ICJ3b3Jrc3BhY2UifQ==" as @mcp
+show "smoke ok"
+PROBE_EOF
+(mlld /tmp/smoke/probe.mld 2>&1 | head -10) || true
+echo "[bench-remote] smoke end"
+echo
+
 echo "[bench-remote] $ uv run --project bench python3 src/run.py ${ARGS[*]}"
 echo
 
