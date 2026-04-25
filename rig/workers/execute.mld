@@ -92,7 +92,10 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   >> already validates shape against `inputs:` at call time.
   let @preparedArgs = @inputValues
   if @updateFields.length > 0 && !@hasNonNullFieldValue(@preparedArgs, @updateFields) [
-    => @plannerValidationFailure("no_update_fields", { update_fields: @updateFields, hint: `This is an update tool. You must include at least one changed field. Updatable fields: @updateFields.join(", "). Pass the new value for at least one of these in your args.` }, null)
+    => @plannerValidationFailure("no_update_fields", {
+      update_fields: @updateFields,
+      hint: `Update tools require at least one changed field in args alongside the control args. None of the declared update fields (@updateFields.join(", ")) are present. Pass the new value(s) directly — known literals or derived refs are both fine for update fields. Example: { args: { <control_arg>: { source: "resolved", ... }, @updateFields[0]: { source: "known", value: "<new value>" } } }. The error is NOT about source-class — switching between known/derived/selection won't fix it; you must include the field name itself.`
+    }, null)
   ]
   if @toolCorrelateControlArgs(@tool) [
     let @correlated = @correlatedControlArgsCheck(@compiled.compiled_entries, @controlArgs)
