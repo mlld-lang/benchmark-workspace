@@ -8,8 +8,9 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [travel, derive]
+updated: 2026-04-25T21:57:39Z
 ---
-# TR-UT13/14 derive_empty_response on car rental ranking tasks
+# TR-UT13 14 car_types hidden as untrusted in record projection forces extract dance
 
 Travel UT13, UT14 both fail with derive_empty_response on car rental ranking. Both have car rental data but derive worker can't produce output.
 

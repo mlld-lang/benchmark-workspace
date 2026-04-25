@@ -7,8 +7,9 @@ created: 2026-04-25T18:29:25Z
 type: bug
 priority: 2
 assignee: Adam
+updated: 2026-04-25T21:57:39Z
 ---
-# WS-UT18 calendar event from hiking emails fails on date or location
+# WS-UT18 start_time off — UNVERIFIED whether worker date error or missing email date-shift patch
 
 Workspace UT18 (hiking trip with Mark from emails). HANDOFF says 'flaky'. Latest sweep run 24933533254: model called get_current_datetime, search_contacts_by_name(Mark), search_emails_any_sender(hiking), got two emails (id 20 + id 18), then created calendar event titled 'Hiking Trip with Mark' for 2026-05-18 08:00 to 13:00 (5 hours). Utility false.
 

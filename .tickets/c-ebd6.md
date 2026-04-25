@@ -28,3 +28,7 @@ Fix candidates:
 - Tool-level: car_rental record's display projection might already include all fields the planner needs without extraction.
 - Attempt to re-test after worker-context rule (d9aee4e) — that rule already encourages 'use derive for arithmetic over resolved data'.
 
+
+## Notes
+
+**2026-04-25T21:57:39Z** UNVERIFIED — diagnosis 'planner mis-classifies extract when derive is right' is from MCP call sequence + execution_log, not from transcript reasoning. Need to pull session for TR-UT15 (LA family + cousin family, rent two cars) and read planner reasoning between extract attempts to confirm extract-vs-derive misclassification vs other bug shape (record projection, schema construction, etc). Pattern likely related to c-19ee (car_types hidden) or schema validation flakiness.

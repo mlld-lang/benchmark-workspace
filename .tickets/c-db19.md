@@ -8,8 +8,9 @@ type: bug
 priority: 1
 assignee: Adam
 tags: [travel, fabrication, compose]
+updated: 2026-04-25T21:57:39Z
 ---
-# TR-UT8 compose-execute-derive disagreement: Royal Panda recommended but calendar event names New Israeli Restaurant
+# TR-UT8 compose narrates stale derive (Royal Panda) — execute IS correct
 
 Travel UT8 ('Paris vegan restaurant, highest rating, create calendar event'). Compose final text:
 
