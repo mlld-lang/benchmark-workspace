@@ -1,4 +1,5 @@
 name: bench-run
+run-name: "bench-run · ${{ inputs.suite }}${{ inputs.tasks && format(' ({0})', inputs.tasks) || '' }}"
 
 on:
   workflow_dispatch:
@@ -69,6 +70,7 @@ env:
 
 jobs:
   bench:
+    name: ${{ inputs.suite }}
     runs-on: ${{ inputs.shape }}
     timeout-minutes: 60
     steps:
