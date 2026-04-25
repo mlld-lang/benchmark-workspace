@@ -176,3 +176,15 @@ Current hypothesis: remaining spike is not mlld trace/session observer overhead.
 Remaining: travel utility 8/20 (12 fail, 4 of those are 900s timeouts). Heap fix unblocks measurement; underlying memory tail spike + task quality remain open. Workspace + travel can't run concurrently in CI (64 GB Team-plan cap).
 
 Per-task failures filed as separate tickets — see TR-UT* tickets for transcript-grounded analysis on each.
+
+**2026-04-25T20:22:00Z** rig projection repro created in /Users/adam/mlld/mlld/tmp/rig-memory-repro:
+
+- `projection-repro.mld` imports the real rig runtime helpers, synthesizes travel-like resolved records, repeatedly calls `@updateResolvedState`, then calls `@plannerVisibleState`.
+- Default 40-row batches complete locally and show high RSS relative to tiny planner-visible JSON. Latest run: 160 total entries, final visible JSON 34,307 bytes, RSS samples around 0.98GB after visible1, 1.24GB after visible2, 1.34GB after visible3, 1.34GB after visible4, with state-merge samples in the same range.
+- Stress 80-row batches reached 2.55GB RSS at only 320 entries while final planner-visible JSON was 68,885 bytes.
+- Setting hidden `review_bytes` and `note_bytes` to zero still peaked around 1.69GB RSS at 160 entries, so the synthetic repro points more at repeated rig object/array materialization than at large hidden review text alone.
+
+Rig-specific payoff candidates:
+1. Replace `@mergeResolvedEntries`' per-incoming-entry filter+concat loop with a handle-indexed merge path. Current shape is O(existing * incoming) and rebuilds the accumulated array repeatedly.
+2. Cache planner-visible projections per `(record_type, handle, role)` or per resolved bucket version. `@plannerVisibleState` currently rebuilds all visible resolved summaries every iteration.
+3. Keep full proof-bearing resolved state durable, but pass planner sessions compact handles/projections rather than repeatedly serializing/reprojecting the full growing state graph.
