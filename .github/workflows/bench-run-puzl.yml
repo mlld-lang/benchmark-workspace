@@ -67,10 +67,11 @@ env:
 jobs:
   bench:
     name: ${{ inputs.suite }}
-    # Matches the runner configured in puzl console — base label
-    # puzl-ubuntu-24.04 + extra label puzl-bench-48x96 (logical AND).
-    # Sized 48 vCPU / 96 GB; same runner handles all suites.
-    runs-on: [puzl-ubuntu-24.04, puzl-bench-48x96]
+    # puzl runner base label only; the runner is sized 48 vCPU / 96 GB
+    # in the puzl console and handles all suites. (Earlier attempt with
+    # an extra-label match queued indefinitely — base-only is the safe
+    # default until we confirm extra labels are actually attached.)
+    runs-on: puzl-ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Log in to GHCR
