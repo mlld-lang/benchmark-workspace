@@ -45,6 +45,10 @@ echo "[bench-remote]   /workspace contents: $(ls /workspace 2>&1 | tr '\n' ' ')"
 echo "[bench-remote]   /workspace/agentdojo/src exists? $(test -d /workspace/agentdojo/src && echo yes || echo NO)"
 echo "[bench-remote]   /workspace/agentdojo/src/agentdojo/runner.py exists? $(test -f /workspace/agentdojo/src/agentdojo/runner.py && echo yes || echo NO)"
 echo "[bench-remote]   /workspace/clean/.mlld-sdk -> $(readlink /workspace/clean/.mlld-sdk 2>/dev/null || echo MISSING)"
+echo "[bench-remote]   env count: $(env | wc -l)  total bytes: $(env | wc -c)"
+echo "[bench-remote]   ulimit -s (kb): $(ulimit -s 2>&1)"
+echo "[bench-remote]   top 5 env vars by size:"
+env | awk '{ print length, $0 }' | sort -rn | head -5 | awk '{ printf "[bench-remote]     %d bytes: %s\n", $1, substr($0, index($0,$2), 80) }'
 echo "[bench-remote] $ uv run --project bench python3 src/run.py ${ARGS[*]}"
 echo
 
