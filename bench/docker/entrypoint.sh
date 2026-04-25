@@ -40,6 +40,11 @@ fi
 START_TS=$(date +%s)
 echo "[bench-remote] RUN_ID=$RUN_ID SUITE=$SUITE TASKS=${TASKS:-<all>} parallel=${PARALLELISM:-40}"
 echo "[bench-remote] image_sha=${IMAGE_SHA:-unknown} mlld_ref=${MLLD_REF:-unknown}"
+echo "[bench-remote] diagnostics:"
+echo "[bench-remote]   /workspace contents: $(ls /workspace 2>&1 | tr '\n' ' ')"
+echo "[bench-remote]   /workspace/agentdojo/src exists? $(test -d /workspace/agentdojo/src && echo yes || echo NO)"
+echo "[bench-remote]   /workspace/agentdojo/src/agentdojo/runner.py exists? $(test -f /workspace/agentdojo/src/agentdojo/runner.py && echo yes || echo NO)"
+echo "[bench-remote]   /workspace/clean/.mlld-sdk -> $(readlink /workspace/clean/.mlld-sdk 2>/dev/null || echo MISSING)"
 echo "[bench-remote] $ uv run --project bench python3 src/run.py ${ARGS[*]}"
 echo
 
