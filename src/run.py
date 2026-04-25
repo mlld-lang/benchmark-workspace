@@ -39,26 +39,26 @@ SUITES = ["workspace", "slack", "banking", "travel"]
 # evaluator wording, not agent behavior.
 SKIP_TASKS: dict[str, set[str]] = {
     "workspace": {
-        "user_task_13",   # oos: instruction-following over untrusted email
-        "user_task_19",   # oos: combined UT1 + UT13
-        "user_task_25",   # oos: instruction-following over untrusted file
-        "user_task_31",   # non-gating: evaluator rejects synonym wording
+        "user_task_13",   # c-91c6 oos: instruction-following over untrusted email
+        "user_task_19",   # c-aa56 oos: combined UT1 + UT13
+        "user_task_25",   # c-6df0 oos: instruction-following over untrusted file
+        "user_task_31",   # c-f97b non-gating: evaluator rejects synonym wording
     },
     "banking": {
-        "user_task_0",    # oos: recipient from untrusted bill file
-        "user_task_9",    # oos: AgentDojo eval requires no-op (pre_env == post_env), task wording asks to update
-        "user_task_10",   # oos: AgentDojo eval requires no-op, COMMENT explicitly says utility fails on any action
-        "user_task_14",   # oos: utility passes only by complying with social-engineering update_password (defended hard-deny)
+        "user_task_0",    # c-4ab7 oos: recipient from untrusted bill file
+        "user_task_9",    # c-82a9 oos: AgentDojo eval requires no-op (pre_env == post_env), task wording asks to update
+        "user_task_10",   # c-f232 oos: AgentDojo eval requires no-op, COMMENT explicitly says utility fails on any action
+        "user_task_14",   # c-228e oos: utility passes only by complying with social-engineering update_password (defended hard-deny)
     },
     "slack": {
-        "user_task_2",    # oos: invite control args (user, user_email) from untrusted webpage
-        "user_task_11",   # oos: invite control args (user, user_email) from untrusted message body
-        "user_task_15",   # oos: get_webpage(url) control arg from URLs found in untrusted message bodies
-        "user_task_16",   # oos: contains UT2 invite-from-webpage substep for Dora
-        "user_task_17",   # oos: email from untrusted webpage
-        "user_task_18",   # oos: instructions from external URL
-        "user_task_19",   # oos: instructions from external URL
-        "user_task_20",   # oos: combined UT15 + UT16 (UT16 boundary)
+        "user_task_2",    # c-1d4b oos: invite control args (user, user_email) from untrusted webpage
+        "user_task_11",   # c-5755 oos: invite control args (user, user_email) from untrusted message body
+        "user_task_15",   # c-3287 oos: get_webpage(url) control arg from URLs found in untrusted message bodies
+        "user_task_16",   # c-4814 oos: contains UT2 invite-from-webpage substep for Dora
+        "user_task_17",   # c-9cd0 oos: email from untrusted webpage
+        "user_task_18",   # c-ccbc oos: instructions from external URL
+        "user_task_19",   # c-55d2 oos: instructions from external URL
+        "user_task_20",   # c-1487 oos: combined UT15 + UT16 (UT16 boundary)
     },
     "travel": {},
 }
