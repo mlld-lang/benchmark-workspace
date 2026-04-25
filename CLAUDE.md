@@ -146,10 +146,11 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 
 Use remote runs. Local CPU pegs at ~10 parallel tasks; Namespace runners on the Team plan (64 vCPU concurrent cap) fan out all 4 suites in parallel — full bench surface in ~10-15 min. The image bakes mlld + clean + agentdojo from main; bench-run.yml has a freshness gate that auto-rebuilds the image if `mlld-lang/mlld:2.1.0` HEAD has moved since the last image build.
 
-Per-suite shape (set in `scripts/bench.sh`):
-- workspace → 32x64 (32 vCPU / 64 GB) — needs the RAM; 36 parallel tasks each carry the AgentDojo TaskEnvironment + mlld + MCP server in memory
-- banking, slack, travel → 8x16 — lighter fixtures
-- Peak: 32+8+8+8 = 56 vCPU, fits Team's 64 cap.
+Per-suite shape (set in `scripts/bench.sh`, derived from OOMs):
+- workspace → 32x64 (32 vCPU / 64 GB) — 36 parallel tasks; OOMs at 8x16 and 16x32
+- travel → 16x32 — 20 parallel tasks; OOMs at 8x16
+- banking, slack → 8x16 — ≤15 parallel tasks survive 16 GB
+- Peak: 32+16+8+8 = 64 vCPU — exact fit under Team's 64 cap.
 
 Standard flow: push your changes to `main`, run `scripts/bench.sh`, fetch each run with `src/fetch_run.py`, browse opencode transcripts via `--home runs/<id>/opencode`. See DEBUG.md "Remote runs (Namespace)" for the full workflow including transcript correlation, debugging failures from artifacts, and the auto-rebuild gate.
 
@@ -158,7 +159,7 @@ Standard flow: push your changes to `main`, run `scripts/bench.sh`, fetch each r
 - **Never use `show` in exe functions during bench runs.** It writes to stdout and corrupts the host's JSON parsing. Use `log` (stderr) or `MLLD_TRACE` instead.
 - **Never rename record fields to match MCP parameter names.** The intent compiler maps arg keys to resolved values — the names don't need to match. Field renaming across the MCP boundary destroys StructuredValue metadata.
 - **Run worker tests before and after prompt changes.** `mlld rig/tests/workers/run.mld --no-checkpoint` catches regressions in ~50s. If tests pass too easily, the assertions are too weak.
-- **Workspace remote runs need 32x64 (64 GB).** 36 parallel workspace tasks OOM on 8x16 (16 GB) — each task pins the full AgentDojo TaskEnvironment + mlld + MCP processes in RAM. Banking/slack/travel are fine on 8x16. `scripts/bench.sh` already sets the right shape per target; if you call `bench-run.yml` directly with workspace, pass `-f shape=nscloud-ubuntu-22.04-amd64-32x64`.
+- **Workspace and travel remote runs need bigger shapes.** Workspace (36 parallel tasks) needs 32x64 (64 GB). Travel (20 parallel tasks) needs 16x32 (32 GB). Both OOM on 8x16 (exit 137). Banking and slack survive 8x16. `scripts/bench.sh` already sets the right shape per target; if you call `bench-run.yml` directly, pass `-f shape=nscloud-ubuntu-22.04-amd64-32x64` for workspace or `-f shape=nscloud-ubuntu-22.04-amd64-16x32` for travel.
 
 ## Deferred: Logging Refactor (ticket c-3edc)
 

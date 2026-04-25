@@ -336,10 +336,11 @@ Typical fixes:
 
 Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this over local for any sweep larger than 3-5 tasks: local CPU pegs out around 10 parallel tasks; remote runners on the Team plan (64 vCPU concurrent cap) fan out all 4 suites in parallel — full bench surface in ~10-15 min wall time.
 
-Shape sizing per suite (set in `scripts/bench.sh`):
-- **workspace** → `32x64` (32 vCPU / 64 GB). Each task pins the full AgentDojo TaskEnvironment plus mlld+MCP processes in RAM; smaller shapes OOM under 36 parallel workspace tasks.
-- **banking, slack, travel** → `8x16` (8 vCPU / 16 GB). Smaller fixtures, lower memory pressure.
-- Peak fan-out: 32 + 8 + 8 + 8 = 56 vCPU, fits Team's 64-vCPU cap.
+Shape sizing per suite (set in `scripts/bench.sh`, derived empirically from OOMs):
+- **workspace** → `32x64` (32 vCPU / 64 GB). 36 parallel tasks; smaller shapes OOM.
+- **travel** → `16x32` (16 vCPU / 32 GB). 20 parallel tasks; OOMs at 8x16.
+- **banking, slack** → `8x16` (8 vCPU / 16 GB). ≤15 parallel tasks; survive.
+- Peak fan-out: 32 + 16 + 8 + 8 = 64 vCPU — exact fit under Team's 64 vCPU cap.
 
 Override per-run via `gh workflow run bench-run.yml -f shape=nscloud-ubuntu-22.04-amd64-16x32`.
 
@@ -381,11 +382,11 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 
 | Target | Shape | Tasks | Notes |
 |---|---|---|---|
-| `workspace` | 32x64 | 36 active (UT13/19/25/31 oos) | Heaviest suite — needs 64 GB to avoid OOM |
-| `banking`   | 8x16  | 15 active (UT0 oos)            | Light |
-| `slack`     | 8x16  | 14 active (UT2/11/16/17/18/19/20 oos) | Light |
-| `travel`    | 8x16  | 20                              | Light |
-| (default, no args) | per-target | all 4 above | The full sweep — 56 vCPU peak |
+| `workspace` | 32x64 | 36 active (UT13/19/25/31 oos) | Heaviest — OOMs below 64 GB |
+| `travel`    | 16x32 | 20                            | OOMs at 8x16; 32 GB needed |
+| `banking`   | 8x16  | 15 active (UT0 oos)           | Survives 8x16 |
+| `slack`     | 8x16  | 14 active (oos UT2/11/16/17/18/19/20) | Survives 8x16 |
+| (default, no args) | per-target | all 4 above | Peak 64 vCPU — exact fit on Team plan |
 
 You can also pass a subset: `scripts/bench.sh banking slack travel`.
 
