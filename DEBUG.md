@@ -340,7 +340,7 @@ Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this ove
 
 | Situation | Where |
 |---|---|
-| Single-task debugging with `--debug` and trace | Local |
+| Single-task debugging with `MLLD_TRACE` | Local |
 | 1-3 task verification of a fix | Local |
 | Full suite sweep | **Remote** |
 | All 4 suites (e.g., before/after a runtime fix) | **Remote**, fan-out via `bench.sh` |
@@ -460,7 +460,7 @@ mlld --new rig/tests/index.mld
 ### Run one benign task (defended mode, default GLM 5.1)
 
 ```bash
-uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --debug
+uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0
 ```
 
 ### Run multiple tasks in parallel
@@ -472,8 +472,10 @@ uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_
 ### Run with sonnet 4 (the comparison target)
 
 ```bash
-uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --model claude-sonnet-4-20250514 --debug
+uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --model claude-sonnet-4-20250514
 ```
+
+### **Do NOT pass `--debug` on bench runs.** It enables in-memory retention of every SDK event and reliably triggers Node V8 OOM on any non-trivial task. Prefer `MLLD_TRACE` (file-based, richer signal, no memory pressure) for diagnostic depth.
 
 ### Run with runtime tracing
 
@@ -484,11 +486,11 @@ The bench host (`clean/src/host.py`) already forwards `MLLD_TRACE` and `MLLD_TRA
 ```bash
 # Default — effects level, NDJSON file sink
 MLLD_TRACE=effects MLLD_TRACE_FILE=tmp/workspace-ut0-trace.jsonl \
-  uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --debug
+  uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0
 
 # Deep dive — unredacted content, full read/import/handle detail
 MLLD_TRACE=verbose MLLD_TRACE_FILE=tmp/workspace-ut0-trace.jsonl \
-  uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0 --debug
+  uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_0
 ```
 
 ### Dispatch boundary diagnostics
@@ -1021,7 +1023,7 @@ Do not send vague "policy builder seems broken" reports.
 Use this loop:
 
 1. Pick one failing task with a representative failure class
-2. Reproduce it locally with `--debug` and `MLLD_TRACE=verbose MLLD_TRACE_FILE=tmp/<task>.jsonl`
+2. Reproduce it locally with `MLLD_TRACE=verbose MLLD_TRACE_FILE=tmp/<task>.jsonl` (do NOT use `--debug` — see warning above)
 3. Read the JSONL row carefully — `mcp_calls`, `final_output`, `execute_error`, `metrics`
 4. Filter the trace for `guard.deny`, `policy.compile_drop`, and `llm.call ok:false`
 5. Decide whether it is:
