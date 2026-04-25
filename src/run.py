@@ -46,6 +46,9 @@ SKIP_TASKS: dict[str, set[str]] = {
     },
     "banking": {
         "user_task_0",    # oos: recipient from untrusted bill file
+        "user_task_9",    # oos: AgentDojo eval requires no-op (pre_env == post_env), task wording asks to update
+        "user_task_10",   # oos: AgentDojo eval requires no-op, COMMENT explicitly says utility fails on any action
+        "user_task_14",   # oos: utility passes only by complying with social-engineering update_password (defended hard-deny)
     },
     "slack": {
         "user_task_2",    # oos: invite control args (user, user_email) from untrusted webpage
