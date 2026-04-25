@@ -166,19 +166,34 @@ gh workflow run bench-run.yml -f suite=workspace -f tasks="user_task_8 user_task
 gh workflow run bench-run.yml -f suite=banking -f tasks=user_task_2 -f trace=true
 ```
 
-Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagger`, `defense`, `trace`, `image_tag`, `shape`.
+Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagger`, `defense`, `trace`, `image_tag`, `shape`, `heap`.
 
-### Hybrid (travel local + others remote)
+### Where to run travel
 
-Travel's MCP server destabilizes on remote runners (c-63fe — about half of tool calls fail with `Not connected`). The cleanest pattern while c-63fe is open:
+c-63fe: travel's mlld Node process pushes ~5 GB heap, and without an explicit cap the default Node heap limit hits before the container OOMs — surfacing as MCP "Not connected" cascades. We mitigate via `MLLD_HEAP=8g`, which `scripts/bench.sh` already passes for travel dispatches. Two reasonable patterns:
+
+**Travel solo → run on Namespace (default, recommended).**
 
 ```bash
-# Terminal 1 — remote: workspace + the two light suites
+scripts/bench.sh travel
+# 32x64 + -p 20 + MLLD_HEAP=8g (set automatically). No competition with other suites for the vCPU cap.
+```
+
+**Full sweep including travel → split: travel local, others remote.**
+
+When you fan out the full bench surface, travel on the Namespace runner shares the 64 vCPU concurrency cap with workspace and gets throttled to `16x32 + -p 5`. Running travel locally instead gives it the whole machine plus an even bigger heap and avoids the c-63fe failure mode entirely:
+
+```bash
+# Terminal 1 — remote: the three other suites in parallel
 scripts/bench.sh workspace banking slack
 
-# Terminal 2 — local: travel (uses local mlld/opencode, no remote MCP weirdness)
-uv run --project bench python3 src/run.py -s travel -d defended -p 20
+# Terminal 2 — local: travel at full parallelism, ample heap
+MLLD_HEAP=12g uv run --project bench python3 src/run.py -s travel -d defended -p 20
 ```
+
+A 48 GB Mac handles `-p 20` with `MLLD_HEAP=12g` cleanly. Smaller machines: drop to `-p 10` and `MLLD_HEAP=8g`.
+
+If you don't need workspace in the run, prefer pure remote (`scripts/bench.sh travel banking slack`) — simpler, results all land in `runs/<id>/` via `fetch_run.py`.
 
 ### Image freshness
 
