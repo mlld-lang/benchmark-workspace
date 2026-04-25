@@ -1,6 +1,6 @@
 ---
 id: c-26be
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-24T23:15:28Z
@@ -8,6 +8,7 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [extract]
+updated: 2026-04-25T15:28:35Z
 ---
 # Slack UT4 / hobbies: extract returns null visibly on resolved-msg sources
 
@@ -17,3 +18,21 @@ Symptom: extract from a resolved slack_msg returns 'null' to the planner even wh
 ## Notes
 
 **2026-04-25T03:44:39Z** NOT closed by the c-ad66 fix. Re-investigation: this ticket's symptom is the planner saying 'returned null' colloquially even when preview_fields is populated (proven by extract_source_already_extracted firing on retry, which requires preview_fields > 0). That's a planner-perception issue, not a runtime null. The c-ad66/c-eeb6 fix only addresses the case where the worker LLM produces a degenerate output — Alice/Eve in the slack UT4 transcript may not match that shape. Needs transcript re-read to confirm.
+
+## Corrected diagnosis (2026-04-25)
+
+After cluster A landed (extract worker degenerate-output guards),
+re-running slack UT4 on run 24933534122 showed extract is NOT the
+problem. Bob's inbox returns 3 messages (Alice/painting,
+Charlie/swimming, Eve/blog-URL) cleanly. The agent extracts them
+correctly but composes from the visible 2 hobbies and never
+fetches Eve's blog where her hobby is documented.
+
+So UT4 is not c-ad66 family (extract returns null) — it's c-8738
+(URL-fetch workflow gap). The agent has the data, just doesn't
+know to follow URLs found in untrusted message bodies.
+
+### Status
+- UT4 → tracked under c-8738 (addendum + planner education work)
+- This ticket close: the original "extract returns null on
+  resolved-msg sources" symptom isn't reproducing post-cluster-A
