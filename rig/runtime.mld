@@ -761,6 +761,22 @@ exe @toolCallError(raw) = when [
   * => null
 ]
 
+>> Build a normalized record:handle key from a backing ref. JS unwraps the
+>> StructuredValue wrappers around `record` / `handle` so two refs with the
+>> same underlying values produce identical primitive strings, and
+>> `.includes()` on the dedup loop compares by value rather than wrapper
+>> identity. Without this normalization, two refs to the SAME instance can
+>> produce two distinct wrapped-string keys that compare unequal — which
+>> rejects legitimate same-instance dispatches like banking
+>> update_scheduled_transaction(id, recipient) from one handle (c-d428).
+exe @correlatedRefKey(ref) = js {
+  if (ref == null || typeof ref !== "object") return null;
+  const record = ref.record;
+  const handle = ref.handle;
+  if (record == null || handle == null) return null;
+  return `${String(record)}:${String(handle)}`;
+}
+
 exe @correlatedControlArgsCheck(compiledEntries, controlArgs) = [
   let @selected = for @entry in (@compiledEntries ?? []) when @controlArgs.includes(@entry.arg) => @entry
   let @refs = loop(1000) [
@@ -775,7 +791,7 @@ exe @correlatedControlArgsCheck(compiledEntries, controlArgs) = [
       values: @cursor.values.concat(@selected[@cursor.index].backing_refs ?? [])
     }
   ]
-  let @keys = for @ref in @refs when @ref.record.isDefined() && @ref.handle.isDefined() => `@ref.record:@ref.handle`
+  let @keys = for @ref in @refs when @correlatedRefKey(@ref).isDefined() => @correlatedRefKey(@ref)
   let @unique = loop(1000) [
     let @ctx = when [
       @input["_rig_cursor"] == "correlatedUniqueKeys" => @input

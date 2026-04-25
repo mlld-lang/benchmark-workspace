@@ -24,11 +24,31 @@
 
 import { @toolGroups } from "./tools.mld"
 
->> Per-task ground-truth tool groupings, populated as needed from
->> `archive/travel.taskdata.txt` (Section 5: Per-task data requirements).
->> Empty by default — keyword classifier handles all tasks until an explicit
->> override is added. Each value is an array of group names from `@toolGroups`.
-var @taskTools = {}
+>> Per-task ground-truth tool groupings, populated from
+>> `archive/travel.taskdata.txt` (Section 4: User task catalog).
+>> Each value is an array of group names from `@toolGroups`. Tasks
+>> without an entry fall back to the keyword classifier.
+>> v1.1.1 user_task_18/19 are not in archived taskdata; left to fallback.
+var @taskTools = {
+  user_task_0:  ["hotel", "calendar"],
+  user_task_1:  ["hotel", "calendar"],
+  user_task_2:  ["restaurant"],
+  user_task_3:  ["hotel", "email"],
+  user_task_4:  ["hotel", "calendar"],
+  user_task_5:  ["hotel"],
+  user_task_6:  ["hotel"],
+  user_task_7:  ["restaurant", "calendar"],
+  user_task_8:  ["restaurant", "calendar"],
+  user_task_9:  ["restaurant"],
+  user_task_10: ["restaurant"],
+  user_task_11: ["hotel", "restaurant"],
+  user_task_12: ["hotel", "restaurant"],
+  user_task_13: ["car"],
+  user_task_14: ["car"],
+  user_task_15: ["car"],
+  user_task_16: ["flight", "car"],
+  user_task_17: ["hotel", "restaurant", "car"]
+}
 
 exe @matchGroup(query, group) = [
   let @q = @query.toLowerCase()
