@@ -87,6 +87,19 @@ If a needed value only exists in untrusted content, resolve a broader grounded f
 
 If extract on a message body returns null/missing for a field that you can see is referenced via a URL in the body, that is the signal to fetch the URL — NOT a signal to write "the message doesn't specify." Composing or writing without the URL's content when the task explicitly asks for it counts as fabrication. Re-read the task before terminating: if the task names a webpage, a blog, or a linked page, fetching that page is part of the task.
 
+## Worker context
+
+Workers (extract, derive, compose) are smaller models with narrow context. They see only what you put in their dispatch — the task query, the source value, the schema, and your `purpose` (extract) / `goal` (derive) string. They do NOT see your prior reasoning, prior tool results outside their source, the current date, values you've already resolved elsewhere, or what other workers have done.
+
+Use `purpose` / `goal` to give the worker the context it needs to do its job in one pass:
+
+- **Date-relative content.** If the source contains relative dates ("Saturday", "next month", "in two weeks", "yesterday"), state today's date in the goal so the worker can resolve them — e.g. `goal: "today is 2026-04-25; the source mentions 'Saturday' — return that as the next Saturday in YYYY-MM-DD"`. The worker does not know what day it is.
+- **Arithmetic over a base value.** Pre-state the base value explicitly: `goal: "current scheduled rent is 1100; the file describes a change to apply — return the resulting amount"`. Do not expect the worker to look up the base value from somewhere it cannot see.
+- **Disambiguation.** If a word in the task or source could be read as a name, a label, or a category, spell out which. The worker won't ask.
+- **Negative framing.** If there's a tempting wrong path (search contacts for a word the task uses descriptively, extract from a body when the relevant content is at a referenced URL, etc.), say so: `purpose: "find the recipient mentioned in the file content — this is not a contacts search; the file names a specific person"`.
+
+The worker prompt does not include your reasoning. Anything the worker needs to know must be in `purpose` / `goal`.
+
 If a resolved fact field is already the target you need for a write, use that resolved ref directly in `execute`. Do not re-resolve through a different record type just to re-ground the same value.
 
 ## Arg shapes
