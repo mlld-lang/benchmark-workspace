@@ -24,17 +24,12 @@ set -euo pipefail
 #   - banking   15 parallel on 8x16  → fine
 #   - slack     14 parallel on 8x16  → fine (run 24922900581)
 #
-# Travel parallelism is also throttled (c-63fe): MCP server destabilizes
-# at higher concurrency with travel's 28-tool surface. Even with no
-# container OOM, ~50% of tool calls fail with "Not connected". Run with
-# -p 5 (fan-out) or -p 10 (solo) until c-63fe is fixed.
-#
-# Two modes:
-#   - Fan-out (workspace alongside others): travel constrained to 16x32
-#     and -p 5 so total fits Team's 64 vCPU cap (32+16+8+8 = 64).
-#   - Solo travel (workspace not in the dispatch set): bump to 32x64 +
-#     -p 10. Less aggressive than the suite size would allow because of
-#     c-63fe.
+# Travel mode switching:
+#   - Fan-out (workspace in the dispatch set): 16x32 + -p 5. Throttled
+#     for both the 64 vCPU concurrency cap and c-63fe MCP destabilization.
+#   - Solo (workspace absent): 32x64 + -p 20 (full parallelism). 64 GB
+#     fits all 20 tasks; c-63fe MCP errors are still possible but the
+#     memory headroom mitigates the OOM-driven part of the failure mode.
 SHAPE_WORKSPACE=nscloud-ubuntu-22.04-amd64-32x64
 SHAPE_TRAVEL_FANOUT=nscloud-ubuntu-22.04-amd64-16x32
 SHAPE_TRAVEL_SOLO=nscloud-ubuntu-22.04-amd64-32x64
@@ -57,13 +52,15 @@ run_target() {
     banking|b)   dispatch banking   -f suite=banking   -f shape="$SHAPE_LIGHT" ;;
     slack|s)     dispatch slack     -f suite=slack     -f shape="$SHAPE_LIGHT" ;;
     travel|t)
-      # c-63fe: MCP server destabilizes under travel's tool load — even
-      # without OOM-kill, ~50% of tool calls fail with "Not connected".
-      # Keep parallelism low while the ticket is open.
+      # c-63fe: MCP server destabilizes under travel's tool load. In
+      # fan-out mode we throttle to -p 5 because the smaller 16x32 shape
+      # also bumps into the 64 vCPU cap. Solo travel takes 32x64 with
+      # full -p 20 — 64 GB has the memory headroom even if MCP errors
+      # are still expected on some tasks until c-63fe lands.
       if "$WORKSPACE_PLANNED"; then
         dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_FANOUT" -f parallelism=5
       else
-        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_SOLO"   -f parallelism=10
+        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_SOLO"   -f parallelism=20
       fi
       ;;
     *) echo "unknown target: $1" >&2

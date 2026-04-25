@@ -384,7 +384,7 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 |---|---|---|---|---|
 | `workspace` | 32x64 | -p 40 (caps at 36) | 36 active (UT13/19/25/31 oos) | Heaviest — OOMs below 64 GB |
 | `travel` (with workspace) | 16x32 | -p 5 | 20 | Constrained: c-63fe (MCP destabilizes at higher -p) + 64 vCPU cap |
-| `travel` (solo, no workspace) | **32x64** | -p 10 | 20 | Auto-bumped when workspace not in dispatch; -p still capped per c-63fe |
+| `travel` (solo, no workspace) | **32x64** | -p 20 | 20 | Auto-bumped when workspace not in dispatch; full parallelism (64 GB headroom) |
 | `banking`   | 8x16 | -p 40 (caps at 15) | 15 active (UT0 oos) | Survives 8x16 |
 | `slack`     | 8x16 | -p 40 (caps at 14) | 14 active (oos UT2/11/16/17/18/19/20) | Survives 8x16 |
 | (default, no args) | per-target | per-target | all 4 above | Peak 64 vCPU — exact fit on Team plan |
@@ -393,7 +393,7 @@ You can also pass a subset: `scripts/bench.sh banking slack travel`.
 
 ### Travel suite caveat (c-63fe)
 
-Travel's MCP server destabilizes under load — at high parallelism (>10) about half of tool calls fail with `Not connected` / `Connection closed` / timeouts even when the container itself doesn't OOM. Travel utility numbers from remote sweeps are not measurable until c-63fe is closed. `scripts/bench.sh` applies `-p 5` (fan-out) or `-p 10` (solo) as a workaround. For travel debugging right now, prefer local single-task runs (`uv run --project bench python3 src/run.py -s travel -d defended -t user_task_X`).
+Travel's MCP server destabilizes under load — about half of tool calls fail with `Not connected` / `Connection closed` / timeouts even when the container itself doesn't OOM. Travel utility numbers from remote sweeps are not fully measurable until c-63fe is closed. `scripts/bench.sh` applies `-p 5` in fan-out mode (limited by the shared 64 vCPU cap) and `-p 20` in solo mode (32x64 has the memory headroom for full parallelism). For travel debugging right now, prefer local single-task runs (`uv run --project bench python3 src/run.py -s travel -d defended -t user_task_X`) or remote single-task dispatches (`gh workflow run bench-run.yml -f suite=travel -f tasks=user_task_N`).
 
 ### Subset and one-off runs
 
