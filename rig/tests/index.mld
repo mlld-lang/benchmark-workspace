@@ -51,7 +51,7 @@ import {
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg } from "../intent.mld"
-import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry } from "../runtime.mld"
+import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
@@ -2783,6 +2783,184 @@ var @c0a6bTokenCompile = @compileExecuteIntent(
 var @c0a6bTokenOk = @c0a6bTokenCompile.ok == true
 var @c0a6bTokenPretty = `ok=@c0a6bTokenCompile.ok`
 
+>> ============================================================
+>> STATE-PROJECTION CONTRACT (c-63fe rework regression guard)
+>> ============================================================
+>>
+>> The OOM agent's investigation (c-63fe notes 2026-04-25) identified
+>> @mergeResolvedEntries (O(existing × incoming) filter+concat) and
+>> @plannerVisibleState (rebuilds all projections every iteration) as
+>> the dominant memory + time cost on travel-shaped workloads. The
+>> indexed-prototype at /Users/adam/mlld/mlld/tmp/rig-memory-repro/
+>> showed 10x improvement (250-row/1000-entries: baseline aborted at
+>> 1.7GB; prototype 12.3s @ 1.04GB).
+>>
+>> These assertions lock in the BEHAVIORAL CONTRACT any rework must
+>> preserve. They run cheap (no LLM, synthetic state) and catch
+>> correctness regressions if the merge or projection path changes
+>> shape. Performance harness lives separately (tmp/).
+>>
+>> Contract:
+>>   1. mergeResolvedEntries dedups by handle (incoming replaces existing)
+>>   2. updateResolvedState only mutates the named record bucket
+>>   3. plannerVisibleState is idempotent given identical state
+>>   4. After update, projection includes the new entries
+>>   5. Family expansion sees the up-to-date state
+>>   6. factsources survive projection so policy compile still works
+
+var @spA1Existing = [
+  { handle: "h1", key: "k1", identity_field: "name", identity_value: "alpha", field_values: { name: "alpha", city: "Paris" } },
+  { handle: "h2", key: "k2", identity_field: "name", identity_value: "beta",  field_values: { name: "beta",  city: "Paris" } }
+]
+var @spA1Incoming = [
+  { handle: "h1", key: "k1", identity_field: "name", identity_value: "alpha-updated", field_values: { name: "alpha-updated", city: "Paris" } },
+  { handle: "h3", key: "k3", identity_field: "name", identity_value: "gamma", field_values: { name: "gamma", city: "Paris" } }
+]
+var @spA1Merged = @mergeResolvedEntries(@spA1Existing, @spA1Incoming)
+var @spA1H1Matches = for @e in @spA1Merged when @e.handle == "h1" => @e.identity_value
+var @spA1H2Matches = for @e in @spA1Merged when @e.handle == "h2" => @e.identity_value
+var @spA1H3Matches = for @e in @spA1Merged when @e.handle == "h3" => @e.identity_value
+var @spA1H1 = @spA1H1Matches[0]
+var @spA1H2 = @spA1H2Matches[0]
+var @spA1H3 = @spA1H3Matches[0]
+var @spA1Ok =
+  @spA1Merged.length == 3 &&
+  @spA1H1 == "alpha-updated" &&
+  @spA1H2 == "beta" &&
+  @spA1H3 == "gamma"
+var @spA1Pretty = `merged.length=@spA1Merged.length h1=@spA1H1 h2=@spA1H2 h3=@spA1H3`
+
+var @spA2Empty = @mergeResolvedEntries([], @spA1Incoming)
+var @spA2Ok = @spA2Empty.length == 2 && @spA2Empty[0].handle == "h1" && @spA2Empty[1].handle == "h3"
+var @spA2Pretty = `from-empty.length=@spA2Empty.length`
+
+var @spA3Unchanged = @mergeResolvedEntries(@spA1Existing, [])
+var @spA3Ok = @spA3Unchanged.length == 2 && @spA3Unchanged[0].handle == "h1" && @spA3Unchanged[1].handle == "h2"
+var @spA3Pretty = `no-incoming.length=@spA3Unchanged.length`
+
+>> Two incoming with same handle: last wins
+var @spA4DupIncoming = [
+  { handle: "h9", key: "k9", identity_field: "name", identity_value: "first",  field_values: { name: "first" } },
+  { handle: "h9", key: "k9", identity_field: "name", identity_value: "second", field_values: { name: "second" } }
+]
+var @spA4Merged = @mergeResolvedEntries([], @spA4DupIncoming)
+var @spA4Ok = @spA4Merged.length == 1 && @spA4Merged[0].identity_value == "second"
+var @spA4Pretty = `dup-incoming.length=@spA4Merged.length last=@spA4Merged[0].identity_value`
+
+>> updateResolvedState: only the named bucket mutates
+var @spB1State = {
+  resolved: {
+    contact: [{ handle: "c1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice" } }],
+    other: [{ handle: "o1", key: "x", identity_field: "name", identity_value: "x", field_values: { name: "x" } }]
+  },
+  extracted: { ext1: { provenance: "extracted", value: "preserved" } },
+  derived: { der1: { provenance: "derived", value: "preserved" } },
+  extract_sources: { src1: "name1" }
+}
+var @spB1NewContacts = [
+  { handle: "c2", key: "bob", identity_field: "name", identity_value: "bob", field_values: { name: "bob" } }
+]
+var @spB1Updated = @updateResolvedState(@spB1State, "contact", @spB1NewContacts)
+var @spB1Ok =
+  @spB1Updated.resolved.contact.length == 2 &&
+  @spB1Updated.resolved.other.length == 1 &&
+  @spB1Updated.extracted.ext1.value == "preserved" &&
+  @spB1Updated.derived.der1.value == "preserved" &&
+  @spB1Updated.extract_sources.src1 == "name1"
+var @spB1Pretty = `contact=@spB1Updated.resolved.contact.length other=@spB1Updated.resolved.other.length ext.preserved=@spB1Updated.extracted.ext1.value`
+
+>> plannerVisibleState idempotency: same state → same projection.
+>> Compare structurally on resolved bucket keys + per-bucket handles.
+var @spC1State = @updateResolvedState(@emptyState(), "contact", [
+  { handle: "spc1-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice" }, value: { name: "alice" } },
+  { handle: "spc1-h2", key: "bob",   identity_field: "name", identity_value: "bob",   field_values: { name: "bob" },   value: { name: "bob" } }
+])
+var @spC1Vis1 = @plannerVisibleState(@builtFixtureAgent, @spC1State)
+var @spC1Vis2 = @plannerVisibleState(@builtFixtureAgent, @spC1State)
+var @spC1V1Contacts = @spC1Vis1.resolved.contact ?? []
+var @spC1V2Contacts = @spC1Vis2.resolved.contact ?? []
+var @spC1V1Handles = for @e in @spC1V1Contacts => @e.handle
+var @spC1V2Handles = for @e in @spC1V2Contacts => @e.handle
+var @spC1Ok =
+  @spC1V1Contacts.length == 2 &&
+  @spC1V2Contacts.length == 2 &&
+  @spC1V1Handles[0] == @spC1V2Handles[0] &&
+  @spC1V1Handles[1] == @spC1V2Handles[1]
+var @spC1Pretty = `len=@spC1V1Contacts.length handles_match=@spC1Ok`
+
+>> plannerVisibleState invalidation: after update, new entries appear
+var @spC2Before = @plannerVisibleState(@sampleAgent, @emptyState())
+var @spC2State1 = @updateResolvedState(@emptyState(), "contact", [
+  { handle: "spc2-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com" }, value: { name: "alice", email: "a@x.com" } }
+])
+var @spC2After1 = @plannerVisibleState(@sampleAgent, @spC2State1)
+var @spC2State2 = @updateResolvedState(@spC2State1, "contact", [
+  { handle: "spc2-h2", key: "bob", identity_field: "name", identity_value: "bob", field_values: { name: "bob", email: "b@x.com" } }
+])
+var @spC2After2 = @plannerVisibleState(@sampleAgent, @spC2State2)
+var @spC2BeforeContacts = @spC2Before.resolved.contact ?? []
+var @spC2After1Contacts = @spC2After1.resolved.contact ?? []
+var @spC2After2Contacts = @spC2After2.resolved.contact ?? []
+var @spC2BeforeCount = @spC2BeforeContacts.length
+var @spC2After1Count = @spC2After1Contacts.length
+var @spC2After2Count = @spC2After2Contacts.length
+var @spC2Ok =
+  @spC2BeforeCount == 0 &&
+  @spC2After1Count == 1 &&
+  @spC2After2Count == 2
+var @spC2Pretty = `empty=@spC2BeforeCount after_first=@spC2After1Count after_second=@spC2After2Count`
+
+>> Family expansion sees up-to-date state after multiple updates
+var @spD1Step1 = @updateResolvedState(@emptyState(), "contact", [
+  { handle: "spd1-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com" }, value: { name: "alice", email: "a@x.com" } }
+])
+var @spD1Step2 = @updateResolvedState(@spD1Step1, "contact", [
+  { handle: "spd1-h2", key: "bob", identity_field: "name", identity_value: "bob", field_values: { name: "bob", email: "b@x.com" }, value: { name: "bob", email: "b@x.com" } },
+  { handle: "spd1-h3", key: "carol", identity_field: "name", identity_value: "carol", field_values: { name: "carol", email: "c@x.com" }, value: { name: "carol", email: "c@x.com" } }
+])
+var @spD1Step3 = @updateResolvedState(@spD1Step2, "contact", [
+  { handle: "spd1-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "alice@new.com" }, value: { name: "alice", email: "alice@new.com" } }
+])
+var @spD1Family = @resolveRefValue(@spD1Step3, { source: "resolved", record: "contact" })
+var @spD1Names = for @v in (@spD1Family.value ?? []) => `@v.name`
+var @spD1Emails = for @v in (@spD1Family.value ?? []) => `@v.email`
+var @spD1Ok =
+  @spD1Family.ok == true &&
+  @spD1Names.length == 3 &&
+  @spD1Emails.includes("alice@new.com") &&
+  @spD1Emails.includes("b@x.com") &&
+  @spD1Emails.includes("c@x.com") &&
+  !@spD1Emails.includes("a@x.com")
+var @spD1Pretty = `count=@spD1Names.length names=@spD1Names emails=@spD1Emails`
+
+>> Whole-record ref: { source: "resolved", record, handle } returns
+>> the full value with all fields. Covers GPT spec #3.
+var @spD2State = @updateResolvedState(@emptyState(), "contact", [
+  { handle: "spd2-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com", phone: "555-1" }, value: { name: "alice", email: "a@x.com", phone: "555-1" } }
+])
+var @spD2WholeRef = @resolveRefValue(@spD2State, { source: "resolved", record: "contact", handle: "spd2-h1" })
+var @spD2Ok =
+  @spD2WholeRef.ok == true &&
+  `@spD2WholeRef.value.name` == "alice" &&
+  `@spD2WholeRef.value.email` == "a@x.com" &&
+  `@spD2WholeRef.value.phone` == "555-1"
+var @spD2Pretty = `whole=@spD2WholeRef.value`
+
+>> Field-path with array index: items[0].name. Covers GPT spec #4.
+>> Required for derive-result references like { source: "derived",
+>> name: "X", field: "items[0].body" } from c-4a08 family.
+var @spD3State = @updateResolvedState(@emptyState(), "container", [
+  { handle: "spd3-h1", key: "c1", identity_field: "id", identity_value: "c1", field_values: { id: "c1", items: [{ name: "first", price: 10 }, { name: "second", price: 20 }] }, value: { id: "c1", items: [{ name: "first", price: 10 }, { name: "second", price: 20 }] } }
+])
+var @spD3FieldZero = @resolveRefValue(@spD3State, { source: "resolved", record: "container", handle: "spd3-h1", field: "items[0].name" })
+var @spD3FieldOne  = @resolveRefValue(@spD3State, { source: "resolved", record: "container", handle: "spd3-h1", field: "items[1].price" })
+var @spD3Ok =
+  @spD3FieldZero.ok == true &&
+  `@spD3FieldZero.value` == "first" &&
+  @spD3FieldOne.ok == true &&
+  `@spD3FieldOne.value` == "20"
+var @spD3Pretty = `items[0].name=@spD3FieldZero.value items[1].price=@spD3FieldOne.value`
+
 exe @allChecks() = [
   => [
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
@@ -2890,7 +3068,17 @@ exe @allChecks() = [
   @check("collection-dispatch-policy-build", @ut8DirectOk, @ut8DirectPretty),
   @check("collection-dispatch-cross-module-m5178", @ut8DispatchOk, @ut8DispatchPretty),
   @check("known-numeric-literal-requires-token-match", @c0a6bSubstringOk, @c0a6bSubstringPretty),
-  @check("known-numeric-literal-accepts-standalone-token", @c0a6bTokenOk, @c0a6bTokenPretty)
+  @check("known-numeric-literal-accepts-standalone-token", @c0a6bTokenOk, @c0a6bTokenPretty),
+  @check("state-projection/A1-merge-dedup-by-handle", @spA1Ok, @spA1Pretty),
+  @check("state-projection/A2-merge-from-empty-existing", @spA2Ok, @spA2Pretty),
+  @check("state-projection/A3-merge-no-incoming-keeps-existing", @spA3Ok, @spA3Pretty),
+  @check("state-projection/A4-merge-duplicate-incoming-last-wins", @spA4Ok, @spA4Pretty),
+  @check("state-projection/B1-update-isolates-named-bucket", @spB1Ok, @spB1Pretty),
+  @check("state-projection/C1-planner-visible-state-idempotent", @spC1Ok, @spC1Pretty),
+  @check("state-projection/C2-planner-visible-state-invalidates-on-update", @spC2Ok, @spC2Pretty),
+  @check("state-projection/D1-family-expansion-up-to-date-after-multiple-updates", @spD1Ok, @spD1Pretty),
+  @check("state-projection/D2-whole-record-ref-returns-full-value", @spD2Ok, @spD2Pretty),
+  @check("state-projection/D3-field-path-with-array-index", @spD3Ok, @spD3Pretty)
   ]
 ]
 
