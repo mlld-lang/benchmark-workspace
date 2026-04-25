@@ -67,11 +67,10 @@ env:
 jobs:
   bench:
     name: ${{ inputs.suite }}
-    # puzl.cloud runners use base label puzl-ubuntu-22.04. If you
-    # configure extra labels on the runner claim, add them here as a
-    # list (logical AND match). For now: a single base-label runner
-    # with no extras, sized 48x96 in the puzl console.
-    runs-on: puzl-ubuntu-22.04
+    # Matches the runner configured in puzl console — base label
+    # puzl-ubuntu-24.04 + extra label puzl-bench-48x96 (logical AND).
+    # Sized 48 vCPU / 96 GB; same runner handles all suites.
+    runs-on: [puzl-ubuntu-24.04, puzl-bench-48x96]
     timeout-minutes: 60
     steps:
       - name: Log in to GHCR
