@@ -1,12 +1,13 @@
 ---
 id: c-b48a
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-24T23:15:10Z
 type: bug
 priority: 2
 assignee: Adam
+updated: 2026-04-25T03:07:14Z
 ---
 # File ticket: travel router synonyms incomplete
 
