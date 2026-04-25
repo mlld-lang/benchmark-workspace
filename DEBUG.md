@@ -334,7 +334,9 @@ Typical fixes:
 
 ## Remote runs (Namespace)
 
-Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this over local for any sweep larger than 3-5 tasks: local CPU pegs out around 10 parallel tasks; the remote 32x64 runners handle 40 parallel without breaking a sweat, and you can fan out to 5 runners (one per suite group) so the full bench surface finishes in ~10-15 min wall time.
+Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this over local for any sweep larger than 3-5 tasks: local CPU pegs out around 10 parallel tasks; the remote 8x16 runners handle 40 parallel I/O-bound tasks fine (work is network-bound on the inference API, not CPU-bound), and on the Team plan (64 vCPU concurrent) all 5 suite groups run truly in parallel — full bench surface in ~10-15 min wall time.
+
+Shape sizing: bench tasks are I/O-bound, so 8x16 (8 vCPU / 16 GB) is plenty and is the default. Larger shapes don't improve per-task wall time meaningfully and reduce how many groups run concurrently under the plan's vCPU cap. Override per-run via `gh workflow run bench-run.yml -f shape=nscloud-ubuntu-22.04-amd64-16x32` if you want to test that.
 
 ### When to use remote vs local
 
@@ -353,7 +355,7 @@ Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this ove
 # 1. Push your changes to main (image rebuilds automatically on bench/, rig/, src/, agents/ paths)
 git push
 
-# 2. Fan out the full bench surface — 5 separate Namespace 32x64 runners, all in parallel
+# 2. Fan out the full bench surface — 5 separate Namespace 8x16 runners, all in parallel (Team plan)
 scripts/bench.sh
 
 # 3. Watch the dispatched runs
