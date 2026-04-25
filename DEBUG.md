@@ -334,9 +334,14 @@ Typical fixes:
 
 ## Remote runs (Namespace)
 
-Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this over local for any sweep larger than 3-5 tasks: local CPU pegs out around 10 parallel tasks; the remote 8x16 runners handle 40 parallel I/O-bound tasks fine (work is network-bound on the inference API, not CPU-bound), and on the Team plan (64 vCPU concurrent) all 5 suite groups run truly in parallel — full bench surface in ~10-15 min wall time.
+Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this over local for any sweep larger than 3-5 tasks: local CPU pegs out around 10 parallel tasks; remote runners on the Team plan (64 vCPU concurrent cap) fan out all 4 suites in parallel — full bench surface in ~10-15 min wall time.
 
-Shape sizing: bench tasks are I/O-bound, so 8x16 (8 vCPU / 16 GB) is plenty and is the default. Larger shapes don't improve per-task wall time meaningfully and reduce how many groups run concurrently under the plan's vCPU cap. Override per-run via `gh workflow run bench-run.yml -f shape=nscloud-ubuntu-22.04-amd64-16x32` if you want to test that.
+Shape sizing per suite (set in `scripts/bench.sh`):
+- **workspace** → `32x64` (32 vCPU / 64 GB). Each task pins the full AgentDojo TaskEnvironment plus mlld+MCP processes in RAM; smaller shapes OOM under 36 parallel workspace tasks.
+- **banking, slack, travel** → `8x16` (8 vCPU / 16 GB). Smaller fixtures, lower memory pressure.
+- Peak fan-out: 32 + 8 + 8 + 8 = 56 vCPU, fits Team's 64-vCPU cap.
+
+Override per-run via `gh workflow run bench-run.yml -f shape=nscloud-ubuntu-22.04-amd64-16x32`.
 
 ### When to use remote vs local
 
@@ -355,7 +360,7 @@ Shape sizing: bench tasks are I/O-bound, so 8x16 (8 vCPU / 16 GB) is plenty and 
 # 1. Push your changes to main (image rebuilds automatically on bench/, rig/, src/, agents/ paths)
 git push
 
-# 2. Fan out the full bench surface — 5 separate Namespace 8x16 runners, all in parallel (Team plan)
+# 2. Fan out the full bench surface — 4 separate Namespace runners, all in parallel
 scripts/bench.sh
 
 # 3. Watch the dispatched runs
@@ -376,13 +381,12 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 
 | Target | Tasks | Notes |
 |---|---|---|
-| `workspace-a` | UT0..18 minus oos (UT13, UT19) — 18 tasks | First half |
-| `workspace-b` | UT20..39 minus oos (UT25, UT31) — 18 tasks | Second half |
+| `workspace` | UT0..39 minus oos (UT13, UT19, UT25, UT31) — 36 tasks on 32x64 | Full workspace, single runner |
 | `workspace` | both halves above | Two separate runs |
 | `banking` | full suite, oos auto-skipped | 15 active |
 | `slack` | full suite, oos auto-skipped | 14 active |
 | `travel` | full suite | 20 |
-| (default, no args) | all 5 above | The full sweep |
+| (default, no args) | all 4 above | The full sweep |
 
 You can also pass a subset: `scripts/bench.sh banking slack travel`.
 

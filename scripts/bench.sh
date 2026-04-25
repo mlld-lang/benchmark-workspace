@@ -2,33 +2,25 @@
 # Dispatch one or more bench-run.yml workflow_dispatch invocations on Namespace.
 #
 # Usage:
-#   scripts/bench.sh                          # all 5 groups (workspace-a/b + banking + slack + travel)
-#   scripts/bench.sh workspace-a              # one group
+#   scripts/bench.sh                          # all 4 suites in parallel
+#   scripts/bench.sh workspace                # just workspace
 #   scripts/bench.sh banking slack            # subset
-#   scripts/bench.sh workspace                # both halves of workspace
 #
-# Each invocation triggers a separate Namespace 32x64 runner and runs all
-# in-scope tasks in parallel inside that runner. Five groups → 5 runners
-# concurrent, ~10-15 min wall time for the full bench surface.
+# Each invocation triggers a separate Namespace runner. All 4 fan out at
+# once on Team plan (workspace 32x64 + others 8x16 = 56 vCPU, fits under
+# the 64 vCPU cap). Wall time ~10-15 min for the full bench surface.
 #
-# Skip lists (oos/non-gating) are honored automatically: workspace-a/b are
-# pre-filtered here; banking/slack/travel rely on src/run.py's SKIP_TASKS
+# Skip lists (oos/non-gating) are honored by src/run.py's SKIP_TASKS
 # when no -t is passed.
 
 set -euo pipefail
 
-# Workspace task IDs to run, oos already excluded:
-# - skipped from A: UT13, UT19 (instruction-following over untrusted content)
-# - skipped from B: UT25 (same), UT31 (non-gating evaluator wording)
-WORKSPACE_A=(0 1 2 3 4 5 6 7 8 9 10 11 12 14 15 16 17 18)
-WORKSPACE_B=(20 21 22 23 24 26 27 28 29 30 32 33 34 35 36 37 38 39)
-
 # Per-target shape. Workspace tasks each carry the full AgentDojo
-# TaskEnvironment in the MCP server's RAM; 18 parallel on 8x16 OOM-killed
-# the container, so workspace halves run on 16x32 (32 GB). Banking/slack/
-# travel are smaller and fit on 8x16. Total at peak fan-out:
-#   16 + 16 + 8 + 8 + 8 = 56 vCPU (under Team plan's 64 vCPU cap).
-SHAPE_WORKSPACE=nscloud-ubuntu-22.04-amd64-16x32
+# TaskEnvironment plus an mlld+MCP process in RAM, and 18 parallel on
+# 8x16 (16 GB) OOM-killed. Workspace runs on 32x64 (64 GB) for headroom.
+# Banking/slack/travel are smaller and fit on 8x16.
+#   Peak fan-out: 32 + 8 + 8 + 8 = 56 vCPU (Team plan cap is 64).
+SHAPE_WORKSPACE=nscloud-ubuntu-22.04-amd64-32x64
 SHAPE_LIGHT=nscloud-ubuntu-22.04-amd64-8x16
 
 dispatch() {
@@ -42,34 +34,20 @@ dispatch() {
   fi
 }
 
-dispatch_workspace() {
-  local label=$1; shift
-  local task_args=()
-  for n in "$@"; do task_args+=("user_task_$n"); done
-  local tasks_str
-  tasks_str="${task_args[*]}"
-  dispatch "$label" -f suite=workspace -f tasks="$tasks_str" -f shape="$SHAPE_WORKSPACE"
-}
-
 run_target() {
   case "$1" in
-    workspace-a|wa) dispatch_workspace workspace-a "${WORKSPACE_A[@]}" ;;
-    workspace-b|wb) dispatch_workspace workspace-b "${WORKSPACE_B[@]}" ;;
-    workspace)
-      dispatch_workspace workspace-a "${WORKSPACE_A[@]}"
-      dispatch_workspace workspace-b "${WORKSPACE_B[@]}"
-      ;;
-    banking|b) dispatch banking -f suite=banking -f shape="$SHAPE_LIGHT" ;;
-    slack|s)   dispatch slack   -f suite=slack   -f shape="$SHAPE_LIGHT" ;;
-    travel|t)  dispatch travel  -f suite=travel  -f shape="$SHAPE_LIGHT" ;;
+    workspace|w) dispatch workspace -f suite=workspace -f shape="$SHAPE_WORKSPACE" ;;
+    banking|b)   dispatch banking   -f suite=banking   -f shape="$SHAPE_LIGHT" ;;
+    slack|s)     dispatch slack     -f suite=slack     -f shape="$SHAPE_LIGHT" ;;
+    travel|t)    dispatch travel    -f suite=travel    -f shape="$SHAPE_LIGHT" ;;
     *) echo "unknown target: $1" >&2
-       echo "valid: workspace-a workspace-b workspace banking slack travel" >&2
+       echo "valid: workspace banking slack travel" >&2
        exit 1 ;;
   esac
 }
 
 if [ $# -eq 0 ]; then
-  set -- workspace-a workspace-b banking slack travel
+  set -- workspace banking slack travel
 fi
 
 for arg in "$@"; do

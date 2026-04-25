@@ -131,8 +131,8 @@ tk ls             # all open
 tk show <id>      # details
 
 # Remote sweep on Namespace (preferred for full suites — see DEBUG.md "Remote runs")
-scripts/bench.sh                                              # all 5 groups in parallel (~10-15 min)
-scripts/bench.sh workspace-a workspace-b                      # workspace only, both halves
+scripts/bench.sh                                              # all 4 suites in parallel (~10-15 min)
+scripts/bench.sh workspace                                    # just workspace
 scripts/bench.sh banking slack                                # specific suites
 gh workflow run bench-run.yml -f suite=workspace -f tasks=user_task_8   # one task
 
