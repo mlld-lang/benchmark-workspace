@@ -116,11 +116,8 @@ mlld clean/rig/tests/index.mld --no-checkpoint
 # Worker LLM tests (must pass 100%, ~50s)
 mlld rig/tests/workers/run.mld --no-checkpoint
 
-# Single task
+# Single task (local)
 uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_11
-
-# Full suite (default -p 20, 5s stagger)
-uv run --project bench python3 src/run.py -s workspace -d defended
 
 # Build mlld after runtime changes
 cd ~/mlld/mlld && npm run build
@@ -129,30 +126,94 @@ cd ~/mlld/mlld && npm run build
 tk ready          # what's actionable
 tk ls             # all open
 tk show <id>      # details
+```
 
-# Remote sweep on Namespace (preferred for full suites — see DEBUG.md "Remote runs")
-scripts/bench.sh                                              # all 4 suites in parallel (~10-15 min)
-scripts/bench.sh workspace                                    # just workspace
-scripts/bench.sh banking slack                                # specific suites
-gh workflow run bench-run.yml -f suite=workspace -f tasks=user_task_8   # one task
+## Running benchmarks
 
-# Watch + fetch
+Full sweeps run remote on Namespace; local is for single-task debugging only. Local CPU caps at ~10 parallel tasks; Namespace's Team plan (64 vCPU concurrent cap) fans all 4 suites in parallel and finishes the bench surface in ~10-15 min. See DEBUG.md "Troubleshooting parallel runs" for the postmortem details on shape sizing, OOMs, and known infrastructure gaps.
+
+### Quick start
+
+```bash
+git push                                  # image rebuilds on bench/, rig/, src/, agents/ paths
+scripts/bench.sh                          # all 4 suites in parallel
+scripts/bench.sh workspace                # just one suite
+scripts/bench.sh banking slack            # subset
+
 gh run list --workflow=bench-run.yml --limit 8
-uv run --project bench python3 src/fetch_run.py <run-id>
+uv run --project bench python3 src/fetch_run.py <run-id>     # → runs/<run-id>/
 uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions
 ```
 
-## Recommended workflow for full suites
+### What runs where
 
-Use remote runs. Local CPU pegs at ~10 parallel tasks; Namespace runners on the Team plan (64 vCPU concurrent cap) fan out all 4 suites in parallel — full bench surface in ~10-15 min. The image bakes mlld + clean + agentdojo from main; bench-run.yml has a freshness gate that auto-rebuilds the image if `mlld-lang/mlld:2.1.0` HEAD has moved since the last image build.
+| Target | Shape | Parallelism | Tasks | Notes |
+|---|---|---|---|---|
+| `workspace` | 32x64 | -p 40 (caps at 36) | 36 active (UT13/19/25/31 oos) | Heaviest — needs 64 GB |
+| `travel` (with workspace) | 16x32 | -p 5 | 20 | Throttled: shared 64 vCPU cap + c-63fe |
+| `travel` (solo, no workspace) | 32x64 | -p 20 | 20 | Auto-bumped when workspace not in dispatch |
+| `banking` | 8x16 | -p 40 (caps at 15) | 15 active (UT0 oos) | Light |
+| `slack` | 8x16 | -p 40 (caps at 14) | 14 active (oos UT2/11/16-20) | Light |
+| (no args) | per-target | per-target | all 4 above | Peak 64 vCPU — exact Team-plan fit |
 
-Per-suite shape (set in `scripts/bench.sh`, derived from OOMs):
-- workspace → 32x64 (32 vCPU / 64 GB) — 36 parallel tasks; OOMs at 8x16 and 16x32
-- travel → 16x32 — 20 parallel tasks; OOMs at 8x16
-- banking, slack → 8x16 — ≤15 parallel tasks survive 16 GB
-- Peak: 32+16+8+8 = 64 vCPU — exact fit under Team's 64 cap.
+### One-off runs
 
-Standard flow: push your changes to `main`, run `scripts/bench.sh`, fetch each run with `src/fetch_run.py`, browse opencode transcripts via `--home runs/<id>/opencode`. See DEBUG.md "Remote runs (Namespace)" for the full workflow including transcript correlation, debugging failures from artifacts, and the auto-rebuild gate.
+For specific tasks (debug repros, verification), trigger `bench-run.yml` directly:
+
+```bash
+gh workflow run bench-run.yml -f suite=workspace -f tasks=user_task_8
+gh workflow run bench-run.yml -f suite=workspace -f tasks="user_task_8 user_task_32"
+gh workflow run bench-run.yml -f suite=banking -f tasks=user_task_2 -f trace=true
+```
+
+Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagger`, `defense`, `trace`, `image_tag`, `shape`.
+
+### Hybrid (travel local + others remote)
+
+Travel's MCP server destabilizes on remote runners (c-63fe — about half of tool calls fail with `Not connected`). The cleanest pattern while c-63fe is open:
+
+```bash
+# Terminal 1 — remote: workspace + the two light suites
+scripts/bench.sh workspace banking slack
+
+# Terminal 2 — local: travel (uses local mlld/opencode, no remote MCP weirdness)
+uv run --project bench python3 src/run.py -s travel -d defended -p 20
+```
+
+### Image freshness
+
+The image bakes mlld@2.1.0 + clean@main + agentdojo@mlld-rig. bench-run.yml inspects each pulled image's `mlld.sha` Docker label and compares against `mlld-lang/mlld:2.1.0` HEAD via the GitHub API: if stale, joins any in-flight `bench-image.yml` run (or dispatches one), waits, repulls. Adds ~3-4 min after a mlld push, zero overhead otherwise. So after pushing both clean and mlld, just run `scripts/bench.sh` — staleness handled automatically.
+
+### Reading remote results
+
+`src/fetch_run.py <run-id>` unpacks artifacts to `runs/<run-id>/`:
+
+```
+runs/<run-id>/
+  manifest.json        # suite, defense, planner, worker, elapsed, exit_code, image_sha, mlld_ref
+  console.log          # stdout from src/run.py inside the container
+  results/             # bench/results/<model>/<suite>/defended.jsonl
+  exec_logs/           # bench/.llm — per-task execution logs
+  opencode/            # full opencode session data (storage/, log/, opencode.db)
+```
+
+Existing transcript debugging works against fetched runs via `opencode_debug.py --home runs/<run-id>/opencode`.
+
+Cross-suite jq summary across a fan-out:
+
+```bash
+for d in runs/24920*/; do
+  jq -r '"\(.suite)\t\(.elapsed_sec)s\texit=\(.exit_code)"' "$d/manifest.json"
+  jq -c 'select(.utility == false) | .task_id' "$d"/results/bench/results/*/*/defended.jsonl 2>/dev/null
+done
+```
+
+### Discipline
+
+- **Push to main, then sweep.** Artifacts under `runs/<id>/` are the canonical record of "this commit produced these numbers."
+- **Run multiples in parallel.** Concurrent Namespace runners cost the same wall-clock as one — fan out for "did this change affect other suites?" questions.
+- **Cite run IDs in SCIENCE.md.** `runs/<id>/` becomes the artifact for re-fetching transcripts later.
+- **Don't sweep when a spike will do.** Inference provider tokens still cost money. Spike-first discipline (see DEBUG.md) still applies.
 
 ## Rules learned the hard way
 

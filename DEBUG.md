@@ -332,126 +332,65 @@ Typical fixes:
 - Compose phase should always wrap output as `=> { content: @result.final.text }`
 - Ensure no `show` / `output` directives in the agent file produce stdout that competes with the JSON return
 
-## Remote runs (Namespace)
+## Troubleshooting parallel runs
 
-Full-parallel sweeps on Namespace-hosted GitHub Actions runners. Prefer this over local for any sweep larger than 3-5 tasks: local CPU pegs out around 10 parallel tasks; remote runners on the Team plan (64 vCPU concurrent cap) fan out all 4 suites in parallel — full bench surface in ~10-15 min wall time.
+How to run benchmarks (local + remote) lives in **CLAUDE.md "Running benchmarks"**. This section captures the specific failure modes you'll see when remote sweeps misbehave and the empirical findings behind the per-suite shape choices in `scripts/bench.sh`.
 
-Shape sizing per suite (set in `scripts/bench.sh`, derived empirically from OOMs):
-- **workspace** → `32x64` (32 vCPU / 64 GB). 36 parallel tasks; smaller shapes OOM.
-- **travel** → `16x32` (16 vCPU / 32 GB). 20 parallel tasks; OOMs at 8x16.
-- **banking, slack** → `8x16` (8 vCPU / 16 GB). ≤15 parallel tasks; survive.
-- Peak fan-out: 32 + 16 + 8 + 8 = 64 vCPU — exact fit under Team's 64 vCPU cap.
+### When a run fails with exit code 137 (SIGKILL)
 
-Override per-run via `gh workflow run bench-run.yml -f shape=nscloud-ubuntu-22.04-amd64-16x32`.
+That's the kernel OOM-killer. The container exhausted memory under the requested parallelism. Each bench task carries the AgentDojo TaskEnvironment + an mlld + MCP server in RAM (~1.5-2 GB at peak), so fan-out memory scales linearly with `-p`.
+
+History (Team plan, 8x16/16x32/32x64 shapes):
+
+| Suite | Shape | Parallelism | Result | Run ID |
+|---|---|---|---|---|
+| workspace-a | 8x16 | 18 (task-count cap) | OOM exit 137 | 24922643802 |
+| workspace-b | 8x16 | 18 | OOM exit 137 | 24922644218 |
+| travel | 8x16 | 20 | OOM exit 137 | 24922900959 |
+| travel | 16x32 | 20 | OOM exit 137 | 24923046920 |
+| banking | 8x16 | 15 | success | 24922644697 |
+| slack | 8x16 | 14 | success | 24922900581 |
+
+That's where `bench.sh`'s shape table comes from. If you bump parallelism or change a suite's task surface, expect to recalibrate.
+
+To diagnose a fresh OOM: check `gh run view <id> --log 2>&1 | grep -E "exit code|137|Killed"`. If exit 137, drop `-p` by half or bump shape one tier.
+
+### When a run "succeeds" but utility is suspiciously low (c-63fe)
+
+Travel's MCP server destabilizes under load. Symptoms in the result jsonl / transcripts:
+
+- `Not connected` errors on tool calls
+- `Request timed out` errors
+- `Connection closed` errors
+- Planner appears stuck in resolve loops (Pattern C symptom) but the cause is infrastructure, not planning
+
+Real example: travel run on 32x64 `-p 20`: 2/20 utility, 102 MCP infrastructure errors (71 Not connected, 19 timeouts, 12 Connection closed). Utility number is **not measurable** while c-63fe is open.
+
+Workarounds:
+- `scripts/bench.sh travel` solo uses 32x64 + `-p 20` (max memory headroom; some MCP errors still expected)
+- For travel utility debugging right now, run **locally** instead — the local MCP environment doesn't hit c-63fe. On a 48 GB Mac: `uv run --project bench python3 src/run.py -s travel -d defended -p 20` (full parallelism). On smaller machines drop `-p` to fit.
+- The hybrid pattern (travel local while other suites run remote) is documented in CLAUDE.md.
+
+When you see "Not connected" in transcripts: it's c-63fe, not a planning failure. Don't chase it as a planner bug.
+
+### When the freshness gate fails
+
+If `bench-run.yml`'s "Check image freshness" step errors, common causes:
+- `gh` CLI in the workflow can't determine repo without `GH_REPO` env (already fixed; if you see `failed to determine base repo`, that env got dropped somewhere)
+- The mlld branch label is missing from the image (older images pre-dating the labels — auto-rebuild handles it, watch for "image lacks mlld labels — rebuilding to be safe" notice)
+- `MLLD_LANG_REPO_TOKEN` secret missing → cross-repo PAT unavailable for the private agentdojo fork (the workflow falls back to GITHUB_TOKEN which can't read the private repo)
 
 ### When to use remote vs local
 
 | Situation | Where |
 |---|---|
-| Single-task debugging with `MLLD_TRACE` | Local |
+| Single-task debugging with `MLLD_TRACE` or `--debug` | Local |
 | 1-3 task verification of a fix | Local |
+| Reading a live opencode session as it runs | Local (remote opencode DB isn't reachable until the run finishes) |
+| Travel utility measurement (until c-63fe is fixed) | Local |
 | Full suite sweep | **Remote** |
-| All 4 suites (e.g., before/after a runtime fix) | **Remote**, fan-out via `bench.sh` |
-| Iterating on a prompt change after spike-driven fix | Remote single-suite at first, fan-out for the final measurement |
-| Anything reading a live opencode session as it runs | Local (remote opencode DB isn't reachable until the run finishes and you fetch artifacts) |
-
-### Standard sweep flow
-
-```bash
-# 1. Push your changes to main (image rebuilds automatically on bench/, rig/, src/, agents/ paths)
-git push
-
-# 2. Fan out the full bench surface — 4 separate Namespace runners, all in parallel
-scripts/bench.sh
-
-# 3. Watch the dispatched runs
-gh run list --workflow=bench-run.yml --limit 8
-
-# 4. Once a run completes, fetch its artifacts to runs/<id>/
-uv run --project bench python3 src/fetch_run.py <run-id>
-
-# 5. Inspect the result row + transcripts
-jq -c '. | {task: .task_id, util: .utility, err: ((.execute_error // "") | .[0:200])}' \
-  runs/<run-id>/results/bench/results/*/workspace/defended.jsonl
-
-uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions
-uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode parts --session <session-id>
-```
-
-`scripts/bench.sh` targets:
-
-| Target | Shape | Parallelism | Tasks | Notes |
-|---|---|---|---|---|
-| `workspace` | 32x64 | -p 40 (caps at 36) | 36 active (UT13/19/25/31 oos) | Heaviest — OOMs below 64 GB |
-| `travel` (with workspace) | 16x32 | -p 5 | 20 | Constrained: c-63fe (MCP destabilizes at higher -p) + 64 vCPU cap |
-| `travel` (solo, no workspace) | **32x64** | -p 20 | 20 | Auto-bumped when workspace not in dispatch; full parallelism (64 GB headroom) |
-| `banking`   | 8x16 | -p 40 (caps at 15) | 15 active (UT0 oos) | Survives 8x16 |
-| `slack`     | 8x16 | -p 40 (caps at 14) | 14 active (oos UT2/11/16/17/18/19/20) | Survives 8x16 |
-| (default, no args) | per-target | per-target | all 4 above | Peak 64 vCPU — exact fit on Team plan |
-
-You can also pass a subset: `scripts/bench.sh banking slack travel`.
-
-### Travel suite caveat (c-63fe)
-
-Travel's MCP server destabilizes under load — about half of tool calls fail with `Not connected` / `Connection closed` / timeouts even when the container itself doesn't OOM. Travel utility numbers from remote sweeps are not fully measurable until c-63fe is closed. `scripts/bench.sh` applies `-p 5` in fan-out mode (limited by the shared 64 vCPU cap) and `-p 20` in solo mode (32x64 has the memory headroom for full parallelism). For travel debugging right now, prefer local single-task runs (`uv run --project bench python3 src/run.py -s travel -d defended -t user_task_X`) or remote single-task dispatches (`gh workflow run bench-run.yml -f suite=travel -f tasks=user_task_N`).
-
-### Subset and one-off runs
-
-For specific tasks (debug repros, single-task validation), trigger `bench-run.yml` directly:
-
-```bash
-gh workflow run bench-run.yml -f suite=workspace -f tasks=user_task_8
-gh workflow run bench-run.yml -f suite=workspace -f tasks="user_task_8 user_task_32 user_task_37"
-gh workflow run bench-run.yml -f suite=banking -f tasks=user_task_2 -f trace=true
-```
-
-Available `bench-run.yml` inputs: `suite`, `tasks` (space-separated), `planner`, `worker`, `harness`, `parallelism` (default 40), `stagger`, `defense`, `trace`, `image_tag`, `shape`.
-
-### Auto-rebuild gate
-
-bench-run.yml inspects the pulled image's `mlld.sha` Docker label and compares it to the current HEAD of the labeled mlld branch (default `2.1.0`) via the GitHub API:
-
-- Match → run starts immediately.
-- Mismatch → workflow joins any in-flight `bench-image.yml` run (or dispatches one), waits for it to finish, repulls, then proceeds.
-
-Adds ~3-4 min to the first run after a mlld push. Zero overhead on a fresh image. So the full-sweep flow after pushing both clean and mlld is just `scripts/bench.sh` — the gate handles staleness.
-
-### Reading remote results
-
-Fetched artifacts unpack to `runs/<run-id>/`:
-
-```
-runs/<run-id>/
-  manifest.json        # suite, defense, planner, worker, elapsed, exit_code, image_sha, mlld_ref
-  console.log          # full stdout from src/run.py inside the container
-  results/             # bench/results/<model>/<suite>/defended.jsonl etc.
-  exec_logs/           # bench/.llm — per-task execution log files
-  opencode/            # storage/, log/, opencode.db — full opencode session data
-```
-
-The `opencode_debug.py --home <path>` flag points at the per-run opencode dir, so the existing transcript-debugging workflow works against fetched runs:
-
-```bash
-uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions
-uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode parts --session <session-id> --limit 50
-```
-
-For tracing across a fan-out sweep:
-
-```bash
-# Cross-suite pass/fail summary from manifests + jsonl
-for d in runs/24920*/; do
-  jq -r '"\(.suite)\t\(.elapsed_sec)s\texit=\(.exit_code)"' "$d/manifest.json"
-  jq -c 'select(.utility == false) | .task_id' "$d"/results/bench/results/*/*/defended.jsonl 2>/dev/null
-done
-```
-
-### Recommended discipline
-
-- **Push to main, then sweep.** Don't run partial fixes locally as a substitute for a clean main-branch sweep — the artifacts are the canonical record of "this commit produced these numbers."
-- **Run multiples in parallel.** Five concurrent Namespace runners cost the same wall-clock time as one. Use the fan-out for any "did this change affect other suites?" question.
-- **Save run IDs in SCIENCE.md** when documenting a result — `runs/<run-id>/` becomes the citation. Future debugging can re-fetch and inspect transcripts.
-- **Don't sweep when a spike will do.** The Namespace cost is the inference provider's bill, not zero. Spike-first discipline still applies (see "Spike First. Sweep Last." above).
+| Comparing all 4 suites before/after a fix | **Remote** fan-out (`scripts/bench.sh`) |
+| Iterating on a prompt change | Remote single-suite during iteration; remote fan-out for the final measurement |
 
 ## Commands You Should Use
 
