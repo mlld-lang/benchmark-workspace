@@ -5,10 +5,10 @@ deps: []
 links: [c-9d56, c-3438, c-36fe, c-d590]
 created: 2026-04-25T04:45:37Z
 type: bug
-priority: 1
+priority: 0
 assignee: Adam
 tags: [infrastructure, mcp]
-updated: 2026-04-26T11:39:40Z
+updated: 2026-04-26T20:49:37Z
 ---
 # MCP server disconnects mid-run on remote bench runners (travel + workspace-b)
 
@@ -518,3 +518,76 @@ The AgentDojo MCP server is INNOCENT (proven by our instrumentation). The bug is
 - m-0710 fix would unblock +5-6 (UT9/10/11/12/18/19) → ~16-17/20
 
 c-63fe stays open as the clean-side tracking ticket. Closes when m-0710 lands and travel sweep verifies +5/6 utility.
+
+**2026-04-26T20:49:37Z** ## 2026-04-26 — Now the dominant remote-travel utility blocker (session bench-grind-9)
+
+Once c-5a24 + c-eda4 landed (closed), travel utility on remote is bottlenecked by MCP destabilization rather than framework. Run 24966154043 (image adc2e7f): 5 of 8 fails were c-63fe-class (MCP "Not connected", "connection down", "timed out"). UT11/12/18/19 all hit it. UT11/12/18/19 PASS locally (where MCP is stable).
+
+## Recommendation: PRIORITY UPGRADE P1 → P0
+
+This is the single biggest lever for travel utility on remote. Estimated +4-5 utility on a clean MCP run. Until it lands, recommend:
+
+- **Travel utility measurement runs LOCALLY** (already documented in CLAUDE.md hybrid pattern).
+- Remote travel runs are measurement-noise on this issue.
+
+## Mitigations already shipped (session-8)
+
+- Parallel resolve_batch reduced cascade pressure
+- mlld cancellation work (m-0710) — opencode socket-close propagates
+- opencode 1.4.3 with configurable mcp_timeout (cfg.mcpTimeoutMs)
+- MLLD_HEAP=8g default for travel runs
+
+After all of this, c-63fe still fires. Next mitigations need to investigate root cause: is mlld holding too many concurrent MCP requests open? Is the AgentDojo MCP server itself stateful and racing?
+
+## Status
+
+Open, P0-priority for travel utility recovery.
+
+**2026-04-26T23:12:46Z** **2026-04-26T23:15:00Z bench-grind-10 opus investigation**
+
+Diagnosis localized: cascade is in **OUTER** mlld↔opencode `function-mcp-bridge` transport (not inner Python MCP, which prior instrumentation cleared).
+
+**Self-reinforcing mechanism**: any transient socket close from opencode triggers `function-mcp-bridge.ts:302-305` → `abortSocketRequests` → `abortRequestControl` (line 387, 397) → `control.abortActiveExecution?.()` → `toolEnv.cleanup()` (set line 546) → calls `Environment.cleanup()` (Environment.ts:5167) and `stopInternal` (line 690-703) destroys all activeSockets → proxy.cjs (line 821-838) `socket.on('error')` fires `process.exit(1)` → opencode shows 'Connection closed' (-32000) then 'Not connected' for all subsequent calls in the same opencode `run`.
+
+**Cascade evidence (local UT12 ses_234511c80ffe4wFF8ile2nxNW9)**: 6 successful tool calls (incl. one at 7m37s), then 3 compose calls in sequence: 4.16s 'Connection closed', 1ms 'Not connected', 1ms 'Not connected'. The 1ms response = opencode SDK knows transport is dead and refuses to send.
+
+**H1 (most likely)**: opencode-side transient stream issue → mlld's `abortRequestControl` *promotes* it to permanent failure by destroying sockets that can't be rehydrated.
+**H2**: Node GC pause / mlld memory pressure (~5GB RSS during travel) stalls socket reads long enough that opencode's MCP transport decides it's broken. Consistent with UT11/12/18/19 PASSING locally, FAILING remotely (different memory env).
+**RULED OUT**: H4 (inner Python MCP — prior instrumentation cleared), H5 (mcp_timeout — 7m37s call succeeded above the 300s timeout, so timeout isn't the cap).
+
+**Side-finding (separate cleanup, not the cascade fix)**: rig/workers/planner.mld:944-951 sets `mcpTimeoutMs: 500000` in @plannerConfig. The opencode harness module (mlld llm/lib/opencode/index.mld:232-307) NEVER reads `cfg.mcpTimeoutMs` — `opencodeInlineConfig` hardcodes `experimental.mcp_timeout: 300000` (line 279). The '120s vs 500s timeout' threads in c-63fe history were based on a config field that has been silently ignored. Either thread it through opencodeInlineConfig (mlld change) or remove the dead field from rig (clean change). Doesn't fix the cascade.
+
+**Recommended next step (without mlld code changes)**: Re-run UT12 locally with `MLLD_TRACE=verbose MLLD_TRACE_FILE=...`. Per LLM-MCP.md the trace emits `mcp.request`/`mcp.progress`/`mcp.response` with `durationMs`, `responseBytes`, `clientClosed`, `error`. If trace shows `mcp.response` with `clientClosed: true` at the 4-second compose mark, that proves H1 + identifies opencode-side close as the trigger. If trace shows mlld writing the response and opencode never reading it, points to H2/H3.
+
+**Defensible fix shape (mlld-side, NOT shipped)**: Decouple the proxy-socket-close path from `toolEnv.cleanup()`. A transient socket close should retain the bridge so a re-connecting proxy can resume; only intentional shutdown (LLM call ending) should run cleanup. Right now the bridge is structurally one-shot per close event.
+
+Full findings + spike scripts: /tmp/c-63fe-investigation/findings.md and /tmp/c-63fe-investigation/spikes/. Codex investigation still running in parallel — will append independent diagnosis when it finishes.
+
+**2026-04-26T23:16:56Z** **2026-04-26T23:30:00Z bench-grind-10 codex investigation (gpt-5.5)**
+
+Independent diagnosis. **Reconciles AGAINST opus's 'mcpTimeoutMs is dead code' side-finding** (opus read outdated v1.4.1 in ~/mlld/mlld; codex correctly read the installed @mlld/opencode@1.4.3 at /Users/adam/mlld/modules/opencode/index.mld:232-294 which DOES wire mcpTimeoutMs through to experimental.mcp_timeout). The 500.04s timeouts in run 24968679636 match `mcpTimeoutMs: 500000` EXACTLY — so the timeout IS being applied as configured.
+
+**Codex's primary diagnosis (different from opus's, and better-grounded):**
+- H2 (ruled IN): opencode's outer MCP timeout fires on long `mlld_tools.resolve_batch` after exactly 500s. Five sessions in run 24968679636 show `MCP error -32001: Request timed out` at 500.024-500.050s on resolve_batch.
+- H3 (strongly likely): the slow work is in mlld/rig — `@plannerResolveBatch` Phase B (sequential settle, state merge, projection, planner cache). Inner Python MCP calls (`clean/src/mcp_server.py`) complete in 1.9-11.1ms in the failing sessions. UT10's inner restaurant metadata calls finished by 22:34:50, but opencode didn't time out the outer resolve_batch until 22:41:04 — a 6m14s GAP between fast inner completions and outer timeout, spent in mlld/rig.
+- H4 (secondary cascade): once opencode's outer timeout fires, its MCP client is permanently dead for that run → 'Connection closed' then immediate 1ms 'Not connected' for all subsequent calls (matches opus's mechanism observation).
+- H1 (ruled OUT): Python MCP server crash. Inner calls completed quickly with no errors.
+- H5 (ruled OUT for direct trigger): inner stdio transport corruption. Codex ran a zero-LLM probe (`/tmp/c-63fe-investigation/spikes/mcp_import_parallel_probe.sh`) confirming one server pid + concurrent calls work cleanly. Sharing is fine.
+
+**Reconciled picture (combining opus + codex):**
+1. Trigger: rig's `@plannerResolveBatch` Phase B spends 5+ min in pure-mlld code (state merge, projection, planner cache) AFTER inner MCP calls return in ms.
+2. opencode's MCP timeout (500s = our configured `mcpTimeoutMs`) fires.
+3. Once opencode-side closes the outer transport, mlld's `abortRequestControl` → `toolEnv.cleanup()` → `stopInternal` (per opus's code-path analysis) destroys all sockets → proxy.cjs exits → cascade.
+
+**Decisive next step (codex's recommendation, and shared with opus):** Run `/tmp/c-63fe-investigation/spikes/trace_travel_task.sh` (TASK=user_task_10 MLLD_TRACE=verbose) and inspect:
+- `mcp.request` start time for resolve_batch
+- inner mcp_calls timestamps from the bench result jsonl
+- `mcp.progress` / `mcp.response` cadence between them
+- where the 5+ minute gap is
+
+If the trace shows mlld busy in pure-code Phase B after inner calls finish, the fix surface moves to rig (cheaper Phase B settle/merge/projection) — NOT to mlld interpreter. That is the most actionable outcome since it's domain code we control.
+
+Spike scripts: /tmp/c-63fe-investigation/spikes/ (analyze_c63fe_run.py, mcp_import_parallel_probe.sh, trace_travel_task.sh, function_bridge_reconnect_probe.ts).
+
+Codex full findings: /tmp/c-63fe-investigation/codex/findings.md
+Opus full findings: /tmp/c-63fe-investigation/findings.md
