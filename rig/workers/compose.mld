@@ -26,6 +26,14 @@ exe @isComposeMalformed(attestation, raw) = [
   let @text = @attestation["text"]
   if @text == "" [ => true ]
   if @typeof(@text) != "string" [ => true ]
+  >> Worker schema violation: returned `{"text": {nested object}}` instead
+  >> of `{"text": "<string>"}`. The composeAttestation record's
+  >> `validate: "demote"` then coerces the non-string field via JS
+  >> String(), producing the literal "[object Object]". The earlier
+  >> typeof check sees a string after demotion, so this catches the
+  >> post-demote artifact and triggers retry with explicit feedback.
+  >> Seen on travel UT10 — c-0ada.
+  if @text == "[object Object]" [ => true ]
   => false
 ]
 

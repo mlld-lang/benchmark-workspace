@@ -23,3 +23,17 @@ Investigation: dump @workerStateSummary output for UT10 (vs UT3) — see what th
 
 Defer: looks mlld-side; user instructed to defer mlld bugs in bench-grind-10.
 
+
+## Notes
+
+**2026-04-26T22:04:21Z** **2026-04-26T22:00:00Z bench-grind-10**: Investigated via spike (`/tmp/clean-bgrind10/coerce_spike.mld`). Two-layer issue:
+
+1. **LLM schema violation**: compose worker returned `{"text": {nested object}}` instead of `{"text": "<string>"}`. The compose prompt says `{"text": "<final answer>"}` but GLM 5.1 occasionally inlines structured fields under text instead of rendering them as a single string.
+
+2. **mlld validate: demote artifact**: `record @composeAttestation = { data: [text: string], validate: "demote" }` — when the parsed `text` field is an object, demote coerces it via JS `String(obj)`, producing the literal string "[object Object]". After demote, `@typeof(@text) == "string"` so the existing typeof-based malformed check doesn't fire.
+
+**Fix shipped (rig/workers/compose.mld)**: added one explicit check `if @text == "[object Object]" [ => true ]` to `@isComposeMalformed`. The retry path then fires with the existing "your previous output was malformed" prompt, giving the worker a second chance with explicit feedback. This catches the demote artifact cleanly without overfitting (the literal "[object Object]" string is a deterministic sentinel of the schema-violation→demote chain).
+
+Verified spike-side. Will see if UT10 stabilizes in the next sweep.
+
+This is NOT a mlld bug per se — `validate: "demote"` correctly demotes a type mismatch by attempting String coercion. The bug is in the LLM not following the JSON schema. The detection-and-retry shape is the appropriate fix layer.
