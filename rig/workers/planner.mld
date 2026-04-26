@@ -12,7 +12,9 @@ import {
   @appendLlmDebug,
   @updateExtractSources,
   @projectResolvedEntry,
-  @bucketItems
+  @bucketItems,
+  @batchSpecMergeState,
+  @phaseResultWithState
 } from "../runtime.mld"
 import {
   @serializeLifecycleJson,
@@ -511,10 +513,26 @@ exe @plannerResolveBatch(input) = [
   >> per-spec settle run for state correctness, then override the runtime
   >> tool_calls / invalid_calls counters at the end (Phase C below) to
   >> charge the planner for one batch decision rather than N specs.
+  >>
+  >> c-eda4: each spec's phaseResult.state is initial+thatSpecsWrites.
+  >> If we hand that raw state to @settlePhaseDispatch it does
+  >> @planner.set({state: phaseResult.state}) which clobbers prior
+  >> settles' writes (because each spec's state lacks other specs'
+  >> contributions). Pre-adjust the phaseResult here: take the cumulative
+  >> @currentCtx.state (which reflects prior settles' writes) and merge
+  >> the spec's record-bucket entries into it via @batchSpecMergeState.
+  >> @settlePhaseDispatch then writes the cumulative state and its
+  >> existing log/runtime/event side effects continue to work unchanged.
   let @results = for @item in @dispatched [
     let @currentCtx = @plannerToolContext("resolve", @item.decision)
     if !@currentCtx.ok [ => @currentCtx.result ]
-    let @settled = @settlePhaseDispatch(@currentCtx, @item.phaseResult, @item.decision)
+    let @adjustedState = @batchSpecMergeState(
+      @currentCtx.state,
+      @item.phaseResult,
+      @currentCtx.agent
+    )
+    let @adjustedPhaseResult = @phaseResultWithState(@item.phaseResult, @adjustedState)
+    let @settled = @settlePhaseDispatch(@currentCtx, @adjustedPhaseResult, @item.decision)
     let @resolvedHandles = for @handle in @arrayItems(@item.phaseResult.result.handles ?? []) => @stringValue(@handle)
     => when [
       @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }

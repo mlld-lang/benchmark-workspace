@@ -751,6 +751,52 @@ exe @updateResolvedState(state, recordName, entries) = [
   )
 ]
 
+>> c-eda4: batch-spec state-merge helper.
+>>
+>> @plannerResolveBatch dispatches all specs in parallel against a shared
+>> @initialCtx.state (snapshot from before the batch). Each spec returns
+>> phaseResult.state = initial + thatSpecsWrites. If Phase B settle just
+>> @planner.set({state: phaseResult.state}) per spec, the second settle
+>> wipes the first's writes — verified in tmp/c-eda4-batch-clobber/probe.mld.
+>>
+>> Fix: for each spec, take its phaseResult bucket for the record_type it
+>> wrote and merge that bucket's entries (via @updateResolvedStateWithDef
+>> → @mergeResolvedEntries → c-5a24 field-level merge) atop the running
+>> cumulative @planner.state. Initial entries pass through unchanged
+>> because field-merge is identity on shared values; new entries get
+>> added.
+exe @batchSpecMergeState(cumulative, phaseResult, agent) = [
+  if @phaseResult.error.isDefined() [ => @cumulative ]
+  let @recordType = @phaseResult.result.record_type
+  if !@recordType.isDefined() [ => @cumulative ]
+  let @specResolved = @bucketObject(@phaseResult.state.resolved ?? {})
+  let @specBucket = @valueField(@specResolved, @recordType)
+  if !@specBucket.isDefined() [ => @cumulative ]
+  let @specEntries = @bucketItems(@specBucket)
+  if @specEntries.length == 0 [ => @cumulative ]
+  let @recordDef = @valueField(@agent.records ?? {}, @recordType)
+  => when [
+    @recordDef.isDefined() => @updateResolvedStateWithDef(@cumulative, @recordType, @specEntries, @recordDef)
+    * => @updateResolvedState(@cumulative, @recordType, @specEntries)
+  ]
+]
+
+>> c-eda4: rebuild a phaseResult with state replaced. Used to feed the
+>> cumulative-merged state back into @settlePhaseDispatch so its existing
+>> log/runtime/phase-event side effects continue to work unchanged.
+exe @phaseResultWithState(phaseResult, state) = [
+  => {
+    state: @state,
+    error: @phaseResult.error,
+    summary: @phaseResult.summary,
+    issues: @phaseResult.issues,
+    raw_error: @phaseResult.raw_error,
+    result: @phaseResult.result,
+    session_id: @phaseResult.session_id,
+    llm_log: @phaseResult.llm_log
+  }
+]
+
 >> Phase 2.5: callers that have the recordDef pass it through this
 >> variant so planner_cache is populated eagerly. @projectResolvedSummary
 >> reuses the cache on subsequent reads when bucket.version is unchanged.
@@ -1067,6 +1113,8 @@ export {
   @rigState,
   @emptyState,
   @mergeResolvedEntries,
+  @batchSpecMergeState,
+  @phaseResultWithState,
   @updateResolvedState,
   @updateNamedState,
   @updateExtractSources,

@@ -51,7 +51,7 @@ import {
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg, @lookupResolvedEntry } from "../intent.mld"
-import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket } from "../runtime.mld"
+import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket, @batchSpecMergeState } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
@@ -2968,6 +2968,59 @@ var @spB1ContactCount = @bucketLength(@spB1Updated.resolved.contact)
 var @spB1OtherCount = @bucketLength(@spB1Updated.resolved.other)
 var @spB1Pretty = `contact=@spB1ContactCount other=@spB1OtherCount ext.preserved=@spB1Updated.extracted.ext1.value`
 
+>> c-eda4: parallel resolve_batch state-merge contract.
+>>
+>> Two specs in a batch run in parallel against the same initial state.
+>> Each returns a phaseResult.state = initial + thatSpecsWrites. Phase B
+>> settle must accumulate per-record-bucket atop a running cumulative
+>> state via @batchSpecMergeState. Pre-fix: second spec's settle wiped
+>> first spec's writes.
+var @spB2Initial = @emptyState()
+var @spB2HotelEntries = [
+  { handle: "r_hotel_A", key: "Hotel A", identity_field: "name", identity_value: "Hotel A", field_values: { name: "Hotel A" } }
+]
+var @spB2RestEntries = [
+  { handle: "r_restaurant_X", key: "X", identity_field: "name", identity_value: "X", field_values: { name: "X" } },
+  { handle: "r_restaurant_Y", key: "Y", identity_field: "name", identity_value: "Y", field_values: { name: "Y" } }
+]
+var @spB2HotelSpecState = @updateResolvedState(@spB2Initial, "hotel", @spB2HotelEntries)
+var @spB2RestSpecState  = @updateResolvedState(@spB2Initial, "restaurant", @spB2RestEntries)
+var @spB2HotelPhaseResult = { state: @spB2HotelSpecState, result: { record_type: "hotel", count: 1, handles: ["r_hotel_A"], summary: "" } }
+var @spB2RestPhaseResult  = { state: @spB2RestSpecState,  result: { record_type: "restaurant", count: 2, handles: ["r_restaurant_X", "r_restaurant_Y"], summary: "" } }
+var @spB2Agent = { records: {} }
+var @spB2After1 = @batchSpecMergeState(@spB2Initial, @spB2HotelPhaseResult, @spB2Agent)
+var @spB2After2 = @batchSpecMergeState(@spB2After1, @spB2RestPhaseResult, @spB2Agent)
+var @spB2HotelLen = @bucketLength(@spB2After2.resolved.hotel ?? {})
+var @spB2RestLen  = @bucketLength(@spB2After2.resolved.restaurant ?? {})
+var @spB2Ok = @spB2HotelLen == 1 && @spB2RestLen == 2
+var @spB2Pretty = `hotels=@spB2HotelLen restaurants=@spB2RestLen (both survive parallel settle)`
+
+>> c-eda4: error spec leaves cumulative state unchanged.
+var @spB3ErrPhaseResult = { error: "intent_compile_failed", state: @spB2Initial, result: {} }
+var @spB3After = @batchSpecMergeState(@spB2After2, @spB3ErrPhaseResult, @spB2Agent)
+var @spB3HotelLen = @bucketLength(@spB3After.resolved.hotel ?? {})
+var @spB3RestLen  = @bucketLength(@spB3After.resolved.restaurant ?? {})
+var @spB3Ok = @spB3HotelLen == 1 && @spB3RestLen == 2
+var @spB3Pretty = `errspec.hotels=@spB3HotelLen errspec.restaurants=@spB3RestLen (unchanged on error)`
+
+>> c-eda4: same record-type from two specs accumulates field-level via
+>> @mergeResolvedEntries (relies on c-5a24 field merge).
+var @spB4HotelAddrEntry = { handle: "r_hotel_A", key: "Hotel A", identity_field: "name", identity_value: "Hotel A", field_values: { name: "Hotel A", address: "1 Rue X" } }
+var @spB4HotelPriceEntry = { handle: "r_hotel_A", key: "Hotel A", identity_field: "name", identity_value: "Hotel A", field_values: { name: "Hotel A", price_range: "100" } }
+var @spB4HotelAddrState  = @updateResolvedState(@spB2Initial, "hotel", [@spB4HotelAddrEntry])
+var @spB4HotelPriceState = @updateResolvedState(@spB2Initial, "hotel", [@spB4HotelPriceEntry])
+var @spB4HotelAddrPR = { state: @spB4HotelAddrState, result: { record_type: "hotel", count: 1, handles: ["r_hotel_A"] } }
+var @spB4HotelPricePR = { state: @spB4HotelPriceState, result: { record_type: "hotel", count: 1, handles: ["r_hotel_A"] } }
+var @spB4After1 = @batchSpecMergeState(@spB2Initial, @spB4HotelAddrPR, @spB2Agent)
+var @spB4After2 = @batchSpecMergeState(@spB4After1, @spB4HotelPricePR, @spB2Agent)
+var @spB4Items = @bucketItems(@spB4After2.resolved.hotel)
+var @spB4Entry = @spB4Items[0]
+var @spB4Ok =
+  @spB4Items.length == 1 &&
+  @spB4Entry.field_values.address == "1 Rue X" &&
+  @spB4Entry.field_values.price_range == "100"
+var @spB4Pretty = `same-record-type-merge: addr=@spB4Entry.field_values.address price=@spB4Entry.field_values.price_range`
+
 >> plannerVisibleState idempotency: same state → same projection.
 >> Compare structurally on resolved bucket keys + per-bucket handles.
 var @spC1State = @updateResolvedState(@emptyState(), "contact", [
@@ -3518,6 +3571,9 @@ exe @allChecks() = [
   @check("state-projection/A7-c5a24-nonnull-incoming-overrides", @spA7Ok, @spA7Pretty),
   @check("state-projection/A8-c5a24-worker-projection-sees-merged-fields", @spA8Ok, @spA8Pretty),
   @check("state-projection/B1-update-isolates-named-bucket", @spB1Ok, @spB1Pretty),
+  @check("state-projection/B2-c-eda4-batch-spec-merge-accumulates-record-types", @spB2Ok, @spB2Pretty),
+  @check("state-projection/B3-c-eda4-error-spec-leaves-cumulative-unchanged", @spB3Ok, @spB3Pretty),
+  @check("state-projection/B4-c-eda4-same-record-type-batch-specs-field-merge", @spB4Ok, @spB4Pretty),
   @check("state-projection/C1-planner-visible-state-idempotent", @spC1Ok, @spC1Pretty),
   @check("state-projection/C2-planner-visible-state-invalidates-on-update", @spC2Ok, @spC2Pretty),
   @check("state-projection/D1-family-expansion-up-to-date-after-multiple-updates", @spD1Ok, @spD1Pretty),
