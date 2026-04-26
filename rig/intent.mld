@@ -219,6 +219,19 @@ exe @resolvedEntries(state, recordName) = [
 
 >> c-63fe Phase 1: direct lookup when bucket is indexed, legacy linear
 >> scan when array. The indexed branch becomes the hot path in Phase 2.
+>> c-bd28: canonicalizeDashes maps known Unicode dash variants
+>> (U+2010 HYPHEN, U+2011 NON-BREAKING, U+2012 FIGURE DASH, U+2013 EN DASH,
+>> U+2014 EM DASH, U+2212 MINUS) to ASCII U+002D. Used by the canonical-
+>> comparison path in selection_ref validation. Wiring into
+>> @lookupResolvedEntry attempted but ran into a wrapper-shape issue
+>> (the canonical-fallback returns a value where .isDefined()=true but
+>> !x=true, breaking @lowerSelectionRef's `if !@entry` guard). xfail/UH-1
+>> in tests/index.mld captures the regression until the proper fix lands.
+exe @canonicalizeDashes(value) = js {
+  if (typeof value !== 'string') return value;
+  return value.replace(/[‐‑‒–—−]/g, '-');
+}
+
 exe @lookupResolvedEntry(state, recordName, handle) = [
   let @recordKey = @name(@recordName)
   let @resolvedBucket = @bucketObject(@state.resolved)
@@ -989,5 +1002,7 @@ export {
   @bucketItems,
   @bucketLength,
   @bucketObject,
-  @valueField
+  @valueField,
+  @canonicalizeDashes,
+  @lookupResolvedEntry
 }

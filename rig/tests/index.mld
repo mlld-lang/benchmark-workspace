@@ -50,8 +50,7 @@ import {
   @updateExtractSources,
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
-import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg } from "../intent.mld"
->> Already imports @lowerSelectionRef which c-bd28 UH-2 tests against.
+import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg, @lookupResolvedEntry } from "../intent.mld"
 import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"

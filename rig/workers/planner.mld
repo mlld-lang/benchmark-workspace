@@ -146,11 +146,13 @@ exe @plannerInvalidBudget() = [
 ]
 
 >> c-3438 (B): warn when the planner has made N calls without state
->> progress. Threshold tuned empirically — start at 6 (15% of default
->> 40-call budget). Lower if planners rarely flail this long; higher
->> if legitimate multi-step gather phases trip it.
+>> progress. Threshold tuned empirically. Started at 6 — never fired in
+>> sweeps because cascade tasks died before reaching threshold AND the
+>> parallel resolve_batch + cancellation eliminated cascades. Dropped
+>> to 3 to surface the warning earlier in tasks that DO flail without
+>> cascading (UT10-style empty-derive loops, etc).
 exe @plannerNoProgressThreshold() = [
-  => 6
+  => 3
 ]
 
 >> c-3438 (B): compute a stable signature of the meaningful state.
