@@ -866,17 +866,17 @@ exe @runPlannerSession(agent, query) = [
   let @executeDocs = @phaseToolDocs(@agent, "execute")
   let @addendum = @agent.plannerAddendum ?? ""
   let @prompt = @plannerPrompt(@query, @resolveDocs, @extractDocs, @executeDocs, @addendum)
+  >> c-63fe / m-0710: opencode default mcp_timeout (60s) is too tight for
+  >> our resolve_batch processing — kills legit batches that need 60-75s
+  >> (very common in this workload). 120s gives legit work headroom while
+  >> still failing fast on the actual flailing pattern (>3x baseline, per
+  >> Adam's analysis showing 0/9 tasks with batches >200s passed).
   let @plannerConfig = {
     model: @agent.model,
     pure: @agent.opencodePure,
     tools: @plannerTools,
     stubPhase: "planner",
     stubResponses: @agent.stub.planner ?? [],
-    >> c-63fe / m-0710: opencode default mcp_timeout (60s) is too tight for
-    >> our resolve_batch processing — kills legit batches that need 60-75s
-    >> (very common in this workload). 120s gives legit work headroom while
-    >> still failing fast on the actual flailing pattern (>3x baseline, per
-    >> Adam's analysis showing 0/9 tasks with batches >200s passed).
     mcpTimeoutMs: 120000
   }
   let @raw = when [
