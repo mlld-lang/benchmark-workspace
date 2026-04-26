@@ -489,13 +489,14 @@ exe @plannerResolveBatch(input) = [
   let @batchPurpose = @coerced.purpose ?? null
 
   >> Phase A — parallel dispatch. resolve_batch is for parallel-safe
-  >> resolves only (chained dependencies are not its use case — the
-  >> planner would emit separate resolves for that). All specs share
-  >> the same starting @toolCtx; @dispatchResolve has no @planner side
-  >> effects so concurrent calls are safe. This collapses what was
-  >> ~75s/spec sequentially into ~75s wall for the whole batch.
+  >> resolves only. All specs share the same starting @toolCtx;
+  >> @dispatchResolve has no @planner side effects so concurrent calls
+  >> are safe.
   let @initialCtx = @plannerToolContext("resolve", { phase: "resolve" })
   if !@initialCtx.ok [ -> @initialCtx.result; => @initialCtx.result ]
+
+  let @initialToolCalls = @initialCtx.runtime.tool_calls
+  let @initialInvalidCalls = @initialCtx.runtime.invalid_calls
 
   let @dispatched = for parallel(8) @spec in @resolves [
     let @decision = { phase: "resolve", tool: @spec.tool, args: @spec.args ?? {}, purpose: @spec.purpose ?? @batchPurpose }
@@ -503,9 +504,13 @@ exe @plannerResolveBatch(input) = [
     => { spec: @spec, decision: @decision, phaseResult: @phaseResult }
   ]
 
-  >> Phase B — sequential settle. @settlePhaseDispatch writes @planner
-  >> state/runtime; must run one at a time. Re-read context per spec so
-  >> we see the prior settle's state changes (budget, fingerprint, etc).
+  >> Phase B — sequential settle. @settlePhaseDispatch merges state +
+  >> appends logs per spec. Each settle ALSO bumps tool_calls + invalid_calls
+  >> on the planner runtime, but that's wrong for batch semantics: the
+  >> planner LLM made one decision (one tool call), not N. We let the
+  >> per-spec settle run for state correctness, then override the runtime
+  >> tool_calls / invalid_calls counters at the end (Phase C below) to
+  >> charge the planner for one batch decision rather than N specs.
   let @results = for @item in @dispatched [
     let @currentCtx = @plannerToolContext("resolve", @item.decision)
     if !@currentCtx.ok [ => @currentCtx.result ]
@@ -525,6 +530,34 @@ exe @plannerResolveBatch(input) = [
       }
     ]
   ]
+
+  >> Phase C — correct the runtime accounting. Per-spec settles bumped
+  >> tool_calls by N and invalid_calls by per-spec error count. Override
+  >> with batch-level accounting: +1 tool_call, +1 invalid_call iff any
+  >> spec errored. Preserves the state merges and progress fingerprint
+  >> the per-spec settles wrote; just corrects the budget counters.
+  let @errorResults = for @r in @results when @r.status == "error" || @r.status == "blocked" => @r
+  let @anyError = @errorResults.length > 0
+  let @correctedToolCalls = @initialToolCalls + 1
+  let @correctedInvalidCalls = @initialInvalidCalls + (@anyError ? 1 : 0)
+  let @currentRuntime = @planner.runtime
+  let @correctedTerminal = when [
+    @correctedInvalidCalls >= @plannerInvalidBudget() => {
+      status: "blocked",
+      text: "blocked: planner_error_budget_exhausted",
+      reason: "planner_error_budget_exhausted"
+    }
+    * => null
+  ]
+  let @correctedRuntime = @plannerRuntimeStateWithProgress(
+    @correctedToolCalls,
+    @correctedInvalidCalls,
+    @correctedTerminal,
+    { phase: "resolve_batch", batch_size: @resolves.length },
+    @currentRuntime.progress_fingerprint ?? "",
+    @currentRuntime.calls_since_progress ?? 0
+  )
+  @planner.set({ runtime: @correctedRuntime })
 
   let @combined = { status: "batch_resolved", results: @results }
   -> @combined

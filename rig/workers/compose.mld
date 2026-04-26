@@ -16,10 +16,34 @@ exe @coerceComposeAttestation(raw) = [
   => @parsed
 ] => record @composeAttestation
 
+>> UT17 caught the compose worker emitting malformed JSON like `{\` —
+>> @coerceComposeAttestation returns null/empty and downstream falls
+>> through to @raw which is the corrupt string. Detect this and retry
+>> once with explicit "your previous output was malformed" feedback.
+exe @isComposeMalformed(attestation, raw) = [
+  if !@attestation.isDefined() [ => true ]
+  if !@attestation["text"].isDefined() [ => true ]
+  let @text = @attestation["text"]
+  if @text == "" [ => true ]
+  if @typeof(@text) != "string" [ => true ]
+  => false
+]
+
+exe @composeRetryPrompt(originalPrompt, badRaw) = `@originalPrompt
+
+---
+RETRY: your previous response was malformed and could not be parsed as JSON. The expected shape is exactly:
+
+{"text": "<final answer>"}
+
+Your previous response started with: @badRaw.slice(0, 80)
+
+Return ONLY the JSON object. No prose, no fences, no markdown. Single object with one field "text".`
+
 exe @dispatchCompose(agent, state, query, decision) = [
   let @executionLog = @readExecutionLogFile(@agent.executionLogFile)
   let @prompt = @composePrompt(@query, @workerStateSummary(@agent, @state), @executionLog, @decision ?? {})
-  let @raw = @llmCall(@agent.harness, @prompt, {
+  let @callConfig = {
     model: @agent.workerModel ?? @agent.model,
     pure: @agent.opencodePure,
     dir: @agent.innerWorkerDir,
@@ -29,15 +53,27 @@ exe @dispatchCompose(agent, state, query, decision) = [
     stubPhase: "compose",
     stubResponses: @agent.stub.compose ?? [],
     stubIndex: @executionLog.length
-  })
-  let @attestation = @coerceComposeAttestation(@raw)
+  }
+  let @raw1 = @llmCall(@agent.harness, @prompt, @callConfig)
+  let @attestation1 = @coerceComposeAttestation(@raw1)
+  let @malformed1 = @isComposeMalformed(@attestation1, @raw1)
+  >> Retry once on malformed output with explicit feedback
+  let @raw = when [
+    @malformed1 => @llmCall(@agent.harness, @composeRetryPrompt(@prompt, @raw1), @callConfig)
+    * => @raw1
+  ]
+  let @attestation = when [
+    @malformed1 => @coerceComposeAttestation(@raw)
+    * => @attestation1
+  ]
   let @sessionId = @llmSessionId(@raw)
   => {
     text: @attestation["text"] ?? @raw,
     session_id: @sessionId,
     llm_log: @llmCallEntry("compose", @prompt, @raw, @attestation, @sessionId, {
       call_kind: "inner_worker",
-      inner_worker_session_id: @sessionId
+      inner_worker_session_id: @sessionId,
+      compose_retried: @malformed1
     })
   }
 ]

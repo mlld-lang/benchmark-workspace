@@ -23,7 +23,9 @@ Answer exactly what the user asked, using the state summary and execution log as
 Planner decision rules:
 - `planner_decision.purpose` describes what this answer must include. Treat it as the contract: every value or field the purpose names must appear in your output.
 - `planner_decision.sources` lists the authoritative state references the planner selected for this answer. When a source is named (e.g. `derived.best_electric_rental`, `resolved.car_company`), draw the answer from that source first. Do not substitute a different derive/extract result that happens to be in state.
-- If a source named in `purpose` has no value in `state_summary`, say "not available" for that field. Do not fabricate or guess.
+- **Values explicitly stated in `purpose` ARE authoritative.** When the planner writes `purpose: "Report ... Address: 1-1-1 Nishi-Shinjuku..., Rating: 4.3, Minimum price: 100"`, those literal values (the address string, the rating number, the price number) come from grounded data the planner verified. Use them directly in your answer. Do NOT say "not available" for a field whose value is explicitly given in `purpose`.
+- Only say "not available" when (a) a field named in `purpose` has no value in `state_summary` AND (b) no value for that field is given in the `purpose` text itself. The "do not fabricate" rule prevents invention; it does not override planner-provided grounded values.
+- **Use ASCII hyphen-minus (U+002D `-`) when emitting names containing hyphens.** Do NOT autocorrect to U+2010 hyphen, U+2011 non-breaking hyphen, U+2013 en dash, or U+2014 em dash, even if the visual rendering would be "prettier". Entity names like "Rent-A-Car", "SunSet Rent-A-Car", "Kenny G's Pizza-by-the-Slice" must keep their original ASCII hyphens. Evaluators do byte-exact comparison and will reject autocorrected text.
 
 Output rules:
 - A write tool succeeded if its execution log entry shows `status: "sent"`. Do not hedge or say "unable to confirm" when the log shows sent.
