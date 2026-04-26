@@ -201,3 +201,25 @@ Comparison against `projection-repro.mld`:
 This gives a clear payoff signal for a real rig change, provided invariant tests prove the handle-indexed/cache shape preserves factsource/proof behavior for resolved refs, whole-record refs, family expansion, selection refs, and execute-policy compilation.
 
 **2026-04-25T21:48:32Z** Update from c-30f7 closure: TR-UT10 transcript (ses_239d672a6ffe...) confirms MCP 'Not connected' cascade under -p 20 with heap=8g. Heap-up alone insufficient. The 4 travel timeouts (UT10, UT11, UT12, UT19) are likely all the same pattern — need to verify on UT11/UT12/UT19 transcripts. May need lower concurrency cap, per-task MCP isolation, or MCP server lifecycle changes.
+
+**2026-04-26T01:06:06Z** PHASES 1-3 LANDED (2026-04-25 session 6 → 7).
+
+Implementation per GPT design review:
+- Phase 1 (commit 32422b0): adapter helpers — @isResolvedIndexBucket, @indexedBucketEntries (mlld-native, no JS), @bucketItems updated, @lookupResolvedEntry direct-lookup path. Reads tolerate either bucket shape; writes still array.
+- Phase 2.0 (commit abf5259): @mergeResolvedEntries flips writer to indexed bucket {_rig_bucket: 'resolved_index_v1', order, by_handle, version, planner_cache}. Audit-pass updated 4 production sites + 6 test sites to use @bucketItems / @bucketLength adapters. by_handle built via @pairsToObject (NOT object spread — spread strips factsources).
+- Phase 2.5 (commit 291b142): @populatePlannerCache eagerly projects entries at merge time. @updateResolvedStateWithDef variant accepts recordDef and populates cache. @projectResolvedSummary uses cache when role:planner + version match. Worker projections always fresh (per GPT decision D — they may include raw tainted content).
+- Phase 3 (commit d967399): opt-in measurement harness at tmp/c63fe-state-projection-baseline/harness.mld. Reports per-batch RSS, planner-visible JSON size, cache reuse behavior.
+
+Initial measurement (160 entries / 4 batches):
+- After batch 4: RSS=1700MB, JSON=31KB
+- 5x reuse: RSS 1815→1820MB (+5MB total) — cache hits stable
+- visible_json_bytes consistent across reuses
+
+Higher absolute RSS than the OOM agent's JS-pure prototype (~1.04GB at 1000 entries) because mlld wrapper overhead is real. The relative win — handle-keyed merge + cached planner projection — is in production.
+
+Gates: 121/121 invariants (was 106 pre-c-63fe), 23/23 worker tests.
+Contract: 14 state-projection tests A1-A4, B1, C1-C2, D1-D3, E1-E3, F1-F2.
+
+Per GPT framing: handle index = storage/addressing only. Proof/authorization stays in factsources/source-class — verified by session-resolved-factsources-survive-boundary still passing.
+
+Travel sweep run 24944774440 in flight on the post-Phase-2.5 image. Will compare against prior 7/20 baseline (run 24942869231) to see whether the 6 MCP-timeout tasks (TR-UT8/10/11/12/18/19) recover with reduced rig-state pressure.
