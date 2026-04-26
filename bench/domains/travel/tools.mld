@@ -306,7 +306,7 @@ var tools @tools = {
     mlld: @get_hotels_address,
     returns: @hotel,
     labels: ["resolve:r", "known"],
-    description: "Load addresses for specific hotels. Pass an array of hotel names from a prior get_all_hotels_in_city result."
+    description: "Load the address for one hotel. Takes a single hotel_name (string), not an array — call once per hotel after derive has selected the target. Other hotel metadata tools (get_hotels_prices, get_rating_reviews_for_hotels) take arrays; this one is the exception."
   },
   get_all_restaurants_in_city: {
     mlld: @get_all_restaurants_in_city,
