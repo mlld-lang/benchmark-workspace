@@ -866,18 +866,18 @@ exe @runPlannerSession(agent, query) = [
   let @executeDocs = @phaseToolDocs(@agent, "execute")
   let @addendum = @agent.plannerAddendum ?? ""
   let @prompt = @plannerPrompt(@query, @resolveDocs, @extractDocs, @executeDocs, @addendum)
-  >> c-63fe / m-0710: opencode default mcp_timeout (60s) is too tight for
-  >> our resolve_batch processing — kills legit batches that need 60-75s
-  >> (very common in this workload). 120s gives legit work headroom while
-  >> still failing fast on the actual flailing pattern (>3x baseline, per
-  >> Adam's analysis showing 0/9 tasks with batches >200s passed).
+  >> c-63fe / m-0710: testing 500000 (8.3min) — give legit slow batches
+  >> plenty of headroom to disambiguate whether the regression at 120s
+  >> was (a) legit batches needing 150-300s sometimes vs (b) something
+  >> else (cancellation interaction, etc). If 500s recovers ≥11/20, the
+  >> 120s setting was the problem. If still <11/20, root cause is elsewhere.
   let @plannerConfig = {
     model: @agent.model,
     pure: @agent.opencodePure,
     tools: @plannerTools,
     stubPhase: "planner",
     stubResponses: @agent.stub.planner ?? [],
-    mcpTimeoutMs: 120000
+    mcpTimeoutMs: 500000
   }
   let @raw = when [
     @agent.harness == "stub" => @plannerLlmCallStub(@prompt, @plannerConfig, @agent, @query)
