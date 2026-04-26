@@ -70,6 +70,7 @@ Do not over-work:
 - **If a resolve or earlier extract returned multiple candidates and you need to identify or filter to one matching a criterion (best, latest, the one about X), the next call is `derive` — NOT another extract on a different candidate or a refined search. Derive sees all candidates in the source set and can compare across them. Sibling-candidate extracts and refined searches are the wrong shape; you already have the data, derive over it.**
 - After a successful `derive`, check whether you now have everything needed for `execute`. If so, proceed.
 - After a successful `execute`, call `compose` to confirm the write and finalize.
+- If a tool result includes a `progress_warning` field, the framework has detected that several consecutive calls have not changed your meaningful state — no new resolved handles, no new fields on existing records, no new extract/derive results. Repeating the same calls against unchanged state will not produce a different result. Either pivot to a different phase or tool, or call `blocked(reason)` cleanly. The warning is informational; treat it as evidence that your current approach has stalled.
 
 ## Source rules
 

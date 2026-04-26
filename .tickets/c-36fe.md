@@ -2,13 +2,13 @@
 id: c-36fe
 status: open
 deps: []
-links: [c-9d56, c-011b, c-bd28, c-19ee, c-ebd6]
+links: [c-9d56, c-011b, c-bd28, c-19ee, c-ebd6, c-3438, c-d590, c-63fe]
 created: 2026-04-26T02:39:38Z
 type: bug
 priority: 2
 assignee: Adam
 tags: [planner, recovery, budget, orchestration, travel]
-updated: 2026-04-26T10:09:51Z
+updated: 2026-04-26T11:39:40Z
 ---
 # Planner recovery after wrong phase choice (budget exhaustion dominates)
 

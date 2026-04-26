@@ -116,7 +116,24 @@ exe @plannerRuntimeState(toolCalls, invalidCalls, terminal, lastDecision) = [
     tool_calls: @toolCalls,
     invalid_calls: @invalidCalls,
     terminal: @terminal,
-    last_decision: @lastDecision
+    last_decision: @lastDecision,
+    progress_fingerprint: "",
+    calls_since_progress: 0
+  }
+]
+
+>> c-3438 (B): extended runtime state with no-progress tracking.
+>> Used by @finishPlannerTool when computing the new fingerprint —
+>> @plannerRuntimeState above is kept for callers that don't yet
+>> track progress (compose/blocked terminals, error short-circuits).
+exe @plannerRuntimeStateWithProgress(toolCalls, invalidCalls, terminal, lastDecision, progressFingerprint, callsSinceProgress) = [
+  => {
+    tool_calls: @toolCalls,
+    invalid_calls: @invalidCalls,
+    terminal: @terminal,
+    last_decision: @lastDecision,
+    progress_fingerprint: @progressFingerprint ?? "",
+    calls_since_progress: @callsSinceProgress ?? 0
   }
 ]
 
@@ -127,6 +144,88 @@ exe @plannerToolBudget(agent) = [
 exe @plannerInvalidBudget() = [
   => 5
 ]
+
+>> c-3438 (B): warn when the planner has made N calls without state
+>> progress. Threshold tuned empirically — start at 6 (15% of default
+>> 40-call budget). Lower if planners rarely flail this long; higher
+>> if legitimate multi-step gather phases trip it.
+exe @plannerNoProgressThreshold() = [
+  => 6
+]
+
+>> c-3438 (B): compute a stable signature of the meaningful state.
+>> Two signatures are equal iff the planner has not added/changed any
+>> resolved handle, gained any new field on an existing handle, named
+>> a new extract/derive, or flipped one from empty to non-empty.
+>>
+>> Captures (per GPT review):
+>> - new resolved handle (changes per-bucket key list)
+>> - existing record gained a previously-null field (changes per-handle
+>>   field count)
+>> - resolved bucket version change (e.g. from a write that touched it)
+>> - new extract/derive name with non-empty payload
+>> - existing extract/derive name flipped empty→non-empty
+>>
+>> Does NOT capture (intentional — those are not progress):
+>> - repeated zero-result resolves to the same tool+args
+>> - repeated validation errors
+exe @stateProgressFingerprint(state) = node {
+  if (!state || typeof state !== 'object') return '';
+  const parts = [];
+
+  // Resolved buckets — sorted by record type for stable signature.
+  const resolved = state.resolved || {};
+  for (const recordType of Object.keys(resolved).sort()) {
+    const bucket = resolved[recordType];
+    if (!bucket) continue;
+    const version = (typeof bucket.version === 'number') ? bucket.version : 0;
+    const byHandle = bucket.by_handle || {};
+    const handleSigs = [];
+    for (const handle of Object.keys(byHandle).sort()) {
+      const entry = byHandle[handle];
+      // Field count = # of non-null/non-empty fields visible on the entry.
+      // Walk multiple shapes since records can be wrapped or raw depending
+      // on whether they came through coerce-record vs direct mutation.
+      const data = (entry && entry.value && entry.value.data)
+        ? entry.value.data
+        : (entry && entry.value && typeof entry.value === 'object')
+          ? entry.value
+          : (entry && entry.field_values) || {};
+      let fieldCount = 0;
+      for (const k of Object.keys(data || {})) {
+        const v = data[k];
+        if (v === null || v === undefined || v === '') continue;
+        if (Array.isArray(v) && v.length === 0) continue;
+        if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) continue;
+        fieldCount++;
+      }
+      handleSigs.push(handle + '@' + fieldCount);
+    }
+    parts.push('R:' + recordType + ':v' + version + ':' + handleSigs.join('|'));
+  }
+
+  // Extract/derive — name + non-empty status.
+  const extracted = state.extracted || {};
+  for (const name of Object.keys(extracted).sort()) {
+    const e = extracted[name];
+    const nonEmpty = !!(e && (
+      (Array.isArray(e.preview_fields) && e.preview_fields.length > 0) ||
+      (Array.isArray(e.selection_refs) && e.selection_refs.length > 0)
+    ));
+    parts.push('E:' + name + ':' + (nonEmpty ? '1' : '0'));
+  }
+  const derived = state.derived || {};
+  for (const name of Object.keys(derived).sort()) {
+    const d = derived[name];
+    const nonEmpty = !!(d && (
+      (Array.isArray(d.preview_fields) && d.preview_fields.length > 0) ||
+      (Array.isArray(d.selection_refs) && d.selection_refs.length > 0)
+    ));
+    parts.push('D:' + name + ':' + (nonEmpty ? '1' : '0'));
+  }
+
+  return parts.join(';');
+}
 
 
 exe @plannerResolvedRecords(records, state, recordType, handles) = [
@@ -287,11 +386,24 @@ exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
     }
     * => null
   ]
-  let @nextRuntime = @plannerRuntimeState(
+  >> c-3438 (B): compute progress fingerprint, compare to prior,
+  >> update calls_since_progress. Errors and successful calls both
+  >> count toward "no progress" if state didn't actually change.
+  let @newFingerprint = @stateProgressFingerprint(@nextState)
+  let @priorFingerprint = @toolCtx.runtime.progress_fingerprint ?? ""
+  let @priorCallsSinceProgress = @toolCtx.runtime.calls_since_progress ?? 0
+  let @nextCallsSinceProgress = when [
+    @newFingerprint != @priorFingerprint => 0
+    * => @priorCallsSinceProgress + 1
+  ]
+
+  let @nextRuntime = @plannerRuntimeStateWithProgress(
     @toolCtx.runtime.tool_calls + 1,
     @invalidCalls,
     @terminal,
-    @decision
+    @decision,
+    @newFingerprint,
+    @nextCallsSinceProgress
   )
   let @summary = when [
     @phaseResult.error.isDefined() => @phaseResult.summary ?? @phaseResult.error
@@ -314,12 +426,22 @@ exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
     @remaining <= @halfBudget => `Budget checkpoint: @toolCtx.runtime.tool_calls of @budget calls used. If you can answer the question or perform the write from current data, do it now. Each additional resolve/extract/derive costs a call.`
     * => null
   ]
+  >> c-3438 (B): no-progress warning. Fires when N consecutive calls
+  >> haven't changed the meaningful state. Tells the planner that
+  >> retrying isn't yielding new info and suggests blocked() as the
+  >> clean exit. Threshold via @plannerNoProgressThreshold().
+  let @noProgressThreshold = @plannerNoProgressThreshold()
+  let @progressWarning = when [
+    @nextCallsSinceProgress >= @noProgressThreshold => `NO PROGRESS: @nextCallsSinceProgress consecutive calls without state change (no new resolved handles, no new fields on existing records, no new extract/derive results). The current approach is not yielding new information. If a critical piece of data is genuinely missing and no other tool can produce it, call blocked(reason). Otherwise pivot to a different phase or tool — repeating the same calls against unchanged state will not produce a different result.`
+    * => null
+  ]
   => {
     finished: @finished,
     terminal: @terminal,
     summary: @summary,
     workerSessionId: @workerSessionId,
-    budget_warning: @budgetWarning
+    budget_warning: @budgetWarning,
+    progress_warning: @progressWarning
   }
 ]
 
@@ -336,7 +458,7 @@ exe @plannerResolve(input) = [
   let @resolvedHandles = for @handle in @arrayItems(@phaseResult.result.handles ?? []) => @stringValue(@handle)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning }
+    @phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning, progress_warning: @settled.progress_warning }
     * => {
       status: "resolved",
       tool: @tool,
@@ -345,7 +467,8 @@ exe @plannerResolve(input) = [
       handles: @resolvedHandles,
       records: @plannerResolvedRecords(@toolCtx.agent.records ?? {}, @settled.finished.state, @phaseResult.result.record_type, @resolvedHandles),
       summary: @phaseResult.result.summary,
-      budget_warning: @settled.budget_warning
+      budget_warning: @settled.budget_warning,
+      progress_warning: @settled.progress_warning
     }
   ]
   -> @result
@@ -459,7 +582,7 @@ exe @plannerExtract(input) = [
   let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "extract", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning }
+    @phaseResult.error.isDefined() => { status: "error", phase: "extract", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning, progress_warning: @settled.progress_warning }
     * => {
       status: "extracted",
       name: @phaseResult.result.name,
@@ -467,7 +590,8 @@ exe @plannerExtract(input) = [
       provenance: @phaseResult.result.provenance,
       preview_fields: @phaseResult.result.preview_fields,
       summary: @phaseResult.result.summary,
-      budget_warning: @settled.budget_warning
+      budget_warning: @settled.budget_warning,
+      progress_warning: @settled.progress_warning
     }
   ]
   -> @result
@@ -499,7 +623,7 @@ exe @plannerDerive(input) = [
   let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "derive", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning }
+    @phaseResult.error.isDefined() => { status: "error", phase: "derive", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning, progress_warning: @settled.progress_warning }
     * => {
       status: "derived",
       name: @phaseResult.result.name,
@@ -508,7 +632,8 @@ exe @plannerDerive(input) = [
       preview_fields: @phaseResult.result.preview_fields,
       selection_refs: @phaseResult.result.selection_refs,
       summary: @phaseResult.result.summary,
-      budget_warning: @settled.budget_warning
+      budget_warning: @settled.budget_warning,
+      progress_warning: @settled.progress_warning
     }
   ]
   -> @result
@@ -535,13 +660,14 @@ exe @plannerExecute(input) = [
   let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "execute", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning }
+    @phaseResult.error.isDefined() => { status: "error", phase: "execute", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning, progress_warning: @settled.progress_warning }
     * => {
       status: "executed",
       tool: @phaseResult.result.tool,
       result_handles: @phaseResult.result.result_handles,
       summary: @phaseResult.result.summary,
-      budget_warning: @settled.budget_warning
+      budget_warning: @settled.budget_warning,
+      progress_warning: @settled.progress_warning
     }
   ]
   -> @result

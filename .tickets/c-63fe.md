@@ -2,13 +2,13 @@
 id: c-63fe
 status: open
 deps: []
-links: [c-9d56]
+links: [c-9d56, c-3438, c-36fe, c-d590]
 created: 2026-04-25T04:45:37Z
 type: bug
 priority: 1
 assignee: Adam
 tags: [infrastructure, mcp]
-updated: 2026-04-26T01:57:57Z
+updated: 2026-04-26T11:39:40Z
 ---
 # MCP server disconnects mid-run on remote bench runners (travel + workspace-b)
 
@@ -450,3 +450,71 @@ Per planner transcripts: "Connection closed", "Connection is down", "MCP server 
 2. _save_state() read-only skip — quick win, low risk
 3. -p 10 spike — measurement
 4. If still failing: per-call isolation / async I/O for state save
+
+**2026-04-26T10:45:48Z** **2026-04-26T11:00:00Z** -p 20 SWEEP RESULT (run 24954390115): 9/20 (down from 11/20). My _save_state skip + instrumentation hypothesis was WRONG.
+
+**Critical findings from new instrumentation:**
+
+1. **`_save_state()` cost is negligible.** UT8 (only mutation) saved once at 1.6ms. The skip-on-read-only is correct but not the bottleneck I theorized.
+
+2. **All MCP calls are sub-15ms.** UT11 (the canonical cascade test case): 12 successful MCP calls, total 43ms of MCP time. UT9: 9 calls, total 45ms. UT8: 6 calls, total 36ms.
+
+3. **MCP server responds fine throughout.** No growing elapsed_ms, no gaps in call_num, no missed calls.
+
+4. **The 900s wall timeout means bottleneck is BETWEEN MCP calls.** 900s - 0.043s of MCP = ~899.96s of non-MCP work. Per UT11: 12 MCP calls in 900s = ~75s between calls average. That's planner LLM thinking + opencode session + mlld processing — NOT MCP.
+
+5. **Planner narrations "Connection closed", "MCP connection is down" are mlld-side errors, NOT MCP server-side.** Our MCP log only shows calls that arrived. Failures happen BEFORE mlld can reach the server. The diagnosis surface we needed was mlld-side, not MCP-side.
+
+**Regression analysis:**
+- UT8 PASS→FAIL: response with different (wrong) compose answer. Different failure mode, not cascade.
+- UT9 PASS→FAIL: 900s timeout. New cascade victim — 9 read calls all fast, then planner stuck.
+- UT19 response→unparseable: also 900s timeout. Same cascade pattern.
+
+The -2 net change is stochastic load distribution, not a regression from the read-only skip. Different tasks land in the cascade window each sweep.
+
+**Diagnosis correction:**
+The cascade is NOT in the MCP server. It's in the mlld↔opencode↔MCP communication layer. The MCP server is innocent. The "Connection closed" narrations are mlld misreading something else as connection failure.
+
+**Possible real causes:**
+1. **mlld MCP client timeout.** mlld may have a request timeout (e.g., 30s, 60s) that fires when opencode hasn't drained the response in time. The MCP server completed in <15ms, but the response sits in stdio waiting for opencode to read it. If opencode is busy with the planner LLM call (75s/turn), it doesn't read in time, mlld marks it "connection closed."
+2. **Opencode session backpressure.** opencode running multiple concurrent agent sessions at -p 20 may serialize MCP reads in a way that starves individual sessions.
+3. **stdio buffer overflow.** If multiple parallel opencode sessions hit the same MCP server (unlikely — PID is per-task), or if response sizes overflow pipe buffers.
+
+**Next investigation:**
+- Wait for -p 10 sweep to confirm/refute the parallelism hypothesis
+- If -p 10 clears: parallelism cap + opencode backpressure investigation
+- If -p 10 also fails: per-task issue, need mlld-side request log (mlld trace)
+
+**`_save_state` skip stays in.** It's correct (read tools shouldn't write state) and harmless even though it's not the fix. Per-call instrumentation also stays — it ruled out the wrong hypothesis cleanly.
+
+**2026-04-26T10:52:02Z** **2026-04-26T11:30:00Z** -p 10 SWEEP RESULT (run 24954391613): 8/20 — WORSE than -p 20's 9/20. Parallelism is NOT the cap. Definitive evidence found.
+
+**Smoking gun: opencode's MCP client times out resolve_batch calls at -32001.**
+
+UT11 at -p 10, opencode session ses_236a76147ffe68rr6BTjvEXkHl, 4 mlld_tools_resolve_batch calls:
+- #1: succeeded (3699 bytes output)
+- #2, #3, #4: ALL hit `MCP error -32001: Request timed out`
+
+JSON-RPC -32001 = "Request timed out". This is opencode's MCP client firing a timeout against mlld's MCP adapter.
+
+**Architecture clarification:** Two-layer MCP:
+1. **OUTER (opencode → mlld):** opencode planner LLM calls mlld via MCP using tools `mlld_tools_resolve_batch`, `mlld_tools_resolve`, `mlld_tools_derive`, etc. THIS is where -32001 fires.
+2. **INNER (mlld → AgentDojo):** mlld processes a tool call and may make multiple AgentDojo-MCP calls. This is what we instrumented in `clean/src/mcp_server.py`. Always fast (<20ms).
+
+The AgentDojo MCP server is INNOCENT (proven by our instrumentation). The bug is in the outer opencode↔mlld bridge.
+
+**Hypothesis:** mlld's resolve_batch handler takes >60s (opencode's likely default MCP timeout) on heavy multi-domain batches. Even though each AgentDojo call is <20ms, mlld's processing overhead per tool (state projection, intent compilation, ref resolution, response shaping, plus the bridge IPC) accumulates. After timeout fires, opencode discards the result; mlld is unaware and continues processing (which is why the AgentDojo log shows the calls completing fast — they DID complete, just after opencode gave up).
+
+**This is upstream of clean.** Filed P0 in mlld as `m-0710` with full repro and evidence. Linked.
+
+**Practical implication for clean:**
+- This caps travel at ~11/20 with current bench-side fixes (UT9/10/11/12/18/19 cluster blocked)
+- No clean-side fix possible — the issue is in mlld's MCP server adapter or opencode's client
+- Mitigations to consider while waiting for mlld: cap resolve_batch size in tool catalog (limit fan-out per call), or skip resolve_batch entirely for travel and force individual resolves (more LLM calls but avoids the timeout)
+
+**Sweep changes summary (post c-011b/c-db45/c-63fe-instrumentation):**
+- Travel utility: 5/20 (baseline) → 11/20 (post bench fixes) → 9/20 (post MCP instrumentation, stochastic) → 8/20 (-p 10)
+- Real ceiling at current architecture: 11-12/20
+- m-0710 fix would unblock +5-6 (UT9/10/11/12/18/19) → ~16-17/20
+
+c-63fe stays open as the clean-side tracking ticket. Closes when m-0710 lands and travel sweep verifies +5/6 utility.
