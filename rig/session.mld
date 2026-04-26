@@ -1,7 +1,14 @@
 import { @emptyState } from "./runtime.mld"
 
 record @plannerRuntime = {
-  data: [tool_calls: number, invalid_calls: number, terminal: object?, last_decision: object?]
+  data: [
+    tool_calls: number,
+    invalid_calls: number,
+    terminal: object?,
+    last_decision: object?,
+    progress_fingerprint: string?,
+    calls_since_progress: number?
+  ]
 }
 
 var session @planner = {
@@ -16,7 +23,9 @@ exe @emptyPlannerRuntime() = [
     tool_calls: 0,
     invalid_calls: 0,
     terminal: null,
-    last_decision: null
+    last_decision: null,
+    progress_fingerprint: "",
+    calls_since_progress: 0
   }
 ]
 
