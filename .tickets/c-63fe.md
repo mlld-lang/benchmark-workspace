@@ -254,3 +254,46 @@ Possible Phase 3.5 optimizations (not yet attempted):
 3. Compact factsource representation (per OOM agent's design candidate 4)
 
 For now, Phase 1-3 ship as the structural foundation. Whether the production travel suite recovers is the next signal — sweep run 24944774440 in flight.
+
+**2026-04-26T01:25:41Z** REGRESSION on travel sweep run 24944774440 (image 291b142, post Phase 2.5).
+
+Summary: 5/20 PASS (down from 7/20 in prior post-c-c4a4 sweep 24942869231).
+
+Comparison vs prior:
+| Task   | Prior (24942869231) | This (24944774440)         |
+|--------|---------------------|----------------------------|
+| UT0    | PASS                | BROKEN (Guard retry failed)|
+| UT3    | (not in this list)  | BROKEN (Guard retry failed)|
+| UT4    | PASS                | PASS                       |
+| UT5    | PASS                | PASS                       |
+| UT6    | PASS                | PASS                       |
+| UT7    | PASS                | PASS                       |
+| UT9    | response (utility:false) | TIMEOUT (was non-timeout) |
+| UT14   | PASS                | response (utility:false)   |
+| UT15   | PASS                | response (utility:false)   |
+| UT17   | response (utility:false) | PASS                  |
+
+Net: -2 utility, +2 broken sessions, 1 task regressed from response→timeout.
+
+UT0/UT3 broken-session detail: utility:null, n_calls:0, execute_error 'Guard retry failed: resume not available for this exe — use retry instead. Guard: @composeRetryOpencode (for operation:named:plannerllmcallopencode)'.
+
+The guard fires AFTER @plannerLlmCallOpencode completes. It checks planner.runtime.terminal — if not set, it tries 'resume' to nudge the planner toward compose. 'Resume not available' means the LLM call did not establish a resumable session.
+
+Possible causes (need investigation):
+1. Eager projection at merge populates planner_cache via @projectResolvedEntry, which may have side-effects in a session-bearing context
+2. The new 4-arg @updateResolvedStateWithDef may interact with rig's checkpoint/resume machinery in a way the 3-arg variant didn't
+3. Bucket shape change (now {_rig_bucket, order, by_handle, version, planner_cache}) may not round-trip through @planner.set() / session storage cleanly for first-iteration restore
+
+Contract tests still pass (121/121 invariants, 23/23 worker tests) — the structural change is sound on synthetic data. The regression is at an interaction boundary not covered by existing tests.
+
+OPTIONS:
+
+A. Rollback Phase 2.5 (commit 291b142) — keep Phase 1 adapters + Phase 2.0 indexed merge + Phase 3 harness, drop the eager planner_cache. Loses the cache-hit speedup but keeps the merge improvement. Tests A1-A4, E1-E3, F1 still pass; F2 (cache populated via WithDef) would fail and need to be removed.
+
+B. Rollback Phase 2.0 + 2.5 (commits abf5259 + 291b142) — keep only Phase 1 adapters as preparation. State stays array-shaped. Tests A1-A4, F1, F2 fail/remove. E2 (legacy) still passes; E3 (indexed adapter ready) still meaningful.
+
+C. Investigate guard-retry interaction — pull the UT0 opencode session in detail, find what specifically fails resume. May find a small fix that avoids rollback.
+
+Recommendation: B (full rollback to Phase 1) given the user's explicit guidance that rig state changes need design discussion before code. Phase 1 + the 13 contract tests + the measurement harness remain as preparation for a future, properly-designed attempt.
+
+Travel sweep numbers preserve as evidence (run 24944774440 in runs/).
