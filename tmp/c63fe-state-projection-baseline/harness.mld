@@ -1,0 +1,170 @@
+>> c-63fe Phase 3 measurement harness — opt-in, NOT in invariant gate.
+>>
+>> Mirrors ~/mlld/mlld/tmp/rig-memory-repro/projection-repro.mld and
+>> indexed-prototype.mld so before/after comparison numbers are
+>> apples-to-apples.
+>>
+>> Usage:
+>>   mlld tmp/c63fe-state-projection-baseline/harness.mld --no-checkpoint
+>>
+>> Reports:
+>>   - timing for N batches of M entries
+>>   - max RSS sampled at key points
+>>   - planner-visible JSON size (proxy for what a planner LLM would
+>>     receive each iteration)
+>>
+>> Compare numbers against the OOM agent's c-63fe note:
+>>   baseline (pre-rig-rework, mlld trace):
+>>     - 40-row x 4 batches / 160 entries: ~25.2s, ~1.34GB RSS
+>>     - 80-row x 4 batches / 320 entries: ~219.1s, ~2.55GB RSS
+>>   indexed prototype (JS, OOM agent's prototype):
+>>     - 160 entries: ~2.3s, ~0.84GB
+>>     - 320 entries: ~4.2s, ~0.88GB
+>>     - 1000 entries: ~12.3s, ~1.04GB
+
+import {
+  @updateResolvedStateWithDef,
+  @plannerVisibleState,
+  @workerStateSummary,
+  @bucketLength,
+  @emptyState,
+  @normalizeResolvedValues
+} from "../../rig/runtime.mld"
+import { @rigBuild } from "../../rig/index.mld"
+
+>> Travel-shaped record: facts, trusted data, untrusted data fields,
+>> handle-keyed. Mirrors @restaurant / @hotel / @car_company shape.
+record @travel_item = {
+  facts: [id_: string, name: string],
+  data: {
+    trusted: [city: string?, kind: string?, rating: number?, price: string?, address: string?, cuisine: string?],
+    untrusted: [reviews: string?, notes: string?]
+  },
+  key: id_,
+  display: {
+    role:planner: [{ ref: "id_" }, { ref: "name" }, city, kind, rating, price, address, cuisine],
+    role:worker: [{ ref: "id_" }, { ref: "name" }, city, kind, rating, price, address, cuisine, reviews, notes]
+  }
+}
+
+var @harnessRecords = { travel_item: @travel_item }
+
+>> Build N synthetic entries with the same shape resolves emit
+exe @makeRows(prefix, count, start) = js {
+  const rows = [];
+  const reviewBytes = "x".repeat(2048);
+  const noteBytes = "y".repeat(1024);
+  for (let i = 0; i < count; i++) {
+    const id = String(start + i);
+    rows.push({
+      id_: id,
+      name: prefix + "_" + id,
+      city: "Paris",
+      kind: i % 3 === 0 ? "hotel" : (i % 3 === 1 ? "restaurant" : "car_rental"),
+      rating: 3.5 + (i % 15) / 10,
+      price: String(50 + (i % 30) * 10),
+      address: "Address " + id + ", Paris, France",
+      cuisine: i % 3 === 1 ? "French" : null,
+      reviews: reviewBytes,
+      notes: noteBytes
+    });
+  }
+  return rows;
+}
+
+exe @memorySample(label) = js {
+  const usage = process.memoryUsage();
+  const mb = (n) => Math.round(n / 1024 / 1024);
+  const out = `[mem] ${label.padEnd(40)} rss=${mb(usage.rss)}MB heap=${mb(usage.heapUsed)}MB ext=${mb(usage.external)}MB`;
+  console.error(out);
+  return out;
+}
+
+exe @sizeOfJson(value) = js {
+  try {
+    return JSON.stringify(value ?? null).length;
+  } catch (_) {
+    return -1;
+  }
+}
+
+>> Build agent fixture so plannerVisibleState has the records map
+var @harnessAgent = @rigBuild({
+  suite: "c63fe-harness",
+  defense: "defended",
+  model: "stub",
+  records: @harnessRecords,
+  tools: {}
+})
+
+show "=== c-63fe Phase 3 measurement ==="
+show ""
+show @memorySample("baseline")
+
+>> Configuration: 4 batches of N entries
+var @batchSize = 40
+var @batchCount = 4
+
+show `config: @batchCount batches × @batchSize entries (total @batchCount * @batchSize)`
+show ""
+
+var @start = 0
+
+>> Each batch: synth rows, normalize through record, merge into state,
+>> render planner-visible state. This mirrors how the rig handles a
+>> resolve worker call returning N entries, then planner reading state
+>> back to render the next prompt.
+
+show `[t0] start: @start`
+var @rows1 = @makeRows("alpha", @batchSize, 0)
+var @entries1 = @normalizeResolvedValues("travel_item", @travel_item, @rows1)
+var @state1 = @updateResolvedStateWithDef(@emptyState(), "travel_item", @entries1, @travel_item)
+show @memorySample("after batch 1 update")
+var @visible1 = @plannerVisibleState(@harnessAgent, @state1)
+show @memorySample("after planner-visible 1")
+show `[batch 1] entries=@bucketLength(@state1.resolved.travel_item) visible_json_bytes=@sizeOfJson(@visible1)`
+
+var @rows2 = @makeRows("beta", @batchSize, @batchSize)
+var @entries2 = @normalizeResolvedValues("travel_item", @travel_item, @rows2)
+var @state2 = @updateResolvedStateWithDef(@state1, "travel_item", @entries2, @travel_item)
+show @memorySample("after batch 2 update")
+var @visible2 = @plannerVisibleState(@harnessAgent, @state2)
+show @memorySample("after planner-visible 2")
+show `[batch 2] entries=@bucketLength(@state2.resolved.travel_item) visible_json_bytes=@sizeOfJson(@visible2)`
+
+var @rows3 = @makeRows("gamma", @batchSize, @batchSize * 2)
+var @entries3 = @normalizeResolvedValues("travel_item", @travel_item, @rows3)
+var @state3 = @updateResolvedStateWithDef(@state2, "travel_item", @entries3, @travel_item)
+show @memorySample("after batch 3 update")
+var @visible3 = @plannerVisibleState(@harnessAgent, @state3)
+show @memorySample("after planner-visible 3")
+show `[batch 3] entries=@bucketLength(@state3.resolved.travel_item) visible_json_bytes=@sizeOfJson(@visible3)`
+
+var @rows4 = @makeRows("delta", @batchSize, @batchSize * 3)
+var @entries4 = @normalizeResolvedValues("travel_item", @travel_item, @rows4)
+var @state4 = @updateResolvedStateWithDef(@state3, "travel_item", @entries4, @travel_item)
+show @memorySample("after batch 4 update")
+var @visible4 = @plannerVisibleState(@harnessAgent, @state4)
+show @memorySample("after planner-visible 4")
+show `[batch 4] entries=@bucketLength(@state4.resolved.travel_item) visible_json_bytes=@sizeOfJson(@visible4)`
+
+>> Cache reuse check: re-call planner-visible 5x without state change.
+>> If planner_cache works, RSS shouldn't grow significantly per call.
+show ""
+show "=== cache reuse check (5x re-render same state) ==="
+var @reuse1 = @plannerVisibleState(@harnessAgent, @state4)
+show @memorySample("reuse 1")
+var @reuse2 = @plannerVisibleState(@harnessAgent, @state4)
+show @memorySample("reuse 2")
+var @reuse3 = @plannerVisibleState(@harnessAgent, @state4)
+show @memorySample("reuse 3")
+var @reuse4 = @plannerVisibleState(@harnessAgent, @state4)
+show @memorySample("reuse 4")
+var @reuse5 = @plannerVisibleState(@harnessAgent, @state4)
+show @memorySample("reuse 5")
+show `reuse_visible_bytes=@sizeOfJson(@reuse5) cache_hit_check=identical=@(@sizeOfJson(@reuse1) == @sizeOfJson(@reuse5))`
+
+show ""
+show "=== final ==="
+show @memorySample("final")
+show `total entries: @bucketLength(@state4.resolved.travel_item)`
