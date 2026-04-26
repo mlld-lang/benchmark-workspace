@@ -74,11 +74,27 @@ The spike's `SCIENCE.md` is a model for what spike documentation should look lik
 | "Does `@policy.build` accept this shape?" | **Spike.** Call it directly with synthetic intent. |
 | "Will the auto-upgrade fire when no `task` config is passed?" | **Spike.** That's literally b-6ea2. |
 | "Does this guard fire on this op label?" | **Spike.** Synthetic exe + the guard, no LLM needed. |
-| "I changed the planner prompt — does the model emit the right shape now?" | **Sweep.** Single task. Can't synthesize this. |
-| "The framework path is clean; how does utility look on the full suite?" | **Sweep.** This is what sweeps are for. |
-| "I want to know if a class of failures has been resolved" | **Sweep**, but a small one (3-5 tasks), AFTER the spike-driven fix landed. |
+| "I changed the planner prompt — does the model emit the right shape now?" | **Targeted sweep.** Single task. Can't synthesize this. |
+| "I want to know if a class of failures has been resolved" | **Targeted sweep**, 3-5 tasks, AFTER the spike-driven fix landed. |
+| "Did the suite I changed regress in the suite I didn't change?" | **Targeted sweep** of the unchanged suite, not full fan-out. |
+| "The framework path is clean; closeout — confirm no regressions" | **Full sweep.** This is the only case for `scripts/bench.sh` with no args. |
 
-If the question is "what does the runtime do given this input?", the answer is always a spike. If the question is "what does the model produce given this prompt?", the answer is a small targeted run with verification. Sonnet 4 sweeps are reserved for "the framework path is clean; measure utility."
+If the question is "what does the runtime do given this input?", the answer is always a spike. If the question is "what does the model produce given this prompt?", the answer is a small targeted run with verification. Full sweeps (`scripts/bench.sh` with no args) are reserved for closeouts — confirming a stabilized fix didn't break unrelated suites. They are not an iteration tool.
+
+### Targeted vs full sweeps
+
+Both are "sweeps" — both run real LLM calls, both cost real money. The cost difference is significant: a single workspace task is ~$0.10 on the hybrid config, a 3-task verification is ~$0.30, a full sweep across all 4 suites is ~$3-5. During iteration that adds up fast.
+
+The discipline:
+
+| When | What | Why |
+|---|---|---|
+| Diagnosing a failure class | 1-3 representative tasks | You're answering "does this fix the class?" not "what's the suite-wide number?" |
+| Verifying a fix works | The same 1-3 tasks, then one nearby task to check generalization | Fastest signal |
+| Suspect a fix may have broken an adjacent class | Targeted sweep of the affected suite or class | Cheaper than full and still definitive |
+| **Closeout** after a stabilized fix | Full sweep | Only place you actually need full-fan-out coverage |
+
+If you find yourself running a full sweep more than once per fix, you've turned sweeps into a debugger. Stop and write a probe instead.
 
 ### Check the agent transcript before writing anything
 

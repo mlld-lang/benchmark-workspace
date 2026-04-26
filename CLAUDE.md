@@ -130,15 +130,30 @@ tk show <id>      # details
 
 ## Running benchmarks
 
-Full sweeps run remote on Namespace; local is for single-task debugging only. Local CPU caps at ~10 parallel tasks; Namespace's Team plan (64 vCPU concurrent cap) fans all 4 suites in parallel and finishes the bench surface in ~10-15 min. See DEBUG.md "Troubleshooting parallel runs" for the postmortem details on shape sizing, OOMs, and known infrastructure gaps.
+Bench runs come in three shapes — match the shape to the question. See DEBUG.md "Spike First. Sweep Last." for the spike-vs-sweep guidance and "Troubleshooting parallel runs" for shape/OOM postmortems.
+
+| Shape | When to use | Cost |
+|---|---|---|
+| **Spike / probe** (zero-LLM) | Asking what the runtime/dispatcher does given an input | $0, seconds |
+| **Targeted sweep** (1 suite or task subset) | Iterating on a fix, verifying a class of failures resolved | minutes, dollars |
+| **Full sweep** (all 4 suites) | Closeout regression check after a fix has stabilized — no other purpose | ~10-15 min, ~$3-5 |
+
+The default during debugging is **targeted**, not full. Re-run only the suite/tasks the change affects until you have evidence it works. Reserve the full sweep for closeouts where you need confidence the change didn't regress unrelated suites.
+
+Local CPU caps at ~10 parallel tasks; Namespace's Team plan (64 vCPU concurrent cap) handles full fan-out in ~10-15 min when you do need it.
 
 ### Quick start
 
 ```bash
 git push                                  # image rebuilds on bench/, rig/, src/, agents/ paths
-scripts/bench.sh                          # all 4 suites in parallel
-scripts/bench.sh workspace                # just one suite
+
+# Targeted (debugging)
+scripts/bench.sh workspace                # one suite
 scripts/bench.sh banking slack            # subset
+gh workflow run bench-run.yml -f suite=workspace -f tasks="user_task_8 user_task_32"   # specific tasks
+
+# Full (closeout / regression)
+scripts/bench.sh                          # all 4 suites in parallel
 
 gh run list --workflow=bench-run.yml --limit 8
 uv run --project bench python3 src/fetch_run.py <run-id>     # → runs/<run-id>/
@@ -156,9 +171,9 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 | `slack` | 8x16 | -p 40 (caps at 14) | 14 active (oos UT2/11/16-20) | Light |
 | (no args) | per-target | per-target | all 4 above | Peak 64 vCPU — exact Team-plan fit |
 
-### One-off runs
+### One-off / targeted runs
 
-For specific tasks (debug repros, verification), trigger `bench-run.yml` directly:
+For specific tasks during debug iteration, trigger `bench-run.yml` directly:
 
 ```bash
 gh workflow run bench-run.yml -f suite=workspace -f tasks=user_task_8
@@ -225,10 +240,10 @@ done
 
 ### Discipline
 
+- **Spike before sweep, target before full.** A $0 probe answers runtime/contract questions; a single-suite or single-task sweep verifies a fix. Full sweeps are for closeouts, not iteration. (DEBUG.md "Spike First. Sweep Last.")
 - **Push to main, then sweep.** Artifacts under `runs/<id>/` are the canonical record of "this commit produced these numbers."
-- **Run multiples in parallel.** Concurrent Namespace runners cost the same wall-clock as one — fan out for "did this change affect other suites?" questions.
 - **Cite run IDs in SCIENCE.md.** `runs/<id>/` becomes the artifact for re-fetching transcripts later.
-- **Don't sweep when a spike will do.** Inference provider tokens still cost money. Spike-first discipline (see DEBUG.md) still applies.
+- **Run multiples in parallel when you do go full.** Concurrent Namespace runners cost the same wall-clock as one — fan out for "did this change affect other suites?" closeouts.
 
 ## Rules learned the hard way
 

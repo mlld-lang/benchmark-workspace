@@ -81,56 +81,9 @@ mlld rig/tests/workers/run.mld --no-checkpoint     # worker LLM tests (17 tests,
 
 ## Running benchmarks
 
-Default hybrid config: GLM 5.1 planner + Cerebras gpt-oss-120b workers. OOS/non-gating tasks are auto-skipped.
+CLAUDE.md "Running benchmarks" is the operational guide — you've already read it as part of step 4 above. Two reminders worth carrying into the session:
 
-### Full sweeps → Namespace runner (preferred)
+- **Match shape to question.** Spike (zero-LLM) for runtime/contract questions; targeted sweep (1 suite or task subset) for iterating on a fix; full `scripts/bench.sh` for closeout regression checks only. Iterating with full sweeps is the most expensive mistake.
+- **Travel needs heap.** `scripts/bench.sh travel` sets `MLLD_HEAP=8g` automatically. Direct `gh workflow run bench-run.yml -f suite=travel` invocations should add `-f heap=8g` (c-63fe).
 
-Local CPU caps at ~10 parallel tasks; the Namespace test runner (Team plan, 64 vCPU concurrent cap) fans all 4 suites in parallel and finishes the bench surface in ~10-15 min. Push to main, then:
-
-```bash
-scripts/bench.sh                          # all 4 suites in parallel
-scripts/bench.sh workspace                # just one suite
-scripts/bench.sh banking slack            # subset
-
-gh run list --workflow=bench-run.yml --limit 8
-uv run --project bench python3 src/fetch_run.py <run-id>          # → runs/<run-id>/
-uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions
-```
-
-Per-suite shape and parallelism are baked into `scripts/bench.sh` (workspace 32x64, travel 16x32 + `-p 5` in fan-out / 32x64 + `-p 20` solo, banking/slack 8x16). Travel always gets `MLLD_HEAP=8g` automatically — without that the mlld Node process pushes ~5 GB heap and OOMs internally before the container does, surfacing as MCP "Not connected" cascades (c-63fe).
-
-The image bakes mlld@2.1.0 + clean@main + agentdojo@mlld-rig. bench-run.yml has a freshness gate: if `mlld-lang/mlld:2.1.0` HEAD has moved since the last image build, the workflow joins the in-flight rebuild (or dispatches one), waits, and re-pulls. So after pushing both clean and mlld, just run `scripts/bench.sh`.
-
-### Travel run-strategy choice
-
-- **Travel solo →** `scripts/bench.sh travel` (Namespace 32x64, `-p 20`, `MLLD_HEAP=8g` set automatically). Recommended.
-- **Full sweep with travel →** split runs: travel locally (bigger heap, no shared 64 vCPU cap), others remote.
-
-```bash
-# Terminal 1 — remote: the three other suites
-scripts/bench.sh workspace banking slack
-
-# Terminal 2 — local: travel at full parallelism with extra heap
-MLLD_HEAP=12g uv run --project bench python3 src/run.py -s travel -d defended -p 20
-```
-
-A 48 GB Mac handles `-p 20 / MLLD_HEAP=12g` cleanly. Smaller machines: `-p 10 / MLLD_HEAP=8g`.
-
-### Local single-task debugging
-
-```bash
-# Single task with trace (default hybrid models)
-MLLD_TRACE=effects MLLD_TRACE_FILE=tmp/trace.jsonl \
-  uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_11
-
-# Override models
-uv run --project bench python3 src/run.py --model cerebras/gpt-oss-120b
-uv run --project bench python3 src/run.py --planner togetherai/zai-org/GLM-5.1 --worker cerebras/gpt-oss-120b
-
-# Claude harness (Sonnet 4 for both)
-uv run --project bench python3 src/run.py --harness claude -s workspace -d defended
-```
-
-Never use `--debug` — it triggers OOM. Use `MLLD_TRACE=effects MLLD_TRACE_FILE=tmp/trace.jsonl` for tracing.
-
-See `CLAUDE.md` "Running benchmarks" for the full operational guide and `DEBUG.md` "Troubleshooting parallel runs" for OOM history, c-63fe details, and freshness-gate failure modes. Model comparison table is in `CLAUDE.md` (12 models tested).
+Never use `--debug` on bench runs — it triggers OOM. `MLLD_TRACE=effects MLLD_TRACE_FILE=tmp/trace.jsonl` is the right tracing knob.
