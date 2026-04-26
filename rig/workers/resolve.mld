@@ -2,7 +2,7 @@ import { @recordTypeName, @toolRuntimeMessage, @toolFailureDetail, @toolCallErro
 import {
   @callTool,
   @normalizeResolvedValues,
-  @updateResolvedState
+  @updateResolvedStateWithDef
 } from "../runtime.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @resolveAttestation } from "../records.mld"
@@ -76,7 +76,7 @@ exe @dispatchResolve(agent, state, decision, query) = [
   let @entries = @normalizeResolvedValues(@recordType, @recordDef, @raw)
   let @handles = for @entry in @entries => @entry.handle
   let @summary = `resolved @entries.length @recordType record(s). Check the projected fields — if they already answer the question, call compose now.`
-  let @nextState = @updateResolvedState(@state, @recordType, @entries)
+  let @nextState = @updateResolvedStateWithDef(@state, @recordType, @entries, @recordDef)
   => {
     state: @nextState,
     result: {

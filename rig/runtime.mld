@@ -429,10 +429,45 @@ exe @projectResolvedEntry(recordType, recordDef, entry, role) = [
   }
 ]
 
+>> c-63fe Phase 2.5: when projecting role:planner over an indexed
+>> bucket whose planner_cache.version matches bucket.version, return
+>> the cached projection. Worker projections always compute fresh —
+>> per GPT decision D, worker projections include raw tainted content
+>> and shouldn't be cached.
+exe @cachedPlannerEntries(bucket) = [
+  if !@isResolvedIndexBucket(@bucket) [ => null ]
+  let @cache = @valueField(@bucket, "planner_cache")
+  if !@cache.isDefined() [ => null ]
+  let @cacheVersion = @valueField(@cache, "version")
+  let @bucketVersion = @valueField(@bucket, "version")
+  if !@cacheVersion.isDefined() [ => null ]
+  if !@bucketVersion.isDefined() [ => null ]
+  if @cacheVersion != @bucketVersion [ => null ]
+  let @cached = @valueField(@cache, "entries") ?? []
+  if @cached.length == 0 [ => null ]
+  => @cached
+]
+
+>> Phase 2.5: cache hit when role:planner + bucket has matching
+>> planner_cache. Otherwise compute fresh — bucket may be legacy
+>> array (no cache), indexed-no-cache (cacheVersion=0,bucketVersion>=1),
+>> or worker role (never cached).
+exe @bucketEntriesForRole(records, recordType, recordDef, bucket, role) = [
+  let @cached = when [
+    @role == "role:planner" => @cachedPlannerEntries(@bucket)
+    * => null
+  ]
+  >> Use `== null` not `.isDefined()`: exe-returned null is a wrapper
+  >> whose .isDefined() reports true, masking the cache-miss path.
+  >> Same family as c-aed5 / c-4a08 — see CLAUDE.md.
+  if @cached != null [ => @cached ]
+  => for @entry in @bucketItems(@bucket) => @projectResolvedEntry(@recordType, @recordDef, @entry, @role)
+]
+
 exe @projectResolvedSummary(records, state, role) = [
   let @resolved = @structuredData(@state.resolved)
   let @pairs = for @recordType, @recordDef in @records [
-    let @entries = for @entry in @bucketItems(@resolved[@recordType]) => @projectResolvedEntry(@recordType, @recordDef, @entry, @role)
+    let @entries = @bucketEntriesForRole(@records, @recordType, @recordDef, @resolved[@recordType], @role)
     => {
       key: @recordType,
       value: @entries
@@ -625,9 +660,50 @@ exe @mergeResolvedEntries(existingBucket, newEntries) = [
   }
 ]
 
+>> c-63fe Phase 2.5: eagerly populate planner_cache at merge time so
+>> @projectResolvedSummary can reuse it when bucket version unchanged.
+>> When recordDef is provided, the cache holds role:planner projections
+>> for every entry. When it isn't, the cache stays empty (callers that
+>> haven't been updated still produce correct buckets, just no cache
+>> hit on subsequent reads).
+exe @populatePlannerCache(bucket, recordType, recordDef) = [
+  if !@recordDef.isDefined() [ => @bucket ]
+  if !@isResolvedIndexBucket(@bucket) [ => @bucket ]
+  let @entries = @bucketItems(@bucket)
+  let @projected = for @entry in @entries => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
+  let @version = @valueField(@bucket, "version") ?? 0
+  let @order = @valueField(@bucket, "order") ?? []
+  let @byHandle = @valueField(@bucket, "by_handle") ?? {}
+  let @cache = { version: @version, entries: @projected }
+  => {
+    _rig_bucket: "resolved_index_v1",
+    order: @order,
+    by_handle: @byHandle,
+    version: @version,
+    planner_cache: @cache
+  }
+]
+
 exe @updateResolvedState(state, recordName, entries) = [
   let @resolved = @structuredData(@state.resolved)
-  let @nextResolved = @replaceObjectField(@resolved, @recordName, @mergeResolvedEntries(@resolved[@recordName], @entries))
+  let @mergedBucket = @mergeResolvedEntries(@resolved[@recordName], @entries)
+  let @nextResolved = @replaceObjectField(@resolved, @recordName, @mergedBucket)
+  => @rigState(
+    @nextResolved,
+    @structuredData(@state.extracted),
+    @structuredData(@state.derived),
+    @structuredData(@state.extract_sources)
+  )
+]
+
+>> Phase 2.5: callers that have the recordDef pass it through this
+>> variant so planner_cache is populated eagerly. @projectResolvedSummary
+>> reuses the cache on subsequent reads when bucket.version is unchanged.
+exe @updateResolvedStateWithDef(state, recordName, entries, recordDef) = [
+  let @resolved = @structuredData(@state.resolved)
+  let @mergedBucket = @mergeResolvedEntries(@resolved[@recordName], @entries)
+  let @cachedBucket = @populatePlannerCache(@mergedBucket, @recordName, @recordDef)
+  let @nextResolved = @replaceObjectField(@resolved, @recordName, @cachedBucket)
   => @rigState(
     @nextResolved,
     @structuredData(@state.extracted),
@@ -906,6 +982,9 @@ export {
   @bucketItems,
   @bucketLength,
   @isResolvedIndexBucket,
+  @populatePlannerCache,
+  @updateResolvedStateWithDef,
+  @cachedPlannerEntries,
   @plainObjectKeys,
   @replaceObjectField,
   @recordMeta,

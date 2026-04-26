@@ -14,7 +14,7 @@ import {
   @correlatedControlArgsCheck,
   @recordTypeName,
   @normalizeResolvedValues,
-  @updateResolvedState
+  @updateResolvedStateWithDef
 } from "../runtime.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @compileExecuteIntent } from "../intent.mld"
@@ -140,7 +140,7 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
       let @coerced = @raw as record @returnsRecord
       let @entries = @normalizeResolvedValues(@recordType, @returnsRecord, @coerced)
       let @handles = for @entry in @entries => @entry.handle
-      => { handles: @handles, state: @updateResolvedState(@state, @recordType, @entries) }
+      => { handles: @handles, state: @updateResolvedStateWithDef(@state, @recordType, @entries, @returnsRecord) }
     ]
     * => { handles: [], state: @state }
   ]
