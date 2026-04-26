@@ -1,6 +1,6 @@
 ---
 id: c-1fa1
-status: open
+status: closed
 deps: []
 links: [c-c653, c-db45]
 created: 2026-04-25T21:49:34Z
@@ -8,7 +8,7 @@ type: bug
 priority: 1
 assignee: Adam
 tags: [travel, date-shift, host]
-updated: 2026-04-26T03:02:00Z
+updated: 2026-04-26T18:08:14Z
 ---
 # Travel missing date-shift utility patches (TR-UT1, TR-UT3, possibly TR-UT18)
 
@@ -26,3 +26,7 @@ Fix: add _patch_travel_utilities function in src/date_shift.py with overrides fo
 
 Probable utility recovery: 2-4 travel tasks. Pure host-side fix, no model/framework changes.
 
+
+## Notes
+
+**2026-04-26T18:08:14Z** **2026-04-27T17:50:00Z** Status confirmed: implementation complete. Verified across multiple sweeps that UT1/3/4/7/8 patches are working. UT8 had a separate bug (extra rating check that wasn't in upstream eval) — fixed in commit ef751e0. UT18 doesn't need a date-shift patch. Closing as done.

@@ -40,3 +40,18 @@ Both layers: validator tolerates known dash variants, prompt teaches the worker 
 
 **Discovered in.** c-9d56 spike. See c-9d56 note 2026-04-26T03:00:00Z.
 
+
+## Notes
+
+**2026-04-26T18:08:14Z** **2026-04-27T17:50:00Z** Status:
+- @canonicalizeDashes helper landed in rig/intent.mld (handles U+2010-2014, U+2212)
+- Wiring into @lookupResolvedEntry rolled back due to wrapper-shape issue: the canonical-fallback returns a value where .isDefined()=true but !x=true (no .handle field), breaking @lowerSelectionRef's `if !@entry` guard
+- xfail/c-bd28/UH-1 invariant test captures the regression cleanly
+- compose.att ASCII hyphen rule shipped in commit ef751e0 (compose-output flavor of the issue — UT13)
+
+Remaining work:
+1. Debug the wrapper-shape issue in canonical-fallback path (`@matched[0]` from for-when returns lossy value)
+2. Wire canonicalizeDashes once #1 fixed
+3. Verify xfail/UH-1 flips to PASS
+
+Stochastic: UT13 and UT15 flip between PASS/FAIL based on whether the worker autocorrects hyphens. Compose ASCII rule should help compose-output flavor; the validator fix is needed for selection_ref handle flavor.

@@ -1,88 +1,111 @@
 # Session Handoff
 
-Last updated: 2026-04-26 (session 7 → 8, end of bench-grind-7)
+Last updated: 2026-04-26 (end of bench-grind-8)
 
-## Latest sweep (post c-63fe Phase 2.5, run 24944774440)
+## Latest sweep (post all session-8 fixes, run 24962959633)
 
-Image SHA `291b142` (commit `291b142`). Travel sweep on -p 20 + 32x64 + heap=8g.
+Image SHA `ef751e0`. Travel sweep on -p 20 + 32x64 + heap=8g.
 
-| Suite | Pass | Total | % | Δ vs prior | Notes |
-|-------|------|-------|---|-----------|-------|
-| Workspace | 28 | 40 | 70.0% | unchanged | Last sweep run 24938656071 (UT18/33 verify) |
-| Banking | 12 | 16 | 75.0% | +1 | BK-UT12 worker-context fix verified |
-| Slack | 11 | 21 | 52.4% | unchanged | c-8738 still open, deferred to c-ade3 |
-| Travel | **5** | 20 | **25.0%** | **REGRESSED -2** | run 24944774440 — c-63fe Phase 2/2.5 surfaced 4 distinct issues |
-| **Total** | **56/97 (57.7%)** | | | -2 | down from 59/97 (60.8%) |
+| Suite | Pass | Total | % | Δ vs session start | Notes |
+|-------|------|-------|---|-----|-------|
+| Workspace | 28 | 40 | 70.0% | unchanged (no workspace runs this session) | |
+| Banking | 12 | 16 | 75.0% | unchanged | |
+| Slack | 11 | 21 | 52.4% | unchanged | |
+| Travel | **9-11** | 20 | **45-55%** | +4-6 (started at 5/20 baseline) | Plateau reached; clear next-session path |
+| **Total** | ~60/97 | | | +5 | |
 
-## c-63fe state-projection rework — STAYS IN, spike complete
+Travel oscillates 9-10 between sweeps with stochastic flips. The structural ceiling improvements are real (cascade dead, batch budget fixed); the score variance is from c-db45 ripple + Unicode hyphen + planner discipline edge cases.
 
-Phases 1-3 shipped (commits 32422b0, abf5259, 291b142, d967399, fc14a37, c204e80, 3fc15ac):
-- Phase 1: adapter helpers (mlld-native @indexedBucketEntries, @bucketItems, @lookupResolvedEntry, @bucketLength, @isResolvedIndexBucket)
-- Phase 2.0: @mergeResolvedEntries flips writer to indexed bucket {_rig_bucket: "resolved_index_v1", order, by_handle, version, planner_cache}. by_handle built via @pairsToObject (NOT spread — spread strips factsources)
-- Phase 2.5: @populatePlannerCache eagerly populates cache; @updateResolvedStateWithDef variant; @projectResolvedSummary cache-hit logic. Critical: use `!= null` not `.isDefined()` (exe-returned null is wrapped, masks miss path)
-- Phase 3: opt-in measurement harness at `tmp/c63fe-state-projection-baseline/harness.mld`
+## Major structural work landed this session
 
-**Gates: 121/121 invariants, 23/23 worker tests.** Contract tests (14 state-projection assertions A1-A4, B1, C1-C2, D1-D3, E1-E3, F1-F2) all pass.
+### Cascade is structurally dead
+- **Parallel `resolve_batch`** (rig/workers/planner.mld) — Phase A `for parallel(8)` dispatch, Phase B sequential settle. Multi-spec fan-outs that took 451s now complete in 75-300s.
+- **mlld cancellation** (m-0710 narrowed scope, GPT shipped) — opencode socket-close now propagates; mlld stops processing on client timeout.
+- **opencode 1.4.3** — `experimental.mcp_timeout` now configurable via `cfg.mcpTimeoutMs`. We removed the magic 300000ms baked default.
 
-### Spike outcome — c-63fe NOT implicated; three real follow-ups filed
+After these landed: **0 `-32001` errors, 0 `Not connected`, 0 `outcome=unparseable`** in the most recent sweep.
 
-5-boundary diff complete (run 24942869231 PASS vs 24944774440 FAIL). Boundary 1 (planner source refs) IDENTICAL. Boundaries 2-3-5 not directly observable (exec-logs.tgz truncated to 45 bytes in both runs — bench infra issue), boundary 4 visible in validation errors and shows rig produced ASCII handles correctly. Failure modes confirmed at the LLM layer, not the rig-state layer.
+### Batch budget accounting fix
+The 5 "budget exhausted" failures (UT6/11/12/18/19) were caused by per-spec `tool_calls + 1` in `@plannerResolveBatch` Phase B. A 6-spec batch consumed 6 of the 25-iteration budget. Fix: Phase C overrides runtime to charge +1 tool_call per batch (whole batch = 1 planner decision). Preserved per-spec state merges; corrected accounting.
 
-**Per-task verdicts:**
+### UT8 bench-bug fix
+Our `_patch_travel_utilities` for UT8 added a `rating in model_output` check that wasn't in AgentDojo's upstream eval. The model was answering correctly per the user prompt; our patch demanded extra. Removed.
 
-- **UT0/UT3 broken sessions** — pre-existing mlld wrapper-resume timing bug. n_calls=0, no opencode session created. Same error class previously hit workspace UT4/7/15/17/23/36/37/39. Phase 2.5 @populatePlannerCache plausibly perturbed first-call timing into the failure window. Tracked under reopened **m-0f63** (mlld). User asked us to leave mlld alone; hand off when ready.
-- **UT9 timeout** — original c-63fe MCP infrastructure symptom (the thing the rework was meant to address; unrelated to bucket shape).
-- **UT14 PASS→FAIL** — planner stochasticity on a pre-existing display-projection bug. Both runs saw `fuel_options: []` (projection masks untrusted content). PRIOR planner stochastically chose derive; NEW planner chose extract → thrashed → empty selection_refs → wrong compose. Filed **c-011b** [P1].
-- **UT15 PASS→FAIL** — worker LLM autocorrected `Rent-A-Car` (U+002D) to `Rent‑A‑Car` (U+2011 non-breaking hyphen) in selection_ref handle. Rig's available_handles correctly contains ASCII. Known LLM behavior on hyphenated product names. Filed **c-bd28** [P2].
-- **Both UT14/UT15** — `planner_error_budget_exhausted` dominates once thrashing starts. Filed **c-36fe** [P2].
+### Compose decision context refinements
+- **Authoritative purpose rule** — values explicitly stated in `compose.purpose` ARE authoritative. The c-db45 "say not available" rule no longer overrides values the planner inlined.
+- **ASCII hyphen rule** — compose.att now tells worker not to autocorrect ASCII `-` to U+2011 (UT13/UT15 stochastic Unicode hyphen issue).
+- **Compose malformed retry** — compose worker output that fails to parse triggers one retry with explicit "previous output was malformed" feedback.
 
-**c-9d56 stays open** as audit trail for the sweep regression until the three follow-ups land or a sweep verifies UT14/UT15 recover. Don't close on c-63fe-not-implicated alone — the user-visible -2 utility regression deserves history.
+### Test infrastructure
+- 8 fingerprint regression tests + 1 schema round-trip test + xfail/UH-1 (c-bd28 captures regression)
+- xfail/ infrastructure in `rig/tests/index.mld` for known regressions that don't block the gate
 
-**Decision: Phase 1+2.0+2.5+3 stay in production.** Per GPT: "the structural memory work survived a targeted regression investigation. The remaining failures are real, but they're not evidence against the indexed bucket/cache design."
+### Module changes (registry, GPT published)
+- `@mlld/opencode@1.4.3` — added `mcpTimeoutMs` optional config; default omits config so opencode uses its own default
 
-### Travel attack plan (refined per GPT 2026-04-26)
+## Per-task status snapshot (post run 24962959633)
 
-Priority by clear design payoff + low ambiguity, NOT ticket priority. Travel is 5/20; realistic ceiling after this batch is 10-12/20.
+| Task | Status | Block |
+|------|--------|-------|
+| UT0/2/5/7/9/14/18 | PASS | stable wins |
+| UT8 | PASS | UT8 bench bug fix |
+| UT13 | flaky PASS | c-bd28 stochastic |
+| UT1/3/6/10/12 | FAIL | **c-5a24 c-db45 ripple** (compose can't see resolved/derived values) |
+| UT4 | FAIL | **c-f52a** compose says "was not created" despite execute success |
+| UT11 | FAIL | **c-8a89** eval-vs-prompt ambiguity (OOS candidate) |
+| UT15/16 | FAIL | **c-db1f** stochastic; c-bd28 + c-db45 ripple |
+| UT17 | FAIL | compose malformed JSON; retry shipped, may flip next sweep |
+| UT19 | FAIL | **c-3c4e** 22 calls hit 900s wall (over-iteration) |
 
-**Order:**
+## Highest-leverage next moves
 
-1. **c-011b — display projection sentinel.** Biggest structural lever. Sentinel = `"<hidden:array>"` (string). Arrays only for v1. Emit at lowest projection point that knows role+field value (around `@projectResolvedEntry` / `@projectResolvedFieldValue`, NOT `@plannerVisibleState`). Worker projection unchanged. Planner.att rule is explanation, not the fix. See ticket note 2026-04-26T04:30:00Z for implementation steps.
+**Priority order, biggest +util first:**
 
-2. **c-db45 — compose decision context contract.** Pick option (a) + small dose of (c). Skip option (b) — "most recent derive wins" is too implicit. Wire `compose.purpose` + sources + named source names into compose worker dispatch (current compose.mld ignores compose decision context entirely — real missing contract). Planner.att: compose.purpose must name authoritative values + exact fields. Compose.att: treat named sources as primary. See ticket note for implementation.
+### 1. c-5a24 — c-db45 ripple (compose value visibility) — **+4-5 utility**
+The dominant remaining failure cluster. UT1/3/6/10/12 all have planners producing right answers but compose saying "not available" for values that ARE in state.
 
-3. **c-8e02 — host-level repro of TR-UT2 env mutation.** Don't run agent. Replay UT2's exact MCP tool sequence directly against `src/mcp_server.py`. Diff pre/post env. Splits root cause into AgentDojo/tool/MCP-server (mutates under direct calls) vs bench harness save/restore plumbing (mutates only with agent). Don't touch rig until this split is known. ~30 min investigation.
+Two fix paths:
+- **(A)** Sharpen `planner.att` rule: planner MUST inline grounded values in `compose.purpose` for every field the answer requires. Cheap prompt fix; partial coverage.
+- **(B)** Project derive/extract payload values into `@workerStateSummary`. Audit what compose actually sees vs what's in state. Architectural; cleaner.
 
-4. **c-63fe — MCP lifecycle instrumentation.** Question to answer FIRST: is MCP server PID shared across tasks or per-task? Read `src/mcp_server.py` lifecycle. Add PID + RSS logging. Run -p 10 spike as mitigation data (NOT fix). Based on PID/RSS evidence, pick lifecycle strategy. Deprioritize Phase 3.5 rig memory optimizations until MCP lifecycle is instrumented — remaining "Not connected" cascade looks host-side.
+Recommend: ship (A) as a pass; if utility recovers most of the 4-5 cluster, defer (B). Otherwise ship (B).
 
-**Bundled with batch 1 (low risk, opportunistic):**
+### 2. c-f52a — UT4 compose misreads execution_log — **+1 utility**
+Compose worker says "was not created" when execute log shows BOTH a failed first attempt AND a successful retry. Fix: compose.att rule "look for LATEST status per operation; status:'executed' or 'sent' is success."
 
-- **c-1fa1** — date-shift patches for TR-UT1, UT3, possibly UT18. Pure Python in `src/date_shift.py`, mirror existing `_patch_workspace_utilities` pattern. ~30 min, zero model risk.
-- **c-bd28** — narrow Unicode dash canonicalization for selection_ref handle comparison. GPT spec'd precisely: U+2010–U+2014 + U+2212 → U+002D on comparison path only; preserve stored handle; paired collision test; derive.att "copy byte-for-byte" rule.
-- **c-36fe** — planner addendum for extract-failure recovery (defer budget-refund variant).
+### 3. c-bd28 wiring debug — **+1 stability (UT13/15 deterministic)**
+Helper function `@canonicalizeDashes` exists but wiring into `@lookupResolvedEntry` rolled back due to wrapper-shape issue (`@matched[0]` from for-when returns lossy value). Debug needed; xfail/UH-1 captures the regression.
 
-**Outside scope (hand off):**
-- **m-0f63** in mlld — wrapper-resume scoping. Not outside our reach, but outside the rig decision path. File/update with travel evidence (UT0/UT3 reproducer); keep it from contaminating c-63fe rollback decisions. Already done.
+### 4. c-3c4e — UT19 over-iteration — **+1 utility**
+22 calls hit 900s wall. Investigation: likely planner re-resolves due to arg-shape errors (c-d590 family). Fix may be just c-d590 (singular vs plural API mismatch in get_hotels_address).
 
-**Audit trail:**
-- **c-9d56** stays open until c-011b/c-bd28/c-36fe land or a sweep verifies UT14/UT15 recover.
+### 5. c-d590 — get_hotels_address API consistency — **+0-1 utility**
+~5-line tool change in `bench/domains/travel/tools.mld`. Reduces over-iteration in UT3/UT11/UT12/UT19.
 
-## Cardinal rules in effect (CLAUDE.md conventions A-E)
+### 6. c-8a89 — UT11 OOS-candidate decision — **+1 measured utility (denominator)**
+Add to `src/run.py` SKIP_TASKS or accept as flaky. Improves sweep-vs-sweep comparison signal.
 
-- **A.** Every failing in-scope test has an open ticket
-- **B.** UT-tied tickets carry task id in title (`[BK-UT12]`, etc.)
-- **C.** Tickets get transcript-grounded notes per sweep
-- **D.** Diagnoses are transcript-grounded, not call-sequence guesses (added session 6 — burned ~10 prior diagnoses retroactively corrected; this session it caught the rollback recommendation as a guess)
-- **E.** Utility numbers report against full denominators (97 total). OOS skip is workflow convenience, not denominator reduction.
+### Realistic ceiling after #1-#5 land
+**14-17/20** on travel. Per c-db28 family + planner discipline + the ripple fix, addressable. The architectural ceiling is ~17-19/20 (the rest are recommendation-hijack-adjacent or eval-stochastic).
 
-## Open ticket landscape
+## Cardinal rules earned this session
 
-**P1**: c-63fe (spike done, stays in), c-9d56 (sweep regression audit trail, links to follow-ups), **c-011b (NEW — display projection hides task-needed fields)**, c-0589 (3 workspace tasks), c-d52c (UT32/37 cleared, blocked downstream by c-0589), c-25af, c-5d98, c-ade3, m-3199, **m-0f63 (reopened in mlld — wrapper-resume scoping; hand off when ready)**.
+1. **"Slow = bug or flailing" is a sharp diagnostic instinct.** "Planner too slow" was lazy; transcript investigation revealed per-spec budget accounting bug.
+2. **Read the actual eval if you suspect false-negative.** UT8 was our patch bug, caught by reading AgentDojo's checker. Cardinal rule A allows this for diagnosis when transcripts show the model doing exactly what the user asked.
+3. **One planner decision = one iteration charge.** When framework charges N for what planner sees as 1, that's a bug class.
+4. **Add tests for the bug class, not just the bug.** xfail/UH-1, FP-7 (items-only false positive), PR-1 (schema round-trip) were all "this would have caught the bug we just hit."
 
-**P2**: **c-bd28 (NEW — selection_ref Unicode dash tolerance)**, **c-36fe (NEW — planner recovery after wrong phase)**, c-db45 (compose-drops-fields, 3+ travel), c-1fa1 (travel date-shift patches), c-8e02 (TR-UT2 env mutation), c-19ee (record over-hides untrusted; adjacent to c-011b), c-bae4 UNVERIFIED, c-ebd6 UNVERIFIED, c-5929 (multi-stack), c-8738 (deferred to c-ade3), c-db19, c-c653, c-5823 (m-0b70 tickler), refactor backlog.
+## Open ticket landscape (post session-8)
 
-**P3**: c-78d9.
+**P0:** c-5a24 (c-db45 ripple — biggest single lever)
 
-**Closed/OOS** (16 tickets tagged `oos`): WS-UT13/19/25/31, BK-UT0/9/10/14, SL-UT2/11/15/16/17/18/19/20.
+**P1:** c-f52a (UT4 compose-misreads-execution-log), c-3c4e (UT19 over-iteration), c-0589 (3 workspace tasks), c-63fe (cascade tracker — mostly resolved), c-bd28 (Unicode dash wiring)
+
+**P2:** c-d590, c-8e02, c-19ee (closed), c-bae4, c-5929, c-db1f (stochastic tracker), c-d52c, c-25af, c-5d98, c-ade3, c-bd28, c-36fe, c-9d56 (closed), m-3199
+
+**P3:** c-7eb6 (revisit B), c-8a89 (UT11 OOS), c-78d9, c-3438 (architectural — empirically less needed than expected)
+
+**Total open:** ~28 (some can close after next sweep — c-9d56, c-7eb6 if (B) still doesn't fire)
 
 ## Quick start for next session
 
@@ -90,24 +113,20 @@ Priority by clear design payoff + low ambiguity, NOT ticket priority. Travel is 
 /rig
 
 # Verify gates green
-mlld rig/tests/index.mld --no-checkpoint    # 121 tests, must pass
-mlld rig/tests/workers/run.mld --no-checkpoint  # 23 tests, must pass
+mlld rig/tests/index.mld --no-checkpoint    # 130 pass, 1 xfail (UH-1)
+mlld rig/tests/workers/run.mld --no-checkpoint  # 23-24 tests
 
-# Check current ticket landscape
+# Check open work
 tk ready
-tk show c-011b   # display projection signal — biggest lever
-tk show c-36fe   # extract-failure recovery
-tk show c-bd28   # Unicode dash canonicalization
-tk show c-9d56   # audit trail for the sweep regression
-tk show c-63fe   # rig state work — closed at top, follow-ups linked
+tk show c-5a24   # the biggest +util ticket
 
-# Optional: determinism re-run on UT14/UT15 to extra-validate c-63fe-not-implicated
-gh workflow run bench-run.yml -f suite=travel -f tasks="user_task_14 user_task_15" -f heap=8g -f parallelism=20 -f shape=nscloud-ubuntu-22.04-amd64-32x64
+# Recommended next move — ship c-5a24 (A) prompt rule first
+# Edit rig/prompts/planner.att to demand value-inlining in compose.purpose
+# Test on UT1/UT6/UT10/UT12 locally before sweeping
 
 # When ready to sweep
-git push  # image rebuilds on bench/, rig/, src/, agents/ changes only
-sleep 200  # wait for image rebuild before dispatching
-scripts/bench.sh                    # all 4 suites in parallel
+git push                            # image rebuilds on bench/, rig/, src/, agents/ changes only
+sleep 200                           # wait for image rebuild before dispatching
 scripts/bench.sh travel             # solo: 32x64 -p 20 heap=8g
 ```
 
@@ -116,26 +135,26 @@ scripts/bench.sh travel             # solo: 32x64 -p 20 heap=8g
 | Purpose | Path |
 |---------|------|
 | Planner prompt | `rig/prompts/planner.att` |
-| Worker prompts | `rig/prompts/{extract,derive,compose}.att` |
-| Suite addendums | `bench/domains/{workspace,travel,banking,slack}/prompts/planner-addendum.mld` |
-| State projection (c-63fe target) | `rig/runtime.mld` @mergeResolvedEntries, @populatePlannerCache, @projectResolvedSummary |
-| Adapters | `rig/intent.mld` @bucketItems, @indexedBucketEntries, @bucketLength, @isResolvedIndexBucket |
-| Ref resolution (c-9d56 spike target) | `rig/runtime.mld` @resolveRefValue family-no-handle path |
-| Tool dispatch | `rig/runtime.mld` |
-| Intent compilation | `rig/intent.mld` |
-| Execute + result handles | `rig/workers/execute.mld` |
-| Travel router | `bench/domains/travel/router.mld` |
-| Invariant gate | `rig/tests/index.mld` (121 tests inc. 14 state-projection) |
-| Worker tests | `rig/tests/workers/run.mld` (23 tests inc. D7 root-array, E11 file-extract) |
-| Date-shift utilities | `src/date_shift.py` |
-| OOS skip list | `src/run.py` SKIP_TASKS (with ticket ids) |
-| OOM agent's prototype | `~/mlld/mlld/tmp/rig-memory-repro/indexed-prototype.mld` |
-| c-63fe measurement harness | `tmp/c63fe-state-projection-baseline/harness.mld` |
-| Memory tips (local, untracked) | `tips-memory-efficient-mlld.md` |
-| Experiment log | `SCIENCE.md` |
+| Compose prompt | `rig/prompts/compose.att` (recently edited — c-db45 + ASCII hyphen rules) |
+| Planner code | `rig/workers/planner.mld` (parallel resolve_batch + batch budget fix) |
+| Compose code | `rig/workers/compose.mld` (malformed retry) |
+| State projection | `rig/runtime.mld` `@projectResolvedSummary`, `@workerStateSummary` |
+| Selection ref validator | `rig/intent.mld` `@lookupResolvedEntry` (c-bd28 helper exported, not wired) |
+| Travel tools | `bench/domains/travel/tools.mld` (c-011b array parsing) |
+| Travel bridge | `bench/domains/travel/bridge.mld` (c-011b `@parseListLines`) |
+| Date-shift patches | `src/date_shift.py` (UT8 patch fix, no-rating check) |
+| MCP server | `src/mcp_server.py` (instrumentation: pid, call_num, elapsed_ms, saved_state) |
+| Invariant gate | `rig/tests/index.mld` (130 pass + 1 xfail) |
+| Worker tests | `rig/tests/workers/run.mld` (23-24 tests) |
+| Stub planner | `rig/workers/planner.mld` (`@plannerNoProgressThreshold = 3`) |
+| OOS skip list | `src/run.py` SKIP_TASKS |
+| Experiment log | `SCIENCE.md` (session bench-grind-8 just added) |
 | Investigation methodology | `DEBUG.md` |
 | Ticket conventions | `CLAUDE.md` "Ticket Conventions" (A-E) |
 
-## Session 7 commits
+## Session 8 commits
 
-97e351d dae045f 0604ff0 d9aee4e 9d2fd0c 47c384a cfbb01d a8731a9 cbfa88f 425028b 773db19 32422b0 abf5259 291b142 d967399 fc14a37 c204e80 9efeee8 cf131f4 3fc15ac (20 commits)
+a22dd7c (test: bump mcpTimeoutMs to 500000)
+8c4d243 (c-3438 + c-bd28: fingerprint fix + regression tests + parallel resolve_batch)
+ef751e0 (4 fixes: batch budget + compose authoritative purpose + ASCII hyphen + UT8 patch + compose retry)
++ earlier: parallel resolve_batch refactor, c-3438 (B) detector + tests, schema fix, mlld @mlld/opencode 1.4.3 published
