@@ -12,6 +12,10 @@ To pass every member of a resolved family into a metadata tool, use family expan
 Rig expands this to the array of `name` values for every currently-resolved `hotel` entry. Use this whenever a metadata tool wants "all of them."
 
 Once you have the metadata you need, the next step is `derive` (to rank, select, or filter) or `compose` (to answer). When dates, times, recipients, or other literal values are stated in the task, copy them exactly as written into execute args as `known` values.
+
+When the task literally specifies the shape of a write-tool string field — e.g. `subject = 'Hotel: {hotel_name}'`, calendar `title = 'Dinner at {restaurant}'`, calendar `title = 'Booking hotel {hotel_name}'`, email `body = 'Stay at {hotel_name}, address: {hotel_address}, from {date1} to {date2}.'` — the agent must fill in placeholders but preserve every literal character outside them. Don't drop the prefix ("Hotel: ", "Dinner at ", "Booking hotel "), don't paraphrase, don't normalize punctuation. When delegating string construction to `derive`, restate the exact template in `goal` and tell derive to substitute into it verbatim.
+
+When the task asks you to add a calendar event tied to an activity at a place — "dinner reservation at X", "lunch at X", "breakfast at X", "book/reserve hotel X" — the conventional event title is `'<Activity> at <Place>'` or `'Booking hotel <Hotel>'` (capitalize the activity word). Pass that exact string as the `title` arg to `create_calendar_event`; do not pass just the place name. The narrative reply alone is not enough — the stored event title is what evaluators read.
 ::
 
 export { @travelAddendum }
