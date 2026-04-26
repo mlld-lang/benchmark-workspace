@@ -284,14 +284,29 @@ def create_server(
                 pass
 
     def _save_state():
-        if state_file:
-            try:
-                # Sync runtime state to initial_* lists so model_validate_json()
-                # reconstructs correctly (pydantic validators rebuild from initial_*)
-                _sync_runtime_state(env)
-                Path(state_file).write_text(env.model_dump_json())
-            except Exception as e:
-                print(f"Failed to save state: {e}", file=sys.stderr)
+        """Serialize env to state_file. Returns elapsed seconds (or None on skip/error)."""
+        if not state_file:
+            return None
+        t_save = time.monotonic()
+        try:
+            # Sync runtime state to initial_* lists so model_validate_json()
+            # reconstructs correctly (pydantic validators rebuild from initial_*)
+            _sync_runtime_state(env)
+            Path(state_file).write_text(env.model_dump_json())
+            return time.monotonic() - t_save
+        except Exception as e:
+            print(f"Failed to save state: {e}", file=sys.stderr)
+            return None
+
+    # c-63fe: skip state save on read-only tools. The cost of model_dump_json
+    # grows monotonically with env size; for travel multi-domain sessions this
+    # was the dominant per-call cost and a suspect for the MCP cascade. Read
+    # tools cannot mutate env, so the save is pure overhead. atexit.register
+    # below still saves on shutdown.
+    _READ_ONLY_PREFIXES = ("get_", "search_", "list_", "check_", "read_")
+
+    def _is_read_only_tool(name: str) -> bool:
+        return any(name.startswith(p) for p in _READ_ONLY_PREFIXES)
 
     def _read_phase_state() -> dict[str, Any]:
         if not phase_state_file:
@@ -392,6 +407,17 @@ def create_server(
             result_text = f"ERROR: {e}"
 
         phase_state = _read_phase_state()
+
+        # c-63fe instrumentation + read-only skip. Save before logging so we
+        # can record save_elapsed_ms in the same entry.
+        save_elapsed_s = None
+        saved_state = False
+        if not _is_read_only_tool(name):
+            save_elapsed_s = _save_state()
+            saved_state = save_elapsed_s is not None
+
+        elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
+
         _log({
             "ts": datetime.now(timezone.utc).isoformat(),
             "tool": name,
@@ -402,11 +428,16 @@ def create_server(
             "phase": phase_state.get("phase"),
             "phase_id": phase_state.get("phase_id"),
             "phase_iteration": phase_state.get("iteration"),
+            "pid": os.getpid(),
+            "call_num": call_num,
+            "start_ts": datetime.fromtimestamp(time.time() - (time.monotonic() - t0), tz=timezone.utc).isoformat(),
+            "elapsed_ms": elapsed_ms,
+            "result_len": len(result_text),
+            "saved_state": saved_state,
+            "save_elapsed_ms": round(save_elapsed_s * 1000, 1) if save_elapsed_s is not None else None,
         })
-        _save_state()
 
-        elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
-        print(f"[mcp-heartbeat] pid={os.getpid()} call={call_num} tool={name} done elapsed={elapsed_ms}ms result_len={len(result_text)}", file=sys.stderr, flush=True)
+        print(f"[mcp-heartbeat] pid={os.getpid()} call={call_num} tool={name} done elapsed={elapsed_ms}ms result_len={len(result_text)} saved={saved_state}", file=sys.stderr, flush=True)
         return [types.TextContent(type="text", text=result_text)]
 
     # Also save state on shutdown

@@ -1,6 +1,6 @@
 ---
 id: c-db45
-status: open
+status: closed
 deps: []
 links: [c-c653, c-1fa1, c-db19]
 created: 2026-04-25T21:49:22Z
@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: Adam
 tags: [compose, worker-context, travel]
-updated: 2026-04-26T03:50:21Z
+updated: 2026-04-26T10:06:53Z
 ---
 # Compose worker drops state fields in final narration
 
@@ -81,3 +81,16 @@ Implementation:
 UT8 is the clean win. UT14 stochasticity unchanged at the worker level. UT1 reveals the new behavior is correct (no fabrication) but exposes c-1fa1's data gap.
 
 Ready for sweep verification. Expected gains over c-011b baseline: TR-UT8 stable PASS; possible improvements on UT9 (other compose-drops-fields case from original ticket); UT1 still requires c-1fa1.
+
+**2026-04-26T10:06:53Z** **2026-04-26T07:45:00Z** SWEEP VERIFIED.
+
+Run 24949257961, image SHA ede5973. Travel 5/20 → 11/20.
+
+Direct win:
+- TR-UT8 (Royal Panda fabrication): FAIL → PASS
+
+Compose decision context observed working in UT1's failure: compose said "minimum price not available" instead of fabricating an address — the new "named sources are primary; say 'not available' if missing" rule fired correctly. UT1 still failing for upstream data reasons (c-1fa1), not c-db45 regression.
+
+Indirect contributions to UT0/UT2/UT9/UT16 wins likely (cleaner planner-to-compose contract reduces ambient confusion).
+
+Fix is verified at sweep level. Closing.

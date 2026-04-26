@@ -372,3 +372,81 @@ Before choosing lifecycle strategy, answer ONE question first: **is the MCP serv
 4. Based on PID/RSS evidence, pick lifecycle strategy
 
 **Deprioritize Phase 3.5 rig memory optimizations** until MCP lifecycle is instrumented. The state work (Phase 1-3) helped structurally, but the remaining "Not connected" cascade looks host-side, not rig-side. No point optimizing rig memory if the bottleneck is MCP server crashing under task load.
+
+**2026-04-26T10:07:08Z** **2026-04-26T07:45:00Z** MCP CASCADE MAY BE EFFECTIVELY DEAD post-c-011b/c-db45.
+
+Run 24949257961 (image ede5973). Travel sweep 11/20 (+6 vs baseline 5/20). Critically:
+- TR-UT9 (was timeout from MCP cascade): PASS
+- TR-UT10/11/12/18 (were timeouts in baseline): now produce 8-13 resolve calls and "Task completed" — outcome=unparseable. **No "Not connected" cascades.**
+- TR-UT19 (was timeout): now `planner_ref_validation_failed` — different bug
+
+So c-011b + c-db45 reducing planner thrashing (cleaner phase choice → fewer iterations → less heap accumulation) appears to have lifted heap pressure below the V8 limit even at -p 20 + 32x64 + heap=8g. The OOM cascade may not be reproducible on the new code.
+
+What remains: the over-resolve loop pattern in UT10/11/12/18 — planner calls resolve 8-13 times without ever calling derive/compose. NEW failure mode (not MCP infrastructure), tracked under expanded c-36fe scope.
+
+Action: keep c-63fe open as a watchpoint. If subsequent sweeps don't show MCP cascades, can close in favor of c-36fe + Phase 3.5 deferred. If cascades return on harder workloads (workspace at -p 40, etc.), reopen investigation per GPT's PID-shared question.
+
+**2026-04-26T10:09:51Z** **2026-04-26T08:00:00Z** CASCADE STILL ALIVE — investigation correction. Earlier note "may be effectively dead" was wrong.
+
+Transcript investigation of UT10/UT11/UT12 (run 24949257961, post c-011b/c-db45):
+- All three show MCP "Connection closed" / "Connection is down" / "MCP server connection is completely down" errors mid-session
+- Pattern: initial single-domain resolves succeed, then resolve_batch on multi-domain (hotels + restaurants + cars) times out, then individual recovery calls hit "Connection closed", planner correctly retries until budget exhausts
+
+Why the failure mode shifted from baseline:
+- Baseline (sweep 24944774440): cascade killed sessions early, outcome=timeout
+- Now (sweep 24949257961): c-011b/c-db45 reduced thrashing → planner gets further before cascade hits → cascade hits mid-session → planner correctly retries → budget exhausts → outcome=unparseable
+
+Light tasks survive (UT9 — single domain, 5 calls). Heavy multi-domain tasks (UT10/11/12/18 — need many parallel resolves) still die.
+
+**This is +4 utility on travel if fixed properly.** Strategy per GPT remains valid:
+1. Question first: is MCP server PID shared across tasks or per-task? Read src/mcp_server.py
+2. -p 10 spike as mitigation data (not fix)
+3. Add MCP PID + RSS logging
+4. Based on PID/RSS evidence, pick lifecycle strategy
+
+GPT's deprioritize-Phase-3.5 framing also stands: rig memory work helped on light tasks but doesn't address the multi-domain cascade. Lifecycle work needed.
+
+c-63fe stays P1.
+
+**2026-04-26T10:15:55Z** **2026-04-26T08:30:00Z** INVESTIGATION FINDINGS (per GPT order: PID question + lifecycle understanding).
+
+**Q1: Is MCP server PID shared across tasks or per-task?**
+**A: Per-task.** mcp_server.py is spawned by mlld via `import tools from mcp` per-task. Each task gets its own subprocess (confirmed in src/host.py `_build_local_mcp_command` and src/mcp_server.py header docs).
+
+Per GPT framing: "If already per task and dying mid-task: restart-per-task will not fix UT9/10/11/12/19; then look at stdio backpressure, per-call isolation, watchdog logging, or reducing in-task concurrency." So restart-per-task is OFF the table.
+
+**Q2: Is MCP server dying or just stalling mid-task?**
+**Wall-clock evidence (run 24949257961 console.log):** UT10/11/12/18 ALL hit exactly 900s (15min per-task timeout). This means the planner spent most of those 15 minutes patiently retrying failed MCP calls. The session is alive — the MCP subprocess is unresponsive.
+
+Per planner transcripts: "Connection closed", "Connection is down", "MCP server connection is completely down" — these come from the planner's narration of mlld's MCP client error responses. Mlld can't reach the server.
+
+**Q3: What's making MCP unresponsive?**
+**Suspects identified in mcp_server.py:**
+
+1. **`_save_state()` runs after EVERY tool call (line 406).** Serializes full env via `env.model_dump_json()` to disk. Includes read-only tools. For travel multi-domain (hotels + restaurants + cars + reviews), env state grows large; per-call I/O cost grows monotonically. SYNCHRONOUS — server can't process other requests during save.
+
+2. **stdio backpressure under parallel resolve_batch.** mlld's resolve_batch may fan out multiple MCP calls. Each blocks on save. Cumulative I/O could overwhelm stdio.
+
+3. **No internal timeouts visible.** mcp_server.py uses `stdio_server` from mcp SDK — if a call hangs in I/O, the server is stuck.
+
+4. **MCP heartbeat logging exists** (`[mcp-heartbeat] pid=X call=N tool=X start=...` to stderr) but stderr is NOT captured anywhere in production runs. Cannot correlate heartbeat patterns with cascade timing without re-instrumenting capture.
+
+**Critical gap: MCP server stderr is invisible in production.** mlld spawns the subprocess via stdio (stdin/stdout) but doesn't redirect stderr. The heartbeats and any server-side error messages are lost. This is the first thing to fix.
+
+**Next moves (per GPT's order):**
+
+1. **Capture MCP stderr in production.** Either: (a) redirect server stderr to a file the host can collect, OR (b) emit MCP heartbeats via a separate channel mlld can capture. Without this, every other diagnostic is guesswork.
+
+2. **Audit `_save_state()` — skip on read-only tools.** Quick win regardless of root cause. Most tool calls in travel are reads (resolve); they don't mutate env. Only need to save after writes (create/send/reserve). This alone could 10x reduce I/O load.
+
+3. **Add per-call latency to heartbeats** (already exists — `elapsed=Xms` in done line). Once stderr is captured, can analyze the latency distribution to confirm/refute the slow-save theory.
+
+4. **-p 10 spike** as mitigation data. If reducing concurrency from -p 20 to -p 10 eliminates the cascade, set travel-specific CI cap while lifecycle work continues.
+
+5. **Phase 3.5 still deferred** — rig memory work doesn't address this layer.
+
+**Implementation order (cheapest first):**
+1. Capture MCP stderr (host change in src/host.py / mlld config) — investigation gating
+2. _save_state() read-only skip — quick win, low risk
+3. -p 10 spike — measurement
+4. If still failing: per-call isolation / async I/O for state save
