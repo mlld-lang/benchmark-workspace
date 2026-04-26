@@ -193,7 +193,46 @@ var @C5 = {
   ]
 }
 
-var @allCases = [@C1, @C2, @C3, @C4, @C5]
+>> C6: c-db45 — compose decision context. Validates the compose worker
+>> respects planner decision (purpose + sources) and refuses to fabricate
+>> values for fields not visible in state.
+var @C6 = {
+  name: "compose_respects_planner_decision",
+  difficulty: "medium",
+  inspired_by: "c-db45 — planner decision context contract",
+  query: "What's the highest-rated electric car rental in LA and the weekly cost?",
+  stateSummary: {
+    resolved: {
+      car_company: [
+        { handle: "r_car_company_Speedy Rentals", record: "car_company", name: "Speedy Rentals", rating: 4.5, fuel_options: ["Electric"], price_per_day: 48 },
+        { handle: "r_car_company_LAX Car Rental", record: "car_company", name: "LAX Car Rental", rating: 4.1, fuel_options: ["Electric"], price_per_day: 40 }
+      ]
+    },
+    extracted: {},
+    derived: {
+      best_electric_rental: {
+        preview_fields: ["company_name", "rating", "weekly_cost"],
+        selection_refs: [{ source: "selection", backing: { record: "car_company", handle: "r_car_company_Speedy Rentals" } }]
+      }
+    }
+  },
+  executionLog: [
+    { phase: "resolve", tool: "get_all_car_rental_companies_in_city", status: "resolved", count: 3 },
+    { phase: "derive", name: "best_electric_rental", status: "derived" }
+  ],
+  decision: {
+    phase: "compose",
+    sources: ["derived.best_electric_rental"],
+    purpose: "Report the company name, rating, and weekly_cost (price_per_day * 7) from derived.best_electric_rental"
+  },
+  assertions: [
+    { type: "field_present", path: "text" },
+    { type: "field_contains", path: "text", value: "Speedy" },
+    { type: "field_not_contains", path: "text", value: "LAX" }
+  ]
+}
+
+var @allCases = [@C1, @C2, @C3, @C4, @C5, @C6]
 
 exe @runOneCompose(testCase, model, harness) = [
   let @startMs = @timestamp()

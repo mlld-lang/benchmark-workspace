@@ -205,23 +205,29 @@ exe @stateProgressFingerprint(state) = node {
   }
 
   // Extract/derive — name + non-empty status.
+  // A derive/extract is "non-empty progress" iff it has selection_refs OR
+  // its preview_fields contain content beyond just ["items"]. The bare
+  // ["items"] preview signals an empty payload (UT10 case): worker returned
+  // {items: []} which serializes as preview=["items"] selection=[]. Treating
+  // that as progress would suppress the no-progress warning when the planner
+  // re-derives an empty result repeatedly.
+  const isPayloadNonEmpty = (rec) => {
+    if (!rec) return false;
+    const refs = Array.isArray(rec.selection_refs) ? rec.selection_refs : [];
+    if (refs.length > 0) return true;
+    const fields = Array.isArray(rec.preview_fields) ? rec.preview_fields : [];
+    if (fields.length === 0) return false;
+    if (fields.length === 1 && fields[0] === 'items') return false;
+    return true;
+  };
+
   const extracted = state.extracted || {};
   for (const name of Object.keys(extracted).sort()) {
-    const e = extracted[name];
-    const nonEmpty = !!(e && (
-      (Array.isArray(e.preview_fields) && e.preview_fields.length > 0) ||
-      (Array.isArray(e.selection_refs) && e.selection_refs.length > 0)
-    ));
-    parts.push('E:' + name + ':' + (nonEmpty ? '1' : '0'));
+    parts.push('E:' + name + ':' + (isPayloadNonEmpty(extracted[name]) ? '1' : '0'));
   }
   const derived = state.derived || {};
   for (const name of Object.keys(derived).sort()) {
-    const d = derived[name];
-    const nonEmpty = !!(d && (
-      (Array.isArray(d.preview_fields) && d.preview_fields.length > 0) ||
-      (Array.isArray(d.selection_refs) && d.selection_refs.length > 0)
-    ));
-    parts.push('D:' + name + ':' + (nonEmpty ? '1' : '0'));
+    parts.push('D:' + name + ':' + (isPayloadNonEmpty(derived[name]) ? '1' : '0'));
   }
 
   return parts.join(';');
@@ -480,29 +486,40 @@ exe @plannerResolveBatch(input) = [
   let @resolves = @coerced.resolves ?? []
   let @batchPurpose = @coerced.purpose ?? null
 
-  >> Dispatch sequentially so each resolve sees the accumulated state
-  >> from prior resolves. Saves planner LLM round-trips (one tool call
-  >> instead of N) even though MCP calls are serial.
-  let @results = for @spec in @resolves [
-    let @tool = @spec.tool
-    let @args = @spec.args ?? {}
-    let @decision = { phase: "resolve", tool: @tool, args: @args, purpose: @spec.purpose ?? @batchPurpose }
-    let @toolCtx = @plannerToolContext("resolve", @decision)
-    if !@toolCtx.ok [ => @toolCtx.result ]
-    let @phaseResult = @dispatchResolve(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query)
-    let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
-    let @resolvedHandles = for @handle in @arrayItems(@phaseResult.result.handles ?? []) => @stringValue(@handle)
+  >> Phase A — parallel dispatch. resolve_batch is for parallel-safe
+  >> resolves only (chained dependencies are not its use case — the
+  >> planner would emit separate resolves for that). All specs share
+  >> the same starting @toolCtx; @dispatchResolve has no @planner side
+  >> effects so concurrent calls are safe. This collapses what was
+  >> ~75s/spec sequentially into ~75s wall for the whole batch.
+  let @initialCtx = @plannerToolContext("resolve", { phase: "resolve" })
+  if !@initialCtx.ok [ -> @initialCtx.result; => @initialCtx.result ]
+
+  let @dispatched = for parallel(8) @spec in @resolves [
+    let @decision = { phase: "resolve", tool: @spec.tool, args: @spec.args ?? {}, purpose: @spec.purpose ?? @batchPurpose }
+    let @phaseResult = @dispatchResolve(@initialCtx.agent, @initialCtx.state, @decision, @initialCtx.query)
+    => { spec: @spec, decision: @decision, phaseResult: @phaseResult }
+  ]
+
+  >> Phase B — sequential settle. @settlePhaseDispatch writes @planner
+  >> state/runtime; must run one at a time. Re-read context per spec so
+  >> we see the prior settle's state changes (budget, fingerprint, etc).
+  let @results = for @item in @dispatched [
+    let @currentCtx = @plannerToolContext("resolve", @item.decision)
+    if !@currentCtx.ok [ => @currentCtx.result ]
+    let @settled = @settlePhaseDispatch(@currentCtx, @item.phaseResult, @item.decision)
+    let @resolvedHandles = for @handle in @arrayItems(@item.phaseResult.result.handles ?? []) => @stringValue(@handle)
     => when [
       @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-      @phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @phaseResult.error, summary: @settled.summary }
+      @item.phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @item.phaseResult.error, summary: @settled.summary }
       * => {
         status: "resolved",
-        tool: @tool,
-        record_type: @phaseResult.result.record_type,
-        count: @phaseResult.result.count,
+        tool: @item.spec.tool,
+        record_type: @item.phaseResult.result.record_type,
+        count: @item.phaseResult.result.count,
         handles: @resolvedHandles,
-        records: @plannerResolvedRecords(@toolCtx.agent.records ?? {}, @settled.finished.state, @phaseResult.result.record_type, @resolvedHandles),
-        summary: @phaseResult.result.summary
+        records: @plannerResolvedRecords(@currentCtx.agent.records ?? {}, @settled.finished.state, @item.phaseResult.result.record_type, @resolvedHandles),
+        summary: @item.phaseResult.result.summary
       }
     ]
   ]
@@ -921,4 +938,4 @@ exe @runPlannerSession(agent, query) = [
   }
 ]
 
-export { @planner, @plannerPrompt, @plannerTools, @runPlannerSession }
+export { @planner, @plannerPrompt, @plannerTools, @runPlannerSession, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress }

@@ -51,13 +51,14 @@ import {
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg } from "../intent.mld"
+>> Already imports @lowerSelectionRef which c-bd28 UH-2 tests against.
 import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation, @dispatchExtract } from "../workers/extract.mld"
 import { @coerceDeriveAttestation } from "../workers/derive.mld"
-import { @planner, @plannerTools } from "../workers/planner.mld"
+import { @planner, @plannerTools, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress } from "../workers/planner.mld"
 
 exe @status(ok) = when [
   @ok => "PASS"
@@ -3117,6 +3118,203 @@ var @spF2Ok =
   @spF2CacheEntries.length == 1
 var @spF2Pretty = `cacheV=@spF2CacheVersion bucketV=@spF2BucketVersion cached_len=@spF2CacheEntries.length`
 
+>> ============================================================================
+>> c-3438 (B): @stateProgressFingerprint regression tests
+>> ============================================================================
+>> The fingerprint detects no-progress loops by computing a stable hash of
+>> the meaningful state. Two fingerprints are equal iff the planner has not
+>> made any of these changes: new resolved handle, new field on existing
+>> handle, new bucket version, new extract/derive name with payload, or
+>> empty→non-empty extract/derive flip.
+
+>> FP-1: empty state produces empty fingerprint
+var @fpEmptyState = { resolved: {}, extracted: {}, derived: {} }
+var @fpEmpty = @stateProgressFingerprint(@fpEmptyState)
+var @fpEmptyOk = @fpEmpty == ""
+var @fpEmptyPretty = `'@fpEmpty'`
+
+>> FP-2: deterministic — same state, same fingerprint
+var @fpDetState = {
+  resolved: {
+    hotel: {
+      version: 1,
+      by_handle: {
+        "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+      }
+    }
+  },
+  extracted: {},
+  derived: {}
+}
+var @fpDet1 = @stateProgressFingerprint(@fpDetState)
+var @fpDet2 = @stateProgressFingerprint(@fpDetState)
+var @fpDetOk = @fpDet1 == @fpDet2 && @fpDet1 != ""
+var @fpDetPretty = `'@fpDet1' == '@fpDet2'`
+
+>> FP-3: new resolved handle changes fingerprint
+var @fpAddHandleState = {
+  resolved: {
+    hotel: {
+      version: 1,
+      by_handle: {
+        "r_hotel_A": { value: { data: { name: "A", price: 100 } } },
+        "r_hotel_B": { value: { data: { name: "B", price: 200 } } }
+      }
+    }
+  },
+  extracted: {},
+  derived: {}
+}
+var @fpAddHandle = @stateProgressFingerprint(@fpAddHandleState)
+var @fpAddHandleOk = @fpAddHandle != @fpDet1
+var @fpAddHandlePretty = `before='@fpDet1' after='@fpAddHandle' differ=@fpAddHandleOk`
+
+>> FP-4: new field on existing handle changes fingerprint (the dominant
+>> travel pattern — prices/ratings landing on already-resolved records)
+var @fpFieldGrowState = {
+  resolved: {
+    hotel: {
+      version: 1,
+      by_handle: {
+        "r_hotel_A": { value: { data: { name: "A", price: 100, rating: 4.5 } } }
+      }
+    }
+  },
+  extracted: {},
+  derived: {}
+}
+var @fpFieldGrow = @stateProgressFingerprint(@fpFieldGrowState)
+var @fpFieldGrowOk = @fpFieldGrow != @fpDet1
+var @fpFieldGrowPretty = `before='@fpDet1' after='@fpFieldGrow' differ=@fpFieldGrowOk`
+
+>> FP-5: bucket version bump changes fingerprint
+var @fpVersionBumpState = {
+  resolved: {
+    hotel: {
+      version: 2,
+      by_handle: {
+        "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+      }
+    }
+  },
+  extracted: {},
+  derived: {}
+}
+var @fpVersionBump = @stateProgressFingerprint(@fpVersionBumpState)
+var @fpVersionBumpOk = @fpVersionBump != @fpDet1
+var @fpVersionBumpPretty = `before='@fpDet1' after='@fpVersionBump' differ=@fpVersionBumpOk`
+
+>> FP-6: derive with selection_refs counts as progress
+var @fpDeriveWithSelState = {
+  resolved: {
+    hotel: {
+      version: 1,
+      by_handle: {
+        "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+      }
+    }
+  },
+  extracted: {},
+  derived: {
+    "best_hotel": {
+      preview_fields: ["name", "rating"],
+      selection_refs: [{ source: "selection", backing: { record: "hotel", handle: "r_hotel_A" } }]
+    }
+  }
+}
+var @fpDeriveWithSel = @stateProgressFingerprint(@fpDeriveWithSelState)
+var @fpDeriveWithSelOk = @fpDeriveWithSel != @fpDet1
+var @fpDeriveWithSelPretty = `before='@fpDet1' after='@fpDeriveWithSel' differ=@fpDeriveWithSelOk`
+
+>> FP-7 (regression for UT10): a derive that returned empty (preview_fields
+>> = ["items"] only, no selection_refs) must NOT count as progress. The
+>> planner re-deriving an empty result repeatedly is precisely the no-progress
+>> loop the warning is supposed to detect. Earlier fingerprint logic treated
+>> ["items"] as non-empty preview, suppressing the warning.
+var @fpDeriveItemsState = {
+  resolved: {
+    hotel: {
+      version: 1,
+      by_handle: {
+        "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+      }
+    }
+  },
+  extracted: {},
+  derived: {
+    "empty_derive": {
+      preview_fields: ["items"],
+      selection_refs: []
+    }
+  }
+}
+var @fpDeriveItems = @stateProgressFingerprint(@fpDeriveItemsState)
+>> Compare against state with the SAME derive but absent — both should signal
+>> "empty payload" so the fingerprints can differ slightly (name presence)
+>> but the empty-payload derive must read as 0 not 1
+var @fpDeriveItemsHasZero = @fpDeriveItems.includes("D:empty_derive:0")
+var @fpDeriveItemsOk = @fpDeriveItemsHasZero
+var @fpDeriveItemsPretty = `'@fpDeriveItems' has D:empty_derive:0 = @fpDeriveItemsHasZero`
+
+>> FP-8: extract with non-empty payload counts as progress
+var @fpExtractWithDataState = {
+  resolved: {
+    hotel: {
+      version: 1,
+      by_handle: {
+        "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+      }
+    }
+  },
+  extracted: {
+    "hotel_address": {
+      preview_fields: ["street", "city"],
+      selection_refs: []
+    }
+  },
+  derived: {}
+}
+var @fpExtractWithData = @stateProgressFingerprint(@fpExtractWithDataState)
+var @fpExtractWithDataOk = @fpExtractWithData != @fpDet1 && @fpExtractWithData.includes("E:hotel_address:1")
+var @fpExtractWithDataPretty = `differ=@fpExtractWithDataOk fp='@fpExtractWithData'`
+
+>> ============================================================================
+>> @plannerRuntime schema round-trip — c-3438 (B) schema fix.
+>> ============================================================================
+>> Earlier the @plannerRuntime record didn't declare progress_fingerprint
+>> or calls_since_progress; the fields were silently stripped on session
+>> writes (m-f780 still preserved them as raw JSON, but the schema-shaped
+>> object lost them). This test asserts the schema round-trip preserves
+>> the new fields so future schema edits can't regress this.
+var @prRuntime = @plannerRuntimeStateWithProgress(5, 1, null, { phase: "resolve" }, "FP_TEST_VALUE", 3)
+var @prRoundtripOk =
+  @prRuntime.tool_calls == 5 &&
+  @prRuntime.invalid_calls == 1 &&
+  @prRuntime.progress_fingerprint == "FP_TEST_VALUE" &&
+  @prRuntime.calls_since_progress == 3
+var @prRoundtripPretty = `tool_calls=@prRuntime.tool_calls fp='@prRuntime.progress_fingerprint' csp=@prRuntime.calls_since_progress`
+
+>> ============================================================================
+>> Unicode hyphen normalization (c-bd28) — EXPECTED TO FAIL until c-bd28 ships.
+>> Captures the regression that bit TR-UT15 (and TR-UT13's compose-output
+>> variant): worker LLMs autocorrect ASCII hyphen (U+002D) to non-breaking
+>> hyphen (U+2011) in product-name selection_ref handles. The validator
+>> should canonicalize known dash variants (U+2010-2014, U+2212) to ASCII
+>> on the comparison path while preserving the stored handle.
+>> ============================================================================
+>> Build a state where the resolved bucket contains a handle with ASCII hyphen.
+var @uhState = @updateResolvedState(@emptyState(), "car_company_review", [
+  { handle: "r_car_company_review_SunSet Rent-A-Car", key: "SunSet Rent-A-Car", field_values: { name: "SunSet Rent-A-Car", rating: 4.5 }, value: { name: "SunSet Rent-A-Car", rating: 4.5 } }
+], @records.contact)
+>> Construct a selection_ref using a Unicode-hyphen handle (what worker emits).
+var @uhRef = {
+  source: "selection",
+  backing: { record: "car_company_review", handle: "r_car_company_review_SunSet Rent‑A‑Car" }
+}
+var @uhResult = @lowerSelectionRef(@uhState, @uhRef)
+var @uhOk = @uhResult.ok == true
+var @uhPretty = `lookup(unicode-hyphen handle on ascii-handle bucket) ok=@uhResult.ok error=@uhResult.error`
+
 exe @allChecks() = [
   => [
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
@@ -3239,7 +3437,17 @@ exe @allChecks() = [
   @check("state-projection/E2-legacy-array-bucket-compatible", @spE2Ok, @spE2Pretty),
   @check("state-projection/E3-indexed-bucket-adapter-reads", @spE3Ok, @spE3Pretty),
   @check("state-projection/F1-writer-produces-indexed-bucket-with-version", @spF1Ok, @spF1Pretty),
-  @check("state-projection/F2-planner-cache-populated-via-withdef", @spF2Ok, @spF2Pretty)
+  @check("state-projection/F2-planner-cache-populated-via-withdef", @spF2Ok, @spF2Pretty),
+  @check("c-3438/FP-1-empty-state", @fpEmptyOk, @fpEmptyPretty),
+  @check("c-3438/FP-2-deterministic", @fpDetOk, @fpDetPretty),
+  @check("c-3438/FP-3-new-handle-changes-fp", @fpAddHandleOk, @fpAddHandlePretty),
+  @check("c-3438/FP-4-new-field-on-existing-handle-changes-fp", @fpFieldGrowOk, @fpFieldGrowPretty),
+  @check("c-3438/FP-5-bucket-version-bump-changes-fp", @fpVersionBumpOk, @fpVersionBumpPretty),
+  @check("c-3438/FP-6-derive-with-selection-ref-counts-as-progress", @fpDeriveWithSelOk, @fpDeriveWithSelPretty),
+  @check("c-3438/FP-7-derive-items-only-preview-is-not-progress", @fpDeriveItemsOk, @fpDeriveItemsPretty),
+  @check("c-3438/FP-8-extract-with-payload-counts-as-progress", @fpExtractWithDataOk, @fpExtractWithDataPretty),
+  @check("c-3438/PR-1-runtime-schema-roundtrip-preserves-progress-fields", @prRoundtripOk, @prRoundtripPretty),
+  @check("xfail/c-bd28/UH-1-selection-ref-tolerates-unicode-dash-variant", @uhOk, @uhPretty)
   ]
 ]
 
@@ -3247,13 +3455,20 @@ var @checks = @allChecks()
 
 var @passes = for @check in @checks when @check.status == "PASS" => @check
 var @fails = for @check in @checks when @check.status == "FAIL" => @check
+>> xfail/ prefix marks tests that capture a known regression: the test
+>> stays in the suite to document the bug + lock in the fix when it ships,
+>> but doesn't block the gate. Failure of a non-xfail test still exits 1.
+var @realFails = for @check in @fails when !@check.id.startsWith("xfail/") => @check
+var @xfails = for @check in @fails when @check.id.startsWith("xfail/") => @check
+>> xpasses: xfail tests that started passing — flip them out of xfail when this fires
+var @xpasses = for @check in @passes when @check.id.startsWith("xfail/") => @check
 
 show "Rig v2 invariant tests"
 show ""
 for @check in @checks => show `[@check.status] @check.id  @check.detail`
 show ""
-show `summary: @passes.length pass / @fails.length fail`
+show `summary: @passes.length pass / @fails.length fail (@xfails.length xfail, @xpasses.length xpass-flip-pending)`
 
-if @fails.length > 0 [
+if @realFails.length > 0 [
   run sh { exit 1 }
 ]
