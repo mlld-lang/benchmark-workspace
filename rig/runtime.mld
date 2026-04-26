@@ -9,7 +9,7 @@ import {
   @toolPayloadArgs,
   @phaseToolNames
 } from "./tooling.mld"
-import { @resolveRefValue, @isResolvedIndexBucket, @bucketItems, @bucketLength, @valueField } from "./intent.mld"
+import { @resolveRefValue, @isResolvedIndexBucket, @bucketItems, @bucketLength, @valueField, @bucketObject } from "./intent.mld"
 import { @appendLlmCall, @serializeLifecycleJson } from "./lifecycle.mld"
 
 >> Shared runtime helpers for the rig loop and per-phase workers.
@@ -586,6 +586,58 @@ exe @emptyState() = [
   }
 ]
 
+>> c-5a24: per-field merge for handle collisions.
+>>
+>> Travel resolves return partial records — get_hotels_address returns
+>> `{name, address}`, get_hotels_prices returns `{name, price_range}`,
+>> etc. Records key by name, so the same handle (`r_hotel_<name>`)
+>> collides across calls. Pre-fix behavior was whole-entry replacement,
+>> which clobbered earlier fields and left compose unable to read them.
+>>
+>> Semantics: non-null incoming wins per-field; null/undefined incoming
+>> preserves existing. Use @pairsToObject (NOT object spread) so
+>> StructuredValue wrapper metadata (factsources) survives — same
+>> reasoning as the bucket-level merge below.
+exe @mergeFieldDict(existing, incoming) = [
+  let @existingObj = @bucketObject(@existing ?? {})
+  let @incomingObj = @bucketObject(@incoming ?? {})
+  let @existingKeys = @plainObjectKeys(@existingObj)
+  let @incomingKeys = @plainObjectKeys(@incomingObj)
+  >> Inline `.includes()` inside `when` clauses inside .concat(...) hits
+  >> a parse error at the closing `)`. Extract to a let.
+  let @existingOnly = for @k in @existingKeys when !@incomingKeys.includes(@k) => @k
+  let @allKeys = @incomingKeys.concat(@existingOnly)
+  let @pairs = for @k in @allKeys [
+    let @incomingV = @valueField(@incomingObj, @k)
+    let @existingV = @valueField(@existingObj, @k)
+    let @chosen = when [
+      @incomingV.isDefined() && @incomingV != null => @incomingV
+      * => @existingV
+    ]
+    => { key: @k, value: @chosen }
+  ]
+  => @pairsToObject(@pairs)
+]
+
+exe @mergeEntryFields(existing, incoming) = [
+  if !@existing.isDefined() [ => @incoming ]
+  if !@incoming.isDefined() [ => @existing ]
+  let @incomingIdValue = @incoming.identity_value
+  let @existingIdValue = @existing.identity_value
+  let @mergedIdValue = when [
+    @incomingIdValue.isDefined() && @incomingIdValue != null => @incomingIdValue
+    * => @existingIdValue
+  ]
+  => {
+    handle: @incoming.handle,
+    key: @incoming.key ?? @existing.key,
+    identity_field: @incoming.identity_field ?? @existing.identity_field,
+    identity_value: @mergedIdValue,
+    value: @mergeFieldDict(@existing.value, @incoming.value),
+    field_values: @mergeFieldDict(@existing.field_values, @incoming.field_values)
+  }
+]
+
 >> c-63fe Phase 2.0: handle-keyed merge that produces indexed bucket.
 >>
 >> Bucket shape: { _rig_bucket: "resolved_index_v1", order, by_handle,
@@ -601,6 +653,9 @@ exe @emptyState() = [
 >> planner_cache slot is initialized {version:0, entries:[]}. Phase 2.5
 >> will populate eagerly at merge time. Today the cache slot exists
 >> but is never read — projection paths still compute fresh.
+>>
+>> c-5a24: handle collisions now field-merge via @mergeEntryFields rather
+>> than whole-entry replace. Travel partial-record resolves accumulate.
 exe @mergeResolvedEntries(existingBucket, newEntries) = [
   let @existingItems = @bucketItems(@existingBucket)
   let @existingHandles = for @e in @existingItems => `@e.handle`
@@ -635,7 +690,7 @@ exe @mergeResolvedEntries(existingBucket, newEntries) = [
     let @existingPos = for @p in @ctx.pairs when @p.key == @handleKey => @p
     let @nextPairs = when [
       @existingPos.length > 0 => for @p in @ctx.pairs => when [
-        @p.key == @handleKey => { key: @handleKey, value: @entry }
+        @p.key == @handleKey => { key: @handleKey, value: @mergeEntryFields(@p.value, @entry) }
         * => @p
       ]
       * => @ctx.pairs.concat([{ key: @handleKey, value: @entry }])

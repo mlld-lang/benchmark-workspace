@@ -2803,7 +2803,10 @@ var @c0a6bTokenPretty = `ok=@c0a6bTokenCompile.ok`
 >> shape. Performance harness lives separately (tmp/).
 >>
 >> Contract:
->>   1. mergeResolvedEntries dedups by handle (incoming replaces existing)
+>>   1. mergeResolvedEntries dedups by handle; on collision, non-null
+>>      incoming fields win and existing fields are preserved when
+>>      incoming is null/undefined (c-5a24 — partial-record resolves
+>>      accumulate instead of clobbering)
 >>   2. updateResolvedState only mutates the named record bucket
 >>   3. plannerVisibleState is idempotent given identical state
 >>   4. After update, projection includes the new entries
@@ -2856,6 +2859,90 @@ var @spA4MergedBucket = @mergeResolvedEntries([], @spA4DupIncoming)
 var @spA4Merged = @bucketItems(@spA4MergedBucket)
 var @spA4Ok = @spA4Merged.length == 1 && @spA4Merged[0].identity_value == "second"
 var @spA4Pretty = `dup-incoming.length=@spA4Merged.length last=@spA4Merged[0].identity_value`
+
+>> c-5a24: partial-field merge — disjoint fields from successive resolves
+>> with the same handle accumulate. Travel's get_hotels_address +
+>> get_hotels_prices canonical sequence.
+var @spA5AddressEntry = {
+  handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+  field_values: { name: "Hotel X", address: "23 Rue Lepic" }
+}
+var @spA5PriceEntry = {
+  handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+  field_values: { name: "Hotel X", price_range: "100" }
+}
+var @spA5Bucket1 = @mergeResolvedEntries([], [@spA5AddressEntry])
+var @spA5Bucket2 = @mergeResolvedEntries(@spA5Bucket1, [@spA5PriceEntry])
+var @spA5Items = @bucketItems(@spA5Bucket2)
+var @spA5Entry = @spA5Items[0]
+var @spA5Ok =
+  @spA5Items.length == 1 &&
+  @spA5Entry.field_values.address == "23 Rue Lepic" &&
+  @spA5Entry.field_values.price_range == "100" &&
+  @spA5Entry.field_values.name == "Hotel X"
+var @spA5Pretty = `address=@spA5Entry.field_values.address price=@spA5Entry.field_values.price_range`
+
+>> c-5a24: null incoming doesn't clobber existing field.
+var @spA6Existing = {
+  handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+  field_values: { name: "Hotel X", address: "23 Rue Lepic" }
+}
+var @spA6IncomingNull = {
+  handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+  field_values: { name: "Hotel X", address: null }
+}
+var @spA6Bucket1 = @mergeResolvedEntries([], [@spA6Existing])
+var @spA6Bucket2 = @mergeResolvedEntries(@spA6Bucket1, [@spA6IncomingNull])
+var @spA6Items = @bucketItems(@spA6Bucket2)
+var @spA6Ok = @spA6Items[0].field_values.address == "23 Rue Lepic"
+var @spA6Pretty = `address=@spA6Items[0].field_values.address (existing preserved)`
+
+>> c-5a24: non-null incoming overrides existing field.
+var @spA7OldEntry = {
+  handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+  field_values: { name: "Hotel X", address: "OLD" }
+}
+var @spA7NewEntry = {
+  handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+  field_values: { name: "Hotel X", address: "NEW" }
+}
+var @spA7Bucket1 = @mergeResolvedEntries([], [@spA7OldEntry])
+var @spA7Bucket2 = @mergeResolvedEntries(@spA7Bucket1, [@spA7NewEntry])
+var @spA7Items = @bucketItems(@spA7Bucket2)
+var @spA7Ok = @spA7Items[0].field_values.address == "NEW"
+var @spA7Pretty = `address=@spA7Items[0].field_values.address (incoming wins)`
+
+>> c-5a24: worker projection sees both fields after partial-record merge.
+>> This is the end-to-end shape compose actually consumes.
+record @spA8Hotel = {
+  facts: [name: string],
+  data: { trusted: [address: string?, price_range: string?] },
+  key: name,
+  display: {
+    worker: [{ ref: "name" }, address, price_range],
+    planner: [{ ref: "name" }, address, price_range]
+  }
+}
+var @spA8Records = { hotel: @spA8Hotel }
+var @spA8AddressEntry = {
+  handle: "r_hotel_HotelX", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+  value: { name: "Hotel X", address: "23 Rue Lepic" },
+  field_values: { name: "Hotel X", address: "23 Rue Lepic" }
+}
+var @spA8PriceEntry = {
+  handle: "r_hotel_HotelX", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+  value: { name: "Hotel X", price_range: "100" },
+  field_values: { name: "Hotel X", price_range: "100" }
+}
+var @spA8Bucket1 = @mergeResolvedEntries([], [@spA8AddressEntry])
+var @spA8Bucket2 = @mergeResolvedEntries(@spA8Bucket1, [@spA8PriceEntry])
+var @spA8State = { resolved: { hotel: @spA8Bucket2 }, extracted: {}, derived: {}, extract_sources: {} }
+var @spA8Summary = @workerStateSummary({ records: @spA8Records }, @spA8State)
+var @spA8Hotel0 = @spA8Summary.resolved.hotel[0]
+var @spA8Ok =
+  @spA8Hotel0.address == "23 Rue Lepic" &&
+  @spA8Hotel0.price_range == "100"
+var @spA8Pretty = `worker.address=@spA8Hotel0.address worker.price_range=@spA8Hotel0.price_range`
 
 >> updateResolvedState: only the named bucket mutates
 var @spB1State = {
@@ -3426,6 +3513,10 @@ exe @allChecks() = [
   @check("state-projection/A2-merge-from-empty-existing", @spA2Ok, @spA2Pretty),
   @check("state-projection/A3-merge-no-incoming-keeps-existing", @spA3Ok, @spA3Pretty),
   @check("state-projection/A4-merge-duplicate-incoming-last-wins", @spA4Ok, @spA4Pretty),
+  @check("state-projection/A5-c5a24-partial-field-merge-accumulates", @spA5Ok, @spA5Pretty),
+  @check("state-projection/A6-c5a24-null-incoming-preserves-existing", @spA6Ok, @spA6Pretty),
+  @check("state-projection/A7-c5a24-nonnull-incoming-overrides", @spA7Ok, @spA7Pretty),
+  @check("state-projection/A8-c5a24-worker-projection-sees-merged-fields", @spA8Ok, @spA8Pretty),
   @check("state-projection/B1-update-isolates-named-bucket", @spB1Ok, @spB1Pretty),
   @check("state-projection/C1-planner-visible-state-idempotent", @spC1Ok, @spC1Pretty),
   @check("state-projection/C2-planner-visible-state-invalidates-on-update", @spC2Ok, @spC2Pretty),
