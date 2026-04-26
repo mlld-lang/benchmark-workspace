@@ -212,7 +212,15 @@ If you don't need workspace in the run, prefer pure remote (`scripts/bench.sh tr
 
 ### Image freshness
 
-The image bakes mlld@2.1.0 + clean@main + agentdojo@mlld-rig. bench-run.yml inspects each pulled image's `mlld.sha` Docker label and compares against `mlld-lang/mlld:2.1.0` HEAD via the GitHub API: if stale, joins any in-flight `bench-image.yml` run (or dispatches one), waits, repulls. Adds ~3-4 min after a mlld push, zero overhead otherwise. So after pushing both clean and mlld, just run `scripts/bench.sh` — staleness handled automatically.
+The image bakes mlld@2.1.0 + clean@main + agentdojo@mlld-rig. bench-run.yml inspects each pulled image's `mlld.sha` Docker label and compares against `mlld-lang/mlld:2.1.0` HEAD via the GitHub API: if stale, joins any in-flight `bench-image.yml` run (or dispatches one), waits, repulls. Adds ~3-4 min after a mlld push, zero overhead otherwise.
+
+**Trap: the freshness check only validates against mlld HEAD, not the clean repo SHA.** A clean/ push triggers `bench-image.yml` to rebuild, but if you dispatch `bench-run.yml` immediately after the push, its `Pull image` step can fire BEFORE the image-build completes — pulling the previous image. The bench then runs against the OLD code with no warning, because the freshness check is happy (mlld unchanged). The result jsonl reports `image_sha` from the pulled image — always cross-check that the SHA matches the commit you intended to test.
+
+Recommended discipline for clean/ changes:
+
+1. **Run local canaries first.** `uv run --project bench python3 src/run.py -s <suite> -d defended -t <task_ids> -p <n>` exercises the *committed-or-uncommitted* working tree directly via the local mlld SDK. No image, no wait, no SHA confusion. Pick the specific tasks the change targets — minutes to confirm the fix shape before spending sweep cost.
+2. **Push, then wait for `bench-image.yml`.** `gh run watch <id> --exit-status` on the matching `bench-image.yml` run, or `gh run list --workflow=bench-image.yml --limit 1` to confirm completion.
+3. **Then dispatch the sweep** via `scripts/bench.sh <suite>`. Verify the fetched manifest's `image_sha` matches HEAD before reading results — if it doesn't, the bench picked up a stale image and the result is meaningless for the change under test.
 
 ### Reading remote results
 
