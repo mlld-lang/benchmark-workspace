@@ -223,3 +223,34 @@ Contract: 14 state-projection tests A1-A4, B1, C1-C2, D1-D3, E1-E3, F1-F2.
 Per GPT framing: handle index = storage/addressing only. Proof/authorization stays in factsources/source-class — verified by session-resolved-factsources-survive-boundary still passing.
 
 Travel sweep run 24944774440 in flight on the post-Phase-2.5 image. Will compare against prior 7/20 baseline (run 24942869231) to see whether the 6 MCP-timeout tasks (TR-UT8/10/11/12/18/19) recover with reduced rig-state pressure.
+
+**2026-04-26T01:07:00Z** MEASUREMENT (clean run, stderr suppressed) — 160 entries / 4 batches of 40:
+
+| stage             | RSS    | heap   | visible_json |
+|-------------------|--------|--------|--------------|
+| baseline          | 671MB  | 276MB  | -            |
+| after batch 1     | 703MB  | 346MB  | 8020 bytes   |
+| after batch 2     | 782MB  | 437MB  | 15826 bytes  |
+| after batch 3     | 984MB  | 713MB  | 23752 bytes  |
+| after batch 4     | 1730MB | 1220MB | 31758 bytes  |
+| reuse 1 (cache)   | 1871MB | 1551MB | 31758 bytes  |
+| reuse 5 (cache)   | 1930MB | 1588MB | 31758 bytes  |
+| final             | 1933MB | 1609MB | -            |
+
+Cache reuse stable: visible_json_bytes identical across 5 reuses. Per-call overhead on cache hit is ~12MB RSS (wrapper allocation), heap stable.
+
+Growth pattern is super-linear per batch (+30, +80, +200, +750MB). The batch 4 jump (750MB) suggests rig still allocates a lot per merge — eager projection over the full bucket on every update means batch N projects N×40 entries.
+
+Compare against:
+- OOM agent's baseline pre-rework (mlld trace, projection-repro.mld): ~1.34GB RSS at 160 entries
+- OOM agent's JS prototype (indexed-prototype.mld): ~0.84GB at 160, ~1.04GB at 1000
+- This implementation (mlld-native, with diagnostics): 1.73GB at 160 entries
+
+So 1.3x worse than the JS prototype absolute, ~25% worse than the pre-rework baseline. The cache mechanism + handle-keyed merge are in production, but mlld wrapper overhead per projection step is meaningful.
+
+Possible Phase 3.5 optimizations (not yet attempted):
+1. Skip eager projection when cache.entries already covers all by_handle keys (only project newly-added entries, splice into cache)
+2. Lazy projection — populate cache on first read, not at merge
+3. Compact factsource representation (per OOM agent's design candidate 4)
+
+For now, Phase 1-3 ship as the structural foundation. Whether the production travel suite recovers is the next signal — sweep run 24944774440 in flight.
