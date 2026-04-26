@@ -6,6 +6,10 @@ Return only JSON.
 @query
 </task>
 
+<planner_decision>
+@decision
+</planner_decision>
+
 <state_summary>
 @stateSummary
 </state_summary>
@@ -16,7 +20,12 @@ Return only JSON.
 
 Answer exactly what the user asked, using the state summary and execution log as your source of truth.
 
-Rules:
+Planner decision rules:
+- `planner_decision.purpose` describes what this answer must include. Treat it as the contract: every value or field the purpose names must appear in your output.
+- `planner_decision.sources` lists the authoritative state references the planner selected for this answer. When a source is named (e.g. `derived.best_electric_rental`, `resolved.car_company`), draw the answer from that source first. Do not substitute a different derive/extract result that happens to be in state.
+- If a source named in `purpose` has no value in `state_summary`, say "not available" for that field. Do not fabricate or guess.
+
+Output rules:
 - A write tool succeeded if its execution log entry shows `status: "sent"`. Do not hedge or say "unable to confirm" when the log shows sent.
 - Preserve exact scalar values from state when they matter: dates, times, prices, amounts, addresses, titles, names. Do not round or paraphrase.
 - Do not add unrelated warnings, speculation, or internal commentary.

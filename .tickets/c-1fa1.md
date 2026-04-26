@@ -2,12 +2,13 @@
 id: c-1fa1
 status: open
 deps: []
-links: []
+links: [c-c653, c-db45]
 created: 2026-04-25T21:49:34Z
 type: bug
 priority: 1
 assignee: Adam
 tags: [travel, date-shift, host]
+updated: 2026-04-26T03:02:00Z
 ---
 # Travel missing date-shift utility patches (TR-UT1, TR-UT3, possibly TR-UT18)
 

@@ -562,7 +562,7 @@ exe @plannerCompose(input) = [
     -> @toolCtx.result
     => @toolCtx.result
   ]
-  let @phaseResult = @dispatchCompose(@toolCtx.agent, @toolCtx.state, @toolCtx.query)
+  let @phaseResult = @dispatchCompose(@toolCtx.agent, @toolCtx.state, @toolCtx.query, @decision)
   let @workerSessionId = @normalizeSessionId(@phaseResult.session_id)
   @appendExecutionLogEntry(@toolCtx.agent.executionLogFile, @serializeLifecycleJson({
     phase: "compose",

@@ -1,13 +1,14 @@
 ---
 id: c-ebd6
-status: open
+status: closed
 deps: []
-links: []
+links: [c-bd28, c-36fe, c-011b]
 created: 2026-04-25T20:01:05Z
 type: bug
 priority: 2
 assignee: Adam
 tags: [travel, extract, derive]
+updated: 2026-04-26T03:02:00Z
 ---
 # TR-UT15 extract_empty_inline_schema + budget exhaust on car rental
 
@@ -32,3 +33,11 @@ Fix candidates:
 ## Notes
 
 **2026-04-25T21:57:39Z** UNVERIFIED — diagnosis 'planner mis-classifies extract when derive is right' is from MCP call sequence + execution_log, not from transcript reasoning. Need to pull session for TR-UT15 (LA family + cousin family, rent two cars) and read planner reasoning between extract attempts to confirm extract-vs-derive misclassification vs other bug shape (record projection, schema construction, etc). Pattern likely related to c-19ee (car_types hidden) or schema validation flakiness.
+
+**2026-04-26T03:02:00Z** **2026-04-26T04:00:00Z** CLOSING — superseded by c-bd28 + c-36fe.
+
+Per c-9d56 spike (transcript-grounded): TR-UT15 has two root causes that this ticket guessed at structurally:
+- Worker LLM autocorrected `Rent-A-Car` (U+002D) to `Rent‑A‑Car` (U+2011) in selection_ref handle → selection_backing_missing → **c-bd28** (narrow Unicode dash canonicalization)
+- After validation failure, planner thrashed extracts and exhausted budget instead of pivoting → **c-36fe** (planner recovery after wrong phase)
+
+The "why did planner choose extract instead of derive" question raised here also generalizes to UT14 and is addressed by **c-011b** (display projection sentinel) at the upstream source.

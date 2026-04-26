@@ -1,14 +1,14 @@
 ---
 id: c-db19
-status: open
+status: closed
 deps: []
-links: []
+links: [c-db45]
 created: 2026-04-25T20:01:25Z
 type: bug
 priority: 1
 assignee: Adam
 tags: [travel, fabrication, compose]
-updated: 2026-04-25T21:57:39Z
+updated: 2026-04-26T03:02:00Z
 ---
 # TR-UT8 compose narrates stale derive (Royal Panda) — execute IS correct
 
@@ -56,3 +56,5 @@ Real bug class: compose-worker context. Same family as TR-UT1 (compose drops max
 Fix direction: extend worker-context rule to compose. Planner should specify in compose's purpose field which derive name(s) are the 'authoritative' answer source. Or rig should auto-prefer the most recently-added derive when names overlap. Or rig should let planner mark a derive as 'final' for compose discovery.
 
 Cluster this ticket with new compose-drops-fields ticket.
+
+**2026-04-26T03:02:00Z** **2026-04-26T04:00:00Z** CLOSING — duplicate of c-db45. TR-UT8 compose narrating a different derive than execute used is the same root cause: compose worker drops/swaps state fields in the final narration. c-db45 is the more general framing covering TR-UT1, UT8, UT9.

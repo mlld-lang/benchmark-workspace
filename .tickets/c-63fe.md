@@ -2,12 +2,13 @@
 id: c-63fe
 status: open
 deps: []
-links: []
+links: [c-9d56]
 created: 2026-04-25T04:45:37Z
 type: bug
 priority: 1
 assignee: Adam
 tags: [infrastructure, mcp]
+updated: 2026-04-26T01:57:57Z
 ---
 # MCP server disconnects mid-run on remote bench runners (travel + workspace-b)
 
@@ -297,3 +298,77 @@ C. Investigate guard-retry interaction — pull the UT0 opencode session in deta
 Recommendation: B (full rollback to Phase 1) given the user's explicit guidance that rig state changes need design discussion before code. Phase 1 + the 13 contract tests + the measurement harness remain as preparation for a future, properly-designed attempt.
 
 Travel sweep numbers preserve as evidence (run 24944774440 in runs/).
+
+**2026-04-26T01:57:18Z** **2026-04-26T02:00:00Z** TRANSCRIPT INVESTIGATION — DO NOT ROLLBACK
+
+Two agents pulled the failing transcripts (run 24944774440). Findings supersede the earlier rollback recommendation:
+
+**UT0/UT3 broken sessions — pre-existing mlld wrapper-resume bug, NOT Phase 2/2.5 root cause.**
+- DB confirms: NO opencode session was created. Earliest session in opencode.db at 01:02:33Z, AFTER UT0/UT3 failure timestamps (01:01:40 / 01:01:46). exec-logs.tgz is 45 bytes (empty).
+- Phase 2/2.5 code does NOT run on first planner turn (state is @emptyState() then). So neither bucket shape nor cache is on the wire when failure occurs.
+- Same error class previously hit workspace UT4/7/15/17/23/36/37/39 across multiple pre-c-63fe commits (defended.17/20/26/27.jsonl 2026-04-22).
+- Theory: Phase 2.5 @populatePlannerCache adds work between LLM turns, plausibly perturbing first-call timing into the m-0f63 failure window. Rollback would restore prior timing but NOT fix the upstream mlld bug.
+
+**UT9 timeout — pure c-63fe MCP infrastructure, unrelated to rework.** 10× 'Not connected' after first resolve_batch timed out with MCP error -32001. This is exactly the original c-63fe symptom. HIGH confidence.
+
+**UT14/UT15 PASS→FAIL — MEDIUM confidence rig-state interaction at derive boundary.**
+- No bucket-shape strings (_rig_bucket, by_handle, planner_cache) appear in transcripts → indexed bucket isn't being serialized into prompts directly.
+- UT14: First derive returned derive_empty_response on materially identical input vs prior. Planner thrashed extracts, eventually composed wrong answer (named SunSet $315/wk instead of Speedy $336/wk).
+- UT15: First derive returned NEW error class selection_ref_validation_failed / selection_backing_missing due to Unicode hyphen mismatch — worker emitted r_car_company_review_SunSet Rent‑A‑Car (U+2011 figure dash), available_handles had r_car_company_review_SunSet Rent-A-Car (U+002D ASCII).
+- Both could be: (a) worker stochasticity from timing changes, (b) @resolveRefValue family-no-handle path now reading through indexed entries with subtly different field shape.
+
+**DECISION: do not rollback Phase 2/2.5.** Rolling back loses structural work AND does not fix the actual problems (UT0/UT3 are upstream mlld; UT9 is the original c-63fe symptom we were trying to address; UT14/15 are unverified at the prompt-content level).
+
+**Next steps (ordered):**
+1. SPIKE: dump derive[0] input for UT14 in 24942869231 (prior, PASS) vs 24944774440 (new, FAIL) via sqlite3 'SELECT json_extract(data,"$.state.input") FROM part WHERE session_id=...'. Byte-identical → worker stochasticity (re-run). Different → bucket-shape leaks into prompt content; targeted fix in @resolveRefValue family-no-handle path.
+2. Re-run UT14+UT15 isolated (`gh workflow run bench-run.yml -f suite=travel -f tasks="user_task_14 user_task_15" -f heap=8g -f parallelism=20 -f shape=nscloud-ubuntu-22.04-amd64-32x64`) to confirm determinism.
+3. Reopen mlld m-0f63 with note: travel sweep newly exposes the wrapper-resume timing bug post-c-63fe Phase 2.5. Workspace tripped it on multiple prior commits; travel never had until now. Needs upstream fix in mlld.
+4. New ticket: TR-UT14/15 derive regression spike (filed separately).
+
+Phase 1+2.0+2.5+3 stay in place pending steps 1-3.
+
+**2026-04-26T02:40:15Z** **2026-04-26T03:30:00Z** UT14/UT15 INVESTIGATED — no evidence of indexed bucket/cache leakage. Do not rollback on this basis.
+
+5-boundary diff completed (see c-9d56 note 2026-04-26T03:00:00Z for full transcript-grounded analysis):
+
+| Boundary | Result |
+|---|---|
+| 1. Planner source refs | IDENTICAL between PRIOR (PASS) and NEW (FAIL) runs |
+| 2-3. resolveRefValue / sources into derivePrompt | Not directly observable (exec-logs.tgz truncated to 45 bytes both runs); inferred clean from worker output classes |
+| 4. handleMap | Visible in validation error — rig produced ASCII handles correctly |
+| 5. Final prompt text | Inline workers, not captured |
+
+Failure modes identified:
+- **UT14**: planner stochasticity on a pre-existing display-projection bug (`fuel_options: []` shown for hidden untrusted content). Both runs saw same projection. PRIOR planner stochastically chose derive immediately; NEW planner chose extract → 7 thrashing extracts → empty selection_refs → wrong compose. Tracked under new ticket **c-011b**.
+- **UT15**: worker LLM autocorrected `Rent-A-Car` (U+002D) to `Rent‑A‑Car` (U+2011) in selection_ref. Rig's available_handles correctly contains ASCII. Known LLM behavior on hyphenated product names. Tracked under new ticket **c-bd28**.
+- Both: `planner_error_budget_exhausted` once thrashing started — recovery from wrong first phase is weak. Tracked under new ticket **c-36fe**.
+
+UT0/UT3 (broken sessions) remain attributed to mlld m-0f63 wrapper-resume timing (already reopened with travel reproducer).
+
+UT9 (timeout) remains the original c-63fe MCP infrastructure symptom this rework was meant to address.
+
+**Decision: Phase 1+2.0+2.5+3 stay in production.** Per GPT: "the structural memory work survived a targeted regression investigation. The remaining failures are real, but they're not evidence against the indexed bucket/cache design."
+
+Phase 3.5 optimization candidates (deferred, see prior note 2026-04-26T01:07:00Z) remain available for future iteration once the c-011b/c-bd28/c-36fe follow-ups land and we have a clean UT14/UT15 baseline.
+
+**2026-04-26T03:46:57Z** **2026-04-26T04:30:00Z** MCP LIFECYCLE INVESTIGATION SHAPE (per GPT review).
+
+**Run -p 10 spike, but treat it as mitigation data, not a fix.**
+
+Before choosing lifecycle strategy, answer ONE question first: **is the MCP server PID shared across tasks or already per-task?**
+
+- If **shared across tasks**: restart per task is likely high payoff
+- If **already per-task and dying mid-task**: restart-per-task will NOT fix UT9/UT10/UT11/UT12/UT19. Then look at:
+  - stdio backpressure (planner emits faster than MCP can drain)
+  - per-call isolation (one bad tool call killing the server)
+  - watchdog logging (capture MCP server stderr around the cascade)
+  - reducing in-task concurrency (fewer parallel tool calls per task)
+- If **-p 10 eliminates the cascade**: set a travel-specific CI cap (`scripts/bench.sh travel` already does -p 20; lower to -p 10) while lifecycle work continues
+
+**Investigation order:**
+1. Read `src/mcp_server.py` lifecycle — is the server spawned once or per-task?
+2. Add MCP PID + RSS logging around the cascade (instrument before fixing)
+3. Run -p 10 spike on travel; compare cascade rate vs -p 20
+4. Based on PID/RSS evidence, pick lifecycle strategy
+
+**Deprioritize Phase 3.5 rig memory optimizations** until MCP lifecycle is instrumented. The state work (Phase 1-3) helped structurally, but the remaining "Not connected" cascade looks host-side, not rig-side. No point optimizing rig memory if the bottleneck is MCP server crashing under task load.

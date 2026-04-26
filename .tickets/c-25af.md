@@ -5,10 +5,10 @@ deps: []
 links: [c-aed5]
 created: 2026-04-23T04:39:52Z
 type: bug
-priority: 1
+priority: 2
 assignee: Adam
 tags: [extract, mcp, tool-bridge]
-updated: 2026-04-25T18:29:08Z
+updated: 2026-04-26T03:50:21Z
 ---
 # WS-UT36 tool-backed extract on resolved file content silently returns null
 

@@ -8,7 +8,7 @@ import {
 import { @readExecutionLogFile } from "../lifecycle.mld"
 import { @composeAttestation } from "../records.mld"
 
-exe @composePrompt(query, stateSummary, executionLog) = template "../prompts/compose.att"
+exe @composePrompt(query, stateSummary, executionLog, decision) = template "../prompts/compose.att"
 
 exe @coerceComposeAttestation(raw) = [
   if @raw == null [ => null ]
@@ -16,9 +16,9 @@ exe @coerceComposeAttestation(raw) = [
   => @parsed
 ] => record @composeAttestation
 
-exe @dispatchCompose(agent, state, query) = [
+exe @dispatchCompose(agent, state, query, decision) = [
   let @executionLog = @readExecutionLogFile(@agent.executionLogFile)
-  let @prompt = @composePrompt(@query, @workerStateSummary(@agent, @state), @executionLog)
+  let @prompt = @composePrompt(@query, @workerStateSummary(@agent, @state), @executionLog, @decision ?? {})
   let @raw = @llmCall(@agent.harness, @prompt, {
     model: @agent.workerModel ?? @agent.model,
     pure: @agent.opencodePure,

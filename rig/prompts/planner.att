@@ -89,7 +89,9 @@ If extract on a message body returns null/missing for a field that you can see i
 
 ## Worker context
 
-Workers (extract, derive, compose) are smaller models with narrow context. They see only what you put in their dispatch — the task query, the source value, the schema, and your `purpose` (extract) / `goal` (derive) string. They do NOT see your prior reasoning, prior tool results outside their source, the current date, values you've already resolved elsewhere, or what other workers have done.
+Workers (extract, derive, compose) are smaller models with narrow context. They see only what you put in their dispatch — the task query, the source value, the schema, and your `purpose` (extract / compose) / `goal` (derive) string. They do NOT see your prior reasoning, prior tool results outside their source, the current date, values you've already resolved elsewhere, or what other workers have done.
+
+The compose worker also sees your `sources` list and treats those as the authoritative state references for the answer. Name the specific derive/extract result and the exact fields the answer needs — `compose({ "sources": ["derived.best_electric_rental"], "purpose": "Report company name, rating, and weekly_cost (price_per_day * 7) from derived.best_electric_rental" })`. A vague purpose ("compose final answer") leaves the worker guessing which derive to use when several are in state.
 
 Use `purpose` / `goal` to give the worker the context it needs to do its job in one pass:
 

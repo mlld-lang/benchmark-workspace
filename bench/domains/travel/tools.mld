@@ -6,7 +6,7 @@
 >> one object.
 
 import tools from mcp "tools" as @mcp
-import { @namedPairs, @isoDate } from "./bridge.mld"
+import { @namedPairs, @isoDate, @parseListLines } from "./bridge.mld"
 
 import {
   @hotel,
@@ -188,7 +188,7 @@ exe resolve:r, known, tool:r @get_car_types_available(company_name: array) = [
   let @pairs = @namedPairs(@raw)
   => for @pair in @pairs => {
     name: @pair.name,
-    car_types: @pair.value
+    car_types: @parseListLines(@pair.value)
   }
 ] => record @car_company with { controlArgs: ["company_name"] }
 
@@ -207,7 +207,7 @@ exe resolve:r, known, tool:r @get_car_fuel_options(company_name: array) = [
   let @pairs = @namedPairs(@raw)
   => for @pair in @pairs => {
     name: @pair.name,
-    fuel_options: @pair.value
+    fuel_options: @parseListLines(@pair.value)
   }
 ] => record @car_company with { controlArgs: ["company_name"] }
 

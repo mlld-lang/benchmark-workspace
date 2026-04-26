@@ -1,14 +1,14 @@
 ---
 id: c-19ee
-status: open
+status: closed
 deps: []
-links: []
+links: [c-011b, c-36fe]
 created: 2026-04-25T20:00:54Z
 type: bug
 priority: 2
 assignee: Adam
 tags: [travel, derive]
-updated: 2026-04-25T21:57:39Z
+updated: 2026-04-26T03:02:00Z
 ---
 # TR-UT13 14 car_types hidden as untrusted in record projection forces extract dance
 
@@ -52,3 +52,7 @@ Fix direction: review @car_company record. car_types should likely be a trusted 
 derive_empty_response itself is a one-shot retry artifact; not the gating issue. UT13 eventually answers correctly via extract+derive. Whether the answer is RIGHT (Speedy Rentals) per eval ground truth — needs eval check.
 
 Stays open with corrected diagnosis pointing at record-projection.
+
+**2026-04-26T03:02:00Z** **2026-04-26T04:00:00Z** CLOSING — same root cause as c-011b. Transcript-grounded note from 2026-04-25T21:49:02Z confirms TR-UT13 planner saw "the car_types arrays are empty in the projected view - this is likely because the content is untrusted and hidden." This is the EXACT same display-projection-masks-hidden-as-empty issue c-011b proposes to fix structurally (sentinel render instead of `[]`).
+
+c-011b has the proposed fix; tracking continues there. TR-UT13/UT14 are covered.

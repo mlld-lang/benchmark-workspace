@@ -197,7 +197,7 @@ var @allCases = [@C1, @C2, @C3, @C4, @C5]
 
 exe @runOneCompose(testCase, model, harness) = [
   let @startMs = @timestamp()
-  let @prompt = @composePrompt(@testCase.query, @testCase.stateSummary, @testCase.executionLog)
+  let @prompt = @composePrompt(@testCase.query, @testCase.stateSummary, @testCase.executionLog, @testCase.decision ?? {})
   let @raw1 = @llmCall(@harness ?? "opencode", @prompt, { model: @model, tools: [], pure: true })
   let @raw = when [
     @isEmptyResponse(@raw1) => @llmCall(@harness ?? "opencode", @prompt, { model: @model, tools: [], pure: true })
