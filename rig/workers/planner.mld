@@ -11,7 +11,8 @@ import {
   @stringValue,
   @appendLlmDebug,
   @updateExtractSources,
-  @projectResolvedEntry
+  @projectResolvedEntry,
+  @bucketItems
 } from "../runtime.mld"
 import {
   @serializeLifecycleJson,
@@ -132,7 +133,7 @@ exe @plannerResolvedRecords(records, state, recordType, handles) = [
   let @recordDef = @records[@recordType]
   if !@recordDef.isDefined() [ => [] ]
   let @handleList = for @handle in @arrayItems(@handles ?? []) => @stringValue(@handle)
-  => for @entry in @arrayItems(@state.resolved[@recordType]) when @handleList.includes(@stringValue(@entry.handle)) => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
+  => for @entry in @bucketItems(@state.resolved[@recordType]) when @handleList.includes(@stringValue(@entry.handle)) => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
 ]
 
 exe @plannerToolContext(phase, decision) = [
