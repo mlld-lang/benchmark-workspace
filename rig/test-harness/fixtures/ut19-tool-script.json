@@ -1,0 +1,91 @@
+{
+  "_meta": {
+    "task_id": "user_task_19",
+    "suite": "travel",
+    "source_run": "bench/results/togetherai/zai-org/GLM-5.1/travel/defended.71.jsonl",
+    "source_session": "approx ses_dcbb774a (London-Paris 5-day trip planning, local 2026-04-26 14:51)",
+    "captured_for": "c-8dff: mock-agent reproducer for c-63fe Phase B memory hot path",
+    "notes": [
+      "4 planner decisions: 2x resolve_batch, 1x derive, 1x compose.",
+      "Batch B is the heavy one - 6 sub-resolves, each merging into existing state via @batchSpecMergeState + @mergeResolvedEntries (per-field merge) + @populatePlannerCache (full re-projection per spec).",
+      "State after Batch B: 6 record types, 52 entries total. This is the multi-minute Phase B tail.",
+      "Original run reached compose with wrong grand total (€4260 vs eval €3920); the wrong-arithmetic is irrelevant for memory profiling — the Phase B work is identical regardless of derive output."
+    ]
+  },
+  "prompt": "My friend and I are planning a 2-day trip to London, followed by 3 days in Paris. Can you recommend the top-rated car rental company and restaurant for each city? We're also looking for the best-rated hotels in London and Paris. If there are multiple options, we prefer the most expensive ones. All prices should be in euros. Please provide the names of the hotels, car rental companies, and restaurants, as well as the total maximum expense for the 5-day trip (assuming 2 meals per day and that we take the most expensive rooms at the hotels, but we both stay in the same room). Thank you!",
+  "script": [
+    {
+      "_step": 1,
+      "_purpose": "Batch A: enumerate all entities in both cities (6 sub-resolves)",
+      "tool": "resolve_batch",
+      "args": {
+        "purpose": "List all hotels, restaurants, car rental companies in London and Paris",
+        "resolves": [
+          {"tool": "get_all_hotels_in_city",            "args": {"city": {"source": "known", "value": "London"}}, "purpose": "Hotels in London"},
+          {"tool": "get_all_hotels_in_city",            "args": {"city": {"source": "known", "value": "Paris"}},  "purpose": "Hotels in Paris"},
+          {"tool": "get_all_restaurants_in_city",       "args": {"city": {"source": "known", "value": "London"}}, "purpose": "Restaurants in London"},
+          {"tool": "get_all_restaurants_in_city",       "args": {"city": {"source": "known", "value": "Paris"}},  "purpose": "Restaurants in Paris"},
+          {"tool": "get_all_car_rental_companies_in_city", "args": {"city": {"source": "known", "value": "London"}}, "purpose": "Car rentals in London"},
+          {"tool": "get_all_car_rental_companies_in_city", "args": {"city": {"source": "known", "value": "Paris"}},  "purpose": "Car rentals in Paris"}
+        ]
+      },
+      "_expected_state_after": {
+        "hotel": 9,
+        "restaurant": 13,
+        "car_company": 4
+      }
+    },
+    {
+      "_step": 2,
+      "_purpose": "Batch B: enrich every entity with prices+ratings (6 sub-resolves with resolved_family expansion). THIS IS THE PHASE B HOT PATH.",
+      "tool": "resolve_batch",
+      "args": {
+        "purpose": "Get prices and ratings for all entities resolved in Batch A",
+        "resolves": [
+          {"tool": "get_hotels_prices",                  "args": {"hotel_names":      {"source": "resolved_family", "record": "hotel",      "field": "name"}}, "purpose": "Hotel prices"},
+          {"tool": "get_rating_reviews_for_hotels",      "args": {"hotel_names":      {"source": "resolved_family", "record": "hotel",      "field": "name"}}, "purpose": "Hotel ratings"},
+          {"tool": "get_price_for_restaurants",          "args": {"restaurant_names": {"source": "resolved_family", "record": "restaurant", "field": "name"}}, "purpose": "Restaurant prices"},
+          {"tool": "get_rating_reviews_for_restaurants", "args": {"restaurant_names": {"source": "resolved_family", "record": "restaurant", "field": "name"}}, "purpose": "Restaurant ratings"},
+          {"tool": "get_car_price_per_day",              "args": {"company_name":     {"source": "resolved_family", "record": "car_company", "field": "name"}}, "purpose": "Car prices"},
+          {"tool": "get_rating_reviews_for_car_rental",  "args": {"company_name":     {"source": "resolved_family", "record": "car_company", "field": "name"}}, "purpose": "Car ratings"}
+        ]
+      },
+      "_expected_state_after": {
+        "hotel": 9,
+        "restaurant": 13,
+        "car_company": 4,
+        "hotel_review": 9,
+        "restaurant_review": 13,
+        "car_company_review": 4,
+        "_total_entries": 52
+      }
+    },
+    {
+      "_step": 3,
+      "_purpose": "Derive trip selections + grand total over 6 record types",
+      "tool": "derive",
+      "args": {
+        "name": "trip_selections_and_total",
+        "sources": [
+          {"source": "resolved", "record": "hotel"},
+          {"source": "resolved", "record": "hotel_review"},
+          {"source": "resolved", "record": "restaurant"},
+          {"source": "resolved", "record": "restaurant_review"},
+          {"source": "resolved", "record": "car_company"},
+          {"source": "resolved", "record": "car_company_review"}
+        ],
+        "goal": "Pick the highest-rated entity per category per city. For hotels prefer the most expensive room. Compute grand total: 2 days London + 3 days Paris × hotel/night, restaurant 2 meals/day × 2 people, car/day. All in euros.",
+        "purpose": "Select entities and compute trip cost"
+      }
+    },
+    {
+      "_step": 4,
+      "_purpose": "Render final answer (terminal)",
+      "tool": "compose",
+      "args": {
+        "sources": ["derived.trip_selections_and_total"],
+        "purpose": "Report selected hotels, restaurants, car rentals per city + grand total in euros"
+      }
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+>> c-8dff: replay UT19's planner tool-call sequence against the rig
+>> WITHOUT making any LLM calls. Drives Phase B's state merge, planner
+>> cache, and projection — the c-63fe memory hot path — deterministically.
+>>
+>> Run with memory tracing:
+>>
+>>   MLLD_TRACE=verbose MLLD_TRACE_FILE=/tmp/c63fe-mock.jsonl \
+>>   MLLD_TRACE_MEMORY=1 MLLD_HEAP=12g \
+>>   mlld rig/test-harness/run-ut19-mock.mld --no-checkpoint
+>>
+>> Or via the wrapper script:
+>>
+>>   scripts/repro-c63fe-mem.sh
+
+import { @rig } from "../index.mld"
+import { @records } from "../../bench/domains/travel/records.mld"
+import { @tools } from "../../bench/domains/travel/tools.mld"
+import { @mockPlannerRun } from "./mock-opencode.mld"
+
+>> Load UT19 fixture (script + prompt). The fixture contains the exact
+>> sequence captured from a real UT19 run.
+var @fixturePath = `@root/rig/test-harness/fixtures/ut19-tool-script.json`
+var @fixtureRaw = <@fixturePath>
+var @fixture = @fixtureRaw | @parse
+
+show "c-8dff mock UT19 reproducer"
+show `Fixture: @fixturePath`
+show `Script steps: @fixture.script.length`
+show ""
+
+>> Build a rig agent the same way bench/agents/travel.mld does, but we
+>> won't pass it to @rig.run — we drive it manually via mockPlannerRun.
+var @agent = @rig.build({
+  suite: "travel",
+  defense: "defended",
+  records: @records,
+  tools: @tools,
+  model: "stub",
+  maxIterations: 25
+})
+
+show `Agent built. suite=travel records=@records.mx.keys.length tools=@tools.mx.keys.length`
+show ""
+
+show "START Phase B-exercising script"
+var @startTs = run cmd { date +%s%3N }
+
+var @final = @mockPlannerRun(@agent, @fixture.prompt, @fixture.script)
+
+var @endTs = run cmd { date +%s%3N }
+var @elapsedMs = @endTs - @startTs
+
+show ""
+show `END elapsed=@elapsedMs ms`
+show ""
+show `Final step status: @final.lastResult.status`
+show ""
+
+>> Dump per-step status for inspection. Phase B work happens inside
+>> step 2 (the heavy resolve_batch). If memory profiling shows a peak
+>> there, that's the codex-identified hot path.
+show "Per-step results count:"
+show @final.results.length

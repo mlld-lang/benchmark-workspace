@@ -2,39 +2,25 @@
 id: c-63fe
 status: in_progress
 deps: []
-links: [c-9d56, c-3438, c-36fe, c-d590, c-cb4a]
+links: [c-9d56, c-3438, c-36fe, c-d590, c-cb4a, c-8dff]
 created: 2026-04-25T04:45:37Z
 type: bug
 priority: 0
 assignee: Adam
 tags: [infrastructure, mcp]
-updated: 2026-04-27T01:01:59Z
+updated: 2026-04-27T07:26:10Z
 ---
-# MCP server disconnects mid-run on remote bench runners (travel + workspace-b)
+# Travel c-63fe: outer MCP timeout cascade and rig memory hot-path attribution
 
-Symptom: travel run 24921398132 has 177 MCP tool errors (152 'Not connected', 13 'Request timed out', 12 'Connection closed') across multiple sessions. workspace-b run 24921396588 has 76 similar errors. Slack and banking runs on the same dispatch had 0 MCP infrastructure errors.
+**Current scope, 2026-04-27.** This is the clean-side anchor for travel heavy-run failures. It has two active tracks, and both need evidence before more broad rig rewrites land.
 
-Concrete evidence: opencode.db part data for prt_dc2dcf3a3001go9QnbLx3ngREB shows 'state.error': 'Not connected' from the very first tool call of travel UT2. Subsequent retries hit the same error.
+1. **Outer MCP timeout cascade.** Opencode times out long `mlld_tools_resolve_batch` calls, then the planner degrades into `Request timed out`, `Connection closed`, and `Not connected`. Inner AgentDojo MCP calls are fast and are not the current suspect. mlld-side bridge serialization/cancellation work is tracked in m-0710; clean-side timeout/no-progress behavior remains linked here.
 
-Why it matters: causes the planner to look like it's stuck in resolve loops (Pattern C compact symptom) when actually the MCP server has died and every tool call is failing infrastructure-level. Travel's apparent 6/20 utility is unmeasurable — the actual model/framework behavior is hidden behind these failures.
+2. **Rig memory hot-path attribution.** The previous indexed-bucket/planner-cache/resolve-delta stack improved throughput in some sweeps but did not prove a memory reduction. It is preserved on `mem-experiments/c-63fe-rig-memory`; re-landing or restoring it should be judged separately from the next memory investigation.
 
-opencode_debug.py masks the issue: it renders the tool error as 'output=null' which looked like 'no error message propagated' (a different framework bug). The real error is in the part state.error field. Should fix opencode_debug.py to surface state.error when status=error.
+Current best memory evidence is the zero-LLM late-spike repro in `tmp/c63fe-late-spike/`: the first clear terminal boundary is around `@workerStateSummary`, compose prompt/state projection, `@dispatchCompose`, seeded planner compose, and final session/write extraction. Claude is identifying the worst travel case so we can seed a deterministic or mock-agent repro without costly LLM calls.
 
-Possible causes:
-- MCP server (uv run python3 src/mcp_server.py) crashes or times out on long-running tasks. Travel tasks have higher per-task tool counts and longer wall times.
-- Per-task MCP timeout setting too short. The session resets at some point and the planner can't reconnect.
-- Container-level resource issue (memory, file descriptors, ephemeral ports) under high parallelism (-p 40).
-- Possibly correlates with travel's larger tool catalog (28 tools) creating more MCP load.
-
-Investigation:
-1. Check src/mcp_server.py for crash conditions / timeout configs
-2. Inspect docker container resources during travel run
-3. Look for patterns: do disconnects cluster around specific tools, specific iter counts, specific wall times?
-4. Reproduce locally with travel suite at -p 5 to see if it's environment-specific
-
-Workaround until fixed: travel results from remote 40-parallel runs are unreliable. Use lower parallelism or local single-task verification for travel debugging until MCP stability lands. Slack and banking remote runs are clean.
-
-Run IDs affected: 24921398132 (travel), 24921396588 (workspace-b).
+Do not use this ticket as a bucket for old derive, array-shape, record-merge, or planner-over-iteration issues. Those tickets are closed context unless they recur with fresh evidence. New rig changes should first improve attribution: phase-level memory summaries, payload sizes, clone/materialization counts, and the first boundary where RSS jumps.
 
 
 ## OOM linkage (2026-04-25)
@@ -842,3 +828,15 @@ Interpretation:
 Most promising reduction path: make compose source-aware. Build a filtered state summary from `decision.sources` instead of always calling `@workerStateSummary(@agent, @state)` over the entire state. Preserve existing behavior when sources include broad wildcards (`resolved.*`, `derived.*`, `extracted.*`) or are absent. For specific sources (`derived.foo`, `extracted.foo`, `resolved.hotel`, structured resolved refs), include only those projected entries/families. This targets the first spike boundary and should reduce both memory and prompt size without changing proof-bearing state storage.
 
 **2026-04-27T05:27:52Z** 2026-04-26 rollback note: preserved the rig memory experiment state on branch mem-experiments/c-63fe-rig-memory at commit e063920, then surgically reverted the rig-side memory-efficiency refactor from main. Reverted commits: a00ca96 native indexed bucket append, 6ac56df settle resolve batches once, 04b5458 resolve deltas in rig batch merge, 291b142 eager planner_cache, abf5259 indexed-bucket writer, 32422b0 indexed-bucket adapters. Follow-up cleanup commit 6ffb232 restored helper imports after removing the adapter layer. Preserved unrelated work: c-5a24 per-field merge, c-eda4 batch state-clobber fix, c-3438 no-progress tests, c-bd28 xfail, and derive insufficient_information changes. Verification after rollback: mlld rig/tests/index.mld --no-checkpoint passes 134/135 with the expected xfail; mlld rig/tests/workers/run.mld --no-checkpoint passes 24/24; mlld qs passes.
+
+**2026-04-27T07:20:50Z** **2026-04-27 cleanup note:** Keep this as the clean-side anchor for travel heavy-run failures, but split the scope clearly:
+
+- Outer MCP timeout cascade: opencode times out long `mlld_tools_resolve_batch` calls, then the session degrades into `Request timed out`, `Connection closed`, and `Not connected`. Inner AgentDojo MCP calls are fast and are not the current suspect.
+- Rig memory hot-path attribution: the previous rig memory-efficiency stack is preserved on `mem-experiments/c-63fe-rig-memory`. It improved throughput/pass rate in some sweeps but did not prove a memory reduction; after rollback peak RSS was lower, while pass rate worsened. Re-landing or restoring that work should be judged separately from the next memory investigation.
+- Deterministic repro work: prefer zero-LLM or mock-agent harnesses that reproduce the first large RSS jump. The current best evidence points near `@workerStateSummary`, compose prompt/state projection, `@dispatchCompose`, seeded planner compose, and final session/write extraction. Claude is identifying the worst travel case to seed this repro.
+
+Do not use c-63fe as a bucket for old derive, array-shape, record-merge, or planner-over-iteration issues. Those tickets are closed context unless they recur with fresh evidence. New rig changes should first improve attribution: phase-level memory summaries, payload sizes, clone/materialization counts, and the first boundary where RSS jumps.
+
+**2026-04-27T07:27:22Z** 2026-04-27 next-step breadcrumb: Wait for Claude to identify the most memory-problematic travel test case, then use it to seed a deterministic/zero-LLM or mock-agent repro. Pair that with mlld:m-15d9 memory summaries to identify the first RSS jump before changing rig storage/projection shapes again. Likely suspects remain workerStateSummary, compose state/prompt projection, dispatchCompose, seeded planner compose, and final session/write extraction.
+
+**2026-04-27T07:34:46Z** 2026-04-27 mlld-dev update: m-15d9 memory.summary is implemented and built locally. Next c-63fe repro runs should inspect memory.summary first for firstMajorJump/topDeltas/sessionWrites before deciding whether the hot fix is rig compose/source projection or mlld session retention.

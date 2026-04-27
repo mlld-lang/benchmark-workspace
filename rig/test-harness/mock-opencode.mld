@@ -1,0 +1,71 @@
+>> Mock harness that mirrors @opencode/@claude for c-63fe Phase B
+>> memory profiling without LLM cost or network. Drives the rig planner
+>> tool exes directly from a JSON script, exercising Phase B (state
+>> merge, planner cache, projection) end-to-end. Inner Python MCP server
+>> still runs and returns real AgentDojo data.
+>>
+>> Limitation: does NOT exercise the OUTER function-mcp-bridge per-call
+>> socket lifecycle (path A in c-8dff). The bridge cascade is downstream
+>> of Phase B's multi-minute tail; profiling Phase B captures the trigger.
+>>
+>> Usage from a test program:
+>>
+>>   import { @mockPlannerRun } from "./mock-opencode.mld"
+>>   var @result = @mockPlannerRun(@agent, @query, @script)
+>>   show @result.text
+
+import { @planner, @emptyPlannerRuntime, @emptyState } from "../session.mld"
+import { @plannerTools } from "../workers/planner.mld"
+
+>> Dispatch one script step against the planner exes. The planner
+>> session is already seeded by @mockPlannerRun's `with` wrapper, so
+>> these exes see the same agent/query/state context the real planner
+>> would. Each call may mutate session state via @planner.set inside
+>> @settlePhaseDispatch — that's the Phase B work we want to profile.
+exe @dispatchScriptStep(step) = [
+  let @tool = @step.tool
+  let @args = @step.args
+  let @entry = @plannerTools[@tool]
+  if !@entry.isDefined() [ => { error: "unknown_tool_in_script", tool: @tool } ]
+  let @fn = @entry.mlld
+  => @fn(@args)
+]
+
+>> Iterate the script in a bounded loop. Each step runs against the
+>> seeded planner session; @plannerResolveBatch in particular triggers
+>> the Phase B settle/merge/cache/projection chain we're profiling.
+>> Returns the LAST step's result (typically compose).
+exe @runScript(script) = [
+  let @results = loop(100) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "mockScript" => @input
+      * => { _rig_cursor: "mockScript", index: 0, results: [], lastResult: null }
+    ]
+    if @ctx.index >= @script.length [ done @ctx ]
+    let @step = @script[@ctx.index]
+    let @result = @dispatchScriptStep(@step)
+    continue {
+      _rig_cursor: "mockScript",
+      index: @ctx.index + 1,
+      results: @ctx.results.concat([@result]),
+      lastResult: @result
+    }
+  ]
+  => @results
+]
+
+>> Drive the rig planner with a fixture script. Seeds the planner
+>> session explicitly via @planner.set so subsequent planner-tool exes
+>> see the agent/query/state context the real planner would.
+>> NOTE: this is NOT an `exe llm` — by design we skip the OUTER bridge.
+exe @mockPlannerRun(agent, query, script) = [
+  @planner.set({
+    agent: @agent,
+    query: @query,
+    state: @emptyState(),
+    runtime: @emptyPlannerRuntime()
+  })
+  => @runScript(@script)
+]
+
+export { @mockPlannerRun, @runScript, @dispatchScriptStep }
