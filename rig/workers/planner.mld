@@ -12,10 +12,10 @@ import {
   @appendLlmDebug,
   @updateExtractSources,
   @projectResolvedEntry,
-  @bucketItems,
   @batchSpecMergeState,
   @phaseResultWithState
 } from "../runtime.mld"
+import { @bucketItems } from "../intent.mld"
 import {
   @serializeLifecycleJson,
   @appendPhaseEvent,

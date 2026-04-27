@@ -998,8 +998,6 @@ export {
   @batchSpecMergeState,
   @phaseResultWithState,
   @updateResolvedState,
-  @bucketItems,
-  @bucketLength,
   @updateNamedState,
   @updateExtractSources,
   @isStructuredRef,

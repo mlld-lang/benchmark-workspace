@@ -65,6 +65,10 @@ exe @bucketItems(values) = when [
   * => []
 ]
 
+exe @bucketLength(values) = [
+  => @bucketItems(@values).length
+]
+
 exe @namedStateEntry(entryValue) = when [
   @entryValue.mx.data.isDefined() => @entryValue.mx.data
   @entryValue.data.isDefined() => @entryValue.data
