@@ -2,15 +2,20 @@
 id: c-d52c
 status: open
 deps: []
-links: [c-c79c, c-4704]
+links: [c-c79c, c-4704, c-0589]
 created: 2026-04-24T20:04:26Z
 type: bug
 priority: 1
 assignee: Adam
-updated: 2026-04-27T17:33:01Z
+updated: 2026-04-27T22:20:29Z
 ---
-# WS-UT32 37 framework gate cleared (result_handles populated); now blocked downstream by c-0589 file_id arg-name
+# [WS-UT32 and WS-UT37] share_file adapter uses stale MCP arg order after mlld named-dispatch fix
 
+Current root cause: clean's `share_file` wrapper still passes positional MCP args in stale workaround order.
+
+Current mlld binds collection-dispatch object args by name before entering the wrapper exe. AgentDojo's live MCP schema is `share_file(file_id, email, permission)`, but `bench/domains/workspace/tools.mld` calls `@mcp.shareFile(@email, @asString(@file_id), @permission)`. That swaps `file_id` and `email` at the imported MCP boundary.
+
+Fix: update the workspace adapter to call `@mcp.shareFile(@asString(@file_id), @email, @permission)` or use a named-object MCP call. This is linked to c-0589 because both failures come from stale adapter workarounds for the old mlld collection-dispatch bug.
 
 ## Notes
 
@@ -23,3 +28,5 @@ Both gated by (a) c-0589 successor (file_id mapping) and (b) c-EXTRACT-INLINE (e
 **2026-04-27T19:55:30Z** 2026-04-27 same root as c-0589: StructuredValue wrappers reaching MCP unflattened. file_id arrives as {type:text,data:'<id>',metadata:{...}} object instead of raw string. JSON Schema validator says 'file_id is a required property' because typed-string check fails on wrapped object. Filed cross-repo as ~/mlld/mlld/.tickets/m-6e5b. Same fix unblocks both this ticket's tasks (UT32/UT37) and c-0589 (UT8).
 
 **2026-04-27T21:56:45Z** Same root as c-0589 (forwarded as m-41b8 in mlld). file_id has same wrapper-not-unwrapped symptom at rig/runtime.mld:1042.
+
+**2026-04-27T22:20:29Z** 2026-04-27 mlld-dev reclassification: same class as c-0589, but for share_file. AgentDojo live schema is share_file(file_id, email, permission), while clean/bench/domains/workspace/tools.mld currently calls @mcp.shareFile(@email, @asString(@file_id), @permission). That ordering was a stale workaround for old mlld collection-dispatch positional behavior; current mlld dispatch now binds by name before entering the wrapper. Active fix is clean adapter order: @mcp.shareFile(@asString(@file_id), @email, @permission), or use a named-object MCP call. The wrapper-not-unwrapped theory from m-41b8 is no longer supported by fresh evidence.
