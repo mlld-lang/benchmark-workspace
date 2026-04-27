@@ -89,9 +89,25 @@ Framework discipline only. Phase rules, ref grammar, source class rules, termina
 
 ### Layer 2: Suite addendums (`bench/domains/<suite>/prompts/`)
 
-Domain workflow patterns. How to reason about data in this specific domain — multi-step patterns, availability calculations, cross-record reasoning strategies. Must be true for any task in that suite, not just one task.
+Domain workflow patterns. How to reason about data in this specific domain — multi-step patterns, availability calculations, cross-record reasoning strategies, arithmetic conventions. Must be true for any task in that suite, not just one task.
 
-**Test:** Would removing this rule cause wrong reasoning for a CLASS of tasks in this suite? If yes, it belongs here. If it only helps one task, it's overfitting.
+Suite addendums are split per-worker. Each suite agent passes the addendum text its workers actually need:
+
+- `plannerAddendum` — top-level workflow patterns the planner uses to pick phases and shape goals.
+- `deriveAddendum` — arithmetic, ranking, selection conventions enforced inside the derive worker. Use when the rule must hold even if the planner forgets to restate it in `goal:`.
+- `extractAddendum` — content-parsing conventions inside the extract worker (e.g. structured-field extraction patterns, verbatim-preservation rules).
+- `composeAddendum` — output-rendering conventions inside the compose worker.
+
+Each defaults to empty string. A suite opts in by exporting an addendum var (e.g. `@travelDeriveAddendum` from `bench/domains/travel/prompts/planner-addendum.mld`) and wiring it through the agent file (`bench/agents/<suite>.mld` calls `@rig.run({ ..., deriveAddendum: @travelDeriveAddendum })`).
+
+The framework wires addendums via:
+- `rig/orchestration.mld` — accepts the four addendum config fields
+- `rig/workers/<worker>.mld` — reads `@agent.<worker>Addendum` and passes to its prompt
+- `rig/prompts/<worker>.att` — interpolates `@suiteAddendum` at the same position in each worker template
+
+**Test:** Would removing this rule cause wrong reasoning for a CLASS of tasks in this suite? If yes, it belongs here. If it only helps one task, it's overfitting. Use the smallest worker scope that catches the failure — a derive arithmetic rule belongs in `deriveAddendum`, not `plannerAddendum`, unless the planner needs to know it to construct the right `goal:`.
+
+**Approval rule:** Every prompt change at this layer — tool descriptions/instructions, suite addendums (any worker), planner.att, worker prompt templates — needs explicit user approval before being written to a file. Show the proposed text, the rationale, and the test plan; do not edit until the user says go. Even small nudges like adding one sentence to a tool's `instructions:` field require approval. The reason: prompts are load-bearing and stochastic — a one-line tweak can shift behavior across many tasks in unpredictable ways. The user reviews to catch overfitting, eval-shaping, or other classes of error that aren't visible to the agent making the change.
 
 ### Layer 3: Tool descriptions and `instructions:` fields
 
