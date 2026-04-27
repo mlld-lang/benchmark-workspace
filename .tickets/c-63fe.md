@@ -738,3 +738,22 @@ Measurement:
 - Local travel subset with MLLD_HEAP=8g, tasks 10/11/12/18/19 at -p 5, completed without MCP disconnect/OOM broken sessions: 2/5 utility, ordinary FAILs on 11/12/19, PASS on 10/18. One mlld child peaked above 6GB RSS, so the end-of-task spike remains and larger heap masks rather than removes that risk.
 
 Deliberately deferred: single batch-settle-once rewrite. That is likely the next high-payoff rig change but has a larger behavioral surface than this delta-path slice.
+
+**2026-04-27T02:28:38Z** Opened mlld runtime ticket m-017b for the remaining O(N) indexed-bucket materialization blocker: array augmented assignment should preserve StructuredValue wrappers/factsources when appending proof-bearing values. A mlld-side worker has started investigating that runtime fix. Until m-017b lands, @indexedBucketEntries remains on the metadata-safe but O(N^2) `.concat([@entry])` path.
+
+**2026-04-27T03:05:03Z** 2026-04-27 batch-settle/delta-only progress:
+
+Implemented clean-side resolve_batch settlement rewrite:
+- `resolve_batch` now dispatches each spec in delta-only mode, so per-spec dispatch returns `state_delta` without building full `initial+spec` state.
+- Batch merge happens in memory through `@batchSpecMergeState` and planner state/runtime is settled once through `@finishPlannerTool`.
+- Added `results: array?` to `@planner_tool_result` so the batch result survives record coercion.
+- Added invariant `planner-resolve-batch-settles-once` covering a two-spec batch, final resolved buckets, and `runtime.tool_calls == 1`.
+
+Verification:
+- `mlld rig/tests/index.mld --no-checkpoint`: `139 pass / 1 fail (1 xfail, 0 xpass-flip-pending)`; only existing `xfail/c-bd28/UH-1-selection-ref-tolerates-unicode-dash-variant` failed.
+- `mlld rig/tests/workers/run.mld --no-checkpoint`: `24/24`.
+- `git diff --check`: pass.
+- Synthetic resolve_batch harness in `tmp/c63fe-resolve-batch-settle/harness.mld`: before this rewrite, 160 synthetic travel-shaped entries ended at about `rss=4111MB heap=2859MB elapsed=149863ms`; after delta-only + single settle, it completed at `rss=3314MB heap=1638MB elapsed=133196ms`. Useful reduction, but not the large win expected from O(N) materialization.
+
+Remaining blocker:
+- m-017b is still blocking O(N) indexed-bucket materialization. Even after the second-pass mlld field-access patch and rebuild, switching `@indexedBucketEntries` from `.concat([@entry])` to native `+= [@entry]` still fails `rig/tests/index.mld` at `@sessionContactEntries[0]` with `FieldAccess: Cannot access index 0 on non-array value (object)`. clean/rig remains on concat until m-017b passes the real rig gate.

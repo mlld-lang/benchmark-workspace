@@ -470,6 +470,28 @@ var @plannerResolveDispatchResult = @testPlannerResolve("test", {
   session: @planner,
   seed: { agent: @builtFixtureAgent, query: "What day is it?", state: @emptyState(), runtime: @emptyPlannerRuntime() }
 }
+exe llm @testPlannerResolveBatch(prompt, config) = [
+  let @batchResult = @callTool(@plannerTools.resolve_batch, @plannerTools, "resolve_batch", @config.args)
+  let @stateAfter = @planner.state
+  let @runtimeAfter = @planner.runtime
+  => {
+    result: @batchResult,
+    state: @stateAfter,
+    runtime: @runtimeAfter
+  }
+]
+var @plannerResolveBatchDispatch = @testPlannerResolveBatch("test", {
+  args: {
+    resolves: [
+      { tool: "get_contacts", args: {}, purpose: "ground contacts" },
+      { tool: "get_today", args: {}, purpose: "ground today" }
+    ],
+    purpose: "ground two independent record families"
+  }
+}) with {
+  session: @planner,
+  seed: { agent: @builtFixtureAgent, query: "Find Alice and today's date.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
 var @plannerExtractFixtureAgent = @rigBuild({
   suite: "fixture-planner-extract",
   defense: "defended",
@@ -1459,6 +1481,14 @@ var @plannerResolveDispatchOk =
   @plannerResolveDispatchResult.status == "resolved" &&
   @plannerResolveDispatchResult.count == 1 &&
   @plannerResolveDispatchResult.record_type == "datetime_context"
+var @plannerResolveBatchPretty = @plannerResolveBatchDispatch | @pretty
+var @plannerResolveBatchOk =
+  @plannerResolveBatchDispatch.result["error"] == null &&
+  @plannerResolveBatchDispatch.result.status == "batch_resolved" &&
+  @plannerResolveBatchDispatch.result.results.length == 2 &&
+  @bucketLength(@plannerResolveBatchDispatch.state.resolved.contact) == 2 &&
+  @bucketLength(@plannerResolveBatchDispatch.state.resolved.datetime_context) == 1 &&
+  @plannerResolveBatchDispatch.runtime.tool_calls == 1
 var @plannerResolveContactsPretty = @plannerResolveContactsResult | @pretty
 var @plannerResolveContactsOk =
   @plannerResolveContactsResult["error"] == null &&
@@ -3515,6 +3545,7 @@ exe @allChecks() = [
   @check("resolve-worker-success-path", @dispatchResolveOk, @dispatchResolvePretty),
   @check("resolve-worker-scalar-keyed-path", @dispatchScalarResolveOk, @dispatchScalarResolvePretty),
   @check("planner-tool-collection-dispatch-does-not-recurse", @plannerResolveDispatchOk, @plannerResolveDispatchPretty),
+  @check("planner-resolve-batch-settles-once", @plannerResolveBatchOk, @plannerResolveBatchPretty),
   @check("planner-session-state-persists-across-direct-planner-tool-calls", @plannerResolveContactsOk, @plannerResolveContactsPretty),
   @check("session-final-state-accessible-via-mx-sessions", @sessionFinalStateOk, `runtime_calls=@sessionFinalState.runtime.tool_calls resolved=@sessionContactCount`),
   @check("llm-call-log-omits-session-snapshot", @llmCallEntryOmitsSessionSnapshotOk, @llmCallEntryOmitsSessionSnapshotDetail),
