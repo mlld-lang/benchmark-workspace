@@ -4,14 +4,95 @@ Experiment log and task classification. Tracks what works, what fails, why, and 
 
 Model: `togetherai/zai-org/GLM-5.1` via OpenCode. Budget: 25 iterations. Defense: defended.
 
-**Latest sweep results (2026-04-26, end of session bench-grind-10):**
-- Workspace: 28/40 (70.0%) — last touched session-7
-- Banking: 12/16 (75.0%) — last touched session-7
-- Slack: 11/21 (52.4%) — last touched session-7
-- Travel: **15/20 (75.0%) local** — bench-grind-10 closed c-d590 (description), c-4e09 (UT3 root cause), c-0ada (compose [object Object] retry); 2 stochastic regressions (UT4/UT7). Remote sweep pending image rebuild.
-- **Total: 66/97 (~68%) local**
+**Latest results (2026-04-27, end of session bench-grind-10 — c-63fe closed):**
+- Workspace: 28/40 (70.0%) — last verified session-7; sweep dispatched at session-10 close
+- Banking: 12/16 (75.0%) — last verified session-7; sweep dispatched at session-10 close
+- Slack: 11/21 (52.4%) — last verified session-7; sweep starting at session-10 close
+- Travel: **15/20 (75.0%) local closeout earlier in session-10**; full local sweep starting at session-10 close
+- **Total: ~66/97 (~68%)** — pending refresh from in-flight session-11 sweeps
 
-Architectural ceiling stays ~78/97 (indirect-injection tasks structurally OOS). See HANDOFF.md for prioritized next moves.
+Architectural ceiling stays ~78/97 (indirect-injection tasks structurally OOS). **c-63fe is now CLOSED** — see HANDOFF.md for the new actionable surface (LLM stochasticity tickets c-eb71/c-e562, prompt-ambiguity c-8a89, workspace P1 stack).
+
+## Session bench-grind-10 (2026-04-27): c-63fe killed at the rig+mlld layer
+
+**The headline**: combined gpt rig optimization work + mlld-dev memory optimization stack (lazy materialization) eliminated the c-63fe MCP cascade that gated travel for weeks. Travel canary went 1/6 PASS at 925s wall to 2/6 PASS at 327s wall — and crucially, **6/6 tasks now finish in budget** (previously 5/6 hit the 900s wall via cascade). The remaining travel failures are all LLM-stochasticity / prompt-ambiguity / eval-mismatch — totally separate failure class from c-63fe and addressable through prompt addendums or OOS classification.
+
+### c-63fe headline numbers
+
+| Metric | 8b0d220 baseline | session-10 HEAD | Δ |
+|--------|------------------|-----------------|---|
+| c-8dff mock peak RAM | 6.8 GB | 1.57 GB | **-77%** |
+| c-8dff mock wall | 9 min | 158s | **-71%** |
+| Travel canary wall (-p 6) | 925s | 327s | **-65%** |
+| Travel canary avg/task | ~787s | 208s | **-74%** |
+| Travel tasks-in-budget | 1/6 | **6/6** | **+5** |
+| Travel PASS (6 c-63fe-class tasks) | 1/6 | 2/6 | +1 |
+
+The PASS number is +1 not +5 because the other 4 finished tasks hit pre-existing prompt-class failures (UT11 c-8a89, UT12 string-precision, UT17 interpretation, UT19 LLM-arithmetic). Those are now actionable — before, c-63fe killed the run before they could matter.
+
+### What landed (chronological, session-9 → session-10 close)
+
+- **April 25 (rig)**: Phases 1/2.0/2.5 — indexed-bucket adapters, handle-keyed merge, planner_cache populated eagerly + used on read
+- **April 26 (rig, gpt)**: 04b5458 (delta merge), 6ac56df (settle batches once), a00ca96 (native indexed append)
+- **April 26 (rig, gpt)**: brief revert + restore cycle — see git history if reviewing why HEAD has these as forward commits
+- **April 27 (rig, gpt)**: 6fd3c10 (reduce repeated intent arg metadata work)
+- **April 27 (mlld)**: m-9179 lazy array helper text materialization, m-9712 threshold exec entry attribution, m-8535 split llm exec memory trace phases, m-c3e6 bound nested helper audit logging, m-a28f narrow llm tool-call trace retention, m-cbe7 trim reserved session method dispatch overhead, m-15d9 summarize runtime memory traces, m-017b index serialized array envelopes, m-2883 speed up security descriptor canonicalization, lazy structured metadata phases, frozen-array fix
+- **April 27 (rig, this session)**: c-d590 description; c-4e09 root cause (agentdojo runner.py normalizer extension to travel); c-0ada compose [object Object] retry; insufficient_information escape hatch in derive
+- **April 27 (test infra, this session)**: c-8dff mock-agent reproducer at `rig/test-harness/` (working, deterministic, zero-LLM, captures Phase B hot path for future memory profiling)
+
+### Tickets closed this session
+
+- **c-63fe** (P0): MCP server disconnects mid-run on remote bench runners — CLOSED. Reproducer guards future regressions.
+- **c-d590** (P2): get_hotels_address singular hotel_name description — CLOSED.
+- **c-4e09** (P0): Travel/Workspace eval-mismatch survey — CLOSED. UT3 fixed via agentdojo normalizer extension; remaining items have own tickets.
+- **c-8dff** (P1): mock-agent reproducer — CLOSED. Working at 6.8GB→1.57GB / 9min→158s on Phase B.
+
+### Tickets opened this session
+
+- **c-0ada** (P2): Travel UT10 compose worker '[object Object]' demote artifact — retry trigger SHIPPED, watching
+- **c-cb4a** (P2): Extend agentdojo post-env normalizer to banking + slack (preventive)
+- **c-eb71** (P2, NEW today): TR-UT12 compose renders rating as '5' not '5.0' (string precision)
+- **c-e562** (P2, NEW today): TR-UT19 LLM stochastic arithmetic on grand total
+
+### Cardinal rules earned this session
+
+1. **`exe llm` is the magic word for mlld testing infrastructure.** Mock harnesses must use `exe llm @mock(prompt, config) = [...]` (not just `exe`) to enable the `with { session: @planner, seed: {...} }` binding semantics. This was the single biggest pothole in c-8dff implementation. See `~/mlld/clean/rig/test-harness/mock-opencode.mld` and the testing-infra plan at `~/mlld/mlld/plan-testing-infra.md` (Phase 6 + 7 callouts).
+
+2. **Memory peaks ≠ memory cost.** When optimizations make work go faster, peak RAM clumps higher because more useful work is in flight per unit time. Don't reflexively roll back optimizations that raise memory peaks — measure the time-vs-memory tradeoff against actual utility (tasks finishing in budget) before concluding regression.
+
+3. **Verify cited file:line against the installed registry version, not the dev-tree clone.** Opus's "mcpTimeoutMs is dead code" finding earlier this session was based on reading v1.4.1 in `~/mlld/mlld/llm/lib/opencode/`. The installed registry version `@mlld/opencode@1.4.3` (used by the bench-image build) DOES wire mcpTimeoutMs through. Codex got this right; opus got it wrong because it read the wrong file.
+
+4. **Foundational optimization commits don't always self-document as foundational.** When considering a "revert all c-63fe work" rollback, audit which specific commits go back and what depends on what — this session, a memory-pressure rollback inadvertently undid foundational rig work from the previous day along with the day's experiments. The data point that was meant as "recent commits" turned out to span multiple days.
+
+5. **Local canaries can hide stochastic failures that don't reproduce on remote, and vice versa.** UT4 PASSED on remote run 24966154043 but FAILED on local closeout (different LLM stochastic outcome). Don't conclude "regression" from one canary; verify with retry.
+
+6. **Once framework is clean, stochastic LLM behaviors dominate.** With c-63fe gone, remaining failures cluster into: prompt ambiguity (c-8a89), eval-string precision (c-eb71), LLM arithmetic (c-e562), interpretation choice (UT17 max-rated-vs-budget). These are the new actionable surface — none of which were addressable while c-63fe killed runs first.
+
+### Session-10 commits (clean + agentdojo + mlld)
+
+Clean repo (`mlld-lang/benchmark-workspace` main):
+- `713febe` c-63fe: CLOSED — rig Phase B + mlld lazy materialization stack
+- `6fd3c10` c-63fe: reduce repeated intent arg metadata work
+- `980b0d2` c-8dff: close — working reproducer (6.8GB, 9min, 0 LLM calls)
+- `1ba9814` c-8dff: working c-63fe reproducer — exe llm fixes session scoping
+- `0ed81a1` c-8dff: c-63fe Phase B mock-agent reproducer foundation
+- `b81b159` Restore c-63fe rig optimization stack from 8b0d220
+- `8b0d220` rig/derive: insufficient_information escape hatch (CaMeL-inspired)
+- `aa24043` c-63fe: opus + codex investigation notes
+- `37fe0ec` travel addendum: preserve write-arg string templates and event-title conventions
+- `b5c4070` SCIENCE: bench-grind-10 session log (travel 12-13 → 15/20)
+- `79fc8fe` rig/compose: retry on '[object Object]' demote artifact (c-0ada)
+- `95c54c8` travel: clarify get_hotels_address singular hotel_name (c-d590)
+- (plus the gpt rig commits — see git log for the full chain)
+
+Agentdojo (`mlld-lang/agentdojo` mlld-rig):
+- `3984ba38` Extend post-env normalizer to travel suite
+
+Mlld (`mlld-lang/mlld` 2.1.0): see `~/mlld/mlld` git log for the full memory optimization stack landed during this session.
+
+All repos pushed.
+
+---
 
 ## Session bench-grind-10 (2026-04-26): UT3 root cause + structural compose retry
 
