@@ -13,6 +13,8 @@ import {
   @updateExtractSources,
   @projectResolvedEntry,
   @bucketItems,
+  @isResolvedIndexBucket,
+  @valueField,
   @batchSpecMergeState,
   @phaseResultWithState
 } from "../runtime.mld"
@@ -242,7 +244,19 @@ exe @plannerResolvedRecords(records, state, recordType, handles) = [
   let @recordDef = @records[@recordType]
   if !@recordDef.isDefined() [ => [] ]
   let @handleList = for @handle in @arrayItems(@handles ?? []) => @stringValue(@handle)
-  => for @entry in @bucketItems(@state.resolved[@recordType]) when @handleList.includes(@stringValue(@entry.handle)) => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
+  let @bucket = @state.resolved[@recordType]
+  => when [
+    @isResolvedIndexBucket(@bucket) => [
+      let @order = @valueField(@bucket, "order") ?? []
+      let @byHandle = @valueField(@bucket, "by_handle") ?? {}
+      => for @handle in @order when @handleList.includes(@stringValue(@handle)) [
+        let @entry = @valueField(@byHandle, @stringValue(@handle))
+        if @entry == null [ => null ]
+        => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
+      ]
+    ]
+    * => for @entry in @bucketItems(@bucket) when @handleList.includes(@stringValue(@entry.handle)) => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
+  ]
 ]
 
 exe @plannerToolContext(phase, decision) = [

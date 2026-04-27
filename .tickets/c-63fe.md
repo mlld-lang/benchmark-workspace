@@ -721,3 +721,20 @@ Promote `/tmp/c-63fe-investigation/spikes/function_bridge_reconnect_probe.ts` in
 - 2026-04-26T23:55: gpt working separately on the c-63fe fix per Adam. Marked **in_progress**.
 - Sequencing: rig fix first (clean repo, no upstream dependency, removes the trigger). mlld fix second (defense-in-depth, also addresses future deadline-class issues).
 - Cross-suite preventive cleanup tracked in c-cb4a (extend agentdojo normalizer gate to banking/slack).
+
+**2026-04-27T01:58:45Z** 2026-04-26 Codex implementation note:
+
+Implemented a narrow rig-side Phase B delta path, not the broader batch-settle rewrite. Resolve workers now return state_delta.resolved[record_type] with just the new entries; batchSpecMergeState prefers that delta and only falls back to full phaseResult.state for compatibility. Indexed merges now reuse by_handle/order directly for indexed buckets and preserve changed_handles for incremental planner_cache refresh. plannerResolvedRecords now has an indexed-bucket path for selected handles. Added regression state-projection/B5-c63fe-batch-spec-merge-prefers-delta.
+
+Verification:
+- mlld rig/tests/index.mld --no-checkpoint: 138 pass / 1 fail (known xfail)
+- mlld rig/tests/workers/run.mld --no-checkpoint: 24/24
+- mlld qs: exit 0
+- git diff --check: clean
+
+Measurement:
+- tmp/c63fe-state-projection-baseline/harness.mld under MLLD_HEAP=8g ended around 1096MB RSS / 819MB heap; prior notes for the same harness were about 1933MB final RSS.
+- tmp/c63fe-phase-b-delta/harness.mld under MLLD_HEAP=8g ended around 1462MB RSS / 760MB heap with 160 total entries; phase B still spends ~7-12s/spec, so memory is much better but settle time is not fully solved.
+- Local travel subset with MLLD_HEAP=8g, tasks 10/11/12/18/19 at -p 5, completed without MCP disconnect/OOM broken sessions: 2/5 utility, ordinary FAILs on 11/12/19, PASS on 10/18. One mlld child peaked above 6GB RSS, so the end-of-task spike remains and larger heap masks rather than removes that risk.
+
+Deliberately deferred: single batch-settle-once rewrite. That is likely the next high-payoff rig change but has a larger behavioral surface than this delta-path slice.

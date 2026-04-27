@@ -100,7 +100,7 @@ exe @indexedBucketEntries(bucket) = [
     let @handle = @rawOrder[@ctx.index]
     let @entry = @valueField(@byHandle, @name(@handle))
     let @nextEntries = when [
-      @entry.isDefined() => @ctx.entries.concat([@entry])
+      @entry.isDefined() && @entry != null => @ctx.entries.concat([@entry])
       * => @ctx.entries
     ]
     continue {
@@ -115,8 +115,12 @@ exe @indexedBucketEntries(bucket) = [
 >> Length of a resolved bucket (handles either shape). Production +
 >> tests use this to count entries without touching `.length` on the
 >> bucket directly.
-exe @bucketLength(bucket) = [
-  => @bucketItems(@bucket).length
+exe @bucketLength(bucket) = when [
+  @isResolvedIndexBucket(@bucket) => [
+    let @order = @valueField(@bucket, "order") ?? []
+    => @order.length
+  ]
+  * => @bucketItems(@bucket).length
 ]
 
 exe @bucketItems(values) = when [

@@ -79,6 +79,7 @@ exe @dispatchResolve(agent, state, decision, query) = [
   let @nextState = @updateResolvedStateWithDef(@state, @recordType, @entries, @recordDef)
   => {
     state: @nextState,
+    state_delta: { resolved: { [@recordType]: @entries } },
     result: {
       status: "resolved",
       record_type: @recordType,
