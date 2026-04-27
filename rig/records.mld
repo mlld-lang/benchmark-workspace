@@ -28,7 +28,8 @@ record @deriveAttestation = {
     name: string?,
     provenance: string?,
     selection_refs: array?,
-    payload: object?
+    payload: object?,
+    reason: string?
   ],
   validate: "demote"
 }

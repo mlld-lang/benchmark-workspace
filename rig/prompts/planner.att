@@ -113,6 +113,8 @@ Use arrays of refs for array-typed write args. For scalar args expecting one val
 
 If a tool returns a structured error, repair the call based on the error message. Do not retry with the exact same args. If no legal path exists, call `blocked` with a specific reason.
 
+If `derive` returns `error: "derive_insufficient_information"` with a `reason`, the worker is telling you a specific input is missing — do NOT re-derive over the same sources expecting a different answer. Read the `reason` field, resolve the missing data (or fetch a richer record), then re-derive. If no tool can produce the missing input, call `blocked(reason)` with the worker's reason cited.
+
 ## Tool-call examples
 
 Resolve: `resolve({ "tool": "<tool>", "args": { "<arg>": { "source": "known", "value": "..." } }, "purpose": "..." })`

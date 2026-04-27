@@ -743,7 +743,16 @@ exe @plannerDerive(input) = [
   let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "derive", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning, progress_warning: @settled.progress_warning }
+    @phaseResult.error.isDefined() => {
+      status: "error",
+      phase: "derive",
+      error: @phaseResult.error,
+      summary: @settled.summary,
+      reason: @phaseResult.reason ?? null,
+      issues: @phaseResult.issues ?? null,
+      budget_warning: @settled.budget_warning,
+      progress_warning: @settled.progress_warning
+    }
     * => {
       status: "derived",
       name: @phaseResult.result.name,

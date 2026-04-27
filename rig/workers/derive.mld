@@ -49,12 +49,26 @@ exe @coerceDeriveEnvelope(parsed) = [
   => @parsed
 ] => record @deriveAttestation
 
+>> The "insufficient_information" status is the worker's structural escape
+>> hatch for "I cannot compute this from the provided typed inputs without
+>> fabricating." It is NOT a degenerate response — payload may legitimately
+>> be empty when status=insufficient_information. Callers route this through
+>> the explicit insufficient-information path, not derive_empty_response.
+exe @isInsufficientInformation(parsed) = [
+  if !@parsed.isDefined() [ => false ]
+  if !@parsed.status.isDefined() [ => false ]
+  => @parsed.status == "insufficient_information"
+]
+
 exe @coerceDeriveAttestation(raw) = [
   if @isDegenerateDeriveRaw(@raw) [ => null ]
   let @parsed = @raw | @parse.llm
   if !@parsed.isDefined() [ => null ]
   let @parsedType = @typeof(@parsed)
   if @parsedType != "object" && @parsedType != "array" [ => null ]
+  >> Insufficient-information short-circuit: skip the empty-payload check
+  >> so the dispatcher sees a defined attestation with the explicit status.
+  if @isInsufficientInformation(@parsed) [ => @coerceDeriveEnvelope(@parsed) ]
   if @isDegenerateDerivePayload(@parsed.payload, @parsed.selection_refs) [ => null ]
   => @coerceDeriveEnvelope(@parsed)
 ]
@@ -147,6 +161,20 @@ exe @dispatchDerive(agent, state, decision, query) = [
   >> Use `== null` not `.isDefined()`: exe-returned null is a wrapper whose
   >> .isDefined() reports true, masking degenerate worker output.
   if @attestation == null [ => { error: "derive_empty_response", summary: "derive_empty_response", session_id: @sessionId, llm_log: @logEntry } ]
+  >> Worker explicitly signaled it can't compute from the typed inputs
+  >> without fabricating. Surface the reason to the planner so it can
+  >> re-resolve missing data or call blocked. Distinct from
+  >> derive_empty_response (which is the silent-fail/degenerate path).
+  if @attestation.status == "insufficient_information" [
+    let @reason = @attestation.reason ?? "worker reported insufficient information; no reason given"
+    => {
+      error: "derive_insufficient_information",
+      reason: @reason,
+      summary: `derive_insufficient_information: @reason`,
+      session_id: @sessionId,
+      llm_log: @logEntry
+    }
+  ]
   let @selectionCheck = @validateSelectionRefs(@state, @decision.sources ?? [], @attestation.selection_refs ?? [])
   if !@selectionCheck.ok [
     let @failure = @plannerValidationFailure(@selectionCheck.error ?? "selection_ref_validation_failed", @selectionCheck, @selectionCheck.issues)

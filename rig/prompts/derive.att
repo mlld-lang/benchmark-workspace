@@ -32,8 +32,19 @@ Rules:
 - When selecting among candidates, return a selection ref using the EXACT handle string from <resolved_handles>. Do not use the candidate's name or data value as the handle — use the opaque `r_*` string.
 - **`payload` is always an object.** If the schema's root type is `array` (or your computed result is naturally a list), wrap it as `{ "items": [ ... ] }` inside `payload`. Callers index list results as `items[N].field` — never put a bare array at `payload`.
 
+**If the typed inputs do not contain everything the goal needs to compute the result without guessing — missing per-day price, missing rating, missing field, ambiguous filter, an arithmetic input you'd have to invent — do NOT fabricate a payload.** Return the insufficient-information shape instead. The planner will then re-resolve the missing data or call blocked. Fabricating a number is worse than admitting the gap: the planner has no way to detect a fabrication, but it can act on a clear "missing X" signal.
+
+Insufficient-information response (use only when the inputs genuinely don't support the goal):
+
+{
+  "status": "insufficient_information",
+  "reason": "<one short sentence naming exactly what's missing — e.g. 'restaurant.price_per_person not present on Le Baratin in resolved.restaurant'>"
+}
+
 Selection ref format:
 { "source": "selection", "backing": { "record": "<record>", "handle": "<exact handle from resolved_handles>" } }
+
+Normal derived response:
 
 {
   "status": "derived",
