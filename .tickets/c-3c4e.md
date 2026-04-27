@@ -1,6 +1,6 @@
 ---
 id: c-3c4e
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-26T18:07:49Z
@@ -8,6 +8,7 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [travel, wall-timeout, over-iteration]
+updated: 2026-04-26T20:49:24Z
 ---
 # [TR-UT19] hits 900s wall with 22 calls — multi-domain task still over-iterates
 
@@ -41,3 +42,23 @@ c-d590 (singular hotel_name vs plural) is exactly this pattern — caused UT12 t
 
 Sweep 24962959633 — only 900s timeout in the sweep, indicating remaining edge case.
 
+
+## Notes
+
+**2026-04-26T20:49:24Z** ## 2026-04-26 — Substantially mitigated by c-5a24 + c-eda4 (session bench-grind-9)
+
+UT19 wall-time went from 622s/42 iters/22 MCPs (baseline 24962959633) → 156s/34 iters/16 MCPs (post-c-5a24 run 24964974666). Then post-c-eda4 in local canary: reaches compose with full €4,260 answer table (limited only by c-63fe MCP disconnect on remote).
+
+The over-iteration was being caused primarily by:
+1. **c-5a24 field clobber** — planner re-resolved entries because previously-resolved fields had been wiped. FIXED.
+2. **c-eda4 batch state clobber** — planner re-resolved entire record families because parallel-batch settle wiped them. FIXED.
+
+Both pieces eliminated. UT19 still shows over-fanning to non-required record types (resolves restaurants/hotels for a cars+restaurants task) but that's planner-quality not framework — already addressed by c-5a24-induced state stickiness.
+
+## Status reduction
+
+Downgrading from "structural over-iteration" to "edge case where planner over-fans, capped by c-63fe on remote". Recommend:
+- Wait for c-63fe to land before re-evaluating UT19 specifically.
+- If after c-63fe fix UT19 still over-iterates, file targeted ticket for the over-fanning (suite addendum: "for cars-only or restaurants-only tasks, don't pre-emptively resolve other families").
+
+Closing as superseded by c-5a24 + c-eda4. New ticket should be filed if measurable over-iteration recurs after c-63fe lands.

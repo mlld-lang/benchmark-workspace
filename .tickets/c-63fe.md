@@ -1,14 +1,14 @@
 ---
 id: c-63fe
-status: open
+status: in_progress
 deps: []
-links: [c-9d56, c-3438, c-36fe, c-d590]
+links: [c-9d56, c-3438, c-36fe, c-d590, c-cb4a]
 created: 2026-04-25T04:45:37Z
 type: bug
 priority: 0
 assignee: Adam
 tags: [infrastructure, mcp]
-updated: 2026-04-26T20:49:37Z
+updated: 2026-04-27T01:01:59Z
 ---
 # MCP server disconnects mid-run on remote bench runners (travel + workspace-b)
 
@@ -591,3 +591,133 @@ Spike scripts: /tmp/c-63fe-investigation/spikes/ (analyze_c63fe_run.py, mcp_impo
 
 Codex full findings: /tmp/c-63fe-investigation/codex/findings.md
 Opus full findings: /tmp/c-63fe-investigation/findings.md
+
+**2026-04-27T01:01:52Z** **2026-04-26T23:50:00Z bench-grind-10 codex fix-shape (gpt-5.5)**
+
+Codex investigated the fix shape after the prior diagnosis. Both layers are in scope; **fix rig first, mlld second**. Rig fix removes the 5+ minute Phase B tail so the 500s timeout never fires; mlld fix is defense-in-depth so a future deadline-class issue (slow LLM API, etc.) doesn't poison the bridge.
+
+Full writeup: /tmp/c-63fe-investigation/codex/fix-shape.md
+Spike scripts: /tmp/c-63fe-investigation/spikes/
+
+---
+
+## Rig fix (clean repo) — primary, do first
+
+### Locations
+- `rig/workers/planner.mld:526-550` — `@plannerResolveBatch` Phase B loop
+- `rig/workers/planner.mld:535` — per-spec `@settlePhaseDispatch`
+- `rig/workers/planner.mld:241-245, 546` — returned-record projection scans full bucket
+- `rig/runtime.mld:659-715` — `@mergeResolvedEntries`
+- `rig/runtime.mld:724-739, 803-807` — `@populatePlannerCache` projects every cumulative entry
+- `rig/runtime.mld:768-781` — `@batchSpecMergeState`
+- `rig/intent.mld:85-130` — indexed bucket adapters
+- `rig/workers/resolve.mld:76-80` — resolved entries already exist here, can carry deltas
+
+### Hot spots (all algorithmic)
+- `@indexedBucketEntries` appends with `entries.concat([entry])` in a loop (`intent.mld:94-110`) → bucket-to-array materialization is **O(N²)**
+- `@bucketLength` calls `@bucketItems(...).length` (`intent.mld:118-120`) → indexed-bucket length is **O(N²)**
+- `@mergeResolvedEntries` scans/rebuilds `@ctx.pairs` per incoming handle (`runtime.mld:682-696`) → merge is **O(existing × incoming)**
+- Phase B gives merge the full `phaseResult.state` bucket (`runtime.mld:772-776`) and each spec state is `initial + that spec's writes` (`planner.mld:517-523`) → each batch ~**O(B × N²)**, behaves like O(N³) tail as N grows
+- `@populatePlannerCache` projects every cumulative entry after every spec (`runtime.mld:724-739`)
+
+### Spike measurements (`/tmp/c-63fe-investigation/spikes/phase_b_hotspot_spike.js`)
+- 4000 initial + 16 specs × 80 entries: current=**2033ms** → optimized=**19.6ms** (~100×)
+- Same with handle collisions: current=**3413ms** → optimized=**15.8ms** (~215×)
+- Actual mlld spike (`phase_b_actual_spike.mld`) reached rss=4532MB heap=3930MB after only 160 initial + 8×40 phase-result construction, then OOMed near 8GB heap limit before Phase B rows emitted
+
+### Change shape
+
+1. **Carry deltas from resolve.** `resolve.mld:76-80` adds:
+   ```mlld
+   state_delta: { resolved: { [@recordType]: @entries } }
+   ```
+   `@batchSpecMergeState` uses `phaseResult.state_delta.resolved[recordType]` first, falls back to `bucketItems(phaseResult.state...)` for compat.
+
+2. **Make indexed adapters O(N).**
+   ```mlld
+   @bucketLength(indexed) => order.length
+   @indexedBucketEntries(indexed) => append/update without per-entry concat
+   ```
+
+3. **Rewrite merge to update `by_handle` directly.**
+   ```mlld
+   ctx = { order: existingOrder, by_handle: existingByHandle, new_handles: [] }
+   for entry in incomingDelta:
+     old = valueField(ctx.by_handle, handle)
+     next = old ? mergeEntryFields(old, entry) : entry
+     ctx.by_handle += { [handle]: next }   >> wrapper-preserving augmented assignment
+     if !old: ctx.new_handles += [handle]
+   return { order: existingOrder.concat(new_handles), by_handle, version: oldVersion + 1 }
+   ```
+
+4. **Make planner cache incremental + indexed.** Use `planner_cache: { version, order, by_handle }`. Project only changed handles at merge time; reconstruct visible array from cached `by_handle` when needed.
+
+5. **Batch-settle once.** Don't call `@settlePhaseDispatch` and `@planner.set` once per spec only to correct runtime in Phase C. Merge all spec deltas into a local `state`, compute one final progress fingerprint, charge one tool call, then do one `@planner.set({ state, runtime })`. Keep log/phase-event writes as needed.
+
+### Expected effect
+Phase B becomes proportional to changed handles plus one final fingerprint/projection, instead of repeatedly materializing and remerging the full resolved bucket. Multi-minute tail removed; late heap spike reduced.
+
+### Verification
+- Re-run JS spike before/after the two commands above
+- Add a smaller actual mlld harness that imports `runtime.mld` only (avoid `workers/planner.mld` because it imports diagnostics)
+- Gate with c-3438 projection tests (FP-1 through FP-8) plus factsources/session-boundary/execute-policy invariants
+- Targeted local sweep on UT10/11/12/17/18/19 (the c-63fe-class travel tasks)
+- Remote travel sweep for the headline number
+
+### Risk
+**Medium-high.** Resolved state is proof-bearing. The merge rewrite must preserve wrappers/factsources across the by_handle path. Tests must cover partial-record merge, whole-record refs, field refs, family refs, selection refs, and policy compilation.
+
+---
+
+## mlld fix (mlld repo) — defense-in-depth, do second
+
+### Locations
+- `function-mcp-bridge.ts:300-305` — socket close aborts socket requests
+- `function-mcp-bridge.ts:397-403` — `abortRequestControl`
+- `function-mcp-bridge.ts:540-562` — active tool cancellation currently calls `this.toolEnv.cleanup()` (the damaging line)
+- `function-mcp-bridge.ts:690-703` — explicit bridge shutdown destroys sockets and cleans toolEnv
+- `function-mcp-bridge.ts:821-838` — proxy exits on socket error
+- `function-mcp-bridge.ts:912-925` — cleanup schedules deferred stop (30s grace)
+- `Environment.ts:5167-5201` — destructive `Environment.cleanup`
+- `exec-invocation.ts:2802-2808`, `mcp/McpImportManager.ts:87-101, 317-350` — current cancellation checks
+
+### Diagnosis
+The equivalence 'socket close means run all toolEnv cleanup' is incorrect. Socket close should cancel the affected request. Full cleanup is correct for intentional bridge shutdown but too destructive for transient transport loss. `socket.close` doesn't directly call `stopInternal`; it aborts active request controls. The damaging part is `abortActiveExecution = () => this.toolEnv.cleanup()` (`function-mcp-bridge.ts:546`). Later, normal call-config cleanup schedules `stopInternal`, which destroys sockets (`:690-703`) and the proxy exits on socket error (`:830-833`).
+
+### Change shape
+Introduce non-destructive active-execution cancellation:
+
+```ts
+// socket/request abort
+control.abortController.abort(cancelledError)
+control.abortActiveExecution?.()  // cancel this execution, not the environment
+
+// execution setup
+const active = toolEnv.beginCancellableExecution(signal)
+control.abortActiveExecution = () => active.cancel()
+try { await router.executeFunction(...) }
+finally { await active.settleOrDetach() }
+```
+
+Add `Environment.cancelActiveExecutions(reason)` and shadow-env equivalents that reject active promises/timers without clearing functions, variables, caches, or sessions. Keep `Environment.cleanup()` destructive and call it only for explicit scope/bridge shutdown. Add cancellation checks inside long pure-mlld `for`/`loop`/`while` evaluation so pure mlld work stops without teardown.
+
+### Expected effect
+If opencode/proxy closes a socket mid-tool, the request is cancelled and the dead socket gets no response. A new proxy/socket can reconnect to the same bridge during the grace window and keep using preserved bridge/session state. Intentional LLM-call finalization still cleans up.
+
+### Verification
+Promote `/tmp/c-63fe-investigation/spikes/function_bridge_reconnect_probe.ts` into a test:
+1. Socket A calls `slow_tool`; close A mid-call
+2. Socket B calls `fast_tool` on the same bridge
+3. Assert `fast_tool` succeeds and `slow_tool` does not mutate after cancellation
+4. Add a pure-mlld loop cancellation test (current checks are only at exec-invocation and imported-MCP boundaries)
+
+### Risk
+**Medium-high.** If full cleanup is removed before non-destructive cancellation works, abandoned pure mlld work could keep mutating session state while a reconnected client continues. The queue must not run the next tool until the old execution is stopped or quarantined.
+
+---
+
+## Status
+
+- 2026-04-26T23:55: gpt working separately on the c-63fe fix per Adam. Marked **in_progress**.
+- Sequencing: rig fix first (clean repo, no upstream dependency, removes the trigger). mlld fix second (defense-in-depth, also addresses future deadline-class issues).
+- Cross-suite preventive cleanup tracked in c-cb4a (extend agentdojo normalizer gate to banking/slack).

@@ -5,9 +5,9 @@ deps: []
 links: []
 created: 2026-04-25T18:29:25Z
 type: bug
-priority: 2
+priority: 1
 assignee: Adam
-updated: 2026-04-25T21:57:39Z
+updated: 2026-04-27T01:03:05Z
 ---
 # WS-UT18 start_time off — UNVERIFIED whether worker date error or missing email date-shift patch
 

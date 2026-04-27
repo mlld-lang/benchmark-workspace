@@ -8,6 +8,7 @@ type: bug
 priority: 1
 assignee: Adam
 tags: [compose, execution-log, travel]
+updated: 2026-04-27T01:03:05Z
 ---
 # [TR-UT4] compose worker reports 'was not created' despite execute success
 
