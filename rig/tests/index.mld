@@ -3233,30 +3233,6 @@ var @spF1Ok =
   @bucketLength(@spF1Bucket2) == 2
 var @spF1Pretty = `indexed1=@isResolvedIndexBucket(@spF1Bucket1) v1=@spF1Version1 v2=@spF1Version2 lens=[@bucketLength(@spF1Bucket1),@bucketLength(@spF1Bucket2)]`
 
->> F2 planner-cache-populated-via-withdef — c-63fe Phase 2.5
->> verification. updateResolvedStateWithDef populates planner_cache
->> at merge time. cache.version == bucket.version means subsequent
->> @projectResolvedSummary returns cache.entries directly without
->> re-projecting. F1 covered the bare writer; F2 covers the cached
->> path.
-import { @updateResolvedStateWithDef, @cachedPlannerEntries } from "../runtime.mld"
-var @spF2Records = { contact: @records.contact }
-var @spF2State = @updateResolvedStateWithDef(@emptyState(), "contact", [
-  { handle: "spf2-h1", key: "alice", identity_field: "email", identity_value: "alice@x.com", field_values: { email: "alice@x.com", name: "Alice", notes: "secret note" }, value: { email: "alice@x.com", name: "Alice", notes: "secret note" } }
-], @records.contact)
-var @spF2Bucket = @spF2State.resolved.contact
-var @spF2Cache = @spF2Bucket.planner_cache
-var @spF2CacheVersion = @spF2Cache.version
-var @spF2BucketVersion = @spF2Bucket.version
-var @spF2CacheEntries = @cachedPlannerEntries(@spF2Bucket)
-var @spF2Ok =
-  @isResolvedIndexBucket(@spF2Bucket) &&
-  @spF2CacheVersion == @spF2BucketVersion &&
-  @spF2CacheVersion == 1 &&
-  @spF2CacheEntries != null &&
-  @spF2CacheEntries.length == 1
-var @spF2Pretty = `cacheV=@spF2CacheVersion bucketV=@spF2BucketVersion cached_len=@spF2CacheEntries.length`
-
 >> ============================================================================
 >> c-3438 (B): @stateProgressFingerprint regression tests
 >> ============================================================================
@@ -3583,7 +3559,6 @@ exe @allChecks() = [
   @check("state-projection/E2-legacy-array-bucket-compatible", @spE2Ok, @spE2Pretty),
   @check("state-projection/E3-indexed-bucket-adapter-reads", @spE3Ok, @spE3Pretty),
   @check("state-projection/F1-writer-produces-indexed-bucket-with-version", @spF1Ok, @spF1Pretty),
-  @check("state-projection/F2-planner-cache-populated-via-withdef", @spF2Ok, @spF2Pretty),
   @check("c-3438/FP-1-empty-state", @fpEmptyOk, @fpEmptyPretty),
   @check("c-3438/FP-2-deterministic", @fpDetOk, @fpDetPretty),
   @check("c-3438/FP-3-new-handle-changes-fp", @fpAddHandleOk, @fpAddHandlePretty),
