@@ -2,7 +2,7 @@ import { @recordTypeName, @toolRuntimeMessage, @toolFailureDetail, @toolCallErro
 import {
   @callTool,
   @normalizeResolvedValues,
-  @updateResolvedState
+  @updateResolvedStateWithDef
 } from "../runtime.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @resolveAttestation } from "../records.mld"
@@ -29,7 +29,7 @@ exe @resolveDebug(agent, marker) = [
 >> Resolve dispatch is mechanical: validate the planner's control refs
 >> through the shared intent compiler, call the read tool, normalize
 >> returned records into rig state, then append the execution log entry.
-exe @dispatchResolve(agent, state, decision, query) = [
+exe @dispatchResolve(agent, state, decision, query, deltaOnly) = [
   @resolveDebug(@agent, "dispatchResolve:start")
   let @tool = @phaseToolEntry(@agent, "resolve", @decision.tool)
   if !@tool [
@@ -76,9 +76,14 @@ exe @dispatchResolve(agent, state, decision, query) = [
   let @entries = @normalizeResolvedValues(@recordType, @recordDef, @raw)
   let @handles = for @entry in @entries => @entry.handle
   let @summary = `resolved @entries.length @recordType record(s). Check the projected fields — if they already answer the question, call compose now.`
-  let @nextState = @updateResolvedState(@state, @recordType, @entries)
+  let @deltaOnlyMode = @deltaOnly ?? false
+  let @nextState = when [
+    @deltaOnlyMode => null
+    * => @updateResolvedStateWithDef(@state, @recordType, @entries, @recordDef)
+  ]
   => {
     state: @nextState,
+    state_delta: { resolved: { [@recordType]: @entries } },
     result: {
       status: "resolved",
       record_type: @recordType,

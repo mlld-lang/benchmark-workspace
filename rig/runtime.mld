@@ -9,7 +9,7 @@ import {
   @toolPayloadArgs,
   @phaseToolNames
 } from "./tooling.mld"
-import { @resolveRefValue, @bucketItems, @bucketLength, @valueField, @bucketObject } from "./intent.mld"
+import { @resolveRefValue, @isResolvedIndexBucket, @bucketItems, @bucketLength, @valueField, @bucketObject } from "./intent.mld"
 import { @appendLlmCall, @serializeLifecycleJson } from "./lifecycle.mld"
 
 >> Shared runtime helpers for the rig loop and per-phase workers.
@@ -429,10 +429,45 @@ exe @projectResolvedEntry(recordType, recordDef, entry, role) = [
   }
 ]
 
+>> c-63fe Phase 2.5: when projecting role:planner over an indexed
+>> bucket whose planner_cache.version matches bucket.version, return
+>> the cached projection. Worker projections always compute fresh —
+>> per GPT decision D, worker projections include raw tainted content
+>> and shouldn't be cached.
+exe @cachedPlannerEntries(bucket) = [
+  if !@isResolvedIndexBucket(@bucket) [ => null ]
+  let @cache = @valueField(@bucket, "planner_cache")
+  if !@cache.isDefined() [ => null ]
+  let @cacheVersion = @valueField(@cache, "version")
+  let @bucketVersion = @valueField(@bucket, "version")
+  if !@cacheVersion.isDefined() [ => null ]
+  if !@bucketVersion.isDefined() [ => null ]
+  if @cacheVersion != @bucketVersion [ => null ]
+  let @cached = @valueField(@cache, "entries") ?? []
+  if @cached.length == 0 [ => null ]
+  => @cached
+]
+
+>> Phase 2.5: cache hit when role:planner + bucket has matching
+>> planner_cache. Otherwise compute fresh — bucket may be legacy
+>> array (no cache), indexed-no-cache (cacheVersion=0,bucketVersion>=1),
+>> or worker role (never cached).
+exe @bucketEntriesForRole(records, recordType, recordDef, bucket, role) = [
+  let @cached = when [
+    @role == "role:planner" => @cachedPlannerEntries(@bucket)
+    * => null
+  ]
+  >> Use `== null` not `.isDefined()`: exe-returned null is a wrapper
+  >> whose .isDefined() reports true, masking the cache-miss path.
+  >> Same family as c-aed5 / c-4a08 — see CLAUDE.md.
+  if @cached != null [ => @cached ]
+  => for @entry in @bucketItems(@bucket) => @projectResolvedEntry(@recordType, @recordDef, @entry, @role)
+]
+
 exe @projectResolvedSummary(records, state, role) = [
   let @resolved = @structuredData(@state.resolved)
   let @pairs = for @recordType, @recordDef in @records [
-    let @entries = for @entry in @arrayItems(@resolved[@recordType]) => @projectResolvedEntry(@recordType, @recordDef, @entry, @role)
+    let @entries = @bucketEntriesForRole(@records, @recordType, @recordDef, @resolved[@recordType], @role)
     => {
       key: @recordType,
       value: @entries
@@ -603,31 +638,177 @@ exe @mergeEntryFields(existing, incoming) = [
   }
 ]
 
->> c-5a24: handle collisions field-merge rather than whole-entry replace.
->> Travel partial-record resolves accumulate fields across calls.
-exe @mergeResolvedEntries(existingEntries, newEntries) = [
-  let @seed = @arrayItems(@existingEntries)
+>> c-63fe Phase 2.0: handle-keyed merge that produces indexed bucket.
+>>
+>> Bucket shape: { _rig_bucket: "resolved_index_v1", order, by_handle,
+>> version, planner_cache }. Reads tolerate either shape via Phase 1
+>> adapters (@bucketItems, @lookupResolvedEntry). Writes always
+>> produce the indexed shape after this lands.
+>>
+>> Algorithm: for indexed buckets, reuse the existing by_handle object and
+>> order array, then apply one native computed-key update per incoming
+>> entry. This avoids materializing the existing bucket before every merge.
+>> The OOM agent's prototype showed 10x time + 50%+ memory win on
+>> travel-shaped workloads.
+>>
+>> planner_cache carries the previous cache plus changed_handles. The
+>> withDef path updates only those projected handles when possible.
+>>
+>> c-5a24: handle collisions now field-merge via @mergeEntryFields rather
+>> than whole-entry replace. Travel partial-record resolves accumulate.
+exe @mergeResolvedEntries(existingBucket, newEntries) = [
+  let @existingIndexed = @isResolvedIndexBucket(@existingBucket)
+  let @existingItems = when [
+    @existingIndexed => []
+    * => @bucketItems(@existingBucket)
+  ]
+  let @existingHandles = when [
+    @existingIndexed => @valueField(@existingBucket, "order") ?? []
+    * => for @e in @existingItems => `@e.handle`
+  ]
+  let @existingPairs = when [
+    @existingIndexed => []
+    * => for @e in @existingItems => { key: `@e.handle`, value: @e }
+  ]
+  let @existingByHandle = when [
+    @existingIndexed => @valueField(@existingBucket, "by_handle") ?? {}
+    * => @pairsToObject(@existingPairs)
+  ]
+  let @existingVersion = when [
+    @existingIndexed => @valueField(@existingBucket, "version") ?? 0
+    * => 0
+  ]
+  let @existingCache = when [
+    @existingIndexed => @valueField(@existingBucket, "planner_cache") ?? { version: 0, entries: [] }
+    * => { version: 0, entries: [] }
+  ]
   let @incoming = @arrayItems(@newEntries)
-  let @cursor = loop(1000) [
-    let @acc = when [
-      @input["_rig_cursor"] == "mergeResolvedEntries" => @input
-      * => { _rig_cursor: "mergeResolvedEntries", index: 0, entries: @seed }
+  let @merged = loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "indexedMerge" => @input
+      * => {
+        _rig_cursor: "indexedMerge",
+        index: 0,
+        order: @existingHandles,
+        by_handle: @existingByHandle,
+        changed_handles: []
+      }
     ]
-    if @acc.index >= @incoming.length [ done @acc ]
-    let @entry = @incoming[@acc.index]
-    let @matches = for @current in @acc.entries when @current.handle == @entry.handle => @current
-    let @without = for @current in @acc.entries when @current.handle != @entry.handle => @current
+    if @ctx.index >= @incoming.length [ done @ctx ]
+    let @entry = @incoming[@ctx.index]
+    let @handleKey = `@entry.handle`
+    let @existingEntry = @valueField(@ctx.by_handle, @handleKey)
+    let @hasExisting = @existingEntry != null
     let @nextEntry = when [
-      @matches.length > 0 => @mergeEntryFields(@matches[0], @entry)
+      @hasExisting => @mergeEntryFields(@existingEntry, @entry)
       * => @entry
     ]
+    let @nextByHandle = @ctx.by_handle
+    @nextByHandle += { [@handleKey]: @nextEntry }
+    let @nextOrder = @ctx.order
+    if !@hasExisting [
+      @nextOrder += [@handleKey]
+    ]
+    let @nextChanged = @ctx.changed_handles
+    if !@nextChanged.includes(@handleKey) [
+      @nextChanged += [@handleKey]
+    ]
     continue {
-      _rig_cursor: "mergeResolvedEntries",
-      index: @acc.index + 1,
-      entries: @without.concat([@nextEntry])
+      _rig_cursor: "indexedMerge",
+      index: @ctx.index + 1,
+      order: @nextOrder,
+      by_handle: @nextByHandle,
+      changed_handles: @nextChanged
     }
   ]
-  => @cursor.entries
+  let @cacheVersion = @valueField(@existingCache, "version") ?? 0
+  let @cacheEntries = @valueField(@existingCache, "entries") ?? []
+  => {
+    _rig_bucket: "resolved_index_v1",
+    order: @merged.order,
+    by_handle: @merged.by_handle,
+    version: @existingVersion + 1,
+    planner_cache: {
+      version: @cacheVersion,
+      entries: @cacheEntries,
+      changed_handles: @merged.changed_handles
+    }
+  }
+]
+
+>> c-63fe Phase 2.5/3.5: populate planner_cache at merge time so
+>> @projectResolvedSummary can reuse it when bucket version unchanged.
+>> When an existing cache is one version behind, update projections only
+>> for changed handles and rebuild the ordered visible array from cache.
+>> If no compatible cache exists, fall back to a full planner projection.
+exe @populatePlannerCache(bucket, recordType, recordDef) = [
+  if !@recordDef.isDefined() [ => @bucket ]
+  if !@isResolvedIndexBucket(@bucket) [ => @bucket ]
+  let @version = @valueField(@bucket, "version") ?? 0
+  let @order = @valueField(@bucket, "order") ?? []
+  let @byHandle = @valueField(@bucket, "by_handle") ?? {}
+  let @priorCache = @valueField(@bucket, "planner_cache") ?? {}
+  let @priorVersion = @valueField(@priorCache, "version") ?? 0
+  let @priorEntriesRaw = @valueField(@priorCache, "entries") ?? []
+  let @priorEntries = @arrayItems(@priorEntriesRaw)
+  let @changedHandlesRaw = @valueField(@priorCache, "changed_handles") ?? []
+  let @changedHandles = @arrayItems(@changedHandlesRaw)
+  let @canIncremental = @priorEntries.length > 0 && @priorVersion + 1 == @version
+  let @projected = when [
+    @canIncremental => [
+      let @priorPairs = for @entry in @priorEntries => { key: `@entry.handle`, value: @entry }
+      let @priorByHandle = @pairsToObject(@priorPairs)
+      let @updated = loop(1000) [
+        let @ctx = when [
+          @input["_rig_cursor"] == "plannerCacheUpdate" => @input
+          * => { _rig_cursor: "plannerCacheUpdate", index: 0, by_handle: @priorByHandle }
+        ]
+        if @ctx.index >= @changedHandles.length [ done @ctx.by_handle ]
+        let @handleKey = `@changedHandles[@ctx.index]`
+        let @entry = @valueField(@byHandle, @handleKey)
+        let @nextByHandle = @ctx.by_handle
+        if @entry != null [
+          @nextByHandle += { [@handleKey]: @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner") }
+        ]
+        continue {
+          _rig_cursor: "plannerCacheUpdate",
+          index: @ctx.index + 1,
+          by_handle: @nextByHandle
+        }
+      ]
+      let @ordered = loop(1000) [
+        let @ctx = when [
+          @input["_rig_cursor"] == "plannerCacheOrder" => @input
+          * => { _rig_cursor: "plannerCacheOrder", index: 0, entries: [] }
+        ]
+        if @ctx.index >= @order.length [ done @ctx.entries ]
+        let @handleKey = `@order[@ctx.index]`
+        let @entry = @valueField(@updated, @handleKey)
+        let @nextEntries = @ctx.entries
+        if @entry != null [
+          @nextEntries += [@entry]
+        ]
+        continue {
+          _rig_cursor: "plannerCacheOrder",
+          index: @ctx.index + 1,
+          entries: @nextEntries
+        }
+      ]
+      => @ordered
+    ]
+    * => [
+      let @entries = @bucketItems(@bucket)
+      => for @entry in @entries => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
+    ]
+  ]
+  let @cache = { version: @version, entries: @projected }
+  => {
+    _rig_bucket: "resolved_index_v1",
+    order: @order,
+    by_handle: @byHandle,
+    version: @version,
+    planner_cache: @cache
+  }
 ]
 
 exe @updateResolvedState(state, recordName, entries) = [
@@ -660,10 +841,18 @@ exe @batchSpecMergeState(cumulative, phaseResult, agent) = [
   if @phaseResult.error.isDefined() [ => @cumulative ]
   let @recordType = @phaseResult.result.record_type
   if !@recordType.isDefined() [ => @cumulative ]
-  let @specResolved = @bucketObject(@phaseResult.state.resolved ?? {})
-  let @specBucket = @valueField(@specResolved, @recordType)
-  if !@specBucket.isDefined() [ => @cumulative ]
-  let @specEntries = @bucketItems(@specBucket)
+  let @deltaResolved = @bucketObject(@phaseResult.state_delta.resolved ?? {})
+  let @deltaBucket = @valueField(@deltaResolved, @recordType)
+  let @hasDelta = @deltaBucket != null
+  let @specEntries = when [
+    @hasDelta => @arrayItems(@deltaBucket)
+    * => [
+      let @specResolved = @bucketObject(@phaseResult.state.resolved ?? {})
+      let @specBucket = @valueField(@specResolved, @recordType)
+      if !@specBucket.isDefined() [ => [] ]
+      => @bucketItems(@specBucket)
+    ]
+  ]
   if @specEntries.length == 0 [ => @cumulative ]
   let @recordDef = @valueField(@agent.records ?? {}, @recordType)
   => when [
@@ -684,15 +873,19 @@ exe @phaseResultWithState(phaseResult, state) = [
     raw_error: @phaseResult.raw_error,
     result: @phaseResult.result,
     session_id: @phaseResult.session_id,
-    llm_log: @phaseResult.llm_log
+    llm_log: @phaseResult.llm_log,
+    state_delta: @phaseResult.state_delta ?? null
   }
 ]
 
->> Compatibility variant for callers that already have recordDef in scope.
->> The argument is intentionally unused here; projection is computed on read.
+>> Phase 2.5: callers that have the recordDef pass it through this
+>> variant so planner_cache is populated eagerly. @projectResolvedSummary
+>> reuses the cache on subsequent reads when bucket.version is unchanged.
 exe @updateResolvedStateWithDef(state, recordName, entries, recordDef) = [
   let @resolved = @structuredData(@state.resolved)
-  let @nextResolved = @replaceObjectField(@resolved, @recordName, @mergeResolvedEntries(@resolved[@recordName], @entries))
+  let @mergedBucket = @mergeResolvedEntries(@resolved[@recordName], @entries)
+  let @cachedBucket = @populatePlannerCache(@mergedBucket, @recordName, @recordDef)
+  let @nextResolved = @replaceObjectField(@resolved, @recordName, @cachedBucket)
   => @rigState(
     @nextResolved,
     @structuredData(@state.extracted),
@@ -968,6 +1161,13 @@ export {
   @structuredData,
   @stringValue,
   @arrayItems,
+  @bucketItems,
+  @bucketLength,
+  @isResolvedIndexBucket,
+  @valueField,
+  @populatePlannerCache,
+  @updateResolvedStateWithDef,
+  @cachedPlannerEntries,
   @plainObjectKeys,
   @replaceObjectField,
   @recordMeta,
