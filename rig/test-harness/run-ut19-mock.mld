@@ -15,7 +15,8 @@
 import { @rig } from "../index.mld"
 import { @records } from "../../bench/domains/travel/records.mld"
 import { @tools } from "../../bench/domains/travel/tools.mld"
-import { @mockPlannerRun } from "./mock-opencode.mld"
+import { @mockOpencode } from "./mock-opencode.mld"
+import { @planner, @emptyPlannerRuntime, @emptyState } from "../session.mld"
 
 >> Load UT19 fixture (script + prompt). The fixture contains the exact
 >> sequence captured from a real UT19 run.
@@ -45,7 +46,11 @@ show ""
 show "START Phase B-exercising script"
 var @startTs = run cmd { date +%s%3N }
 
-var @final = @mockPlannerRun(@agent, @fixture.prompt, @fixture.script)
+var @final = @mockOpencode(@fixture.prompt, { toolScript: @fixture.script }) with {
+  display: "role:planner",
+  session: @planner,
+  seed: { agent: @agent, query: @fixture.prompt, state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
 
 var @endTs = run cmd { date +%s%3N }
 var @elapsedMs = @endTs - @startTs

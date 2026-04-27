@@ -79,8 +79,10 @@ def main() -> int:
     print()
 
     client = Client()
+    timeout_s = int(os.environ.get("MOCK_TIMEOUT_S", "900"))
     execute_kwargs = {
         "mcp_servers": {"tools": mcp_command},
+        "timeout": timeout_s,
     }
     if os.environ.get("MLLD_TRACE"):
         execute_kwargs["trace"] = os.environ["MLLD_TRACE"]

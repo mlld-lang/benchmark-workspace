@@ -18,10 +18,11 @@ import { @planner, @emptyPlannerRuntime, @emptyState } from "../session.mld"
 import { @plannerTools } from "../workers/planner.mld"
 
 >> Dispatch one script step against the planner exes. The planner
->> session is already seeded by @mockPlannerRun's `with` wrapper, so
->> these exes see the same agent/query/state context the real planner
->> would. Each call may mutate session state via @planner.set inside
->> @settlePhaseDispatch — that's the Phase B work we want to profile.
+>> session is already seeded (see @mockPlannerRun's `with` wrapper),
+>> so these exes see the same agent/query/state context the real
+>> planner would. Each call may mutate session state via @planner.set
+>> inside @settlePhaseDispatch — that's the Phase B work we want to
+>> profile.
 exe @dispatchScriptStep(step) = [
   let @tool = @step.tool
   let @args = @step.args
@@ -54,18 +55,27 @@ exe @runScript(script) = [
   => @results
 ]
 
->> Drive the rig planner with a fixture script. Seeds the planner
->> session explicitly via @planner.set so subsequent planner-tool exes
->> see the agent/query/state context the real planner would.
->> NOTE: this is NOT an `exe llm` — by design we skip the OUTER bridge.
-exe @mockPlannerRun(agent, query, script) = [
-  @planner.set({
-    agent: @agent,
-    query: @query,
-    state: @emptyState(),
-    runtime: @emptyPlannerRuntime()
-  })
+>> Mock LLM-shaped function — `exe llm` so it gets the same session
+>> binding semantics as the real @opencode/@claude. The planner-session
+>> seed in the `with` block applies for the duration of this call;
+>> planner-tool exes called inside @runScript see the seeded @planner.
+>>
+>> Signature mirrors @opencode(prompt, config) so this can drop into
+>> the same call sites if needed.
+exe llm @mockOpencode(prompt, config) = [
+  let @cfg = @config ? @config : {}
+  let @script = @cfg.toolScript ? @cfg.toolScript : []
   => @runScript(@script)
 ]
 
-export { @mockPlannerRun, @runScript, @dispatchScriptStep }
+>> Convenience driver: builds the proper config + with-wrapper around
+>> @mockOpencode so callers don't need to know the planner-session
+>> seeding pattern. Use this from a test program.
+exe @mockPlannerRun(agent, query, script) =
+  @mockOpencode(@query, { toolScript: @script }) with {
+    display: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+
+export { @mockPlannerRun, @mockOpencode, @runScript, @dispatchScriptStep }

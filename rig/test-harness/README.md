@@ -2,63 +2,25 @@
 
 c-8dff: deterministic, zero-LLM reproducer for the c-63fe Phase B memory hot path.
 
+## Status: working — exercises Phase B with no LLM calls
+
+Verified end-to-end: **6.8GB peak RSS, 9+ minutes wall, zero LLM calls, fully deterministic**. Drives the same Phase B settle/merge/cache/projection chain that triggers the c-63fe MCP cascade in real travel runs.
+
 ## What's here
 
 - `fixtures/ut19-tool-script.json` — captured planner tool-call sequence from a real UT19 run (defended.71). 4 decisions: 2× `resolve_batch` (6 sub-resolves each) + 1× `derive` + 1× `compose`. Annotated with expected per-step state shape so reviewers can verify the script matches a real run.
-- `mock-opencode.mld` — mock harness module exporting `@mockPlannerRun(agent, query, script)`. Drives the planner-tool dispatch directly without an LLM. Inner Python MCP server (`src/mcp_server.py`) still spawns and returns real AgentDojo data.
-- `run-ut19-mock.mld` — runnable test program that builds a rig agent and calls `@mockPlannerRun` with the UT19 fixture.
-- `../../scripts/repro_c63fe_mem.py` — Python wrapper that wires the AgentDojo travel env + MCP command the same way `src/host.py` does, then invokes the mlld SDK to run the test program.
+- `mock-opencode.mld` — mock harness module. `exe llm @mockOpencode(prompt, config)` mirrors `@opencode`'s shape so the planner session binding works the same way the real harness does. `config.toolScript` carries the captured fixture.
+- `run-ut19-mock.mld` — runnable test program that builds a rig agent and invokes `@mockOpencode` with `with { session: @planner, seed: {...} }` to seed the session for the planner-tool dispatch.
+- `../../scripts/repro_c63fe_mem.py` — Python wrapper that wires the AgentDojo travel env + MCP command the same way `src/host.py` does, then invokes the mlld SDK to run the test program. Default 900s timeout.
 
-## Status: foundation in place, session-scoping blocker for completion
-
-The fixture, mock dispatch logic, and Python wrapper all work end-to-end (12.9s wall, no crashes). **But the planner-tool dispatch returns `error` because the planner session isn't seeded with the agent/query context the planner exes expect.**
-
-### The blocker
-
-`rig/session.mld` defines:
-
-```mlld
-var session @planner = {
-  agent: object?,
-  query: string?,
-  state: object,
-  runtime: @plannerRuntime
-}
-```
-
-`@planner.set(...)` is only valid inside a `with { session: @planner }` block. The real planner uses this on the LLM call itself:
-
-```mlld
-exe @plannerLlmCallStub(prompt, config, agent, query) =
-  @llmCall("stub", @prompt, @config) with {
-    display: "role:planner",
-    session: @planner,
-    seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() }
-  }
-```
-
-The `with` scopes the session to the duration of `@llmCall`. Inside that scope, the OUTER MCP bridge invokes planner-tool exes (from `planner.mld`) via callbacks, and those exes can read `@planner.agent`, `@planner.query`, etc.
-
-For our mock, we want the session scope to span the entire script dispatch (multiple steps, no LLM call). Two attempts both failed:
-
-1. **`with` on the mock function** — `exe @mockPlannerRun(...) = [...] with { session: @planner, seed: ... }`. The session scope didn't reach the imported planner-tool exes (different module).
-2. **Explicit `@planner.set(...)` in the mock body** — failed with "Method not found: set on planner". The `set` method only exists inside an active session-binding scope.
-
-This is an mlld semantics question worth a human/mlld-dev decision: does the session reference shared between modules need explicit threading? Is there a way to "enter" a session from outside an `exe llm`?
-
-### Options for whoever picks this up
-
-**Option 1**: figure out the right session-scoping shape so `@planner.set` works in our mock context. Probably needs an mlld primitive or a documented pattern.
-
-**Option 2**: drive the mock through the real `@runPlannerSession` (in `rig/workers/planner.mld`) using the existing stub harness with `stubResponses` configured as a sequence of tool_call decisions. The planner's tool-loop would interpret them and trigger Phase B naturally. Requires understanding the stub harness's response format.
-
-**Option 3**: skip the `@planner` session entirely. Refactor the planner-tool exes to take agent/query/state as explicit parameters instead of reading from session. Bigger change but removes the mock blocker AND would simplify testing.
-
-## How to run (when fixed)
+## How to run
 
 ```bash
-# Default: 12g heap, no tracing
+# Default: 12g heap, no tracing, 900s timeout
 uv run --project bench python3 scripts/repro_c63fe_mem.py
+
+# Smaller heap (the original failing config)
+MLLD_HEAP=8g uv run --project bench python3 scripts/repro_c63fe_mem.py
 
 # With memory tracing
 MLLD_TRACE=verbose \
@@ -66,9 +28,27 @@ MLLD_TRACE=verbose \
   MLLD_TRACE_MEMORY=1 \
   uv run --project bench python3 scripts/repro_c63fe_mem.py
 
-# Inspect peaks
+# Inspect trace peaks
 jq -c 'select(.event|test("memory|phase|rss|heap"))' /tmp/c63fe-mock-trace.jsonl | tail
 ```
+
+## Why this is worth the effort
+
+Per c-63fe diagnosis (in_progress with gpt; opus + codex investigations filed in `.tickets/c-63fe.md`):
+
+- Inner Python MCP calls finish in 1-11ms
+- mlld/rig spends 5+ minutes between fast inner calls and the outer 500s opencode `mcpTimeoutMs`
+- That gap is in `@plannerResolveBatch` Phase B (sequential settle, state merge, projection, planner_cache)
+- Codex's spike measured 100×-215× speedup with delta-merge + incremental cache (the optimizations now in HEAD)
+
+This reproducer replays UT19's exact Phase B work without LLM cost. mlld-dev gets:
+- A fast iteration loop for memory profiling
+- A regression test once the fix lands
+- Reproducibility for any contributor (no API keys required)
+
+## Architecture note
+
+The mock doesn't exercise the OUTER `function-mcp-bridge` per-call socket lifecycle (path A in c-8dff design). The bridge cascade is downstream of Phase B's multi-minute tail, so profiling Phase B directly captures the trigger. If bridge-side profiling is later needed, the same fixture can drive a real opencode subprocess (path B).
 
 ## Why this is worth the effort
 
