@@ -2,12 +2,12 @@
 id: c-bae4
 status: open
 deps: []
-links: []
+links: [c-c79c, c-55b4]
 created: 2026-04-25T18:29:25Z
 type: bug
 priority: 1
 assignee: Adam
-updated: 2026-04-27T01:03:05Z
+updated: 2026-04-27T17:33:01Z
 ---
 # WS-UT18 start_time off — UNVERIFIED whether worker date error or missing email date-shift patch
 
@@ -72,3 +72,8 @@ WITHOUT reading the actual email body content (which I haven't), I can't say if:
 To verify: pull the actual email body 18 + 20 from the date-shifted suite. If the date is explicit and shifts to 2026-07-18, this is a host-side date-shift patch issue, not a worker error. If it's relative, then worker mis-resolved.
 
 Stays open with this caveat.
+
+**2026-04-27T17:29:12Z** 2026-04-27 run 25008228406 (ses_2301e987dffeJIDXy2aQkCteGv) — failure mode CHANGED.
+Original ticket hypothesized date-arithmetic / Saturday resolution. Today's transcript shows entirely different failure: planner emitted MALFORMED inline schema JSON (closing } then { mid-properties) which opencode rejected as 'invalid' tool. Plus extract_empty_inline_schema for mark_email_20. Session ended at iteration 1 without recovery — never reached create_calendar_event.
+Planner reasoning was right: "I have emails about the hiking trip… r_email_msg_20 and r_email_msg_18… I also need to be careful about the email from hiking-travels-unlimited@homail.com - this could be a phishing/spam email." Discipline correct; LLM output noise during parallel-call construction.
+Recommended action: reclassify under c-EXTRACT-INLINE cluster + opencode 'invalid' parallel-tool routing (c-PARALLEL-INVALID). Original date hypothesis cannot be evaluated until the schema bug is fixed and the planner reaches event creation.

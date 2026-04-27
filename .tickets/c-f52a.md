@@ -1,6 +1,6 @@
 ---
 id: c-f52a
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-26T18:06:50Z
@@ -8,7 +8,7 @@ type: bug
 priority: 1
 assignee: Adam
 tags: [compose, execution-log, travel]
-updated: 2026-04-27T01:03:05Z
+updated: 2026-04-27T20:13:35Z
 ---
 # [TR-UT4] compose worker reports 'was not created' despite execute success
 
@@ -37,3 +37,15 @@ Adjacent to c-db45 v2 (c-5a24) — same compose-conservatism pattern. Filed sepa
 
 Sweep 24962959633 transcript investigation.
 
+
+## Notes
+
+**2026-04-27T20:13:35Z** 2026-04-27 NOT REPRODUCING post-c-c79c. Same story as c-c23a / c-3457 (both closed as subsumed).
+
+Local TR-UT4 reruns (4 in parallel): 3 PASS, 1 FAIL.
+- All 4 runs' compose now narrates SUCCESS ("Calendar event ... has been created"). Original c-f52a symptom was compose saying "was not created" despite execute succeeding — that shape is gone.
+- The 1 FAIL (defended.91) has compose narrating success and the actual MCP create_calendar_event call has correct title/date/location. Eval rejects for a different reason — eval-vs-output mismatch class (c-4e09 family), not compose-stale-outcome.
+
+Hypothesis: c-f52a's original symptom from run 24962959633 was a downstream artifact of c-c79c. When the planner burned iterations on the validator's false rejections of inline schemas, the execution_log accumulated mixed error/success rows; compose conservatively narrated failure. With c-c79c fixed, the planner reaches execute cleanly, the log doesn't have failure clutter, compose narrates the actual outcome.
+
+Closing as subsumed. The 1/4 stochastic TR-UT4 fail is a separate eval-mismatch issue, not c-f52a.

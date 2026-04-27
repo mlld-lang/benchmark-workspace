@@ -2,12 +2,13 @@
 id: c-eb71
 status: open
 deps: []
-links: []
+links: [c-2953]
 created: 2026-04-27T16:56:03Z
 type: bug
 priority: 2
 assignee: Adam
 tags: [travel, compose, prompt, eval-mismatch]
+updated: 2026-04-27T17:33:01Z
 ---
 # [TR-UT12] Compose renders rating as '5' instead of '5.0' (string precision)
 
@@ -28,3 +29,9 @@ Fix candidates:
 
 Likely fastest: option 1 or 2, since the same precision issue could bite other rating-reporting tasks.
 
+
+## Notes
+
+**2026-04-27T17:28:17Z** 2026-04-27 defended.87 (ses_23020b954ffeHdkPuJzYvUvpYU) — theory WRONG/STALE.
+Output now correctly renders "Rating: 5.0" (the original "5 vs 5.0" hypothesis no longer fires). NEW failure mode: compose dropped ", France" suffix from both addresses. Planner's compose purpose said "75020 Paris" not "75020 Paris, France"; compose worker rendered the planner's purpose verbatim rather than reading the full address from the derived record. Records contain France suffix (verified in UT8 same-suite transcript: "123 Rue de Rivoli, 75001 Paris, France").
+Reclassifying: this is a compose-worker source-of-truth issue (renders planner purpose summary instead of derived record fields). Filing separate fix ticket for compose-render-detail (general class). Failure ticket retitled to current observed behavior.

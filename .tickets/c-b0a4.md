@@ -2,12 +2,13 @@
 id: c-b0a4
 status: open
 deps: []
-links: []
+links: [c-45f0]
 created: 2026-04-27T17:06:18Z
 type: bug
 priority: 2
 assignee: Adam
 tags: [travel, planner, double-write, addendum-gap]
+updated: 2026-04-27T17:33:01Z
 ---
 # [TR-UT8] Double-create_calendar_event: wrong title first, corrected second
 
@@ -34,3 +35,11 @@ The cleanest fix is probably to make the planner addendum more explicit about pr
 
 Linked to c-f52a (compose narrates failure despite success — same class).
 
+
+## Notes
+
+**2026-04-27T17:28:02Z** 2026-04-27 defended.87 (ses_2302218e7ffe3J04wqenDWzdlz) — theory MATCHES.
+Transcript confirms: first execute used pure ref `title: {source: derived, name: best_vegan_restaurant, field: name}` — no template-construction derive was used; the ", Dinner at " prefix was forgotten entirely. Self-correction came AFTER first execute (planner read its own action back via execution_log).
+Quote from prt_dcfe0761e: "But wait - the task specifies the title should be 'Dinner at {restaurant_name}'. I passed just the restaurant name as the title, not 'Dinner at {restaurant_name}'."
+The activity-at-place addendum did NOT catch this at purpose-construction time; it only fired after the first execute.
+Recommended action: amend activity-at-place addendum to require purpose-inspection rule that detects template literals (`{name}`, `{restaurant_name}`, etc.) in the user prompt and forces a derive step to construct the final title string before the first execute. General class — applies to any title-template task.
