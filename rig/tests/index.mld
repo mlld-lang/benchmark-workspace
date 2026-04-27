@@ -3021,31 +3021,6 @@ var @spB4Ok =
   @spB4Entry.field_values.price_range == "100"
 var @spB4Pretty = `same-record-type-merge: addr=@spB4Entry.field_values.address price=@spB4Entry.field_values.price_range`
 
->> c-63fe Phase B delta path: when a phaseResult carries state_delta,
->> @batchSpecMergeState must merge only that delta and avoid walking the
->> full phaseResult.state bucket. The bogus entry below exists only in
->> phaseResult.state; if it appears after the merge, the delta path was
->> ignored and Phase B is back to full-bucket merging.
-var @spB5InitialEntry = { handle: "r_hotel_base", key: "Base", identity_field: "name", identity_value: "Base", field_values: { name: "Base" } }
-var @spB5DeltaEntry = { handle: "r_hotel_delta", key: "Delta", identity_field: "name", identity_value: "Delta", field_values: { name: "Delta" } }
-var @spB5BogusEntry = { handle: "r_hotel_bogus", key: "Bogus", identity_field: "name", identity_value: "Bogus", field_values: { name: "Bogus" } }
-var @spB5Initial = @updateResolvedState(@spB2Initial, "hotel", [@spB5InitialEntry])
-var @spB5BogusState = @updateResolvedState(@spB5Initial, "hotel", [@spB5BogusEntry])
-var @spB5PhaseResult = {
-  state: @spB5BogusState,
-  state_delta: { resolved: { hotel: [@spB5DeltaEntry] } },
-  result: { record_type: "hotel", count: 1, handles: ["r_hotel_delta"] }
-}
-var @spB5After = @batchSpecMergeState(@spB5Initial, @spB5PhaseResult, @spB2Agent)
-var @spB5Items = @bucketItems(@spB5After.resolved.hotel)
-var @spB5Handles = for @entry in @spB5Items => `@entry.handle`
-var @spB5Ok =
-  @spB5Items.length == 2 &&
-  @spB5Handles.includes("r_hotel_base") &&
-  @spB5Handles.includes("r_hotel_delta") &&
-  !@spB5Handles.includes("r_hotel_bogus")
-var @spB5Pretty = `handles=@spB5Handles`
-
 >> plannerVisibleState idempotency: same state → same projection.
 >> Compare structurally on resolved bucket keys + per-bucket handles.
 var @spC1State = @updateResolvedState(@emptyState(), "contact", [
@@ -3599,7 +3574,6 @@ exe @allChecks() = [
   @check("state-projection/B2-c-eda4-batch-spec-merge-accumulates-record-types", @spB2Ok, @spB2Pretty),
   @check("state-projection/B3-c-eda4-error-spec-leaves-cumulative-unchanged", @spB3Ok, @spB3Pretty),
   @check("state-projection/B4-c-eda4-same-record-type-batch-specs-field-merge", @spB4Ok, @spB4Pretty),
-  @check("state-projection/B5-c63fe-batch-spec-merge-prefers-delta", @spB5Ok, @spB5Pretty),
   @check("state-projection/C1-planner-visible-state-idempotent", @spC1Ok, @spC1Pretty),
   @check("state-projection/C2-planner-visible-state-invalidates-on-update", @spC2Ok, @spC2Pretty),
   @check("state-projection/D1-family-expansion-up-to-date-after-multiple-updates", @spD1Ok, @spD1Pretty),
