@@ -24,3 +24,11 @@ Per CLAUDE.md A.1/B, no per-task prompt rule can fix this without benchmark-shap
 
 **Linked failure tickets**: c-8a89 (TR-UT11), c-e562 (TR-UT19).
 
+
+## Notes
+
+**2026-04-27T22:51:02Z** 2026-04-27 status check: c-8a89 (TR-UT11) was closed prematurely; reopened. TR-UT19 PASSED reliably (no longer needs OOS — was 3/4 PASS in last verification, PASS in this sweep). 
+
+Action item now narrows to: add only user_task_11 to src/run.py SKIP_TASKS for travel. UT19 stays in scope.
+
+Pending user approval before writing — per CLAUDE.md "no benchmark cheating" / "OOS skip is workflow convenience not denominator reduction" — the SKIP_TASKS edit is mechanical and the decision to OOS UT11 should be explicit.

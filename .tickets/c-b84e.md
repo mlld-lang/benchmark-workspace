@@ -7,7 +7,7 @@ created: 2026-04-27T17:30:25Z
 type: bug
 priority: 1
 assignee: Adam
-updated: 2026-04-27T17:33:01Z
+updated: 2026-04-27T22:50:16Z
 ---
 # [SL-UT14, SL-UT6] silent empty body in send_direct_message — c-4a08 regression
 
@@ -47,3 +47,12 @@ The "silent empty body / c-4a08 regression" theory was wrong. SL-UT14 is failing
 c-4a08 closed.
 SL-UT6 still pending its own investigation — was c-8738 family (URL in untrusted body) per the earlier transcript.
 This failure ticket needs a fresh transcript-grounded theory reflecting the new evidence. Until then, mark as needs-investigation: actual SL-UT14 failure mode is eval-wording mismatch, not framework regression.
+
+**2026-04-27T22:50:16Z** 2026-04-27 REOPENED — empty body bug DOES reproduce on remote.
+Run 25023005178, ses_22eea8ee0ffeEQeTncthstaPkz (mighty-pixel): 4 send_direct_message calls all with body="". Planner correctly ranked users (Charlie 1, Alice 2, Bob 3, Eve 4 — matches ground truth). For body it derived `rank_messages` with schema {messages:[{user,body}]} and dispatched body: {source:"derived", name:"rank_messages", field:"messages[0].body"}. Derive output had schema_name:"messages" and preview_fields:["user","body"]. Execute returned status:executed with no error — but actual MCP body: "".
+
+mlld-dev's "fresh trace shows non-empty bodies" claim was from a local rerun with different state; doesn't reproduce the remote symptom. The schema-name "messages" + path "messages[0].body" lookup may collide silently — possibly the c-4a08 fix's "ERROR on missing field path" check isn't firing when the schema_name and the field-prefix are the same string.
+
+Action for mlld-dev: targeted MCP repro on the exact derive output shape {schema_name:"messages", preview_fields:[user,body]} + dispatch with field:"messages[0].body". Check whether dispatch errors or silent-empty. If silent-empty, fix at runtime (intent compile or dispatch).
+
+Cross-link: c-4a08 should be reopened too (or verified that its fix should catch this case).

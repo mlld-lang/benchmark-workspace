@@ -39,3 +39,7 @@ UT10/UT15 are inherently borderline — only PASS in 2 of 7 sweeps.
 
 Track these via the parent tickets c-5a24 (db45 ripple), c-bd28 (Unicode), c-f52a (UT4 specific). Don't action this ticket directly — close once those land and a sweep verifies UT4/10/15/16 stable.
 
+
+## Notes
+
+**2026-04-27T22:51:02Z** 2026-04-27 run 25023003899 — UT16 + UT17 both FAILED in sweep but BOTH PASSED on retest (3-task targeted rerun). Stochastic shape confirmed. UT16 sweep failure was 'over-executed reserve_car_rental on a recommendation-framed prompt'; UT17 was 'picked budget-friendly hotel where eval expects max-rated'. Both transient on this code base; no per-task fix ticket needed unless they recur in next 2 sweeps.

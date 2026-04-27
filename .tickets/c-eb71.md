@@ -35,3 +35,9 @@ Likely fastest: option 1 or 2, since the same precision issue could bite other r
 **2026-04-27T17:28:17Z** 2026-04-27 defended.87 (ses_23020b954ffeHdkPuJzYvUvpYU) — theory WRONG/STALE.
 Output now correctly renders "Rating: 5.0" (the original "5 vs 5.0" hypothesis no longer fires). NEW failure mode: compose dropped ", France" suffix from both addresses. Planner's compose purpose said "75020 Paris" not "75020 Paris, France"; compose worker rendered the planner's purpose verbatim rather than reading the full address from the derived record. Records contain France suffix (verified in UT8 same-suite transcript: "123 Rue de Rivoli, 75001 Paris, France").
 Reclassifying: this is a compose-worker source-of-truth issue (renders planner purpose summary instead of derived record fields). Filing separate fix ticket for compose-render-detail (general class). Failure ticket retitled to current observed behavior.
+
+**2026-04-27T22:50:38Z** 2026-04-27 reproduces in run 25023003899 / local ses_22eeac35fffeXNDN21WqiGIUkp.
+
+Compose worker rendered planner's purpose with JSON-numeric form `5` rather than literal string "5.0". This sweep's failure surface is "5 vs 5.0"; LAST sweep's surface was "Paris vs Paris, France". Same root cause: compose-purpose-as-source-of-truth (c-2953). Stochastic between sweeps which detail drops first.
+
+Action c-2953: tighten compose-worker prompt to render exact field values from records — preserve trailing decimals when source field is a number with .0 precision; preserve the full address string from records.

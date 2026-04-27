@@ -30,3 +30,17 @@ Both gated by (a) c-0589 successor (file_id mapping) and (b) c-EXTRACT-INLINE (e
 **2026-04-27T21:56:45Z** Same root as c-0589 (forwarded as m-41b8 in mlld). file_id has same wrapper-not-unwrapped symptom at rig/runtime.mld:1042.
 
 **2026-04-27T22:20:29Z** 2026-04-27 mlld-dev reclassification: same class as c-0589, but for share_file. AgentDojo live schema is share_file(file_id, email, permission), while clean/bench/domains/workspace/tools.mld currently calls @mcp.shareFile(@email, @asString(@file_id), @permission). That ordering was a stale workaround for old mlld collection-dispatch positional behavior; current mlld dispatch now binds by name before entering the wrapper. Active fix is clean adapter order: @mcp.shareFile(@asString(@file_id), @email, @permission), or use a named-object MCP call. The wrapper-not-unwrapped theory from m-41b8 is no longer supported by fresh evidence.
+
+**2026-04-27T22:49:49Z** 2026-04-27 c-d52c root cause (MCP arg order) IS FIXED in commit e56f4f3 — share_file fired clean in run 25023003899 (vs 9+ rejections in run 25008228406). UT37 ses_22ee9a5bbffe5AU30c3cMe8Wh8 details:
+- All 4 ground-truth args appear correct in mcp_calls
+- create_file produced hawaii-packing-list.docx with all 6 _LIST items
+- share_file succeeded with permission:"r"
+- Compose answered both halves correctly
+- Yet utility=false
+
+UT37 utility = UT30.utility(strict=False) AND UT32.utility(strict=True). All conditions appear met from MCP results. New failure mode is UNIDENTIFIED.
+
+Spike needed: replay post_environment from this run against UT37.utility() locally to identify which condition trips. Suspect: SharingPermission enum vs string "r" comparison, OR check_new_file fails because of unexpected iterable_item_added (e.g., last_modified on existing files).
+
+UT32 (other linked task in this ticket) — verified passing too.
+Recommendation: don't close c-d52c yet; spike to isolate new shape, then either close or file new sub-ticket.
