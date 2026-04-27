@@ -15,7 +15,8 @@ import {
   @bucketItems,
   @isResolvedIndexBucket,
   @valueField,
-  @batchSpecMergeState
+  @batchSpecMergeState,
+  @phaseResultWithState
 } from "../runtime.mld"
 import {
   @serializeLifecycleJson,
@@ -104,7 +105,6 @@ record @planner_tool_result = {
     preview_fields: array?,
     selection_refs: array?,
     result_handles: array?,
-    results: array?,
     summary: string?,
     issues: array?
   ],
@@ -516,91 +516,63 @@ exe @plannerResolveBatch(input) = [
 
   let @dispatched = for parallel(8) @spec in @resolves [
     let @decision = { phase: "resolve", tool: @spec.tool, args: @spec.args ?? {}, purpose: @spec.purpose ?? @batchPurpose }
-    let @phaseResult = @dispatchResolve(@initialCtx.agent, @initialCtx.state, @decision, @initialCtx.query, true)
+    let @phaseResult = @dispatchResolve(@initialCtx.agent, @initialCtx.state, @decision, @initialCtx.query)
     => { spec: @spec, decision: @decision, phaseResult: @phaseResult }
   ]
 
-  >> Phase B — merge all spec deltas in memory. c-eda4 established that
-  >> each spec returns initial+thatSpecWrites, so the batch must merge
-  >> each spec's delta atop the cumulative state. c-63fe: do that without
-  >> calling @settlePhaseDispatch per spec; each settle writes planner
-  >> state/runtime and recomputes progress, which creates the long
-  >> resolve_batch tail on travel.
-  let @mergedState = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "resolveBatchMerge" => @input
-      * => { _rig_cursor: "resolveBatchMerge", index: 0, state: @initialCtx.state }
-    ]
-    if @ctx.index >= @dispatched.length [ done @ctx.state ]
-    let @item = @dispatched[@ctx.index]
-    let @nextState = @batchSpecMergeState(
-      @ctx.state,
-      @item.phaseResult,
-      @initialCtx.agent
-    )
-    continue {
-      _rig_cursor: "resolveBatchMerge",
-      index: @ctx.index + 1,
-      state: @nextState
-    }
-  ]
-
-  >> Preserve the error-log side effect from @settlePhaseDispatch for
-  >> failed specs, but keep planner state/runtime settlement batch-level.
-  let @errorLogWrites = for @item in @dispatched when @item.phaseResult.error.isDefined() [
-    let @workerSessionId = @normalizeSessionId(@item.phaseResult.session_id)
-    @appendExecutionLogEntry(@initialCtx.agent.executionLogFile, @serializeLifecycleJson({
-      phase: @item.decision.phase,
-      tool: @item.decision.tool ?? null,
-      name: @item.decision.name ?? null,
-      status: "error",
-      error: @item.phaseResult.error,
-      summary: @item.phaseResult.summary ?? @item.phaseResult.error,
-      issues: @item.phaseResult.issues ?? null,
-      raw_error: @item.phaseResult.raw_error ?? null,
-      worker_session_id: @workerSessionId
-    }))
-    => true
-  ]
-  let @llmDebugWrites = for @item in @dispatched [
-    => @appendLlmDebug(@initialCtx.agent, @item.phaseResult.llm_log ?? null)
-  ]
-
+  >> Phase B — sequential settle. @settlePhaseDispatch merges state +
+  >> appends logs per spec. Each settle ALSO bumps tool_calls + invalid_calls
+  >> on the planner runtime, but that's wrong for batch semantics: the
+  >> planner LLM made one decision (one tool call), not N. We let the
+  >> per-spec settle run for state correctness, then override the runtime
+  >> tool_calls / invalid_calls counters at the end (Phase C below) to
+  >> charge the planner for one batch decision rather than N specs.
+  >>
+  >> c-eda4: each spec's phaseResult.state is initial+thatSpecsWrites.
+  >> If we hand that raw state to @settlePhaseDispatch it does
+  >> @planner.set({state: phaseResult.state}) which clobbers prior
+  >> settles' writes (because each spec's state lacks other specs'
+  >> contributions). Pre-adjust the phaseResult here: take the cumulative
+  >> @currentCtx.state (which reflects prior settles' writes) and merge
+  >> the spec's record-bucket entries into it via @batchSpecMergeState.
+  >> @settlePhaseDispatch then writes the cumulative state and its
+  >> existing log/runtime/event side effects continue to work unchanged.
   let @results = for @item in @dispatched [
+    let @currentCtx = @plannerToolContext("resolve", @item.decision)
+    if !@currentCtx.ok [ => @currentCtx.result ]
+    let @adjustedState = @batchSpecMergeState(
+      @currentCtx.state,
+      @item.phaseResult,
+      @currentCtx.agent
+    )
+    let @adjustedPhaseResult = @phaseResultWithState(@item.phaseResult, @adjustedState)
+    let @settled = @settlePhaseDispatch(@currentCtx, @adjustedPhaseResult, @item.decision)
     let @resolvedHandles = for @handle in @arrayItems(@item.phaseResult.result.handles ?? []) => @stringValue(@handle)
     => when [
-      @item.phaseResult.error.isDefined() => {
-        status: "error",
-        phase: "resolve",
-        error: @item.phaseResult.error,
-        summary: @item.phaseResult.summary ?? @item.phaseResult.error,
-        issues: @item.phaseResult.issues ?? null
-      }
+      @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
+      @item.phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @item.phaseResult.error, summary: @settled.summary }
       * => {
         status: "resolved",
         tool: @item.spec.tool,
         record_type: @item.phaseResult.result.record_type,
         count: @item.phaseResult.result.count,
         handles: @resolvedHandles,
-        records: @plannerResolvedRecords(@initialCtx.agent.records ?? {}, @mergedState, @item.phaseResult.result.record_type, @resolvedHandles),
+        records: @plannerResolvedRecords(@currentCtx.agent.records ?? {}, @settled.finished.state, @item.phaseResult.result.record_type, @resolvedHandles),
         summary: @item.phaseResult.result.summary
       }
     ]
   ]
 
-  >> Phase C — one runtime/state settlement for the whole batch. Charge
-  >> one planner tool call and one invalid call iff any spec errored.
+  >> Phase C — correct the runtime accounting. Per-spec settles bumped
+  >> tool_calls by N and invalid_calls by per-spec error count. Override
+  >> with batch-level accounting: +1 tool_call, +1 invalid_call iff any
+  >> spec errored. Preserves the state merges and progress fingerprint
+  >> the per-spec settles wrote; just corrects the budget counters.
   let @errorResults = for @r in @results when @r.status == "error" || @r.status == "blocked" => @r
   let @anyError = @errorResults.length > 0
   let @correctedToolCalls = @initialToolCalls + 1
   let @correctedInvalidCalls = @initialInvalidCalls + (@anyError ? 1 : 0)
-  let @newFingerprint = @stateProgressFingerprint(@mergedState)
-  let @priorFingerprint = @initialCtx.runtime.progress_fingerprint ?? ""
-  let @priorCallsSinceProgress = @initialCtx.runtime.calls_since_progress ?? 0
-  let @nextCallsSinceProgress = when [
-    @newFingerprint != @priorFingerprint => 0
-    * => @priorCallsSinceProgress + 1
-  ]
+  let @currentRuntime = @planner.runtime
   let @correctedTerminal = when [
     @correctedInvalidCalls >= @plannerInvalidBudget() => {
       status: "blocked",
@@ -614,18 +586,10 @@ exe @plannerResolveBatch(input) = [
     @correctedInvalidCalls,
     @correctedTerminal,
     { phase: "resolve_batch", batch_size: @resolves.length },
-    @newFingerprint,
-    @nextCallsSinceProgress
+    @currentRuntime.progress_fingerprint ?? "",
+    @currentRuntime.calls_since_progress ?? 0
   )
-  let @finished = @finishPlannerTool(
-    @initialCtx,
-    @mergedState,
-    @correctedRuntime,
-    null,
-    when [ @anyError => "error" * => "success" ],
-    when [ @anyError => "resolve_batch_error" * => "batch_resolved" ],
-    null
-  )
+  @planner.set({ runtime: @correctedRuntime })
 
   let @combined = { status: "batch_resolved", results: @results }
   -> @combined
