@@ -1,6 +1,6 @@
 ---
 id: c-63fe
-status: in_progress
+status: closed
 deps: []
 links: [c-9d56, c-3438, c-36fe, c-d590, c-cb4a, c-8dff]
 created: 2026-04-25T04:45:37Z
@@ -8,7 +8,7 @@ type: bug
 priority: 0
 assignee: Adam
 tags: [infrastructure, mcp]
-updated: 2026-04-27T07:26:10Z
+updated: 2026-04-27T16:52:44Z
 ---
 # Travel c-63fe: outer MCP timeout cascade and rig memory hot-path attribution
 
@@ -864,3 +864,35 @@ Do not use c-63fe as a bucket for old derive, array-shape, record-merge, or plan
 **2026-04-27T09:08:30Z** 2026-04-27 experiment result: grouped batch merge by record_type was tried and reverted. It worsened the 180s c-8dff cap to ~3.68GB peak and introduced a large @batchMergeResolvedState/projection spike. The extra grouping/flattening appears to materialize more state than the per-spec merge path despite fewer conceptual updates.
 
 **2026-04-27T09:14:18Z** 2026-04-27 validation for intent compiler cleanup: rig invariant gate passes as expected (139 pass / 1 known xfail), worker suite passes 24/24, and git diff --check is clean. Current retained clean code change is narrow: per-arg tool metadata is computed once for array/resolved_family compilation and array result accumulators use native += instead of concat. Capped c-8dff signal is modest (~3.13GB vs ~3.23GB prior quick baseline), but it removes @toolInputRecord from top scopes without changing proof/factsource tests.
+
+**2026-04-27T10:54:40Z** 2026-04-27 next safe optimization: @plannerResolvedRecords still scans indexed bucket order and checks handleList.includes for each entry. For c-8dff resolve_batch results this repeats a full-bucket scan per spec. Change indexed path to iterate requested handles directly and project by_handle[handle]. This preserves merged state/projection semantics while using the index that c-63fe already maintains.
+
+**2026-04-27T10:56:22Z** 2026-04-27 experiment result: direct by_handle lookup in @plannerResolvedRecords was tried and reverted. It worsened the c-8dff live RSS quickly (~3.1GB at ~70s), likely because direct per-handle projection caused less favorable wrapper/cache behavior than scanning the existing ordered bucket. Keep the existing ordered indexed path for now.
+
+**2026-04-27T10:56:42Z** 2026-04-27 next retained-local experiment: plannerResolveBatch binds  but never uses @finished. That helper returns , so the batch path may hold an extra named reference to the just-merged state while also writing it to the planner session and constructing results. Try calling @finishPlannerTool for side effects without binding the returned state/runtime.
+
+**2026-04-27T10:58:26Z** 2026-04-27 experiment result: dropping the unused plannerResolveBatch @finished binding was tried and reverted. It worsened live c-8dff RSS quickly (~3.6GB at ~70s). Keep the existing let-bound finishPlannerTool path for now; mlld evaluation/retention behavior is not improved by making this a bare side-effect call.
+
+**2026-04-27T16:52:44Z** **2026-04-27T??:?? CLOSED — c-63fe dead at the rig+mlld layer**
+
+Combined gpt + mlld-dev work (rig Phase B optimization + mlld lazy materialization stack) eliminates the cascade. Headline numbers:
+
+| Metric | 8b0d220 baseline | Current HEAD | Δ |
+|--------|------------------|--------------|---|
+| c-8dff mock peak RAM | 6.8 GB | 1.57 GB | -77% |
+| c-8dff mock wall | 9 min | 158s | -71% |
+| Travel canary wall (-p 6) | 925s | 327s | -65% |
+| Travel canary avg/task | ~787s | 208s | -74% |
+| Travel tasks-in-budget | 1/6 | **6/6** | +5 |
+
+**The 6/6 tasks-in-budget is the structural fix indicator.** Previously 5 of 6 c-63fe-class tasks (UT10/11/12/17/18/19) hit the 900s wall via the MCP cascade signature (-32001 timeout → -32000 closed → 'Not connected' for the rest of run). Now every task in that class completes in budget; remaining failures are LLM stochasticity (UT11 c-8a89 ambiguity, UT12 'Rating: 5' vs '5.0' precision, UT17 max-rated-vs-budget interpretation, UT19 LLM arithmetic) — totally separate failure class from c-63fe.
+
+**Reproducer verified at c-8dff** — anyone can validate against the captured UT19 fixture in ~3 min with no LLM cost.
+
+**Optimization work that landed**:
+- April 25: rig Phases 1/2.0/2.5 (indexed-bucket adapters, handle-keyed merge, planner_cache populated eagerly)
+- April 26: rig commits 04b5458 (delta merge), 6ac56df (settle batches once), a00ca96 (native indexed append)
+- April 27: rig 6fd3c10 (intent arg metadata) + mlld stack (m-9179 lazy array helper text materialization, m-9712 threshold exec entry attribution, m-8535 split llm exec memory trace phases, m-c3e6 bound nested helper audit logging, m-a28f narrow llm tool-call trace retention, m-cbe7 trim reserved session method dispatch overhead, m-15d9 summarize runtime memory traces, m-017b index serialized array envelopes, lazy structured metadata phases, etc.)
+- @normalizeResolvedValues trace avg dropped from ~213ms to ~23ms (9× on the hot path)
+
+**Closing.** Cloud runner memory settings can be reduced from MLLD_HEAP=8g to a more conservative value once a sweep validates the new normal. Reproducer stays in-tree at `rig/test-harness/` as a regression guard.
