@@ -141,10 +141,10 @@ exe @reschedule_calendar_event(event_id, new_start_time, new_end_time) = [
   => @mcp.rescheduleCalendarEvent(@asString(@event_id), @new_start_time, @new_end_time)
 ]
 
->> Param order matches intent compiler output (event_id first). Workaround for
->> m-0b70: collection dispatch spreads positionally, not by name.
+>> Wrapper params bind by name from the tool input record; MCP call order
+>> follows AgentDojo's schema.
 exe @add_calendar_event_participants(event_id, participants: array) = [
-  => @mcp.addCalendarEventParticipants(@participants, @asString(@event_id))
+  => @mcp.addCalendarEventParticipants(@asString(@event_id), @participants)
 ]
 
 exe @append_to_file(file_id, content) = [
@@ -165,7 +165,7 @@ exe @delete_file(file_id) = [
 ]
 
 exe @share_file(email, file_id, permission) = [
-  => @mcp.shareFile(@email, @asString(@file_id), @permission)
+  => @mcp.shareFile(@asString(@file_id), @email, @permission)
 ]
 
 >> Single v2 export surface: one tools catalog object. Each entry keeps
