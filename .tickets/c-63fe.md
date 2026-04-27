@@ -779,3 +779,64 @@ Validation:
 - Synthetic resolve_batch harness with native append: `rss=3637MB heap=2109MB elapsed=114399ms`, `bucket_entries=160`, `runtime_tool_calls=1`.
 
 Interpretation: native append gives the expected materialization-time improvement (133s → 114s on the synthetic harness after batch-settle/delta-only), but RSS is noisy and did not show a clear memory reduction in this harness. The local travel `-p 20` run immediately before the native-append clean change still peaked near ~6.1GB RSS on a late worker, so the remaining high-memory issue is not solved by batch-settle/delta-only and is unlikely to be solved by indexed bucket materialization alone.
+
+**2026-04-27T03:29:49Z** 2026-04-27 late-spike investigation plan:
+
+Current state:
+- Clean-side c-63fe commits landed:
+  - `6ac56df c-63fe: settle resolve batches once`
+  - `a00ca96 c-63fe: use native indexed bucket append`
+- mlld runtime dependency landed:
+  - `4a752778d m-017b: index serialized array envelopes`
+- Rig invariant and worker suites pass with the native O(N) indexed bucket materializer:
+  - `mlld rig/tests/index.mld --no-checkpoint`: `139 pass / 1 fail`, only known unicode-hyphen xfail.
+  - `mlld rig/tests/workers/run.mld --no-checkpoint`: `24/24`.
+- Local travel at `-p 20` with `MLLD_HEAP=12g` completes without MCP/OOM broken sessions (`13/20`, 728s), but live polling still saw late mlld workers peak around `6.1GB RSS`. Heap headroom is a mitigation, not a fix.
+- Synthetic resolve_batch harness shows batch-settle/delta-only/native append improve time, but do not explain the late travel spike.
+
+Next plan: build a zero-LLM deterministic repro in `tmp/c63fe-late-spike/` that constructs travel-shaped proof-bearing rig state and samples memory across the suspected terminal boundaries:
+1. `@workerStateSummary(@agent, @state)`
+2. `@composePrompt(...)`
+3. `@dispatchCompose(...)` with stub harness
+4. `@plannerTools.compose` inside a seeded `@planner` session
+5. `@finishPlannerTool` / `@planner.set`
+6. final session/debug-result extraction as used by `@runPlannerSession`
+
+Run it across scaled record/log counts (for example 80/160/320/640 records) and with toggles for planner_cache / execution_log / compose prompt / final session extraction. The goal is to identify the first boundary where RSS/heap jumps and distinguish persistent growth from a finalization-only duplicate materialization.
+
+**2026-04-27T03:42:44Z** 2026-04-27 late-spike repro results:
+
+Created zero-LLM repro under `tmp/c63fe-late-spike/`:
+- `harness.mld` builds travel-shaped, record-coerced rig state across 4 families (`hotel`, `restaurant`, `car_company`, `flight`).
+- Uses stub compose responses, so no model/API cost.
+- Samples memory after state build, planner projection, worker projection, compose prompt, manual stub LLM call, llm log entry, direct `@dispatchCompose`, and seeded `@plannerTools.compose`.
+
+Representative runs:
+
+`C63_PER_FAMILY=40 C63_LOGS=12 C63_REVIEW_BYTES=2048` (160 total records):
+- after_state_build: ~757MB RSS / 325MB heap
+- after_planner_visible_state: ~757MB RSS / 420MB heap; planner summary JSON ~45KB
+- after_worker_state_summary: ~1098MB RSS / 345MB heap; worker summary JSON ~540KB
+- after_compose_prompt: ~1100MB RSS / 395MB heap; prompt ~544K chars
+- after_manual_llm_call / attestation / llm_log_entry: no RSS jump, heap rises to ~609MB
+- after_direct_dispatch_compose: ~1355MB RSS / 827MB heap
+- after_seeded_planner_compose_tool: ~1500MB RSS / 1098MB heap
+
+`C63_PER_FAMILY=80 C63_LOGS=24 C63_REVIEW_BYTES=2048` (320 total records):
+- after_state_build: ~1191MB RSS / 930MB heap
+- after_planner_visible_state: ~1270MB RSS / 1005MB heap; planner summary JSON ~91KB
+- after_worker_state_summary: ~1607MB RSS / 1209MB heap; worker summary JSON ~1.08MB
+- after_compose_prompt: ~1610MB RSS / 1313MB heap; prompt ~1.09M chars
+- after_direct_dispatch_compose: ~2394MB RSS / 2055MB heap
+- after_seeded_planner_compose_tool: ~2862MB RSS / 1120MB heap
+
+`C63_PER_FAMILY=80 C63_LOGS=24 C63_REVIEW_BYTES=0` (same record count, tiny untrusted content):
+- worker summary JSON drops to ~99KB and prompt to ~106K chars, but RSS still reaches ~1555MB after worker summary and ~2627MB after seeded planner compose.
+
+Interpretation:
+- This reproduces the late spike shape without a full travel run or paid LLM calls.
+- The first clear terminal boundary is `@workerStateSummary`: compose currently projects the full worker-visible state, including untrusted fields for every resolved candidate, even when planner `sources` names only a subset.
+- Prompt text size matters, but wrapper/provenance/session materialization dominates: even with `C63_REVIEW_BYTES=0`, the same 320-record proof-bearing state still reaches ~2.6GB by terminal compose.
+- Manual stub LLM call and `@llmCallEntry` are not the RSS cliff by themselves; `@dispatchCompose`/seeded planner compose re-materialize worker summary/prompt and hold them alongside session state.
+
+Most promising reduction path: make compose source-aware. Build a filtered state summary from `decision.sources` instead of always calling `@workerStateSummary(@agent, @state)` over the entire state. Preserve existing behavior when sources include broad wildcards (`resolved.*`, `derived.*`, `extracted.*`) or are absent. For specific sources (`derived.foo`, `extracted.foo`, `resolved.hotel`, structured resolved refs), include only those projected entries/families. This targets the first spike boundary and should reduce both memory and prompt size without changing proof-bearing state storage.
