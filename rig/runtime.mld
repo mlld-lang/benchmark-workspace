@@ -9,7 +9,7 @@ import {
   @toolPayloadArgs,
   @phaseToolNames
 } from "./tooling.mld"
-import { @resolveRefValue, @isResolvedIndexBucket, @bucketItems, @bucketLength, @valueField, @bucketObject } from "./intent.mld"
+import { @resolveRefValue, @bucketItems, @bucketLength, @valueField, @bucketObject } from "./intent.mld"
 import { @appendLlmCall, @serializeLifecycleJson } from "./lifecycle.mld"
 
 >> Shared runtime helpers for the rig loop and per-phase workers.
@@ -998,6 +998,8 @@ export {
   @batchSpecMergeState,
   @phaseResultWithState,
   @updateResolvedState,
+  @bucketItems,
+  @bucketLength,
   @updateNamedState,
   @updateExtractSources,
   @isStructuredRef,

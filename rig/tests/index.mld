@@ -51,7 +51,7 @@ import {
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg, @lookupResolvedEntry } from "../intent.mld"
-import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket, @batchSpecMergeState } from "../runtime.mld"
+import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @batchSpecMergeState } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
@@ -3162,42 +3162,6 @@ var @spE2Ok =
   @spE2FamilyEmails.includes("b@x.com")
 var @spE2Pretty = `whole=@spE2Whole.value.name field=@spE2Field.value family_emails=@spE2FamilyEmails`
 
->> E3 indexed-bucket-adapter — c-63fe Phase 1 readiness. Hand-build a
->> bucket in the indexed shape and verify the adapter helpers in
->> intent.mld route reads through the indexed path. When Phase 2
->> @updateResolvedState ships and writes this shape, the same reads
->> will keep working. Until then, the adapter is dormant on real state.
-var @spE3IndexedBucket = {
-  _rig_bucket: "resolved_index_v1",
-  order: ["spe3-h1", "spe3-h2"],
-  by_handle: {
-    "spe3-h1": { handle: "spe3-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com" }, value: { name: "alice", email: "a@x.com" } },
-    "spe3-h2": { handle: "spe3-h2", key: "bob",   identity_field: "name", identity_value: "bob",   field_values: { name: "bob",   email: "b@x.com" }, value: { name: "bob",   email: "b@x.com" } }
-  },
-  version: 2,
-  planner_cache: { version: 0, entries: [] }
-}
-var @spE3State = {
-  resolved: { contact: @spE3IndexedBucket },
-  extracted: {},
-  derived: {},
-  extract_sources: {}
-}
-var @spE3Whole = @resolveRefValue(@spE3State, { source: "resolved", record: "contact", handle: "spe3-h1" })
-var @spE3Field = @resolveRefValue(@spE3State, { source: "resolved", record: "contact", handle: "spe3-h2", field: "email" })
-var @spE3Family = @resolveRefValue(@spE3State, { source: "resolved", record: "contact" })
-var @spE3FamilyEmails = for @v in (@spE3Family.value ?? []) => `@v.email`
-var @spE3Ok =
-  @spE3Whole.ok == true &&
-  `@spE3Whole.value.name` == "alice" &&
-  @spE3Field.ok == true &&
-  `@spE3Field.value` == "b@x.com" &&
-  @spE3Family.ok == true &&
-  @spE3FamilyEmails.length == 2 &&
-  @spE3FamilyEmails.includes("a@x.com") &&
-  @spE3FamilyEmails.includes("b@x.com")
-var @spE3Pretty = `whole=@spE3Whole.value.name field=@spE3Field.value family_emails=@spE3FamilyEmails`
-
 >> ============================================================================
 >> c-3438 (B): @stateProgressFingerprint regression tests
 >> ============================================================================
@@ -3522,7 +3486,6 @@ exe @allChecks() = [
   @check("state-projection/D3-field-path-with-array-index", @spD3Ok, @spD3Pretty),
   @check("state-projection/E1-worker-summary-no-planner-cache-leak", @spE1Ok, @spE1Pretty),
   @check("state-projection/E2-legacy-array-bucket-compatible", @spE2Ok, @spE2Pretty),
-  @check("state-projection/E3-indexed-bucket-adapter-reads", @spE3Ok, @spE3Pretty),
   @check("c-3438/FP-1-empty-state", @fpEmptyOk, @fpEmptyPretty),
   @check("c-3438/FP-2-deterministic", @fpDetOk, @fpDetPretty),
   @check("c-3438/FP-3-new-handle-changes-fp", @fpAddHandleOk, @fpAddHandlePretty),
