@@ -78,45 +78,10 @@ exe @isResolvedIndexBucket(bucket) = [
   => @name(@sentinel) == "resolved_index_v1"
 ]
 
->> Iterate the order array and look each handle up in by_handle. Pure
->> mlld so entry values keep their wrappers/factsources intact. Uses
->> an explicit loop accumulator because nested `for` over a wrapped
->> array surfaces as a `for-result` envelope downstream.
 exe @indexedBucketEntries(bucket) = [
-  let @rawOrder = @valueField(@bucket, "order") ?? []
+  let @order = @valueField(@bucket, "order") ?? []
   let @byHandle = @valueField(@bucket, "by_handle") ?? {}
-  let @orderLength = when [
-    @typeof(@rawOrder) == "array" => @rawOrder.length
-    @rawOrder.mx.data.length.isDefined() => @rawOrder.mx.data.length
-    @rawOrder.data.length.isDefined() => @rawOrder.data.length
-    * => 0
-  ]
-  let @resolved = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "indexedEntries" => @input
-      * => { _rig_cursor: "indexedEntries", index: 0, entries: [] }
-    ]
-    if @ctx.index >= @orderLength [ done @ctx.entries ]
-    let @handle = @rawOrder[@ctx.index]
-    let @entry = @valueField(@byHandle, @name(@handle))
-    let @nextEntries = when [
-      @entry.isDefined() => @ctx.entries.concat([@entry])
-      * => @ctx.entries
-    ]
-    continue {
-      _rig_cursor: "indexedEntries",
-      index: @ctx.index + 1,
-      entries: @nextEntries
-    }
-  ]
-  => @resolved
-]
-
->> Length of a resolved bucket (handles either shape). Production +
->> tests use this to count entries without touching `.length` on the
->> bucket directly.
-exe @bucketLength(bucket) = [
-  => @bucketItems(@bucket).length
+  => for @handle in @order => @valueField(@byHandle, @name(@handle))
 ]
 
 exe @bucketItems(values) = when [

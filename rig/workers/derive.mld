@@ -3,7 +3,6 @@ import {
   @llmCallEntry,
   @llmSessionId,
   @arrayItems,
-  @bucketItems,
   @previewFields,
   @updateNamedState
 } from "../runtime.mld"
@@ -77,7 +76,7 @@ exe @allowedSelectionKeys(state, sources) = [
   let @pairs = for @source in (@sources ?? []) [
     => when [
       @source.source == "resolved" && @source.handle.isDefined() => [{ key: `@source.record:@source.handle`, value: true }]
-      @source.source == "resolved" => for @entry in @bucketItems(@state.resolved[@source.record] ?? []) => {
+      @source.source == "resolved" => for @entry in (@state.resolved[@source.record] ?? []) => {
         key: `@source.record:@entry.handle`,
         value: true
       }

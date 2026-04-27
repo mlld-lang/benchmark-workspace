@@ -529,7 +529,7 @@ var @sessionFinalState = @extractChainResult.mx.sessions.planner
 var @sessionFinalStateOk =
   @sessionFinalState.isDefined() &&
   @sessionFinalState.runtime.tool_calls == 2 &&
-  @bucketLength(@sessionFinalState.state.resolved.contact) == 2
+  @sessionFinalState.state.resolved.contact.length == 2
 
 exe llm @testPlannerTextResult(prompt, config) = [
   let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.args)
@@ -557,9 +557,7 @@ var @llmCallEntryOmitsSessionSnapshotDetail =
 >> The session stores state via @planner.set(); reading it back via @planner.state
 >> must preserve StructuredValue metadata on identity_value, field_values, and value
 >> fields. Without this, handle-type input records reject control args at dispatch.
-var @sessionContactEntries = @bucketItems(@sessionFinalState.state.resolved.contact)
-var @sessionResolvedEntry = @sessionContactEntries[0]
-var @sessionContactCount = @bucketLength(@sessionFinalState.state.resolved.contact)
+var @sessionResolvedEntry = @sessionFinalState.state.resolved.contact[0]
 var @sessionIdentityFs = @sessionResolvedEntry.identity_value.mx.factsources ?? []
 var @sessionFieldFs = @sessionResolvedEntry.field_values.email.mx.factsources ?? []
 var @sessionValueFs = @sessionResolvedEntry.value.email.mx.factsources ?? []
@@ -1464,7 +1462,7 @@ var @plannerResolveContactsOk =
   @plannerResolveContactsResult["error"] == null &&
   @plannerResolveContactsResult.status == "resolved" &&
   @plannerResolveContactsResult.count == 2 &&
-  @bucketLength(@plannerStateAfterContactResolve.resolved.contact) == 2
+  @plannerStateAfterContactResolve.resolved.contact.length == 2
 var @plannerResolvedContactEmailPretty = @plannerResolvedContactEmail | @pretty
 var @plannerResolvedContactEmailOk =
   @plannerResolvedContactEmail.ok == true &&
@@ -2647,7 +2645,7 @@ var @executeResultHandleResult = @probeExecuteResultHandles(
   "Create a file called test.txt with hello world"
 )
 var @executeResultRecordType = @recordTypeName(@ws_file_entry)
-var @executeResultStateEntries = @bucketItems(@executeResultHandleResult.state.resolved[@executeResultRecordType])
+var @executeResultStateEntries = @executeResultHandleResult.state.resolved[@executeResultRecordType]
 var @executeResultHandleOk =
   @executeResultHandleResult.result.status == "sent" &&
   @executeResultHandleResult.result.result_handles.length > 0 &&
@@ -2821,11 +2819,7 @@ var @spA1Incoming = [
   { handle: "h1", key: "k1", identity_field: "name", identity_value: "alpha-updated", field_values: { name: "alpha-updated", city: "Paris" } },
   { handle: "h3", key: "k3", identity_field: "name", identity_value: "gamma", field_values: { name: "gamma", city: "Paris" } }
 ]
->> Phase 2.0: @mergeResolvedEntries returns an indexed bucket
->> { _rig_bucket, order, by_handle, version, planner_cache }. Use
->> @bucketItems to extract the entries array for assertion.
-var @spA1MergedBucket = @mergeResolvedEntries(@spA1Existing, @spA1Incoming)
-var @spA1Merged = @bucketItems(@spA1MergedBucket)
+var @spA1Merged = @mergeResolvedEntries(@spA1Existing, @spA1Incoming)
 var @spA1H1Matches = for @e in @spA1Merged when @e.handle == "h1" => @e.identity_value
 var @spA1H2Matches = for @e in @spA1Merged when @e.handle == "h2" => @e.identity_value
 var @spA1H3Matches = for @e in @spA1Merged when @e.handle == "h3" => @e.identity_value
@@ -2836,17 +2830,14 @@ var @spA1Ok =
   @spA1Merged.length == 3 &&
   @spA1H1 == "alpha-updated" &&
   @spA1H2 == "beta" &&
-  @spA1H3 == "gamma" &&
-  @isResolvedIndexBucket(@spA1MergedBucket)
-var @spA1Pretty = `merged.length=@spA1Merged.length h1=@spA1H1 h2=@spA1H2 h3=@spA1H3 indexed=@isResolvedIndexBucket(@spA1MergedBucket)`
+  @spA1H3 == "gamma"
+var @spA1Pretty = `merged.length=@spA1Merged.length h1=@spA1H1 h2=@spA1H2 h3=@spA1H3`
 
-var @spA2EmptyBucket = @mergeResolvedEntries([], @spA1Incoming)
-var @spA2Empty = @bucketItems(@spA2EmptyBucket)
+var @spA2Empty = @mergeResolvedEntries([], @spA1Incoming)
 var @spA2Ok = @spA2Empty.length == 2 && @spA2Empty[0].handle == "h1" && @spA2Empty[1].handle == "h3"
 var @spA2Pretty = `from-empty.length=@spA2Empty.length`
 
-var @spA3UnchangedBucket = @mergeResolvedEntries(@spA1Existing, [])
-var @spA3Unchanged = @bucketItems(@spA3UnchangedBucket)
+var @spA3Unchanged = @mergeResolvedEntries(@spA1Existing, [])
 var @spA3Ok = @spA3Unchanged.length == 2 && @spA3Unchanged[0].handle == "h1" && @spA3Unchanged[1].handle == "h2"
 var @spA3Pretty = `no-incoming.length=@spA3Unchanged.length`
 
@@ -2855,8 +2846,7 @@ var @spA4DupIncoming = [
   { handle: "h9", key: "k9", identity_field: "name", identity_value: "first",  field_values: { name: "first" } },
   { handle: "h9", key: "k9", identity_field: "name", identity_value: "second", field_values: { name: "second" } }
 ]
-var @spA4MergedBucket = @mergeResolvedEntries([], @spA4DupIncoming)
-var @spA4Merged = @bucketItems(@spA4MergedBucket)
+var @spA4Merged = @mergeResolvedEntries([], @spA4DupIncoming)
 var @spA4Ok = @spA4Merged.length == 1 && @spA4Merged[0].identity_value == "second"
 var @spA4Pretty = `dup-incoming.length=@spA4Merged.length last=@spA4Merged[0].identity_value`
 
@@ -2959,14 +2949,12 @@ var @spB1NewContacts = [
 ]
 var @spB1Updated = @updateResolvedState(@spB1State, "contact", @spB1NewContacts)
 var @spB1Ok =
-  @bucketLength(@spB1Updated.resolved.contact) == 2 &&
-  @bucketLength(@spB1Updated.resolved.other) == 1 &&
+  @spB1Updated.resolved.contact.length == 2 &&
+  @spB1Updated.resolved.other.length == 1 &&
   @spB1Updated.extracted.ext1.value == "preserved" &&
   @spB1Updated.derived.der1.value == "preserved" &&
   @spB1Updated.extract_sources.src1 == "name1"
-var @spB1ContactCount = @bucketLength(@spB1Updated.resolved.contact)
-var @spB1OtherCount = @bucketLength(@spB1Updated.resolved.other)
-var @spB1Pretty = `contact=@spB1ContactCount other=@spB1OtherCount ext.preserved=@spB1Updated.extracted.ext1.value`
+var @spB1Pretty = `contact=@spB1Updated.resolved.contact.length other=@spB1Updated.resolved.other.length ext.preserved=@spB1Updated.extracted.ext1.value`
 
 >> c-eda4: parallel resolve_batch state-merge contract.
 >>
@@ -3210,29 +3198,6 @@ var @spE3Ok =
   @spE3FamilyEmails.includes("b@x.com")
 var @spE3Pretty = `whole=@spE3Whole.value.name field=@spE3Field.value family_emails=@spE3FamilyEmails`
 
->> F1 writer-produces-indexed-bucket — c-63fe Phase 2.0 verification.
->> @updateResolvedState now emits {_rig_bucket: "resolved_index_v1",
->> order, by_handle, version, planner_cache}. Confirms the writer flip
->> took, version increments per update, and reads still adapt cleanly.
-var @spF1Step1 = @updateResolvedState(@emptyState(), "contact", [
-  { handle: "spf1-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice" }, value: { name: "alice" } }
-])
-var @spF1Step2 = @updateResolvedState(@spF1Step1, "contact", [
-  { handle: "spf1-h2", key: "bob", identity_field: "name", identity_value: "bob", field_values: { name: "bob" }, value: { name: "bob" } }
-])
-var @spF1Bucket1 = @spF1Step1.resolved.contact
-var @spF1Bucket2 = @spF1Step2.resolved.contact
-var @spF1Version1 = @spF1Bucket1.version
-var @spF1Version2 = @spF1Bucket2.version
-var @spF1Ok =
-  @isResolvedIndexBucket(@spF1Bucket1) &&
-  @isResolvedIndexBucket(@spF1Bucket2) &&
-  @spF1Version1 == 1 &&
-  @spF1Version2 == 2 &&
-  @bucketLength(@spF1Bucket1) == 1 &&
-  @bucketLength(@spF1Bucket2) == 2
-var @spF1Pretty = `indexed1=@isResolvedIndexBucket(@spF1Bucket1) v1=@spF1Version1 v2=@spF1Version2 lens=[@bucketLength(@spF1Bucket1),@bucketLength(@spF1Bucket2)]`
-
 >> ============================================================================
 >> c-3438 (B): @stateProgressFingerprint regression tests
 >> ============================================================================
@@ -3467,7 +3432,7 @@ exe @allChecks() = [
   @check("resolve-worker-scalar-keyed-path", @dispatchScalarResolveOk, @dispatchScalarResolvePretty),
   @check("planner-tool-collection-dispatch-does-not-recurse", @plannerResolveDispatchOk, @plannerResolveDispatchPretty),
   @check("planner-session-state-persists-across-direct-planner-tool-calls", @plannerResolveContactsOk, @plannerResolveContactsPretty),
-  @check("session-final-state-accessible-via-mx-sessions", @sessionFinalStateOk, `runtime_calls=@sessionFinalState.runtime.tool_calls resolved=@sessionContactCount`),
+  @check("session-final-state-accessible-via-mx-sessions", @sessionFinalStateOk, `runtime_calls=@sessionFinalState.runtime.tool_calls resolved=@sessionFinalState.state.resolved.contact.length`),
   @check("llm-call-log-omits-session-snapshot", @llmCallEntryOmitsSessionSnapshotOk, @llmCallEntryOmitsSessionSnapshotDetail),
   @check("session-resolved-factsources-survive-boundary", @sessionFsOk, @sessionFsPretty),
   @check("planner-session-resolved-handle-remains-readable-after-direct-resolve", @plannerResolvedContactEmailOk, @plannerResolvedContactEmailPretty),
@@ -3558,7 +3523,6 @@ exe @allChecks() = [
   @check("state-projection/E1-worker-summary-no-planner-cache-leak", @spE1Ok, @spE1Pretty),
   @check("state-projection/E2-legacy-array-bucket-compatible", @spE2Ok, @spE2Pretty),
   @check("state-projection/E3-indexed-bucket-adapter-reads", @spE3Ok, @spE3Pretty),
-  @check("state-projection/F1-writer-produces-indexed-bucket-with-version", @spF1Ok, @spF1Pretty),
   @check("c-3438/FP-1-empty-state", @fpEmptyOk, @fpEmptyPretty),
   @check("c-3438/FP-2-deterministic", @fpDetOk, @fpDetPretty),
   @check("c-3438/FP-3-new-handle-changes-fp", @fpAddHandleOk, @fpAddHandlePretty),

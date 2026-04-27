@@ -432,7 +432,7 @@ exe @projectResolvedEntry(recordType, recordDef, entry, role) = [
 exe @projectResolvedSummary(records, state, role) = [
   let @resolved = @structuredData(@state.resolved)
   let @pairs = for @recordType, @recordDef in @records [
-    let @entries = for @entry in @bucketItems(@resolved[@recordType]) => @projectResolvedEntry(@recordType, @recordDef, @entry, @role)
+    let @entries = for @entry in @arrayItems(@resolved[@recordType]) => @projectResolvedEntry(@recordType, @recordDef, @entry, @role)
     => {
       key: @recordType,
       value: @entries
@@ -603,81 +603,31 @@ exe @mergeEntryFields(existing, incoming) = [
   }
 ]
 
->> c-63fe Phase 2.0: handle-keyed merge that produces indexed bucket.
->>
->> Bucket shape: { _rig_bucket: "resolved_index_v1", order, by_handle,
->> version, planner_cache }. Reads tolerate either shape via Phase 1
->> adapters (@bucketItems, @lookupResolvedEntry). Writes always
->> produce the indexed shape after this lands.
->>
->> Algorithm: for each incoming entry, single dict assignment +
->> conditional order-append. O(incoming) instead of O(existing × incoming).
->> The OOM agent's prototype showed 10x time + 50%+ memory win on
->> travel-shaped workloads.
->>
->> planner_cache slot is initialized {version:0, entries:[]}. Phase 2.5
->> will populate eagerly at merge time. Today the cache slot exists
->> but is never read — projection paths still compute fresh.
->>
->> c-5a24: handle collisions now field-merge via @mergeEntryFields rather
->> than whole-entry replace. Travel partial-record resolves accumulate.
-exe @mergeResolvedEntries(existingBucket, newEntries) = [
-  let @existingItems = @bucketItems(@existingBucket)
-  let @existingHandles = for @e in @existingItems => `@e.handle`
-  let @existingPairs = for @e in @existingItems => { key: `@e.handle`, value: @e }
-  let @existingByHandle = when [
-    @isResolvedIndexBucket(@existingBucket) => @valueField(@existingBucket, "by_handle") ?? {}
-    * => @pairsToObject(@existingPairs)
-  ]
-  let @existingOrder = when [
-    @isResolvedIndexBucket(@existingBucket) => @valueField(@existingBucket, "order") ?? @existingHandles
-    * => @existingHandles
-  ]
-  let @existingVersion = when [
-    @isResolvedIndexBucket(@existingBucket) => @valueField(@existingBucket, "version") ?? 0
-    * => 0
-  ]
+>> c-5a24: handle collisions field-merge rather than whole-entry replace.
+>> Travel partial-record resolves accumulate fields across calls.
+exe @mergeResolvedEntries(existingEntries, newEntries) = [
+  let @seed = @arrayItems(@existingEntries)
   let @incoming = @arrayItems(@newEntries)
-  >> Track the resolved order + entries via a list of pairs. Build the
-  >> dict at the end via @pairsToObject. Object spread / inline
-  >> { ...by_handle, [k]: entry } MATERIALIZES the entry values and
-  >> strips factsources/wrapper metadata — verified breaks the
-  >> session-resolved-factsources-survive-boundary test.
-  let @existingPairs = for @h in @existingOrder => { key: `@h`, value: @valueField(@existingByHandle, `@h`) }
-  let @merged = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "indexedMerge" => @input
-      * => { _rig_cursor: "indexedMerge", index: 0, order: @existingOrder, pairs: @existingPairs }
+  let @cursor = loop(1000) [
+    let @acc = when [
+      @input["_rig_cursor"] == "mergeResolvedEntries" => @input
+      * => { _rig_cursor: "mergeResolvedEntries", index: 0, entries: @seed }
     ]
-    if @ctx.index >= @incoming.length [ done @ctx ]
-    let @entry = @incoming[@ctx.index]
-    let @handleKey = `@entry.handle`
-    let @existingPos = for @p in @ctx.pairs when @p.key == @handleKey => @p
-    let @nextPairs = when [
-      @existingPos.length > 0 => for @p in @ctx.pairs => when [
-        @p.key == @handleKey => { key: @handleKey, value: @mergeEntryFields(@p.value, @entry) }
-        * => @p
-      ]
-      * => @ctx.pairs.concat([{ key: @handleKey, value: @entry }])
-    ]
-    let @nextOrder = when [
-      @existingPos.length > 0 => @ctx.order
-      * => @ctx.order.concat([@handleKey])
+    if @acc.index >= @incoming.length [ done @acc ]
+    let @entry = @incoming[@acc.index]
+    let @matches = for @current in @acc.entries when @current.handle == @entry.handle => @current
+    let @without = for @current in @acc.entries when @current.handle != @entry.handle => @current
+    let @nextEntry = when [
+      @matches.length > 0 => @mergeEntryFields(@matches[0], @entry)
+      * => @entry
     ]
     continue {
-      _rig_cursor: "indexedMerge",
-      index: @ctx.index + 1,
-      order: @nextOrder,
-      pairs: @nextPairs
+      _rig_cursor: "mergeResolvedEntries",
+      index: @acc.index + 1,
+      entries: @without.concat([@nextEntry])
     }
   ]
-  => {
-    _rig_bucket: "resolved_index_v1",
-    order: @merged.order,
-    by_handle: @pairsToObject(@merged.pairs),
-    version: @existingVersion + 1,
-    planner_cache: { version: 0, entries: [] }
-  }
+  => @cursor.entries
 ]
 
 exe @updateResolvedState(state, recordName, entries) = [
@@ -1018,9 +968,6 @@ export {
   @structuredData,
   @stringValue,
   @arrayItems,
-  @bucketItems,
-  @bucketLength,
-  @isResolvedIndexBucket,
   @plainObjectKeys,
   @replaceObjectField,
   @recordMeta,
