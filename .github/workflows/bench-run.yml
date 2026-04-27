@@ -88,32 +88,56 @@ jobs:
       - name: Pull image
         run: docker pull ${{ env.IMAGE }}:${{ inputs.image_tag }}
 
-      - name: Check image freshness vs mlld HEAD
+      - name: Check image freshness vs mlld + clean HEAD
         id: freshness
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           IMAGE_REF: ${{ env.IMAGE }}:${{ inputs.image_tag }}
+          CLEAN_HEAD: ${{ github.sha }}
         run: |
           set -e
-          BAKED_SHA=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$IMAGE_REF")
-          BAKED_REF=$(docker inspect --format='{{ index .Config.Labels "mlld.ref" }}' "$IMAGE_REF")
-          echo "image-baked: ref=$BAKED_REF sha=$BAKED_SHA"
-          if [ -z "$BAKED_SHA" ] || [ -z "$BAKED_REF" ]; then
+          BAKED_MLLD_SHA=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$IMAGE_REF")
+          BAKED_MLLD_REF=$(docker inspect --format='{{ index .Config.Labels "mlld.ref" }}' "$IMAGE_REF")
+          BAKED_CLEAN_SHA=$(docker inspect --format='{{ index .Config.Labels "clean.sha" }}' "$IMAGE_REF")
+          echo "image-baked: mlld_ref=$BAKED_MLLD_REF mlld_sha=$BAKED_MLLD_SHA clean_sha=$BAKED_CLEAN_SHA"
+          echo "current:     clean_sha=$CLEAN_HEAD"
+
+          # Missing labels → older image, rebuild to be safe.
+          if [ -z "$BAKED_MLLD_SHA" ] || [ -z "$BAKED_MLLD_REF" ]; then
             echo "::warning::image lacks mlld labels — likely an older build, rebuilding to be safe"
             echo "stale=true" >> "$GITHUB_OUTPUT"
             echo "ref=2.1.0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          CURRENT_SHA=$(gh api "repos/mlld-lang/mlld/git/ref/heads/${BAKED_REF}" --jq .object.sha)
-          echo "mlld-head:   ref=$BAKED_REF sha=$CURRENT_SHA"
-          if [ "$BAKED_SHA" = "$CURRENT_SHA" ]; then
-            echo "image is fresh"
-            echo "stale=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::image is stale ($BAKED_SHA != $CURRENT_SHA), rebuilding"
+
+          # mlld freshness: compare baked sha against the head of baked ref.
+          CURRENT_MLLD_SHA=$(gh api "repos/mlld-lang/mlld/git/ref/heads/${BAKED_MLLD_REF}" --jq .object.sha)
+          echo "mlld-head:   ref=$BAKED_MLLD_REF sha=$CURRENT_MLLD_SHA"
+          MLLD_STALE=false
+          if [ "$BAKED_MLLD_SHA" != "$CURRENT_MLLD_SHA" ]; then
+            MLLD_STALE=true
+            echo "::notice::mlld is stale ($BAKED_MLLD_SHA != $CURRENT_MLLD_SHA)"
+          fi
+
+          # clean freshness: image's clean.sha must match this workflow's clean@HEAD.
+          # github.sha on workflow_dispatch is the dispatched ref's commit (main).
+          # If clean.sha label is missing (very old image) treat as stale.
+          CLEAN_STALE=false
+          if [ -z "$BAKED_CLEAN_SHA" ]; then
+            CLEAN_STALE=true
+            echo "::notice::image lacks clean.sha label, treating as stale"
+          elif [ "$BAKED_CLEAN_SHA" != "$CLEAN_HEAD" ]; then
+            CLEAN_STALE=true
+            echo "::notice::clean is stale ($BAKED_CLEAN_SHA != $CLEAN_HEAD)"
+          fi
+
+          if [ "$MLLD_STALE" = "true" ] || [ "$CLEAN_STALE" = "true" ]; then
             echo "stale=true" >> "$GITHUB_OUTPUT"
-            echo "ref=$BAKED_REF" >> "$GITHUB_OUTPUT"
+            echo "ref=$BAKED_MLLD_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "image is fresh on both mlld and clean"
+            echo "stale=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Rebuild image and wait
@@ -123,19 +147,26 @@ jobs:
           GH_REPO: ${{ github.repository }}
           IMAGE_REF: ${{ env.IMAGE }}:${{ inputs.image_tag }}
           BAKED_REF: ${{ steps.freshness.outputs.ref }}
+          CLEAN_HEAD: ${{ github.sha }}
         run: |
           set -e
           # Reuse an in-flight rebuild rather than starting a duplicate.
+          # Filter to runs whose head_sha matches CLEAN_HEAD so we don't join
+          # a build for an earlier push.
           IN_FLIGHT=$(gh run list --workflow=bench-image.yml \
-            --status in_progress --limit 5 \
-            --json databaseId -q '.[0].databaseId' || true)
+            --status in_progress --limit 10 \
+            --json databaseId,headSha \
+            -q ".[] | select(.headSha == \"$CLEAN_HEAD\") | .databaseId" \
+            | head -1 || true)
           if [ -z "$IN_FLIGHT" ]; then
             IN_FLIGHT=$(gh run list --workflow=bench-image.yml \
-              --status queued --limit 5 \
-              --json databaseId -q '.[0].databaseId' || true)
+              --status queued --limit 10 \
+              --json databaseId,headSha \
+              -q ".[] | select(.headSha == \"$CLEAN_HEAD\") | .databaseId" \
+              | head -1 || true)
           fi
           if [ -n "$IN_FLIGHT" ]; then
-            echo "rebuild already in flight: $IN_FLIGHT"
+            echo "rebuild already in flight for clean@$CLEAN_HEAD: $IN_FLIGHT"
             REBUILD_ID=$IN_FLIGHT
           else
             gh workflow run bench-image.yml -f mlld_ref="$BAKED_REF"
@@ -146,6 +177,17 @@ jobs:
           fi
           gh run watch "$REBUILD_ID" --exit-status
           docker pull "$IMAGE_REF"
+
+          # Sanity check: post-rebuild image should match clean@HEAD now.
+          # Catches the edge case where we joined a queued build for an
+          # older clean SHA (rare — usually only happens with manual
+          # bench-image dispatches that had a stale clean checkout).
+          POST_CLEAN_SHA=$(docker inspect --format='{{ index .Config.Labels "clean.sha" }}' "$IMAGE_REF")
+          echo "post-rebuild: clean.sha=$POST_CLEAN_SHA expected=$CLEAN_HEAD"
+          if [ -n "$POST_CLEAN_SHA" ] && [ "$POST_CLEAN_SHA" != "$CLEAN_HEAD" ]; then
+            echo "::error::post-rebuild image clean.sha ($POST_CLEAN_SHA) does not match dispatched clean@HEAD ($CLEAN_HEAD). Manually re-dispatch this workflow after the next bench-image build completes."
+            exit 1
+          fi
 
       - name: Prepare artifacts dir
         run: mkdir -p ${{ github.workspace }}/artifacts

@@ -212,15 +212,21 @@ If you don't need workspace in the run, prefer pure remote (`scripts/bench.sh tr
 
 ### Image freshness
 
-The image bakes mlld@2.1.0 + clean@main + agentdojo@mlld-rig. bench-run.yml inspects each pulled image's `mlld.sha` Docker label and compares against `mlld-lang/mlld:2.1.0` HEAD via the GitHub API: if stale, joins any in-flight `bench-image.yml` run (or dispatches one), waits, repulls. Adds ~3-4 min after a mlld push, zero overhead otherwise.
+The image bakes mlld@2.1.0 + clean@main + agentdojo@mlld-rig. bench-run.yml inspects each pulled image's `mlld.sha` AND `clean.sha` Docker labels:
 
-**Trap: the freshness check only validates against mlld HEAD, not the clean repo SHA.** A clean/ push triggers `bench-image.yml` to rebuild, but if you dispatch `bench-run.yml` immediately after the push, its `Pull image` step can fire BEFORE the image-build completes — pulling the previous image. The bench then runs against the OLD code with no warning, because the freshness check is happy (mlld unchanged). The result jsonl reports `image_sha` from the pulled image — always cross-check that the SHA matches the commit you intended to test.
+- Compares baked `mlld.sha` against `mlld-lang/mlld:<baked-ref>` HEAD via the GitHub API.
+- Compares baked `clean.sha` against the dispatched `github.sha` (clean@main at dispatch time).
+
+If either is stale, bench-run joins an in-flight `bench-image.yml` build whose `head_sha` matches clean@HEAD (or dispatches a new one), waits, repulls, and verifies the post-rebuild image's `clean.sha` matches before continuing. Adds ~3-4 min after a clean or mlld push, zero overhead otherwise.
+
+This means: **dispatching `scripts/bench.sh` immediately after a clean push is safe** — bench-run will block until the matching bench-image build completes. You don't need to manually wait for `bench-image.yml`.
+
+Edge case: if you dispatch `bench-run.yml` while a bench-image build for an *earlier* clean SHA is queued/in-progress (and no build has been triggered yet for the latest push), bench-run won't find a matching in-flight build for clean@HEAD and will dispatch a new one. The post-rebuild verification catches the unlikely case where we still end up with a mismatched `clean.sha` and aborts with an actionable error message.
 
 Recommended discipline for clean/ changes:
 
 1. **Run local canaries first.** `uv run --project bench python3 src/run.py -s <suite> -d defended -t <task_ids> -p <n>` exercises the *committed-or-uncommitted* working tree directly via the local mlld SDK. No image, no wait, no SHA confusion. Pick the specific tasks the change targets — minutes to confirm the fix shape before spending sweep cost.
-2. **Push, then wait for `bench-image.yml`.** `gh run watch <id> --exit-status` on the matching `bench-image.yml` run, or `gh run list --workflow=bench-image.yml --limit 1` to confirm completion.
-3. **Then dispatch the sweep** via `scripts/bench.sh <suite>`. Verify the fetched manifest's `image_sha` matches HEAD before reading results — if it doesn't, the bench picked up a stale image and the result is meaningless for the change under test.
+2. **Push, then dispatch directly.** `scripts/bench.sh <suite>` — bench-run handles freshness automatically. Verify the fetched manifest's `image_sha` matches HEAD afterward as a sanity check (the post-rebuild step inside bench-run already does this for clean.sha, but the manifest cross-check is good practice).
 
 ### Reading remote results
 
@@ -264,7 +270,9 @@ done
 
 Three rules for benchmark-failure tickets:
 
-**A. Every failing in-scope test has an open ticket.** No silent failures. If a task is failing on the latest sweep and isn't out-of-scope, there's a ticket for it. Multiple tasks failing for the same root cause cluster under one ticket. If the root cause isn't known yet, the ticket says "needs investigation" — file it anyway, don't wait until you have a theory.
+**A. Every failing in-scope test has an open ticket carrying the current theory.** No silent failures. If a task is failing on the latest sweep and isn't out-of-scope, there's a `[SUITE-UT<N>]`-titled ticket for it whose body is the current best theory of why it's failing (transcript-grounded per rule D). If the root cause isn't known yet, the theory is "needs investigation" — file the ticket anyway, don't wait. Multiple tasks failing for the same root cause may share a cluster ticket so long as each task id appears in the title.
+
+**A.1. Actionable fixes get their own tickets, linked to the failure tickets they would close.** A failure ticket is "this test is failing and here's why we think so." A fix ticket is "do X to address it." When the theory points at a concrete change — a prompt addendum, a rig primitive, a runtime fix, an OOS classification — file a separate fix ticket with the action in the title (e.g. `Add compose-precision rule for decimal renderings`) and `tk link` it to the failing-test ticket(s) it would resolve. This keeps the work surface (`tk ready`) populated with do-able tasks while preserving the per-task failure record. When a fix lands, the fix ticket closes; the failure ticket only closes when the test verifies green.
 
 **B. UT-tied tickets carry the task id in the title.** Format: `[SUITE-UT<N>...] short description`. Example: `[BK-UT10] send_money recipient resolved to id field` or `[WS-UT32, WS-UT37] create_file → share_file chaining returns no result handles`. Cluster tickets list all affected ids in the title. Makes `tk ls` greppable by suite/task and makes cross-references visible.
 
@@ -274,7 +282,7 @@ Three rules for benchmark-failure tickets:
 
 **E. Always report utility against full benchmark denominators.** The canonical numbers are pass-count over the *full* AgentDojo task count (workspace=40, banking=16, slack=21, travel=20 = 97 total). The OOS skip list is a workflow convenience for not re-adjudicating items during local iteration; it does NOT reduce the denominator for any number that gets compared with prior runs, other architectures, or progress baselines. Reporting "12/12 in-scope" when the actual measurement is 12/16 is goalpost movement — it makes session-over-session comparison meaningless and obscures the structural ceiling that OOS tasks impose. Always cite both: `12/16 (75%) — 3 OOS skipped, see tag:oos tickets`. The ceiling discussion belongs in a separate "what's structurally cappable" framing, not in the running utility number.
 
-These five together mean: every utility=false row in any sweep traces to a specific ticket, every ticket is current, ticket history is the audit log of what we know about each task, no ticket carries a guess as if it were a finding, and progress numbers stay honest against the full benchmark.
+These rules together mean: every utility=false row in any sweep traces to a specific failure ticket, every actionable fix has its own ticket linked to the failures it closes, every ticket is current, ticket history is the audit log of what we know about each task, no ticket carries a guess as if it were a finding, and progress numbers stay honest against the full benchmark.
 
 ## Deferred: Logging Refactor (ticket c-3edc)
 
