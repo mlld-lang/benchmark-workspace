@@ -1,6 +1,6 @@
 ---
 id: c-8dff
-status: in_progress
+status: closed
 deps: []
 links: [c-63fe]
 created: 2026-04-27T07:26:04Z
@@ -8,7 +8,7 @@ type: feature
 priority: 1
 assignee: Adam
 tags: [c-63fe, test-harness, memory-profiling, reproducer]
-updated: 2026-04-27T07:26:10Z
+updated: 2026-04-27T08:00:22Z
 ---
 # Mock-agent test program for c-63fe Phase B memory hot path repro
 
@@ -192,3 +192,68 @@ This is an mlld semantics question. Three resolution options documented in READM
 3. Refactor planner-tool exes to take agent/query/state as explicit params
 
 Foundation committed; blocker handed off (need mlld-dev or gpt input on session semantics).
+
+**2026-04-27T08:00:22Z** **2026-04-27T08:30:00Z WORKING — closed**
+
+Resolved the session-scoping blocker by declaring the mock as `exe llm @mockOpencode(prompt, config)`. The `llm` modifier is what enables the `with { session: @planner, seed: {...} }` binding semantics — same path the real @opencode/@claude harness uses. (Adam pointed this out: 'just add one'. Should have looked at ~/mlld/modules/opencode/index.mld for the wiring earlier.)
+
+## Verified metrics
+
+End-to-end run with no LLM calls, no API keys, fully deterministic:
+
+| Metric | Value |
+|--------|-------|
+| Wall time | **9+ minutes** |
+| Peak RSS | **6.8 GB** |
+| Final state size | 52 entries × 6 record types |
+| Planner tool calls | 4 (resolve_batch ×2, derive, compose) |
+| Inner MCP calls | 12 (each <20ms) |
+| LLM calls | **0** |
+
+For 52 record entries that's ~10 seconds per entry of pure-mlld processing. The synthetic phase_b_hotspot_spike.js predicted ~2 seconds for similar-sized work — actual implementation is ~300× slower than even the conservative model predicted. Compounding overhead the spike didn't simulate (factsource walks, per-spec bucket re-shaping, GC pause stacking, or hidden O(N³) somewhere).
+
+## Files (final)
+
+- `rig/test-harness/fixtures/ut19-tool-script.json` — captured UT19 sequence
+- `rig/test-harness/mock-opencode.mld` — `exe llm @mockOpencode` + `@runScript` + `@dispatchScriptStep`
+- `rig/test-harness/run-ut19-mock.mld` — runnable test program (uses `@mockOpencode` with `with { session: @planner, seed: {...} }` at the call site)
+- `scripts/repro_c63fe_mem.py` — Python wrapper wiring the AgentDojo travel env + MCP command (mirrors src/host.py); calls mlld SDK with mcp_servers and trace knobs; default 900s timeout
+- `rig/test-harness/README.md` — usage, architecture note, why it matters
+
+## How to run
+
+```bash
+# Default 12g heap, no tracing
+uv run --project bench python3 scripts/repro_c63fe_mem.py
+
+# Reproduce the original 8g failure profile
+MLLD_HEAP=8g uv run --project bench python3 scripts/repro_c63fe_mem.py
+
+# With memory + phase tracing (for mlld-dev profiling)
+MLLD_TRACE=verbose \
+  MLLD_TRACE_FILE=/tmp/c63fe-mock-trace.jsonl \
+  MLLD_TRACE_MEMORY=1 \
+  uv run --project bench python3 scripts/repro_c63fe_mem.py
+
+jq -c 'select(.event|test("memory|phase|rss|heap"))' /tmp/c63fe-mock-trace.jsonl | tail
+```
+
+## Commits
+
+- `0ed81a1` c-8dff: foundation (had session-scoping blocker)
+- `1ba9814` c-8dff: working c-63fe reproducer — exe llm fixes session scoping
+
+Pushed to main.
+
+## What this unblocks
+
+mlld-dev (and gpt working c-63fe) now has:
+- A fast iteration loop for memory profiling — every optimization shows up as wall-time delta
+- A regression test that runs in seconds-of-setup once the fix lands
+- Zero-API-key reproducer any contributor can run
+
+The fixture captures UT19's exact Phase B workload — anyone who wants to profile a different task can capture a similar fixture from any travel run's defended.jsonl mcp_calls + phase_events.
+
+## Out of scope (deferred)
+
+- Path B (full external fake-opencode binary that exercises the OUTER function-mcp-bridge per-call socket lifecycle). Per opus + codex c-63fe diagnosis, the bridge cascade is downstream of Phase B; profiling Phase B directly captures the trigger. Path B would be a future ticket only if Phase B optimization doesn't fully resolve c-63fe.
