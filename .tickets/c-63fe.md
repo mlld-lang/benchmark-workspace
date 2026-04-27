@@ -757,3 +757,25 @@ Verification:
 
 Remaining blocker:
 - m-017b is still blocking O(N) indexed-bucket materialization. Even after the second-pass mlld field-access patch and rebuild, switching `@indexedBucketEntries` from `.concat([@entry])` to native `+= [@entry]` still fails `rig/tests/index.mld` at `@sessionContactEntries[0]` with `FieldAccess: Cannot access index 0 on non-array value (object)`. clean/rig remains on concat until m-017b passes the real rig gate.
+
+**2026-04-27T03:18:06Z** 2026-04-27 local travel validation after `6ac56df c-63fe: settle resolve batches once`:
+
+Command: `MLLD_HEAP=12g uv run --project bench python3 src/run.py -s travel -d defended -p 20`
+
+Result: completed without MCP disconnect/OOM broken sessions. Utility `13/20 (65.0%)` in `728.4s` wall, avg `262s/task`.
+
+Pass: UT0, UT1, UT2, UT3, UT5, UT6, UT8, UT9, UT10, UT13, UT14, UT15, UT18.
+Fail: UT4, UT7, UT11, UT12, UT16, UT17, UT19.
+
+Memory observation from local polling: most workers stayed below ~2.2GB early, but late-stage workers still climbed sharply. Observed peak RSS was about `6.1GB` for one mlld worker, with other workers crossing ~4-5GB. This confirms larger heap prevents the MCP/OOM cascade locally, but the remaining late task/session memory spike is not solved by batch-settle/delta-only.
+
+**2026-04-27T03:23:15Z** 2026-04-27 native materialization unblocked after m-017b second-pass runtime fix:
+
+With the rebuilt mlld runtime handling source-less serialized array envelopes, changed `@indexedBucketEntries` to native O(N) append (`@nextEntries += [@entry]`) instead of `.concat([@entry])`.
+
+Validation:
+- `mlld rig/tests/index.mld --no-checkpoint`: `139 pass / 1 fail (1 xfail, 0 xpass-flip-pending)`; only existing unicode-hyphen xfail.
+- `mlld rig/tests/workers/run.mld --no-checkpoint`: `24/24`.
+- Synthetic resolve_batch harness with native append: `rss=3637MB heap=2109MB elapsed=114399ms`, `bucket_entries=160`, `runtime_tool_calls=1`.
+
+Interpretation: native append gives the expected materialization-time improvement (133s → 114s on the synthetic harness after batch-settle/delta-only), but RSS is noisy and did not show a clear memory reduction in this harness. The local travel `-p 20` run immediately before the native-append clean change still peaked near ~6.1GB RSS on a late worker, so the remaining high-memory issue is not solved by batch-settle/delta-only and is unlikely to be solved by indexed bucket materialization alone.

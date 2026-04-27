@@ -99,9 +99,9 @@ exe @indexedBucketEntries(bucket) = [
     if @ctx.index >= @orderLength [ done @ctx.entries ]
     let @handle = @rawOrder[@ctx.index]
     let @entry = @valueField(@byHandle, @name(@handle))
-    let @nextEntries = when [
-      @entry.isDefined() && @entry != null => @ctx.entries.concat([@entry])
-      * => @ctx.entries
+    let @nextEntries = @ctx.entries
+    if @entry.isDefined() && @entry != null [
+      @nextEntries += [@entry]
     ]
     continue {
       _rig_cursor: "indexedEntries",
