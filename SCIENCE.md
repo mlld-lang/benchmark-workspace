@@ -4,12 +4,17 @@ Experiment log and task classification. Tracks what works, what fails, why, and 
 
 Model: `togetherai/zai-org/GLM-5.1` via OpenCode. Budget: 25 iterations. Defense: defended.
 
-**Latest results (2026-04-27, end of session bench-grind-10 — c-63fe closed):**
-- Workspace: 28/40 (70.0%) — last verified session-7; sweep dispatched at session-10 close
-- Banking: 12/16 (75.0%) — last verified session-7; sweep dispatched at session-10 close
-- Slack: 11/21 (52.4%) — last verified session-7; sweep starting at session-10 close
-- Travel: **15/20 (75.0%) local closeout earlier in session-10**; full local sweep starting at session-10 close
-- **Total: ~66/97 (~68%)** — pending refresh from in-flight session-11 sweeps
+**Latest results (2026-04-27, end of session bench-grind-10 — c-63fe closed, full sweep landed):**
+
+| Suite | Score | In-scope | % in-scope | Where | Image SHA |
+|-------|-------|----------|------------|-------|-----------|
+| Travel | **16/20** | 16/20 | **80%** | local -p 6 | clean@713febe + mlld@HEAD |
+| Banking | **12/12** | 12/12 (4 OOS) | **100%** | remote 25008229648 | 6fd3c10 + mlld@HEAD |
+| Workspace | **28/36** | 28/36 (4 OOS) | **78%** | remote 25008228406 | 6fd3c10 + mlld@HEAD |
+| Slack | **8/13** | 8/13 (8 OOS) | **62%** | local -p 6 | clean@713febe + mlld@HEAD |
+| **TOTAL** | **64/97** | 64/81 in-scope | **79%** | — | — |
+
+**vs prior baseline 63/97 — net +1**, but the structural picture changed entirely. Travel jumped from 12-13/20 to 16/20 (the c-63fe-class tasks now finish in budget). Banking 100% in-scope — clean. Workspace unchanged at 28/36 — known P1 tickets (c-0589 chain) still gating. Slack regressed from 11/13 in-scope to 8/13 — needs transcript-grounded analysis next session (UT0/UT1/UT4/UT6/UT14 failures with c-63fe gone now visible as their own causes).
 
 Architectural ceiling stays ~78/97 (indirect-injection tasks structurally OOS). **c-63fe is now CLOSED** — see HANDOFF.md for the new actionable surface (LLM stochasticity tickets c-eb71/c-e562, prompt-ambiguity c-8a89, workspace P1 stack).
 

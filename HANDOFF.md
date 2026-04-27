@@ -7,27 +7,29 @@ Last updated: 2026-04-27 end of session bench-grind-10
 
 1. **c-63fe is dead.** Travel's structural memory blocker is gone via combined gpt rig optimization + mlld lazy materialization stack. Travel canary went 1/6 → 6/6 tasks-in-budget; c-8dff mock went 6.8GB → 1.57GB / 9min → 158s. **Don't waste time on c-63fe diagnosis** — it's done.
 
-2. **A full pass of all suites was started at session-10 close.** Your first job is to read the results:
-   - **Local sweeps**: `bench/results/togetherai/zai-org/GLM-5.1/{travel,slack}/defended.jsonl`
-   - **Remote sweeps**: `gh run list --workflow=bench-run.yml --limit 6` to find run IDs, then `uv run --project bench python3 src/fetch_run.py <run-id>`
-   - **Already verified** at session-10 close: slack local **8/13 in-scope (61.5%)** — has new failure modes (UT0/UT1/UT4/UT6/UT14) that weren't visible historically when c-63fe was hiding behavior
+2. **All four suite sweeps completed at session-10 close.** Numbers are in SCIENCE.md and the table below. Your first job is to **read transcripts of all failures** and update tickets with transcript-grounded diagnoses. Per CLAUDE.md convention D — diagnoses must be transcript-grounded, not call-sequence guesses.
 
-3. **READ THE TRANSCRIPTS for ALL failing and slow tasks before writing diagnoses.** Per CLAUDE.md ticket convention D: "Diagnoses must be transcript-grounded, not call-sequence guesses." Use `uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions` for remote, or `~/.local/share/opencode/opencode.db` for local.
+3. **The slack regression is the priority transcript read.** Slack went from 11/13 in-scope to 8/13. UT0/UT1/UT4/UT6/UT14 failures need careful investigation — were they always broken (and c-63fe was hiding behavior), or did the mlld optimization stack introduce a regression? Initial transcript skim suggests at least UT4 has a real wrong-action mode (`post_webpage(url="www.our-company.com", ...)` — model used a hard-coded URL instead of one from Bob's inbox), and UT1 hit budget exhaustion.
 
-4. **Update SCIENCE.md** with the post-session-10 fresh-sweep results once you've read transcripts and have transcript-grounded diagnoses.
+4. The new actionable surface (with c-63fe dead) is **LLM stochasticity / prompt ambiguity / eval-mismatch / planner self-correction failures** — totally separate ticket class from infrastructure work.
 
-5. The new actionable surface (with c-63fe dead) is **LLM stochasticity / prompt ambiguity / eval-mismatch** — totally separate ticket class from infrastructure work.
+## Session-10 final sweep results (all completed before close)
 
-## In-flight at session-10 close
+| Suite | Score | In-scope | % in-scope | Wall | Image |
+|-------|-------|----------|------------|------|-------|
+| Travel | **16/20** | 16/20 | **80%** | 12 min local | clean@713febe + mlld@HEAD |
+| Banking | **12/12** | 12/12 (4 OOS) | **100%** | 6 min remote | `6fd3c10` + mlld@HEAD (run 25008229648) |
+| Workspace | **28/36** | 28/36 (4 OOS) | **78%** | 10.5 min remote | `6fd3c10` + mlld@HEAD (run 25008228406) |
+| Slack | **8/13** | 8/13 (8 OOS) | **62%** | 5.6 min local | clean@713febe + mlld@HEAD |
+| **TOTAL** | **64/97** | **64/81** | **79% in-scope** | — | — |
 
-| Sweep | Where | Run ID | Started | Expected |
-|-------|-------|--------|---------|----------|
-| Travel | local `-p 6` MLLD_HEAP=8g | PID file `/tmp/clean-bgrind10/canary/full-travel.pid` | ~16:54 UTC | ~10-15 min wall |
-| Slack | local `-p 6` MLLD_HEAP=8g | PID file `/tmp/clean-bgrind10/canary/full-slack.pid` | ~16:54 UTC | **DONE: 8/13 in-scope (61.5%)** at 16:59 UTC |
-| Workspace | cloud bench-run.yml | 25008228406 | ~16:54 UTC | ~15 min wall |
-| Banking | cloud bench-run.yml | 25008229648 | ~16:54 UTC | ~10 min wall |
+vs 63/97 baseline. Net +1 absolute, but the structural picture changed entirely:
+- Travel: 12-13 → **16** (c-63fe-class tasks now finish in budget)
+- Banking: 12 → 12 (clean run, no cascade risk)
+- Workspace: 28 → 28 (known P1 tickets still gating; not regressed)
+- Slack: 11/13 → **8/13** (regression — needs transcript reads to determine if c-63fe was hiding behavior or new cause)
 
-Image freshness check fired and rebuilt for both remote runs. Both got mlld@HEAD + clean@6fd3c10. (Verify with `jq .image_sha runs/<id>/manifest.json` after fetch — should match HEAD.)
+Image SHA `6fd3c10` for remote runs (rig optimizations); both remote sweeps fired image-freshness rebuild and pulled mlld@HEAD via the rebuild.
 
 ## What c-63fe killing unblocked
 
