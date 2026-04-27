@@ -222,7 +222,8 @@ var tools @tools = {
     mlld: @search_contacts_by_name,
     returns: @contact,
     labels: ["resolve:r", "known"],
-    description: "Search contacts by one display name string. For multiple names, call this tool separately for each name or derive a per-person structure first."
+    description: "Search contacts by one display name string. For multiple names, call this tool separately for each name or derive a per-person structure first.",
+    instructions: "The query must be a person's name."
   },
   search_contacts_by_email: {
     mlld: @search_contacts_by_email,

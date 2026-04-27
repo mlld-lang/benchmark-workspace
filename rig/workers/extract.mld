@@ -10,7 +10,8 @@ import {
   @extractToolResultValue,
   @previewFields,
   @updateNamedState,
-  @updateExtractSources
+  @updateExtractSources,
+  @plainObjectKeys
 } from "../runtime.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @compileToolArgs, @resolveRefValue } from "../intent.mld"
@@ -22,7 +23,7 @@ import {
   @plannerValidationFailure
 } from "../planner_inputs.mld"
 
-exe @extractPrompt(query, sourceValue, schemaDoc, decision) = template "../prompts/extract.att"
+exe @extractPrompt(query, sourceValue, schemaDoc, decision, suiteAddendum) = template "../prompts/extract.att"
 
 >> Only dedup resolved sources. Re-extracting from resolved state with a
 >> different name is always redundant — the data hasn't changed. But
@@ -238,7 +239,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
   let @schemaCheck = @validateExtractSchema(@agent.records ?? {}, @decision.schema)
   if !@schemaCheck.ok [ => @plannerValidationFailure(@schemaCheck.error, @schemaCheck, @schemaCheck.issues) ]
   let @schemaDef = @schemaRecord(@agent, @decision.schema)
-  let @prompt = @extractPrompt(@query, @resolvedSource.value, @schemaDef ?? @decision.schema, @decision)
+  let @prompt = @extractPrompt(@query, @resolvedSource.value, @schemaDef ?? @decision.schema, @decision, @agent.extractAddendum ?? "")
   let @raw = @llmCall(@agent.harness, @prompt, {
     model: @agent.workerModel ?? @agent.model,
     pure: @agent.opencodePure,
@@ -308,4 +309,4 @@ exe @dispatchExtract(agent, state, decision, query) = [
   }
 ]
 
-export { @extractPrompt, @coerceExtractAttestation, @dispatchExtract }
+export { @extractPrompt, @coerceExtractAttestation, @dispatchExtract, @validateExtractSchema }

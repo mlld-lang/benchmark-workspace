@@ -44,6 +44,8 @@ Insufficient-information response (use only when the inputs genuinely don't supp
 Selection ref format:
 { "source": "selection", "backing": { "record": "<record>", "handle": "<exact handle from resolved_handles>" } }
 
+@suiteAddendum
+
 Normal derived response:
 
 {

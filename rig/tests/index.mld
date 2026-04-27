@@ -55,7 +55,7 @@ import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry,
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
-import { @coerceExtractAttestation, @dispatchExtract } from "../workers/extract.mld"
+import { @coerceExtractAttestation, @dispatchExtract, @validateExtractSchema } from "../workers/extract.mld"
 import { @coerceDeriveAttestation } from "../workers/derive.mld"
 import { @planner, @plannerTools, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress } from "../workers/planner.mld"
 
@@ -3509,8 +3509,45 @@ var @uhResult = @lowerSelectionRef(@uhState, @uhRef)
 var @uhOk = @uhResult.ok == true
 var @uhPretty = `lookup(unicode-hyphen handle on ascii-handle bucket) ok=@uhResult.ok error=@uhResult.error`
 
+>> ============================================================================
+>> c-c79c — validateExtractSchema lock-in tests
+>> Production bench (run 25008228406) showed extract_empty_inline_schema firing
+>> on perfectly well-formed inline schemas {type:"object", properties:{...}}.
+>> Local repros via in-process literals + JSON parse + record coercion all PASS,
+>> so the production failure path differs (likely MCP-arrival-only). These tests
+>> lock in the in-process behavior so it can't silently regress while we keep
+>> the failure-path cause open.
+>> ============================================================================
+var @c79cInlineSchema = { type: "object", properties: { description: { type: "string" } } }
+var @c79cValidNonEmpty = @validateExtractSchema({}, @c79cInlineSchema)
+var @c79cValidNonEmptyOk = @c79cValidNonEmpty.ok == true
+var @c79cValidNonEmptyDetail = `inline schema — ok=@c79cValidNonEmpty.ok error=@c79cValidNonEmpty.error`
+
+var @c79cJsonStr = `{"type":"object","properties":{"title":{"type":"string"},"description":{"type":"string"}}}`
+var @c79cJsonParsed = @c79cJsonStr | @parse
+var @c79cValidJsonParsed = @validateExtractSchema({}, @c79cJsonParsed)
+var @c79cValidJsonParsedOk = @c79cValidJsonParsed.ok == true
+var @c79cValidJsonParsedDetail = `JSON-parsed inline schema — ok=@c79cValidJsonParsed.ok error=@c79cValidJsonParsed.error`
+
+var @c79cEmptyObject = @validateExtractSchema({}, {})
+var @c79cEmptyObjectOk = @c79cEmptyObject.ok == false && @c79cEmptyObject.error == "extract_empty_inline_schema"
+var @c79cEmptyObjectDetail = `empty {} schema — correctly rejected ok=@c79cEmptyObject.ok error=@c79cEmptyObject.error`
+
+var @c79cNullSchema = @validateExtractSchema({}, null)
+var @c79cNullSchemaOk = @c79cNullSchema.ok == true
+var @c79cNullSchemaDetail = `null schema — correctly accepts ok=@c79cNullSchema.ok`
+
+var @c79cSchemaName = @validateExtractSchema({ calendar_evt: { facts: [], data: [] } }, "calendar_evt")
+var @c79cSchemaNameOk = @c79cSchemaName.ok == true && @c79cSchemaName.record == true
+var @c79cSchemaNameDetail = `schema_name string referencing existing record — ok=@c79cSchemaName.ok record=@c79cSchemaName.record`
+
 exe @allChecks() = [
   => [
+  @check("c-c79c/V1-non-empty-inline-schema-passes", @c79cValidNonEmptyOk, @c79cValidNonEmptyDetail),
+  @check("c-c79c/V2-json-parsed-inline-schema-passes", @c79cValidJsonParsedOk, @c79cValidJsonParsedDetail),
+  @check("c-c79c/V3-empty-object-correctly-rejected", @c79cEmptyObjectOk, @c79cEmptyObjectDetail),
+  @check("c-c79c/V4-null-schema-passes", @c79cNullSchemaOk, @c79cNullSchemaDetail),
+  @check("c-c79c/V5-schema-name-string-passes", @c79cSchemaNameOk, @c79cSchemaNameDetail),
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
   @check("CAT-1", @catalogTransparentInputRecordOk, @catalogTransparentInputRecordDetail),
   @check("CAT-2", @catalogTransparentMetadataOk, @catalogTransparentMetadataDetail),

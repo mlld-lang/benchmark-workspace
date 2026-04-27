@@ -15,7 +15,7 @@ import {
   @plannerValidationFailure
 } from "../planner_inputs.mld"
 
-exe @derivePrompt(query, sources, schemaDoc, decision, handleMap) = template "../prompts/derive.att"
+exe @derivePrompt(query, sources, schemaDoc, decision, handleMap, suiteAddendum) = template "../prompts/derive.att"
 
 >> Mirrors the extract-side hardening (see extract.mld for rationale).
 >> Without this, `@parse.llm` turns "" / "null" / non-JSON into mlld-null,
@@ -138,7 +138,7 @@ exe @dispatchDerive(agent, state, decision, query) = [
     => for @e in @entries => { record: @source.record, handle: @e.handle }
   ]
   let @flatHandles = @handleMap.flat()
-  let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision, @flatHandles)
+  let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision, @flatHandles, @agent.deriveAddendum ?? "")
   let @raw = @llmCall(@agent.harness, @prompt, {
     model: @agent.workerModel ?? @agent.model,
     pure: @agent.opencodePure,

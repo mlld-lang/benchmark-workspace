@@ -165,6 +165,9 @@ exe @validateConfig(config) = [
     innerWorkerStateHome: @config.innerWorkerStateHome ?? "/tmp/mlld-rig-inner-worker-state",
     opencodePure: @config.opencodePure ?? true,
     plannerAddendum: @config.plannerAddendum ?? "",
+    deriveAddendum: @config.deriveAddendum ?? "",
+    extractAddendum: @config.extractAddendum ?? "",
+    composeAddendum: @config.composeAddendum ?? "",
     toolFilter: @config.toolFilter ?? null
   }
 ]

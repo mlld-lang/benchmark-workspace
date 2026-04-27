@@ -34,6 +34,8 @@ Output rules:
 - Do not expose internal handles, record types, policy details, or debug structures.
 - Keep the answer concise — 1-3 sentences for simple lookups, a short paragraph for multi-step tasks.
 
+@suiteAddendum
+
 {
   "text": "<final answer>"
 }

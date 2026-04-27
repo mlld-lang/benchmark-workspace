@@ -1,7 +1,7 @@
 import { @rig } from "../../rig/index.mld"
 import { @records } from "../domains/travel/records.mld"
 import { @tools } from "../domains/travel/tools.mld"
-import { @travelAddendum } from "../domains/travel/prompts/planner-addendum.mld"
+import { @travelAddendum, @travelDeriveAddendum } from "../domains/travel/prompts/planner-addendum.mld"
 import { @routeTravel } from "../domains/travel/router.mld"
 
 import { @query, @model } from @payload
@@ -18,6 +18,7 @@ var @result = @rig.run({
   workerModel: @payload.worker_model,
   toolFilter: @toolFilter,
   plannerAddendum: @travelAddendum,
+  deriveAddendum: @travelDeriveAddendum,
   harness: @payload.harness,
   phaseLogFile: @payload.phase_log_file ?? null,
   phaseStateFile: @payload.phase_state_file ?? null,
