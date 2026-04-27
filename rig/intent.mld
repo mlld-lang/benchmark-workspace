@@ -34,19 +34,30 @@ exe @argNameList(values) = [
   => for @value in (@values ?? []) => @name(@value)
 ]
 
-exe @roleForArg(tool, argName) = [
+exe @toolArgMeta(tool, argName) = [
   let @arg = @name(@argName)
   let @controlArgs = @argNameList(@toolControlArgs(@tool))
   let @payloadArgs = @argNameList(@toolPayloadArgs(@tool))
-  => when [
+  let @exactArgs = @argNameList(@toolExactArgs(@tool))
+  let @role = when [
     @controlArgs.includes(@arg) => "control"
     @payloadArgs.includes(@arg) => "payload"
     * => "unknown"
   ]
+  => {
+    arg: @arg,
+    role: @role,
+    exact: @exactArgs.includes(@arg),
+    control_count: @controlArgs.length
+  }
+]
+
+exe @roleForArg(tool, argName) = [
+  => @toolArgMeta(@tool, @argName).role
 ]
 
 exe @isExactArg(tool, argName) = [
-  => @argNameList(@toolExactArgs(@tool)).includes(@name(@argName))
+  => @toolArgMeta(@tool, @argName).exact
 ]
 
 exe @bucketObject(bucketValue) = when [
@@ -602,11 +613,16 @@ exe @knownInTask(query, literalValue) = js {
 }
 
 exe @compileScalarRef(state, tool, argName, ref, query) = [
-  let @arg = @name(@argName)
-  let @role = @roleForArg(@tool, @arg)
+  let @argMeta = @toolArgMeta(@tool, @argName)
+  => @compileScalarRefWithMeta(@state, @tool, @argMeta, @ref, @query)
+]
+
+exe @compileScalarRefWithMeta(state, tool, argMeta, ref, query) = [
+  let @arg = @argMeta.arg
+  let @role = @argMeta.role
   if @role == "unknown" [ => { ok: false, arg: @arg, error: "unknown_tool_arg" } ]
 
-  let @exactArg = @isExactArg(@tool, @arg)
+  let @exactArg = @argMeta.exact
   let @controlResolved = when [
     @role != "control" => null
     @refSource(@ref) == "selection" => @resolveControlRefValue(@state, @ref)
@@ -632,7 +648,7 @@ exe @compileScalarRef(state, tool, argName, ref, query) = [
   ]
 
   if @resolved.source == "allow" [
-    if @toolControlArgs(@tool).length > 0 [
+    if @argMeta.control_count > 0 [
       => { ok: false, arg: @arg, error: "allow_requires_no_control_args" }
     ]
     => {
@@ -806,7 +822,8 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
   let @arg = @name(@argName)
 
   if @typeof(@ref) == "array" [
-    let @compiled = for @item in @ref => @compileScalarRef(@state, @tool, @arg, @item, @query)
+    let @argMeta = @toolArgMeta(@tool, @arg)
+    let @compiled = for @item in @ref => @compileScalarRefWithMeta(@state, @tool, @argMeta, @item, @query)
     let @errors = for @entry in @compiled when !@entry.ok => @entry
     if @errors.length > 0 [
       => { ok: false, arg: @arg, error: "array_arg_element_invalid", issues: @errors }
@@ -818,10 +835,15 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
         * => { _rig_cursor: "backingRefs", index: 0, values: [] }
       ]
       if @ctx.index >= @compiled.length [ done @ctx.values ]
+      let @nextValues = @ctx.values
+      let @entryValues = @compiled[@ctx.index].backing_refs ?? []
+      if @entryValues.length > 0 [
+        @nextValues += @entryValues
+      ]
       continue {
         _rig_cursor: "backingRefs",
         index: @ctx.index + 1,
-        values: @ctx.values.concat(@compiled[@ctx.index].backing_refs ?? [])
+        values: @nextValues
       }
     ]
     let @flatAttestations = loop(1000) [
@@ -830,10 +852,15 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
         * => { _rig_cursor: "flatAttestations", index: 0, values: [] }
       ]
       if @ctx.index >= @compiled.length [ done @ctx.values ]
+      let @nextValues = @ctx.values
+      let @entryValues = @compiled[@ctx.index].flat_attestations ?? []
+      if @entryValues.length > 0 [
+        @nextValues += @entryValues
+      ]
       continue {
         _rig_cursor: "flatAttestations",
         index: @ctx.index + 1,
-        values: @ctx.values.concat(@compiled[@ctx.index].flat_attestations ?? [])
+        values: @nextValues
       }
     ]
     let @values = for @entry in @compiled => @entry.value

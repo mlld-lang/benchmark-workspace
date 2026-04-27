@@ -271,3 +271,9 @@ This is the entire timing-analysis story. No bespoke instrumentation in rig.
 - Append: `~/mlld/mlld/docs/src/atoms/output/03-append.md`
 - Current rig logging: `~/mlld/clean/rig/lifecycle.mld`, `~/mlld/clean/rig/runtime.mld:147`, `~/mlld/clean/rig/workers/planner.mld:194-232`
 
+
+## Notes
+
+**2026-04-27T07:24:59Z** 2026-04-27 c-63fe instrumentation note: the immediate need is not more firehose logging. For rig memory work, add compact phase-level attribution: first boundary where RSS/heap jumps, payload byte sizes for state summaries/prompts/session writes, clone/materialization counters if available, and top deltas by rig phase. Keep this separate from the runtime --trace-memory summary work now tracked in mlld:m-15d9.
+
+**2026-04-27T07:27:22Z** 2026-04-27 sequencing breadcrumb: For c-63fe memory work, prefer compact phase-level memory attribution over additional firehose logs. The next rig-side logging work should consume/align with mlld:m-15d9 summaries and the worst-travel-case repro, then report payload sizes and first-jump boundaries.
