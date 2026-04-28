@@ -2102,6 +2102,7 @@ var @taintedExtractMarker = "ATTACKER_INJECTED_PAYLOAD_MARKER"
 var @taintedDerivedMarker = "DERIVED_ATTACK_PAYLOAD_MARKER"
 var @indexedExtractMarker = "INDEXED_EXTRACT_BODY_MARKER"
 var @indexedDerivedMarker = "INDEXED_DERIVED_BODY_MARKER"
+var @schemaPrefixedDerivedMarker = "SCHEMA_PREFIXED_DERIVED_BODY_MARKER"
 var @stateWithTaintedNamedValues = {
   resolved: {},
   extracted: {
@@ -2157,6 +2158,15 @@ var @stateWithTaintedNamedValues = {
           { body: @indexedDerivedMarker }
         ]
       }
+    },
+    ranked_message_array: {
+      provenance: "derived",
+      schema_name: "messages",
+      preview_fields: ["body"],
+      value: [
+        { body: "ignored array row 0" },
+        { body: @schemaPrefixedDerivedMarker }
+      ]
     }
   },
   extract_sources: {}
@@ -2242,6 +2252,60 @@ var @extractedPayloadCompilePretty = `ok=@field(@extractedPayloadCompile, "ok") 
 var @derivedPayloadCompilePretty = `ok=@field(@derivedPayloadCompile, "ok") content=@field(@field(@derivedPayloadCompile, "compiled_args"), "content")`
 var @indexedExtractedPayloadCompilePretty = `ok=@field(@indexedExtractedPayloadCompile, "ok") content=@field(@field(@indexedExtractedPayloadCompile, "compiled_args"), "content")`
 var @indexedDerivedPayloadCompilePretty = `ok=@field(@indexedDerivedPayloadCompile, "ok") content=@field(@field(@indexedDerivedPayloadCompile, "compiled_args"), "content")`
+var @numericDotArrayPayloadCompile = @compileExecuteIntent(
+  @stateWithTaintedNamedValues,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "derived", name: "ranked_message_array", field: "1.body" }
+    }
+  },
+  "create a note from numeric-dot indexed derived content"
+)
+var @schemaPrefixedArrayPayloadCompile = @compileExecuteIntent(
+  @stateWithTaintedNamedValues,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "derived", name: "ranked_message_array", field: "messages[1].body" }
+    }
+  },
+  "create a note from schema-prefixed indexed derived content"
+)
+var @numericDotArrayPayloadCompileOk = @numericDotArrayPayloadCompile.ok &&
+  @field(@field(@numericDotArrayPayloadCompile, "compiled_args"), "content") == @schemaPrefixedDerivedMarker
+var @schemaPrefixedArrayPayloadCompileOk = @schemaPrefixedArrayPayloadCompile.ok &&
+  @field(@field(@schemaPrefixedArrayPayloadCompile, "compiled_args"), "content") == @schemaPrefixedDerivedMarker
+var @numericDotArrayPayloadCompilePretty = `ok=@field(@numericDotArrayPayloadCompile, "ok") content=@field(@field(@numericDotArrayPayloadCompile, "compiled_args"), "content")`
+var @schemaPrefixedArrayPayloadCompilePretty = `ok=@field(@schemaPrefixedArrayPayloadCompile, "ok") content=@field(@field(@schemaPrefixedArrayPayloadCompile, "compiled_args"), "content")`
+var @missingDerivedPath = @resolveRefValue(@stateWithTaintedNamedValues, {
+  source: "derived",
+  name: "ranked_messages",
+  field: "messages[0].body"
+})
+var @missingDerivedPathCompile = @compileExecuteIntent(
+  @stateWithTaintedNamedValues,
+  @tools,
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "derived", name: "ranked_messages", field: "messages[0].body" }
+    }
+  },
+  "create a note from missing derived content"
+)
+var @missingDerivedPathOk =
+  !@missingDerivedPath.ok &&
+  @missingDerivedPath.error == "derived_field_missing" &&
+  !@missingDerivedPathCompile.ok &&
+  @missingDerivedPathCompile.error == "intent_compile_failed" &&
+  @missingDerivedPathCompile.issues[0].error == "derived_field_missing"
+var @missingDerivedPathPretty = `resolve=@missingDerivedPath compile=@missingDerivedPathCompile`
 
 var @wrappedScalarNamedState = {
   resolved: {},
@@ -3638,6 +3702,9 @@ exe @allChecks() = [
   @check("execute-compile-reads-derived-state", @derivedPayloadCompileOk, @derivedPayloadCompilePretty),
   @check("execute-compile-reads-indexed-extracted-state", @indexedExtractedPayloadCompileOk, @indexedExtractedPayloadCompilePretty),
   @check("execute-compile-reads-indexed-derived-state", @indexedDerivedPayloadCompileOk, @indexedDerivedPayloadCompilePretty),
+  @check("execute-compile-reads-numeric-dot-derived-array-index", @numericDotArrayPayloadCompileOk, @numericDotArrayPayloadCompilePretty),
+  @check("execute-compile-reads-schema-prefixed-derived-array-index", @schemaPrefixedArrayPayloadCompileOk, @schemaPrefixedArrayPayloadCompilePretty),
+  @check("execute-compile-rejects-missing-derived-field-path", @missingDerivedPathOk, @missingDerivedPathPretty),
   @check("execute-compile-unwraps-wrapped-extracted-scalar", @wrappedScalarExtractCompileOk, @wrappedScalarExtractCompilePretty),
   @check("execute-compile-unwraps-wrapped-derived-scalar", @wrappedScalarDerivedCompileOk, @wrappedScalarDerivedCompilePretty),
   @check("record-backed-named-state-projects-display", @recordBackedDisplayOk, @recordBackedDisplayPretty),

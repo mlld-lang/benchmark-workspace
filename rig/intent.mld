@@ -209,11 +209,26 @@ exe @valueIndex(inputValue, indexValue) = [
   ]
 ]
 
+exe @numericPathIndex(inputValue) = js {
+  const raw = inputValue == null ? "" : String(inputValue);
+  if (!/^(0|[1-9]\d*)$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
 exe @pathStepValue(inputValue, step) = [
   let @kind = @name(@valueField(@step, "kind"))
   let @value = @valueField(@step, "value")
   => when [
-    @kind == "field" => @valueField(@inputValue, @value)
+    @kind == "field" => [
+      let @fieldValue = @valueField(@inputValue, @value)
+      if @fieldValue != null [ => @fieldValue ]
+      let @numericIndex = @numericPathIndex(@value)
+      => when [
+        @numericIndex != null => @valueIndex(@inputValue, @numericIndex)
+        * => null
+      ]
+    ]
     @kind == "index" => @valueIndex(@inputValue, @value)
     * => null
   ]
@@ -477,14 +492,29 @@ exe @resolveNamedValue(state, bucketName, ref) = [
   let @bucket = @bucketObject(@state[@bucketName])
   let @entry = @namedStateEntry(@bucket[@ref.name])
   if !@entry.isDefined() [ => { ok: false, error: `@bucketName\_name_not_found`, name: @ref.name } ]
+  let @rootValue = @namedEntryRootValue(@entry)
   let @value = when [
-    !@ref.field.isDefined() => @namedEntryRootValue(@entry)
+    !@ref.field.isDefined() => @rootValue
     * => loop(1000) [
       let @steps = @fieldPathSteps(@ref.field)
-      if @steps.length == 0 [ done @namedEntryRootValue(@entry) ]
+      if @steps.length == 0 [ done @rootValue ]
+      let @schemaName = @name(@entry.schema_name)
+      let @firstStep = @steps[0] ?? null
+      let @firstKind = @name(@valueField(@firstStep, "kind"))
+      let @firstValue = @name(@valueField(@firstStep, "value"))
+      let @schemaFieldValue = @valueField(@rootValue, @schemaName)
+      let @schemaFieldMissing = @schemaFieldValue == null
+      let @stripSchemaPrefix = @schemaName.isDefined() &&
+        (@firstKind == "field") &&
+        (@firstValue == @schemaName) &&
+        @schemaFieldMissing
       let @ctx = when [
         @input["_rig_cursor"] == "namedEntryFieldPath" => @input
-        * => { _rig_cursor: "namedEntryFieldPath", index: 0, value: @namedEntryRootValue(@entry) }
+        * => {
+          _rig_cursor: "namedEntryFieldPath",
+          index: when [ @stripSchemaPrefix => 1 * => 0 ],
+          value: @rootValue
+        }
       ]
       if !@ctx.value.isDefined() || @ctx.value == null [ done null ]
       if @ctx.index >= @steps.length [ done @ctx.value ]
@@ -497,7 +527,7 @@ exe @resolveNamedValue(state, bucketName, ref) = [
     ]
   ]
   => when [
-    @value.isDefined() => { ok: true, source: @bucketName, name: @ref.name, value: @value }
+    @value.isDefined() && @value != null => { ok: true, source: @bucketName, name: @ref.name, value: @value }
     * => { ok: false, error: `@bucketName\_field_missing`, name: @ref.name, field: @ref.field }
   ]
 ]
