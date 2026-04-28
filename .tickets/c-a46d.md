@@ -7,9 +7,10 @@ created: 2026-04-27T17:32:50Z
 type: chore
 priority: 2
 assignee: Adam
-updated: 2026-04-27T17:33:02Z
+updated: 2026-04-28T04:42:13Z
+tags: [oos-deferred]
 ---
-# Action: OOS-classify SL-UT1, SL-UT4 under defended-boundary family (URLs in untrusted bodies)
+# OOS-DEFERRED: SL-UT1 - URL in untrusted message body; same URL-promotion family as SL-UT4 and SL-UT6
 
 **Action**: Add user_task_1 and user_task_4 to src/run.py SKIP_TASKS for the slack suite, with reason: "URLs embedded in untrusted message bodies cannot reach get_webpage as control args without weakening the clean-planner invariant. Same defended-boundary class as SL-UT2/UT11/UT15/UT16/UT17/UT18/UT19/UT20."
 

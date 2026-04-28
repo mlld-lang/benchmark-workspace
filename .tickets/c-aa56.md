@@ -7,8 +7,8 @@ created: 2026-04-25T18:50:56Z
 type: task
 priority: 4
 assignee: Adam
-tags: [oos]
-updated: 2026-04-25T18:50:56Z
+tags: [oos, oos-deferred]
+updated: 2026-04-28T04:42:13Z
 ---
-# WS-UT19 combined UT1+UT13. Same OOS reason as WS-UT13 (instruction-following over untrusted email).
+# OOS-DEFERRED: WS-UT19 - combined UT1+UT13; same family
 

@@ -7,9 +7,10 @@ created: 2026-04-25T18:29:25Z
 type: bug
 priority: 1
 assignee: Adam
-updated: 2026-04-27T17:33:01Z
+updated: 2026-04-28T04:42:13Z
+tags: [oos-exhausted]
 ---
-# WS-UT18 start_time off — UNVERIFIED whether worker date error or missing email date-shift patch
+# OOS-EXHAUSTED: WS-UT18 - date arithmetic worker miss; both prompt and structural fix paths attempted
 
 Workspace UT18 (hiking trip with Mark from emails). HANDOFF says 'flaky'. Latest sweep run 24933533254: model called get_current_datetime, search_contacts_by_name(Mark), search_emails_any_sender(hiking), got two emails (id 20 + id 18), then created calendar event titled 'Hiking Trip with Mark' for 2026-05-18 08:00 to 13:00 (5 hours). Utility false.
 

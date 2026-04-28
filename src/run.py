@@ -33,34 +33,54 @@ from date_shift import get_shifted_suite
 BENCHMARK_VERSION = "v1.1.1"
 SUITES = ["workspace", "slack", "banking", "travel"]
 
-# Tasks excluded from benign runs. Out-of-scope (oos) tasks require capabilities
-# the defended architecture structurally cannot provide (instruction-following over
-# untrusted content, recipient from untrusted file, etc). Non-gating tasks fail on
-# evaluator wording, not agent behavior.
+# Tasks skipped during local debugging runs. Skipping is a workflow convenience —
+# it does NOT reduce the benchmark denominator (97 tasks total). Every entry below
+# remains an in-scope failure against the full 97 for any reported utility number.
+#
+# Buckets (see CLAUDE.md "Test prioritization buckets"):
+#   OOS-DEFERRED   - we know how to fix; architectural primitive on roadmap
+#   OOS-EXHAUSTED  - tried; further attempts would be benchmark-shaping/overfitting
+#   OOS-CANDIDATE  - believed exhausted but visible in sweeps for evidence
+#                    (CANDIDATE entries are typically NOT skipped to keep evidence flowing)
 SKIP_TASKS: dict[str, set[str]] = {
     "workspace": {
-        "user_task_13",   # c-91c6 oos: instruction-following over untrusted email
-        "user_task_19",   # c-aa56 oos: combined UT1 + UT13
-        "user_task_25",   # c-6df0 oos: instruction-following over untrusted file
-        "user_task_31",   # c-f97b non-gating: evaluator rejects synonym wording
+        # OOS-DEFERRED — typed-instruction channel deferred (v3 architecture)
+        "user_task_13",   # c-91c6: instruction-following over untrusted email
+        "user_task_19",   # c-aa56: combined UT1 + UT13
+        "user_task_25",   # c-6df0: instruction-following over untrusted file
+        # OOS-EXHAUSTED — eval design vs agent correctness
+        "user_task_31",   # c-f97b: eval strict text match rejects synonym wording
+        "user_task_18",   # c-bae4: date arithmetic worker miss; both fix paths attempted
+        "user_task_33",   # c-5929: 'the client' linguistic ambiguity (~50% pass)
     },
     "banking": {
-        "user_task_0",    # c-4ab7 oos: recipient from untrusted bill file
-        "user_task_9",    # c-82a9 oos: AgentDojo eval requires no-op (pre_env == post_env), task wording asks to update
-        "user_task_10",   # c-f232 oos: AgentDojo eval requires no-op, COMMENT explicitly says utility fails on any action
-        "user_task_14",   # c-228e oos: utility passes only by complying with social-engineering update_password (defended hard-deny)
+        # OOS-DEFERRED — structured-content extraction primitive deferred
+        "user_task_0",    # c-4ab7: recipient IBAN from untrusted bill file
+        # OOS-EXHAUSTED — eval design adversarial to defended posture
+        "user_task_9",    # c-82a9: eval requires no-op; task wording asks to update
+        "user_task_10",   # c-f232: eval requires no-op; comment says utility fails on any action
+        "user_task_14",   # c-228e: eval requires social-engineering update_password compliance
     },
     "slack": {
-        "user_task_2",    # c-1d4b oos: invite control args (user, user_email) from untrusted webpage
-        "user_task_11",   # c-5755 oos: invite control args (user, user_email) from untrusted message body
-        "user_task_15",   # c-3287 oos: get_webpage(url) control arg from URLs found in untrusted message bodies
-        "user_task_16",   # c-4814 oos: contains UT2 invite-from-webpage substep for Dora
-        "user_task_17",   # c-9cd0 oos: email from untrusted webpage
-        "user_task_18",   # c-ccbc oos: instructions from external URL
-        "user_task_19",   # c-55d2 oos: instructions from external URL
-        "user_task_20",   # c-1487 oos: combined UT15 + UT16 (UT16 boundary)
+        # OOS-DEFERRED — URL-promotion primitive (find_referenced_urls + get_webpage_via_ref) deferred
+        "user_task_1",    # c-a46d: URL in untrusted message body
+        "user_task_2",    # c-1d4b: invite control args from untrusted webpage
+        "user_task_4",    # c-8738: URL in untrusted message body
+        "user_task_6",    # c-8738: URL in untrusted message body (post-mlld-fix; URL-grounding gate)
+        "user_task_11",   # c-5755: invite from untrusted message body
+        "user_task_15",   # c-3287: get_webpage URL from untrusted body
+        "user_task_16",   # c-4814: contains UT2 invite-from-webpage substep
+        "user_task_17",   # c-9cd0: email from untrusted webpage
+        "user_task_18",   # c-ccbc: instructions from external URL
+        "user_task_19",   # c-55d2: instructions from external URL
+        "user_task_20",   # c-1487: combined UT15 + UT16
+        # OOS-EXHAUSTED — eval requires literal '{k}-th' substitution (1-th, not 1st)
+        "user_task_14",   # c-3701: eval design we don't shape around
     },
-    "travel": {},
+    "travel": {
+        # OOS-EXHAUSTED — interpretation ambiguity, eval picks one valid reading
+        "user_task_11",   # c-8a89: 'lunch and dinner for 2' = 2 meals OR 2 people
+    },
 }
 
 ATTACKS = [

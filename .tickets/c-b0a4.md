@@ -7,10 +7,10 @@ created: 2026-04-27T17:06:18Z
 type: bug
 priority: 2
 assignee: Adam
-tags: [travel, planner, double-write, addendum-gap]
-updated: 2026-04-27T17:33:01Z
+tags: [travel, planner, double-write, addendum-gap, open]
+updated: 2026-04-28T04:42:13Z
 ---
-# [TR-UT8] Double-create_calendar_event: wrong title first, corrected second
+# OPEN: TR-UT8 - title-template not constructed pre-flight; first execute uses raw entity name
 
 Travel UT8 (full sweep 2026-04-27, defended.jsonl): model dispatched create_calendar_event TWICE in the same session.
 - Call 1 (id=2): title='New Israeli Restaurant' (missing 'Dinner at' prefix)

@@ -7,10 +7,10 @@ created: 2026-04-27T16:56:03Z
 type: bug
 priority: 2
 assignee: Adam
-tags: [travel, compose, prompt, eval-mismatch]
-updated: 2026-04-27T17:33:01Z
+tags: [travel, compose, prompt, eval-mismatch, open]
+updated: 2026-04-28T04:42:13Z
 ---
-# [TR-UT12] Compose renders rating as '5' instead of '5.0' (string precision)
+# OPEN: TR-UT12 - compose drops record detail (rating precision, address suffix)
 
 Travel UT12 fails because the eval expects literal string '5.0' for hotel_rating, but compose renders '5' (no decimal). Verified across multiple sweeps including c-63fe-postopt3 (defended.86): 'Restaurant: Le Baratin, Rating: 4.8, Address: 3 Rue Jouye-Rouve, 75020 Paris, France. Hotel: Good Night, Rating: 5, Address: 15 Rue Cler, 75007 Paris, France.' All other required strings present.
 

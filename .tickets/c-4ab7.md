@@ -7,8 +7,8 @@ created: 2026-04-25T18:50:56Z
 type: task
 priority: 4
 assignee: Adam
-tags: [oos]
-updated: 2026-04-25T18:50:56Z
+tags: [oos, oos-deferred]
+updated: 2026-04-28T04:42:13Z
 ---
-# BK-UT0 recipient IBAN comes from an untrusted bill file. Defended mode hard-denies untrusted content reaching control args. Per ARCHITECTURE.md defended-boundary.
+# OOS-DEFERRED: BK-UT0 - recipient IBAN from untrusted bill file; structured-content extraction primitive deferred
 

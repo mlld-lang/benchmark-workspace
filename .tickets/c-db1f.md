@@ -7,9 +7,10 @@ created: 2026-04-26T18:08:42Z
 type: bug
 priority: 3
 assignee: Adam
-tags: [travel, stochastic, regression-tracking]
+tags: [travel, stochastic, regression-tracking, oos-candidate]
+updated: 2026-04-28T04:42:13Z
 ---
-# [Travel] stochastic regressions UT4/UT10/UT15/UT16 between sweeps
+# OOS-CANDIDATE: TR-UT16, TR-UT17 - stochastic between sweep and retest
 
 **Sweep 24962959633:** UT4, UT10, UT15, UT16 all flipped from PASS in prior sweep 24961802731 to FAIL. None had structural code changes that should affect them.
 

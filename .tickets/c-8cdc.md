@@ -1,13 +1,13 @@
 ---
 id: c-8cdc
-status: open
+status: closed
 deps: []
 links: [c-8a89, c-e562]
 created: 2026-04-27T17:32:15Z
 type: chore
 priority: 2
 assignee: Adam
-updated: 2026-04-27T17:33:01Z
+updated: 2026-04-28T04:44:50Z
 ---
 # Action: OOS-classify TR-UT11 and TR-UT19 (interpretation ambiguity in 'lunch and dinner for 2')
 

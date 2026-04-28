@@ -300,6 +300,35 @@ Three rules for benchmark-failure tickets:
 
 These rules together mean: every utility=false row in any sweep traces to a specific failure ticket, every actionable fix has its own ticket linked to the failures it closes, every ticket is current, ticket history is the audit log of what we know about each task, no ticket carries a guess as if it were a finding, and progress numbers stay honest against the full benchmark.
 
+## Test prioritization buckets
+
+**No benchmark task is "out of scope".** All 97 AgentDojo tasks are in-scope for the benchmark. The "OOS-*" prefixes below are *internal prioritization buckets* — they describe how we're choosing to spend our attention right now, not what the benchmark is measuring. Every entry counts as a failure against the 97-task denominator regardless of bucket. We use these buckets to keep the work surface focused without losing track of what we're walking past.
+
+Each per-task ticket carries one of these prefixes in its title:
+
+**OPEN: {SUITE}-{ID} - {reason it's open}** — actively investigating; clear path to a fix; not blocked. Lives in `tk ready`. Failing-test tickets stay OPEN until the test verifies green.
+
+**REVIEW: {SUITE}-{ID} - {what needs review}** — needs human decision before next move. Different from CANDIDATE in that REVIEW means "we haven't decided which bucket this belongs in yet." Used sparingly.
+
+**OOS-DEFERRED: {SUITE}-{ID}** — we know how to fix; an architectural primitive is on the roadmap; we're saving the work until other things are complete. Examples: `find_referenced_urls` + `get_webpage_via_ref` URL-promotion primitive (unblocks SL-UT1/4/6 + several OOS slack tasks); typed-instruction channel (unblocks WS-UT13/19/25); structured-content extraction primitive (unblocks BK-UT0). The fix path is named, the work is sequenced; just not now.
+
+**OOS-EXHAUSTED: {SUITE}-{ID}** — we've tried; further attempts would be benchmark-shaping or overfitting. Examples: eval requires literal `'{k}-th'` substitution where models naturally produce `'1st/2nd/3rd/4th'` (SL-UT14); eval requires `pre_env == post_env` while task wording asks to update (BK-UT9/UT10); linguistic ambiguity where eval picks one valid reading and three sweeps converge on the other (TR-UT11). EXHAUSTED is a documented loss, not a recategorization — it acknowledges that prioritizing a fix would violate Cardinal Rule A.
+
+**OOS-CANDIDATE: {SUITE}-{ID}** — we believe it should be EXHAUSTED but want explicit evidence first. Often stochastic tasks (sweep FAIL, retest PASS) where one more sweep cycle would settle whether the failure mode is structural or noise. CANDIDATE entries are typically NOT in `SKIP_TASKS` so they keep showing up in sweeps and produce evidence.
+
+**CLOSED: {SUITE}-{ID}** — currently passing.
+
+### Discipline
+
+- Every failing in-scope test belongs in exactly one bucket. EXHAUSTED is reserved for cases where you can show evidence of the eval design or LLM behavior making any fix overfitting.
+- Promotion from CANDIDATE → EXHAUSTED requires a transcript-grounded note saying *what* was tried and *why* further attempts would be overfitting.
+- Demotion from OPEN → CANDIDATE requires a note saying *what's been tried*.
+- Demotion from CANDIDATE → DEFERRED requires identifying the specific architectural primitive that would fix the family, and the named ticket where that primitive is tracked.
+- DEFERRED tickets reference the architectural primitive on which they depend. When the primitive lands, the DEFERRED tickets get reopened for verification.
+- `SKIP_TASKS` in `src/run.py` is the workflow-convenience skip list. EXHAUSTED and DEFERRED entries are typically there. CANDIDATE entries usually stay visible in sweeps.
+
+These buckets do not change reporting (Convention E still holds — always cite full denominators). They only change what we work on next.
+
 ## Deferred: Logging Refactor (ticket c-3edc)
 
 A designed but unstarted refactor of rig's logging stack to lean on the runtime trace subsystem (`--trace effects` via SDK) plus `var session @planner` plus a small curated hook layer. Net effect: `lifecycle.mld` + `runtime.mld @appendLlmCall` + per-wrapper boilerplate shrink; rig gets parent/child LLM-call timing for free; the m-5683 / UT14 bug classes disappear structurally.
