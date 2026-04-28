@@ -304,8 +304,15 @@ def create_server(
     # tools cannot mutate env, so the save is pure overhead. atexit.register
     # below still saves on shutdown.
     _READ_ONLY_PREFIXES = ("get_", "search_", "list_", "check_", "read_")
+    # Tools whose names match a read-only prefix but actually mutate state.
+    # get_unread_emails sets `email.read = True` on every returned email
+    # (agentdojo email_client.py:120-124) — UT24's eval requires that
+    # mutation to be visible in post_env, so the state save must run.
+    _MUTATING_READ_LIKE = {"get_unread_emails"}
 
     def _is_read_only_tool(name: str) -> bool:
+        if name in _MUTATING_READ_LIKE:
+            return False
         return any(name.startswith(p) for p in _READ_ONLY_PREFIXES)
 
     def _read_phase_state() -> dict[str, Any]:

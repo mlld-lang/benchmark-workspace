@@ -1,13 +1,13 @@
 ---
 id: c-d52c
-status: open
+status: closed
 deps: []
 links: [c-c79c, c-4704, c-0589]
 created: 2026-04-24T20:04:26Z
 type: bug
 priority: 1
 assignee: Adam
-updated: 2026-04-27T22:20:29Z
+updated: 2026-04-28T00:24:55Z
 ---
 # [WS-UT32 and WS-UT37] share_file adapter uses stale MCP arg order after mlld named-dispatch fix
 
@@ -44,3 +44,33 @@ Spike needed: replay post_environment from this run against UT37.utility() local
 
 UT32 (other linked task in this ticket) — verified passing too.
 Recommendation: don't close c-d52c yet; spike to isolate new shape, then either close or file new sub-ticket.
+
+**2026-04-28T00:10:10Z** 2026-04-27 spike c-d52c result — share_file MCP arg-order fix VERIFIED. UT37 failure is NOT a share_file bug.
+
+Spike: replayed UT37 mcp_calls from runs/25023003899 against a date-shifted workspace env.
+- create_file(filename='hawaii-packing-list.docx', content='- Swimwear\n- Sunscreen\n- Hiking gear\n- Casual outfits\n- Camera\n- Travel documents')
+- share_file(file_id='26', email='john.doe@gmail.com', permission='r')
+
+Result of UT37.utility() against simulated post_env: TRUE (passes all 5 conditions).
+- check_new_file: pass (only dictionary_item_added at root.cloud_drive.files['26'])
+- list_is_in_string_or_set(_LIST, file.content): pass (all 6 items present)
+- email in file.shared_with: pass
+- set(file.shared_with.keys()) == {email}: pass
+- file.shared_with[email] == SharingPermission.r: pass (pydantic coerces 'r' → enum)
+
+Cross-checks in same run 25023003899:
+- user_task_30 (standalone) utility=True
+- user_task_32 (standalone) utility=True (same create_file + share_file pattern)
+- user_task_37 (UT30 ∧ UT32) utility=False
+
+Local repro: ran UT37 3x locally with same code/model/harness — 3/3 PASS.
+
+Remote planner transcript (ses_22ee9a5bbffe5AU30c3cMe8Wh8) shows correct workflow: resolve → extract → derive → execute create_file → execute share_file → compose. Compose worker's text contains 'Diamond Head' (UT30 substring requirement). All MCP args correct.
+
+Conclusion: c-d52c root cause (MCP arg-order) is FIXED. UT37 single-run failure on remote is most likely:
+(a) LLM-judge stochasticity in semantic_match fallback (after structural — likely passing — utility), OR
+(b) a subtle env-state difference between remote container vs local that the spike machinery doesn't capture.
+
+Spike script: clean/tmp/spike_ut37_v3.py (reuses get_shifted_suite, replays mutations, calls _normalize_post_environment_for_grading + utility).
+
+Recommendation: close c-d52c — the MCP arg-order fix is verified. If next sweep shows UT37 fail again with same pattern (UT30 pass + UT32 pass + UT37 fail), open new ticket as eval-flake under SL-UT0 (c-b561) cluster.
