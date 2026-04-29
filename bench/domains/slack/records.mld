@@ -66,6 +66,55 @@ record @webpage_content = {
   }
 }
 
+>> ── URL refs (URL-promotion primitive, c-be06) ──
+>>
+>> Minted by @find_referenced_urls from a resolved slack_msg body. The
+>> record carries provenance (which message, where in the body) and a
+>> safety flag — but NO `url` field. The actual URL string lives in
+>> rig-private state.capabilities.url_refs and is reachable only by
+>> @get_webpage_via_ref. This prevents a body-promoted URL from being
+>> reused as a generic fact for post_webpage / send_direct_message etc.
+>> (URL_PROMOTION.md "url_ref" + threat enumeration).
+record @url_ref = {
+  facts: [
+    id_: handle,
+    source_msg: string?,
+    ordinal_in_message: number?,
+    position_in_message: number?,
+    canonical_url_hash: string?,
+    has_query: boolean?,
+    has_fragment: boolean?,
+    safety_status: string?
+  ],
+  data: [],
+  key: id_,
+  display: {
+    default: [{ ref: "id_" }, { ref: "source_msg" }, { ref: "ordinal_in_message" }, { ref: "canonical_url_hash" }, { ref: "has_query" }, { ref: "has_fragment" }, { ref: "safety_status" }],
+    worker: [{ ref: "id_" }, { ref: "source_msg" }, { ref: "ordinal_in_message" }, { ref: "canonical_url_hash" }, { ref: "has_query" }, { ref: "has_fragment" }, { ref: "safety_status" }],
+    planner: [{ ref: "id_" }, { ref: "source_msg" }, { ref: "ordinal_in_message" }, { ref: "canonical_url_hash" }, { ref: "has_query" }, { ref: "has_fragment" }, { ref: "safety_status" }]
+  }
+}
+
+>> ── Webpage content fetched via url_ref ──
+>>
+>> Sibling family to @webpage_content. NO public `url` fact: the source
+>> URL came from an untrusted message body and we don't want it laundered
+>> into post_webpage. Provenance traces back to the originating url_ref
+>> handle. Content stays untrusted — fetched via a fact-bearing capability,
+>> but the page contents themselves remain attacker-influenced data.
+record @referenced_webpage_content = {
+  facts: [id_: handle, source_url_ref: string?, fetch_status: string?],
+  data: {
+    untrusted: [content: string?]
+  },
+  key: id_,
+  display: {
+    default: [{ ref: "id_" }, { ref: "source_url_ref" }, content],
+    worker: [{ ref: "id_" }, { ref: "source_url_ref" }, content],
+    planner: [{ ref: "id_" }, { ref: "source_url_ref" }, { ref: "fetch_status" }]
+  }
+}
+
 >> Write input records. Fact fields carry grounded target identities;
 >> data fields carry the free-form content to send.
 record @send_channel_message_inputs = {
@@ -117,6 +166,8 @@ var @records = {
   slack_user: @slack_user,
   slack_channel: @slack_channel,
   webpage_content: @webpage_content,
+  url_ref: @url_ref,
+  referenced_webpage_content: @referenced_webpage_content,
   send_channel_message_inputs: @send_channel_message_inputs,
   send_direct_message_inputs: @send_direct_message_inputs,
   invite_user_to_slack_inputs: @invite_user_to_slack_inputs,
@@ -130,6 +181,8 @@ export {
   @slack_user,
   @slack_channel,
   @webpage_content,
+  @url_ref,
+  @referenced_webpage_content,
   @send_channel_message_inputs,
   @send_direct_message_inputs,
   @invite_user_to_slack_inputs,

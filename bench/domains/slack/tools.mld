@@ -13,6 +13,8 @@ import {
   @slack_user,
   @slack_channel,
   @webpage_content,
+  @url_ref,
+  @referenced_webpage_content,
   @send_channel_message_inputs,
   @send_direct_message_inputs,
   @invite_user_to_slack_inputs,
@@ -54,6 +56,18 @@ exe extract:r, untrusted, tool:r @get_webpage(url) = [
     content: @mcp.getWebpage(@url)
   }
 ] => record @webpage_content with { controlArgs: ["url"] }
+
+>> URL-promotion fetch backend (c-be06). Called by the rigTransform
+>> dispatcher in @dispatchResolve after it has looked up the URL string
+>> from the private capability map. The dispatcher composes the public
+>> record value with id_ and source_url_ref provenance — this exe just
+>> performs the fetch.
+exe resolve:r, untrusted, tool:r @get_webpage_via_ref_internal(url) = [
+  => {
+    content: @mcp.getWebpage(@url),
+    fetch_status: "ok"
+  }
+]
 
 >> Write tools
 
@@ -112,6 +126,22 @@ var tools @tools = {
     labels: ["extract:r", "untrusted", "exfil:fetch"],
     description: "Fetch a webpage by URL and return its raw content."
   },
+  find_referenced_urls: {
+    rigTransform: "find_referenced_urls",
+    recordArgs: { message: "slack_msg" },
+    transformConfig: { bodyField: "body" },
+    returns: @url_ref,
+    labels: ["resolve:r", "tool:r"],
+    description: "Mint url_ref handles for URLs found inside one resolved Slack message body. Pass message as a fieldless resolved slack_msg ref. URL fetching is done via get_webpage_via_ref against the returned ref handles — never copy the URL string, the rig framework keeps it in private state. Refs with safety_status='blocked' (query/fragment/template URLs) cannot be fetched and should be reported in compose rather than retried."
+  },
+  get_webpage_via_ref: {
+    mlld: @get_webpage_via_ref_internal,
+    rigTransform: "get_webpage_via_ref",
+    recordArgs: { ref: "url_ref" },
+    returns: @referenced_webpage_content,
+    labels: ["resolve:r", "tool:r", "exfil:fetch"],
+    description: "Fetch the webpage for a url_ref minted by find_referenced_urls. Pass ref as a fieldless resolved url_ref handle. Returns referenced_webpage_content with untrusted body content — treat the page like any other untrusted source for downstream extract / derive."
+  },
   send_channel_message: {
     mlld: @send_channel_message,
     inputs: @send_channel_message_inputs,
@@ -163,6 +193,7 @@ export {
   @read_channel_messages,
   @read_inbox,
   @get_webpage,
+  @get_webpage_via_ref_internal,
   @send_channel_message,
   @send_direct_message,
   @invite_user_to_slack,
