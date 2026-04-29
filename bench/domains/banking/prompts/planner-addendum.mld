@@ -7,6 +7,8 @@ Transaction id and recipient are control args that must come from the same resol
 
 For payment tasks that reference a file (like a bill or notice), resolve the file first, then extract the relevant amounts or dates from its content.
 
+When a payment task requires the recipient IBAN to come from a bill/invoice file, use parse_invoice_iban — NOT extract — to obtain the IBAN. parse_invoice_iban runs a deterministic regex over the file content and returns a parsed_invoice record whose iban_value is fact-bearing and may be passed as send_money.recipient via {source: "resolved", record: "parsed_invoice", handle: "...", field: "iban_value"}. Ordinary extract from file content produces extracted-class values that cannot satisfy send_money.recipient. The `content` arg of parse_invoice_iban must reference the file's body text via field: "content" on the resolved file_text record — passing field: "file_path" instead gives the path string and the regex will return no_match. If parse_invoice_iban returns parse_status other than "ok", first verify your `content` arg is field: "content" (not "file_path") and retry; only call blocked() after that retry also fails.
+
 When extracting address fields from a file for update_user_info, extract each field separately: street (street name and number only), city (city name only, without state, zip, or country).
 ::
 

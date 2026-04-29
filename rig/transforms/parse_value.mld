@@ -1,0 +1,277 @@
+>> rig/transforms/parse_value.mld — deterministic parser primitive (v1)
+>>
+>> The shared rig abstraction for "deterministic transform mints fact-bearing
+>> values from untrusted content." Per-suite tools provide the parser spec
+>> and return record type; this module owns the generic regex + post-op
+>> dispatcher so per-suite wrappers stay lean.
+>>
+>> Bounded engine v1: regex (RegExp) + fixed post-op library. No arbitrary
+>> mlld/JS functions yet. ReDoS guard via input-length and pattern-length
+>> caps.
+>>
+>> Source-class enforcement happens at @compileToolArgs / @compileExecuteIntent
+>> when wrappers are called as tools: their `value` arg is a payload arg
+>> (read tool, no exfil), so it accepts any source class. The fact-mint on
+>> wrapper output flows through `=> record @<returns_type>`, same as any
+>> resolve tool. Spike 42 invariant remains intact: extract still cannot
+>> mint selection refs; parse_value is a third class of resolve-phase
+>> transform with deterministic provenance.
+>>
+>> Limits per GPT5.5 design:
+>>   - max pattern length: 512
+>>   - max input length: 65536 (64 KB)
+>>   - max matches in 'many' mode: 100
+>>   - max captures per pattern: 16
+
+exe @applyRegexParser(value, spec) = js {
+  // ----- limits -----
+  const MAX_PATTERN_LEN = 512;
+  const MAX_INPUT_LEN = 65536;
+  const MAX_MATCHES = 100;
+  const MAX_CAPTURES = 16;
+
+  if (typeof value !== "string") {
+    return { parse_status: "invalid_input_type", captures: null, matches: null, diagnostics: { reason: `value must be string, got ${typeof value}` } };
+  }
+  if (value.length > MAX_INPUT_LEN) {
+    return { parse_status: "input_too_large", captures: null, matches: null, diagnostics: { reason: `input length ${value.length} > ${MAX_INPUT_LEN}` } };
+  }
+
+  if (!spec || typeof spec !== "object") {
+    return { parse_status: "invalid_spec", captures: null, matches: null, diagnostics: { reason: "spec must be object" } };
+  }
+  const kind = spec.kind || "regex";
+  if (kind !== "regex") {
+    return { parse_status: "unsupported_kind", captures: null, matches: null, diagnostics: { reason: `parser kind '${kind}' not supported in v1 (regex only)` } };
+  }
+  const pattern = spec.pattern;
+  if (typeof pattern !== "string") {
+    return { parse_status: "invalid_spec", captures: null, matches: null, diagnostics: { reason: "spec.pattern must be string" } };
+  }
+  if (pattern.length > MAX_PATTERN_LEN) {
+    return { parse_status: "pattern_too_long", captures: null, matches: null, diagnostics: { reason: `pattern length ${pattern.length} > ${MAX_PATTERN_LEN}` } };
+  }
+
+  // Build regex flags
+  const flagsArr = Array.isArray(spec.flags) ? spec.flags : [];
+  let flagStr = "";
+  if (flagsArr.includes("multiline")) flagStr += "m";
+  if (flagsArr.includes("global")) flagStr += "g";
+  if (flagsArr.includes("insensitive")) flagStr += "i";
+  if (flagsArr.includes("dotall")) flagStr += "s";
+
+  let re;
+  try {
+    re = new RegExp(pattern, flagStr);
+  } catch (err) {
+    return { parse_status: "regex_compile_error", captures: null, matches: null, diagnostics: { reason: String(err.message || err) } };
+  }
+
+  // Capture spec: { name: index } map
+  const captures = (spec.captures && typeof spec.captures === "object") ? spec.captures : null;
+  if (captures && Object.keys(captures).length > MAX_CAPTURES) {
+    return { parse_status: "too_many_captures", captures: null, matches: null, diagnostics: { reason: `${Object.keys(captures).length} captures > ${MAX_CAPTURES}` } };
+  }
+
+  const cardinality = spec.cardinality || "optional_one";
+
+  // Apply regex. For 'one' cardinality we must scan globally to detect
+  // ambiguity (multiple matches); a non-global match() would return only
+  // the first and silently mint a fact.
+  let matches = [];
+  const needsGlobal = (cardinality === "many" || cardinality === "one");
+  if (needsGlobal && !flagStr.includes("g")) {
+    try {
+      re = new RegExp(pattern, flagStr + "g");
+    } catch (err) {
+      return { parse_status: "regex_compile_error", captures: null, matches: null, diagnostics: { reason: String(err.message || err) } };
+    }
+  }
+  if (needsGlobal) {
+    let m;
+    let count = 0;
+    while ((m = re.exec(value)) !== null && count < MAX_MATCHES) {
+      matches.push(m);
+      count++;
+      if (m.index === re.lastIndex) re.lastIndex++;  // avoid infinite loop on zero-width
+    }
+  } else {
+    const m = value.match(re);
+    if (m) matches.push(m);
+  }
+
+  if (matches.length === 0) {
+    return { parse_status: "no_match", captures: null, matches: [], diagnostics: { reason: "regex matched zero times" } };
+  }
+
+  if (cardinality === "one" && matches.length !== 1) {
+    return { parse_status: "ambiguous", captures: null, matches: matches.length, diagnostics: { reason: `expected exactly one match, got ${matches.length}` } };
+  }
+
+  // ----- post-op library -----
+  const POST_OPS = {
+    trim: (v) => typeof v === "string" ? v.trim() : v,
+    normalize_space: (v) => typeof v === "string" ? v.replace(/\s+/g, " ").trim() : v,
+    lowercase: (v) => typeof v === "string" ? v.toLowerCase() : v,
+    uppercase: (v) => typeof v === "string" ? v.toUpperCase() : v,
+    parse_int: (v) => {
+      const n = parseInt(v, 10);
+      return Number.isNaN(n) ? null : n;
+    },
+    parse_decimal: (v) => {
+      const n = parseFloat(v);
+      return Number.isNaN(n) ? null : n;
+    },
+    validate_iban_format: (v) => {
+      // Format check only: 2-letter country, 2-digit checks, alphanumeric body.
+      // Accepts fictional/test IBAN values that pass format but not checksum.
+      if (typeof v !== "string") return null;
+      const normalized = v.replace(/\s/g, "").toUpperCase();
+      return /^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(normalized) ? normalized : null;
+    },
+    validate_iban_checksum: (v) => {
+      // Mod-97 IBAN checksum
+      if (typeof v !== "string") return null;
+      const normalized = v.replace(/\s/g, "").toUpperCase();
+      if (!/^[A-Z]{2}\d{2}[A-Z0-9]{1,30}$/.test(normalized)) return null;
+      const rearranged = normalized.slice(4) + normalized.slice(0, 4);
+      const numeric = rearranged.replace(/[A-Z]/g, c => (c.charCodeAt(0) - 55).toString());
+      // Mod-97 over the (potentially long) numeric string
+      let remainder = 0;
+      for (const ch of numeric) {
+        remainder = (remainder * 10 + parseInt(ch, 10)) % 97;
+      }
+      return remainder === 1 ? normalized : null;
+    },
+    validate_email: (v) => {
+      if (typeof v !== "string") return null;
+      // Basic RFC-shaped email check
+      const trimmed = v.trim();
+      return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(trimmed) ? trimmed : null;
+    },
+    validate_url: (v) => {
+      if (typeof v !== "string") return null;
+      const trimmed = v.trim();
+      try {
+        const u = new URL(trimmed);
+        if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+        return trimmed;
+      } catch {
+        return null;
+      }
+    },
+    validate_iso_date: (v) => {
+      if (typeof v !== "string") return null;
+      const trimmed = v.trim();
+      return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+    },
+    reject_if_empty: (v) => {
+      if (typeof v === "string" && v.length === 0) return null;
+      return v;
+    }
+  };
+
+  // Apply post-ops to a single capture map
+  function applyPostOps(captureMap) {
+    const out = {};
+    for (const [name, val] of Object.entries(captureMap)) {
+      out[name] = val;
+    }
+    const post = spec.post && typeof spec.post === "object" ? spec.post : null;
+    if (!post) return { ok: true, values: out };
+
+    for (const [field, ops] of Object.entries(post)) {
+      if (!Array.isArray(ops)) continue;
+      let current = out[field];
+      for (const op of ops) {
+        const opName = op && op.op;
+        const handler = POST_OPS[opName];
+        if (!handler) {
+          return { ok: false, reason: `unknown post-op '${opName}'` };
+        }
+        const result = handler(current);
+        if (result === null) {
+          // Validation failure → no fact mint for this field
+          return { ok: false, reason: `post-op '${opName}' failed validation on field '${field}'` };
+        }
+        current = result;
+      }
+      out[field] = current;
+    }
+    return { ok: true, values: out };
+  }
+
+  // Build per-match capture maps
+  const matchCaptures = matches.map((m, idx) => {
+    if (!captures) return { _index: idx, _full_match: m[0] };
+    const cap = { _index: idx };
+    for (const [name, capIdx] of Object.entries(captures)) {
+      cap[name] = m[capIdx];
+    }
+    return cap;
+  });
+
+  // Apply post-ops to each match
+  const validated = [];
+  const rejected = [];
+  for (const cap of matchCaptures) {
+    const result = applyPostOps(cap);
+    if (result.ok) {
+      validated.push(result.values);
+    } else {
+      rejected.push({ index: cap._index, reason: result.reason });
+    }
+  }
+
+  if (validated.length === 0) {
+    return {
+      parse_status: "validation_failed",
+      captures: null,
+      matches: [],
+      diagnostics: { rejected_count: rejected.length, rejected: rejected }
+    };
+  }
+
+  if (cardinality === "many") {
+    return {
+      parse_status: "ok",
+      captures: null,
+      matches: validated,
+      diagnostics: { matched: validated.length, rejected_count: rejected.length }
+    };
+  }
+
+  return {
+    parse_status: "ok",
+    captures: validated[0],
+    matches: validated,
+    diagnostics: { matched: 1 }
+  };
+}
+
+>> Compute a parser id (sha256 of spec) for provenance/audit.
+exe @parserId(spec) = js {
+  // Deterministic JSON serialization
+  function canonicalize(o) {
+    if (o === null || typeof o !== "object") return JSON.stringify(o);
+    if (Array.isArray(o)) return "[" + o.map(canonicalize).join(",") + "]";
+    const keys = Object.keys(o).sort();
+    return "{" + keys.map(k => JSON.stringify(k) + ":" + canonicalize(o[k])).join(",") + "}";
+  }
+  // Use crypto if available, fallback to a simpler hash
+  try {
+    const crypto = require("crypto");
+    return crypto.createHash("sha256").update(canonicalize(spec)).digest("hex").slice(0, 16);
+  } catch {
+    // Fallback: simple non-cryptographic hash for environments without crypto
+    let h = 0;
+    const s = canonicalize(spec);
+    for (let i = 0; i < s.length; i++) {
+      h = ((h << 5) - h) + s.charCodeAt(i);
+      h |= 0;
+    }
+    return "v1_" + (h >>> 0).toString(16);
+  }
+}
+
+export { @applyRegexParser, @parserId }

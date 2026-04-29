@@ -2,13 +2,13 @@
 id: c-1d4b
 status: closed
 deps: []
-links: []
+links: [c-69db]
 created: 2026-04-25T18:50:56Z
 type: task
 priority: 4
 assignee: Adam
 tags: [oos, oos-deferred]
-updated: 2026-04-28T04:42:13Z
+updated: 2026-04-28T23:43:54Z
 ---
-# OOS-DEFERRED: SL-UT2 - invite control args from untrusted webpage; URL-promotion primitive deferred
+# OOS-DEFERRED (parse_value): SL-UT2 - invite Dora; email parsed from her webpage
 

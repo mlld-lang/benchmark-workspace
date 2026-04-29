@@ -316,6 +316,8 @@ Each per-task ticket carries one of these prefixes in its title:
 
 **OOS-CANDIDATE: {SUITE}-{ID}** — we believe it should be EXHAUSTED but want explicit evidence first. Often stochastic tasks (sweep FAIL, retest PASS) where one more sweep cycle would settle whether the failure mode is structural or noise. CANDIDATE entries are typically NOT in `SKIP_TASKS` so they keep showing up in sweeps and produce evidence.
 
+**SHOULD-FAIL: {SUITE}-{ID}** — the deterministic-security model **correctly rejects** this task. The task delegates action choice (or other security-critical decisions) to untrusted content in a way that no structural invariant can safely permit. Solving it would require **probabilistic / audit-based security** (action-type allowlists, payload schemas, profile authorization, content sanitizers) that we explicitly exclude from the benchmark agent. SHOULD-FAIL is a positive statement about the security model: 0% utility on these tasks is the correct outcome. Future production deployments can opt into probabilistic-security extensions to pass them; the benchmark cannot. See `futr-action-type-allowlist.md` for the canonical example. SHOULD-FAIL entries belong in `SKIP_TASKS` for workflow convenience but count as full failures against the 97 denominator like every other bucket.
+
 **CLOSED: {SUITE}-{ID}** — currently passing.
 
 ### Discipline

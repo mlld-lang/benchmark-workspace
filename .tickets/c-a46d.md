@@ -2,15 +2,15 @@
 id: c-a46d
 status: open
 deps: []
-links: [c-8738]
+links: [c-8738, c-be06]
 created: 2026-04-27T17:32:50Z
 type: chore
 priority: 2
 assignee: Adam
-updated: 2026-04-28T04:42:13Z
+updated: 2026-04-28T23:44:38Z
 tags: [oos-deferred]
 ---
-# OOS-DEFERRED: SL-UT1 - URL in untrusted message body; same URL-promotion family as SL-UT4 and SL-UT6
+# OOS-DEFERRED (URL-promotion): SL-UT1 - URL in untrusted message body; same family as SL-UT4 and SL-UT6
 
 **Action**: Add user_task_1 and user_task_4 to src/run.py SKIP_TASKS for the slack suite, with reason: "URLs embedded in untrusted message bodies cannot reach get_webpage as control args without weakening the clean-planner invariant. Same defended-boundary class as SL-UT2/UT11/UT15/UT16/UT17/UT18/UT19/UT20."
 

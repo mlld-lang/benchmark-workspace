@@ -58,6 +58,7 @@ import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation, @dispatchExtract, @validateExtractSchema } from "../workers/extract.mld"
 import { @coerceDeriveAttestation } from "../workers/derive.mld"
 import { @planner, @plannerTools, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress } from "../workers/planner.mld"
+import { @applyRegexParser, @parserId } from "../transforms/parse_value.mld"
 
 exe @status(ok) = when [
   @ok => "PASS"
@@ -3605,6 +3606,201 @@ var @c79cSchemaName = @validateExtractSchema({ calendar_evt: { facts: [], data: 
 var @c79cSchemaNameOk = @c79cSchemaName.ok == true && @c79cSchemaName.record == true
 var @c79cSchemaNameDetail = `schema_name string referencing existing record — ok=@c79cSchemaName.ok record=@c79cSchemaName.record`
 
+>> ─────────────────────────────────────────────────────────────────
+>> parse_value primitive invariants (c-69db)
+>> ─────────────────────────────────────────────────────────────────
+>>
+>> The parse_value transform mints fact-bearing values from untrusted
+>> content via deterministic regex + post-ops. These tests pin the
+>> security-critical behaviors: bounded engine, validation enforcement,
+>> source-class firewall integration, and the spike-validated chain
+>> that fact-bearing parsed fields satisfy write-tool control args.
+
+>> PV-1: simple regex match with capture
+var @pv1Result = @applyRegexParser("IBAN: UK12345678901234567890", {
+  kind: "regex",
+  pattern: `IBAN:\s+([A-Z0-9]+)`,
+  captures: { iban_value: 1 }
+})
+var @pv1Ok = @pv1Result.parse_status == "ok" && @pv1Result.captures.iban_value == "UK12345678901234567890"
+var @pv1Detail = `parse_status=@pv1Result.parse_status iban_value=@pv1Result.captures.iban_value`
+
+>> PV-2: no match returns no_match status (no fact mint)
+var @pv2Result = @applyRegexParser("no IBAN here", {
+  kind: "regex",
+  pattern: `IBAN:\s+([A-Z0-9]+)`,
+  captures: { iban_value: 1 }
+})
+var @pv2Ok = @pv2Result.parse_status == "no_match" && @pv2Result.captures == null
+var @pv2Detail = `parse_status=@pv2Result.parse_status`
+
+>> PV-3: post-op validation failure blocks fact mint
+var @pv3Result = @applyRegexParser("IBAN: BAD12", {
+  kind: "regex",
+  pattern: `IBAN:\s+(\S+)`,
+  captures: { iban_value: 1 },
+  post: {
+    iban_value: [{ op: "validate_iban_format" }]
+  }
+})
+var @pv3Ok = @pv3Result.parse_status == "validation_failed"
+var @pv3Detail = `parse_status=@pv3Result.parse_status (post-op rejected non-IBAN format)`
+
+>> PV-4: many-cardinality returns array of validated matches
+var @pv4Text = ::- David: do thing. Deadline: 2024-05-20.
+- Linda: email file. Deadline: 2024-05-21.
+- Mark: review. Deadline: 2024-05-19.::
+var @pv4Result = @applyRegexParser(@pv4Text, {
+  kind: "regex",
+  pattern: `^- (\w+): (.+?)\. Deadline: (\d{4}-\d{2}-\d{2})\.$`,
+  flags: ["multiline", "global"],
+  captures: { name: 1, task: 2, deadline: 3 },
+  cardinality: "many",
+  post: {
+    deadline: [{ op: "validate_iso_date" }]
+  }
+})
+var @pv4Ok = @pv4Result.parse_status == "ok" && @pv4Result.matches.length == 3 && @pv4Result.matches[0].name == "David"
+var @pv4Detail = `parse_status=@pv4Result.parse_status matches=@pv4Result.matches.length`
+
+>> PV-5: cardinality "one" rejects ambiguous matches
+var @pv5Result = @applyRegexParser("IBAN: UK12345678901234567890\nIBAN: DE12345678901234567890", {
+  kind: "regex",
+  pattern: `IBAN:\s+([A-Z0-9]+)`,
+  flags: ["multiline", "global"],
+  captures: { iban_value: 1 },
+  cardinality: "one"
+})
+var @pv5Ok = @pv5Result.parse_status == "ambiguous"
+var @pv5Detail = `parse_status=@pv5Result.parse_status`
+
+>> PV-6: oversize input rejected (>64KB)
+var @pv6BigInput = js { return "x".repeat(70000); }
+var @pv6Result = @applyRegexParser(@pv6BigInput, {
+  kind: "regex",
+  pattern: `(\w+)`,
+  captures: { v: 1 }
+})
+var @pv6Ok = @pv6Result.parse_status == "input_too_large"
+var @pv6Detail = `parse_status=@pv6Result.parse_status (>64KB rejected)`
+
+>> PV-7: oversize pattern rejected (>512 chars)
+var @pv7BigPattern = js { return "(.+)".repeat(200); }
+var @pv7Result = @applyRegexParser("hello", {
+  kind: "regex",
+  pattern: @pv7BigPattern,
+  captures: { v: 1 }
+})
+var @pv7Ok = @pv7Result.parse_status == "pattern_too_long"
+var @pv7Detail = `parse_status=@pv7Result.parse_status (>512 chars rejected)`
+
+>> PV-8: unsupported parser kind (no eval/code injection via spec)
+var @pv8Result = @applyRegexParser("hello", {
+  kind: "javascript",
+  code: "alert('hi')"
+})
+var @pv8Ok = @pv8Result.parse_status == "unsupported_kind"
+var @pv8Detail = `parse_status=@pv8Result.parse_status (only regex kind supported in v1)`
+
+>> PV-9: parserId is deterministic for same spec
+var @pv9SpecA = { kind: "regex", pattern: "x", captures: { v: 1 } }
+var @pv9SpecB = { kind: "regex", pattern: "x", captures: { v: 1 } }
+var @pv9IdA = @parserId(@pv9SpecA)
+var @pv9IdB = @parserId(@pv9SpecB)
+var @pv9Ok = @pv9IdA == @pv9IdB && @pv9IdA.length > 0
+var @pv9Detail = `id_a=@pv9IdA id_b=@pv9IdB`
+
+>> PV-10: spike-A integration — parse_value-minted fact-bearing field
+>> satisfies write-tool control arg through the existing source-class
+>> firewall. This is the load-bearing claim of the design.
+record @pv10ParsedIban = {
+  facts: [
+    parse_id: handle,
+    iban_value: string?,
+    parser_id: string
+  ],
+  data: {},
+  key: parse_id
+}
+
+record @pv10SendMoneyInputs = {
+  facts: [recipient: string],
+  data: { trusted: [amount: number] },
+  validate: "strict"
+}
+
+exe @pv10SendMoney(recipient, amount) = [ => { recipient: @recipient, amount: @amount } ]
+
+var tools @pv10Tools = {
+  send_money: {
+    mlld: @pv10SendMoney,
+    inputs: @pv10SendMoneyInputs,
+    labels: ["execute:w", "tool:w"],
+    can_authorize: "role:planner",
+    description: "Test send_money for parse_value invariant."
+  }
+}
+
+var @pv10ParsedRecord = {
+  parse_id: "pv10_test",
+  iban_value: "UK12345678901234567890",
+  parser_id: "test_parser_v1"
+} as record @pv10ParsedIban
+
+var @pv10ParseId = @pv10ParsedRecord.parse_id
+var @pv10IbanValue = @pv10ParsedRecord.iban_value
+var @pv10ParserIdValue = @pv10ParsedRecord.parser_id
+
+var @pv10State = {
+  resolved: {
+    pv10ParsedIban: [
+      { handle: "r_pv10_test", key: "pv10_test", value: @pv10ParsedRecord,
+        field_values: { parse_id: @pv10ParseId, iban_value: @pv10IbanValue, parser_id: @pv10ParserIdValue } }
+    ]
+  },
+  extracted: {},
+  derived: {},
+  step_history: []
+}
+
+var @pv10ResolvedAttempt = @compileExecuteIntent(@pv10State, @pv10Tools, {
+  phase: "execute",
+  operation: "send_money",
+  args: {
+    recipient: { source: "resolved", record: "pv10ParsedIban", handle: "r_pv10_test", field: "iban_value" },
+    amount: { source: "known", value: 98.7 }
+  }
+}, "pay the bill")
+
+var @pv10Ok = @pv10ResolvedAttempt.ok == true
+var @pv10Detail = `compile.ok=@pv10ResolvedAttempt.ok`
+
+>> PV-11: extracted source rejected for the same control arg shape
+var @pv11ExtractedAttempt = @compileExecuteIntent(@pv10State, @pv10Tools, {
+  phase: "execute",
+  operation: "send_money",
+  args: {
+    recipient: { source: "extracted", name: "iban_extract", field: "iban" },
+    amount: { source: "known", value: 98.7 }
+  }
+}, "pay the bill")
+
+var @pv11Ok = @pv11ExtractedAttempt.ok == false
+var @pv11Detail = `compile.ok=@pv11ExtractedAttempt.ok (expected reject of extracted source)`
+
+>> PV-12: derived source rejected for the same control arg shape
+var @pv12DerivedAttempt = @compileExecuteIntent(@pv10State, @pv10Tools, {
+  phase: "execute",
+  operation: "send_money",
+  args: {
+    recipient: { source: "derived", name: "iban_derive", field: "iban" },
+    amount: { source: "known", value: 98.7 }
+  }
+}, "pay the bill")
+
+var @pv12Ok = @pv12DerivedAttempt.ok == false
+var @pv12Detail = `compile.ok=@pv12DerivedAttempt.ok (expected reject of derived source)`
+
 exe @allChecks() = [
   => [
   @check("c-c79c/V1-non-empty-inline-schema-passes", @c79cValidNonEmptyOk, @c79cValidNonEmptyDetail),
@@ -3612,6 +3808,18 @@ exe @allChecks() = [
   @check("c-c79c/V3-empty-object-correctly-rejected", @c79cEmptyObjectOk, @c79cEmptyObjectDetail),
   @check("c-c79c/V4-null-schema-passes", @c79cNullSchemaOk, @c79cNullSchemaDetail),
   @check("c-c79c/V5-schema-name-string-passes", @c79cSchemaNameOk, @c79cSchemaNameDetail),
+  @check("c-69db/PV-1-regex-match-with-capture", @pv1Ok, @pv1Detail),
+  @check("c-69db/PV-2-no-match-yields-no-fact", @pv2Ok, @pv2Detail),
+  @check("c-69db/PV-3-validation-failure-blocks-fact", @pv3Ok, @pv3Detail),
+  @check("c-69db/PV-4-many-cardinality-array", @pv4Ok, @pv4Detail),
+  @check("c-69db/PV-5-one-cardinality-rejects-ambiguous", @pv5Ok, @pv5Detail),
+  @check("c-69db/PV-6-input-size-cap-enforced", @pv6Ok, @pv6Detail),
+  @check("c-69db/PV-7-pattern-size-cap-enforced", @pv7Ok, @pv7Detail),
+  @check("c-69db/PV-8-only-regex-kind-supported", @pv8Ok, @pv8Detail),
+  @check("c-69db/PV-9-parser-id-deterministic", @pv9Ok, @pv9Detail),
+  @check("c-69db/PV-10-parsed-fact-satisfies-control-arg", @pv10Ok, @pv10Detail),
+  @check("c-69db/PV-11-extracted-source-rejected", @pv11Ok, @pv11Detail),
+  @check("c-69db/PV-12-derived-source-rejected", @pv12Ok, @pv12Detail),
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
   @check("CAT-1", @catalogTransparentInputRecordOk, @catalogTransparentInputRecordDetail),
   @check("CAT-2", @catalogTransparentMetadataOk, @catalogTransparentMetadataDetail),

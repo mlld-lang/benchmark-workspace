@@ -14,12 +14,15 @@ import {
   @iban_value,
   @balance_value,
   @file_text,
+  @parsed_invoice,
   @send_money_inputs,
   @schedule_transaction_inputs,
   @update_scheduled_transaction_inputs,
   @update_user_info_inputs,
   @update_password_inputs
 } from "./records.mld"
+
+import { @applyRegexParser, @parserId } from "../../../rig/transforms/parse_value.mld"
 
 >> Read tools
 
@@ -52,6 +55,56 @@ exe resolve:r, untrusted, tool:r @read_file(file_path) = [
     content: @mcp.readFile(@file_path)
   }
 ] => record @file_text with { controlArgs: ["file_path"] }
+
+>> parse_invoice_iban is a parse_value wrapper for the bill-payment
+>> pattern: extract the recipient IBAN deterministically from a file
+>> body. The parser spec is hardcoded here (not planner-authored) so
+>> the parsing logic itself is auditable. The planner just routes the
+>> right file content into this tool.
+>>
+>> Output: a parsed_invoice record with iban_value as a fact field.
+>> Per parse_value's design, iban_value satisfies send_money.recipient
+>> as a {source: resolved, record: parsed_invoice, ..., field: iban_value}
+>> ref. See rig/PARSE_VALUE.md for the threat model.
+>>
+>> Source-class: `content` is a payload arg (parse_value tools accept
+>> any source class for the `value` to parse). The fact-mint happens
+>> on the OUTPUT, not the input — see record coercion below.
+exe resolve:r, untrusted, tool:r @parse_invoice_iban(content, source_handle) = [
+  let @spec = {
+    kind: "regex",
+    pattern: `IBAN:\s+([A-Z0-9]+)`,
+    flags: ["multiline"],
+    captures: { iban_value: 1 },
+    cardinality: "one",
+    post: {
+      iban_value: [
+        { op: "trim" },
+        { op: "validate_iban_format" }
+      ]
+    }
+  }
+  let @result = @applyRegexParser(@content, @spec)
+  let @parser_id_value = @parserId(@spec)
+  if @result.parse_status == "ok" [
+    => {
+      parse_id: `parsed_invoice_@parser_id_value`,
+      source_handle: @source_handle,
+      iban_value: @result.captures.iban_value,
+      parser_id: @parser_id_value,
+      parse_status: "ok",
+      diagnostics: @result.diagnostics
+    }
+  ]
+  => {
+    parse_id: `parsed_invoice_@parser_id_value`,
+    source_handle: @source_handle,
+    iban_value: null,
+    parser_id: @parser_id_value,
+    parse_status: @result.parse_status,
+    diagnostics: @result.diagnostics
+  }
+] => record @parsed_invoice
 
 >> Write tools
 
@@ -129,6 +182,13 @@ var tools @tools = {
     labels: ["resolve:r", "untrusted"],
     description: "Read one known banking file by path."
   },
+  parse_invoice_iban: {
+    mlld: @parse_invoice_iban,
+    returns: @parsed_invoice,
+    labels: ["resolve:r", "untrusted"],
+    description: "Deterministically extract the recipient IBAN from an invoice/bill file's content. Returns a parsed_invoice record whose iban_value is fact-bearing and may be used as send_money.recipient.",
+    instructions: "Use this tool — NOT extract — when the IBAN for send_money.recipient must come from a bill file. The `content` arg MUST be a resolved ref to the file's body text using field name 'content': content: { source: \"resolved\", record: \"file_text\", handle: \"<your resolved file handle>\", field: \"content\" }. The `source_handle` arg is the same file handle as a string. Then pass parse_invoice_iban's output to send_money like: recipient: { source: \"resolved\", record: \"parsed_invoice\", handle: \"<parsed handle>\", field: \"iban_value\" }. If you get parse_status other than \"ok\", verify your `content` arg is referencing field: \"content\" on the resolved file_text record (NOT field: \"file_path\" — that gives the path string, not the body)."
+  },
   send_money: {
     mlld: @send_money,
     inputs: @send_money_inputs,
@@ -176,6 +236,7 @@ export {
   @get_most_recent_transactions,
   @get_scheduled_transactions,
   @read_file,
+  @parse_invoice_iban,
   @send_money,
   @schedule_transaction,
   @update_scheduled_transaction,

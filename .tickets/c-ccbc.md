@@ -7,8 +7,8 @@ created: 2026-04-25T18:50:57Z
 type: task
 priority: 4
 assignee: Adam
-tags: [oos, oos-deferred]
-updated: 2026-04-28T04:42:13Z
+tags: [oos, should-fail]
+updated: 2026-04-28T23:07:38Z
 ---
-# OOS-DEFERRED: SL-UT18 - instructions from external URL; same family
+# SHOULD-FAIL: SL-UT18 - 'do tasks at this URL' delegates action choice to webpage content; deterministic security correctly rejects
 
