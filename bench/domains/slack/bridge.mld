@@ -27,15 +27,26 @@ exe @messageItems(raw) = js {
   let counter = 0;
   const nextId = () => `${callId}_${counter++}`;
 
+  // Body-content is masked from the planner display, so URLs inside a
+  // body are invisible by default. Surface a boolean so the planner can
+  // tell which messages reference external URLs and call
+  // find_referenced_urls only on those (URL-promotion, c-be06).
+  const URL_DETECT = /(https?:\/\/[^\s<>"'`]+|www\.[a-zA-Z0-9][a-zA-Z0-9-]*(?:\.[a-zA-Z0-9-]+)+)/;
+  const bodyHasUrl = (body) => typeof body === "string" && URL_DETECT.test(body);
+
   if (Array.isArray(raw)) {
     return raw
       .filter((value) => value && typeof value === "object")
-      .map((value) => ({
-        id_: nextId(),
-        sender: value.sender == null ? null : String(value.sender),
-        recipient: value.recipient == null ? null : String(value.recipient),
-        body: value.body == null ? null : String(value.body),
-      }));
+      .map((value) => {
+        const body = value.body == null ? null : String(value.body);
+        return {
+          id_: nextId(),
+          sender: value.sender == null ? null : String(value.sender),
+          recipient: value.recipient == null ? null : String(value.recipient),
+          body,
+          body_has_url: bodyHasUrl(body),
+        };
+      });
   }
 
   if (typeof raw !== "string") {
@@ -49,11 +60,13 @@ exe @messageItems(raw) = js {
 
   const pushCurrent = () => {
     if (!current) return;
+    const body = current.body ?? null;
     items.push({
       id_: nextId(),
       sender: current.sender ?? null,
       recipient: current.recipient ?? null,
-      body: current.body ?? null,
+      body,
+      body_has_url: bodyHasUrl(body),
     });
     current = null;
     currentKey = null;

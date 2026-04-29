@@ -239,7 +239,23 @@ exe @toolOptionalArgs(toolEntry) = [
   ]
 ]
 
+exe @recordArgKeysFromTool(toolEntry) = js {
+  if (!toolEntry || typeof toolEntry !== "object") return [];
+  const recordArgs = toolEntry.recordArgs;
+  if (!recordArgs || typeof recordArgs !== "object") return [];
+  return Object.keys(recordArgs);
+}
+
 exe @toolParamNames(toolEntry) = [
+  >> rigTransform tools expose recordArgs keys as params — these are the
+  >> argument names the planner should use (resolved record-handle refs),
+  >> not the internal mlld exe param names which receive resolved values
+  >> after the dispatcher's capability lookup.
+  let @rigTransform = @toolEntry.rigTransform
+  if @rigTransform.isDefined() [
+    let @recordArgKeys = @recordArgKeysFromTool(@toolEntry)
+    if @recordArgKeys.length > 0 [ => @recordArgKeys ]
+  ]
   let @inputFieldNames = when [
     @toolInputFields(@toolEntry).length > 0 => @toolInputFieldNames(@toolEntry, "fact").concat(@toolInputFieldNames(@toolEntry, "data"))
     * => []

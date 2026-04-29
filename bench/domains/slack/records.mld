@@ -22,7 +22,7 @@
 >> messages from the same sender collapse to one resolved entry and
 >> per-message counting/addressing breaks (slack UT13/UT14).
 record @slack_msg = {
-  facts: [id_: handle, sender: string?, recipient: string?],
+  facts: [id_: handle, sender: string?, recipient: string?, body_has_url: boolean?],
   data: {
     untrusted: [body: string?]
   },
@@ -30,7 +30,7 @@ record @slack_msg = {
   display: {
     default: [{ handle: "id_" }, { mask: "sender" }, { mask: "recipient" }, body],
     worker: [{ handle: "id_" }, { mask: "sender" }, { mask: "recipient" }, body],
-    planner: [{ ref: "id_" }, { ref: "sender" }, { ref: "recipient" }]
+    planner: [{ ref: "id_" }, { ref: "sender" }, { ref: "recipient" }, { ref: "body_has_url" }]
   }
 }
 

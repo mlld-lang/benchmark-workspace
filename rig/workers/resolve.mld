@@ -168,9 +168,10 @@ exe @dispatchResolve(agent, state, decision, query, deltaOnly) = [
         [{ arg: @recordArgsCheck.arg, error: @recordArgsCheck.error }]
       )
     ]
+    let @deltaOnlyMode = @deltaOnly ?? false
     => when [
-      @rigTransform == "find_referenced_urls" => @dispatchFindReferencedUrls(@agent, @state, @tool, @recordArgsCheck.descriptors, @decision, @query, @deltaOnly)
-      @rigTransform == "get_webpage_via_ref" => @dispatchGetWebpageViaRef(@agent, @state, @tool, @recordArgsCheck.descriptors, @decision, @query, @deltaOnly)
+      @rigTransform == "find_referenced_urls" => @dispatchFindReferencedUrls(@agent, @state, @tool, @recordArgsCheck.descriptors, @decision, @query, @deltaOnlyMode)
+      @rigTransform == "get_webpage_via_ref" => @dispatchGetWebpageViaRef(@agent, @state, @tool, @recordArgsCheck.descriptors, @decision, @query, @deltaOnlyMode)
       * => { error: "unknown_rig_transform", summary: `Unknown rigTransform '@rigTransform' on tool '@decision.tool'` }
     ]
   ]

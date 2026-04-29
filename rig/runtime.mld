@@ -11,6 +11,7 @@ import {
 } from "./tooling.mld"
 import { @resolveRefValue, @isResolvedIndexBucket, @bucketItems, @bucketLength, @valueField, @bucketObject } from "./intent.mld"
 import { @appendLlmCall, @serializeLifecycleJson } from "./lifecycle.mld"
+import { @withUrlCapabilities } from "./transforms/url_refs.mld"
 
 >> Shared runtime helpers for the rig loop and per-phase workers.
 >> These helpers stay on native mlld values so resolved factsources and
@@ -861,11 +862,20 @@ exe @batchSpecMergeState(cumulative, phaseResult, agent) = [
       => @bucketItems(@specBucket)
     ]
   ]
-  if @specEntries.length == 0 [ => @cumulative ]
   let @recordDef = @valueField(@agent.records ?? {}, @recordType)
-  => when [
+  let @resolvedNext = when [
+    @specEntries.length == 0 => @cumulative
     @recordDef.isDefined() => @updateResolvedStateWithDef(@cumulative, @recordType, @specEntries, @recordDef)
     * => @updateResolvedState(@cumulative, @recordType, @specEntries)
+  ]
+  >> URL-promotion (c-be06): a parallel rigTransform spec may also
+  >> produce a state.capabilities.url_refs delta. Merge it into the
+  >> cumulative state so a subsequent batched get_webpage_via_ref can
+  >> see the URLs minted by an earlier batched find_referenced_urls.
+  let @capDelta = @phaseResult.state_delta.capabilities.url_refs ?? null
+  => when [
+    @capDelta.isDefined() && @capDelta != null => @withUrlCapabilities(@resolvedNext, @capDelta)
+    * => @resolvedNext
   ]
 ]
 
