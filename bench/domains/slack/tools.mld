@@ -69,6 +69,14 @@ exe resolve:r, untrusted, tool:r @get_webpage_via_ref_internal(url) = [
   }
 ]
 
+>> Placeholder exe to satisfy the mlld:-required tool catalog validator.
+>> @find_referenced_urls is a rigTransform tool whose dispatch is owned
+>> by @dispatchFindReferencedUrls in rig/workers/resolve.mld; this exe
+>> is never invoked at runtime.
+exe @find_referenced_urls_placeholder(message) = [
+  => { error: "rigTransform_should_not_be_called_directly" }
+]
+
 >> Write tools
 
 exe @send_channel_message(channel, body) = [
@@ -127,6 +135,7 @@ var tools @tools = {
     description: "Fetch a webpage by URL and return its raw content."
   },
   find_referenced_urls: {
+    mlld: @find_referenced_urls_placeholder,
     rigTransform: "find_referenced_urls",
     recordArgs: { message: "slack_msg" },
     transformConfig: { bodyField: "body" },

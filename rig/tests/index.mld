@@ -51,7 +51,7 @@ import {
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @compileRecordArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg, @lookupResolvedEntry } from "../intent.mld"
-import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket, @batchSpecMergeState } from "../runtime.mld"
+import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket, @batchSpecMergeState, @plainObjectKeys } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
@@ -2693,6 +2693,11 @@ var @ut7DispatchPretty = `error=@ut7DispatchResult.error status=@ut7DispatchResu
 >> The workspace file_entry record uses `id_` as its key field. MCP
 >> returns `id_` directly. This test verifies the value survives
 >> `=> record` coercion and can be resolved as a control arg.
+import {
+  @url_ref as @slack_url_ref,
+  @referenced_webpage_content as @slack_ref_webpage,
+  @slack_msg as @slack_msg_record
+} from "../../bench/domains/slack/records.mld"
 import { @file_entry as @ws_file_entry } from "../../bench/domains/workspace/records.mld"
 
 var @fakeFileRaw = [
@@ -4085,6 +4090,165 @@ var @ur20Result = @compileRecordArgs(@urCStateWithWebpage, @urCMessageSpec, {
 var @ur20Ok = @ur20Result.ok == false
 var @ur20Detail = `ok=@ur20Result.ok error=@ur20Result.error`
 
+>> ─────────────────────────────────────────────────────────────────
+>> URL-promotion dispatch integration (c-be06, Group D)
+>> ─────────────────────────────────────────────────────────────────
+>>
+>> End-to-end zero-LLM tests of the @dispatchResolve rigTransform branch.
+>> Builds a synthetic slack-shaped agent with the production url_ref +
+>> referenced_webpage_content records and a minimal catalog. State is
+>> seeded directly with a slack_msg entry so we can exercise the full
+>> resolve → mint → capability-write path without an MCP server.
+
+>> Stub fetch exe for the get_webpage_via_ref test path. Returns a fixed
+>> body so the test asserts on routing/composition, not on real network.
+exe @urDStubWebFetch(url) = [
+  => { content: `STUB-CONTENT-FOR @url`, fetch_status: "ok" }
+]
+
+>> Placeholder mlld for the find_referenced_urls catalog entry — required
+>> by the var tools validator but never invoked (rigTransform-dispatched).
+exe @urDFindRefsPlaceholder(message) = [
+  => { error: "rigTransform_should_not_be_called_directly" }
+]
+
+var @urDRecords = {
+  slack_msg: @slack_msg_record,
+  url_ref: @slack_url_ref,
+  referenced_webpage_content: @slack_ref_webpage
+}
+
+var tools @urDTools = {
+  find_referenced_urls: {
+    mlld: @urDFindRefsPlaceholder,
+    rigTransform: "find_referenced_urls",
+    recordArgs: { message: "slack_msg" },
+    transformConfig: { bodyField: "body" },
+    returns: @slack_url_ref,
+    labels: ["resolve:r", "tool:r"],
+    description: "Mint url_ref handles from a resolved slack_msg body."
+  },
+  get_webpage_via_ref: {
+    mlld: @urDStubWebFetch,
+    rigTransform: "get_webpage_via_ref",
+    recordArgs: { ref: "url_ref" },
+    returns: @slack_ref_webpage,
+    labels: ["resolve:r", "tool:r", "exfil:fetch"],
+    description: "Fetch a url_ref's URL via stub backend."
+  }
+}
+
+var @urDAgent = @rigBuild({
+  suite: "url-promotion-dispatch-test",
+  defense: "defended",
+  model: "stub",
+  records: @urDRecords,
+  tools: @urDTools
+})
+
+>> Synthetic state seed: one slack_msg entry whose body holds two URLs —
+>> one ok, one blocked (query string).
+var @urDMsgEntry = {
+  handle: "r_slack_msg_seed_001",
+  key: "seed_001",
+  identity_field: "id_",
+  identity_value: "seed_001",
+  value: { id_: "seed_001", sender: "alice", recipient: "bob", body: "see https://example.com/article and beacon https://internal.example.com/check?key=secret" },
+  field_values: { id_: "seed_001", sender: "alice", recipient: "bob", body: "see https://example.com/article and beacon https://internal.example.com/check?key=secret" }
+}
+var @urDSeedState = {
+  resolved: { slack_msg: [@urDMsgEntry] },
+  extracted: {},
+  derived: {},
+  extract_sources: {},
+  capabilities: { url_refs: {} }
+}
+
+>> UR-21: dispatchResolve(find_referenced_urls) on a body with one ok URL
+>> and one blocked URL → 2 url_ref entries minted, 1 capability written.
+var @ur21Result = @dispatchResolve(@urDAgent, @urDSeedState, {
+  phase: "resolve",
+  tool: "find_referenced_urls",
+  args: { message: { source: "resolved", record: "slack_msg", handle: "r_slack_msg_seed_001" } },
+  purpose: "extract URL refs from the seed message"
+}, "summarize the linked article", false)
+var @ur21CapMap = @ur21Result.state.capabilities.url_refs
+var @ur21CapCount = @plainObjectKeys(@ur21CapMap).length
+var @ur21RecordCount = @ur21Result.result.count
+var @ur21Ok = @ur21Result.error == null && @ur21RecordCount == 2 && @ur21CapCount == 1
+var @ur21Detail = `error=@ur21Result.error records=@ur21RecordCount capabilities=@ur21CapCount`
+
+>> UR-22: state_delta carries both resolved.url_ref and capabilities.url_refs
+>> deltas, and the public record values include no URL string anywhere.
+var @ur22StateDeltaResolved = @ur21Result.state_delta.resolved.url_ref
+var @ur22StateDeltaCaps = @ur21Result.state_delta.capabilities.url_refs
+var @ur22FirstRecordSerialized = @urJsonStringify(@ur22StateDeltaResolved[0].value)
+var @ur22SecondRecordSerialized = @urJsonStringify(@ur22StateDeltaResolved[1].value)
+var @ur22NoUrlInRecords = !@ur22FirstRecordSerialized.includes("example.com") && !@ur22SecondRecordSerialized.includes("internal.example.com")
+var @ur22DeltaCapsKeys = @plainObjectKeys(@ur22StateDeltaCaps).length
+var @ur22Ok = @ur22StateDeltaResolved.length == 2 && @ur22DeltaCapsKeys == 1 && @ur22NoUrlInRecords
+var @ur22Detail = `delta_records=@ur22StateDeltaResolved.length delta_caps=@ur22DeltaCapsKeys no_url_leak=@ur22NoUrlInRecords`
+
+>> UR-23: dispatchResolve(get_webpage_via_ref) on a state whose capability
+>> map carries one ok URL → returns referenced_webpage_content with the
+>> stub-fetched content and source_url_ref provenance.
+var @urDOkRefHandle = @plainObjectKeys(@ur21CapMap)[0]
+var @ur23UrlRefBucket = @ur21Result.state.resolved.url_ref
+>> Find the matching url_ref entry in the resolved bucket via array scan
+exe @urDFindEntry(bucket, handle) = js {
+  if (!bucket) return null;
+  let entries = [];
+  if (Array.isArray(bucket)) entries = bucket;
+  else if (bucket._rig_bucket === "resolved_index_v1") entries = Object.values(bucket.by_handle || {});
+  else entries = Object.values(bucket || {});
+  for (const e of entries) {
+    if (e && e.handle === handle) return e;
+  }
+  return null;
+}
+var @ur23OkUrlRefEntry = @urDFindEntry(@ur23UrlRefBucket, @urDOkRefHandle)
+var @ur23OkRefStateExists = @ur23OkUrlRefEntry.isDefined() && @ur23OkUrlRefEntry != null
+var @ur23Result = @dispatchResolve(@urDAgent, @ur21Result.state, {
+  phase: "resolve",
+  tool: "get_webpage_via_ref",
+  args: { ref: { source: "resolved", record: "url_ref", handle: @urDOkRefHandle } },
+  purpose: "fetch the referenced webpage"
+}, "summarize the linked article", false)
+var @ur23WebpageBucket = @ur23Result.state.resolved.referenced_webpage_content
+var @ur23WebpageEntry = @urDFindEntry(@ur23WebpageBucket, @ur23Result.result.handles[0])
+var @ur23ContentOk = @ur23WebpageEntry.value.content.includes("STUB-CONTENT-FOR")
+var @ur23SourceLink = @ur23WebpageEntry.value.source_url_ref == @urDOkRefHandle
+var @ur23Ok = @ur23Result.error == null && @ur23OkRefStateExists && @ur23ContentOk && @ur23SourceLink
+var @ur23Detail = `error=@ur23Result.error content_ok=@ur23ContentOk source_link_ok=@ur23SourceLink`
+
+>> UR-24: dispatchResolve(get_webpage_via_ref) on a handle that does NOT
+>> appear in the capability map → returns url_ref_capability_missing
+>> rather than fetching anything. Synthesize a state where the resolved
+>> bucket has a url_ref entry but the capability map is empty.
+var @ur24FakeUrlRefEntry = {
+  handle: "r_url_ref_fake_001",
+  key: "fake_001",
+  identity_field: "id_",
+  identity_value: "fake_001",
+  value: { id_: "fake_001", source_msg: "r_slack_msg_seed_001", ordinal_in_message: 0, safety_status: "ok" },
+  field_values: { id_: "fake_001", source_msg: "r_slack_msg_seed_001", ordinal_in_message: 0, safety_status: "ok" }
+}
+var @ur24State = {
+  resolved: { slack_msg: [@urDMsgEntry], url_ref: [@ur24FakeUrlRefEntry] },
+  extracted: {},
+  derived: {},
+  extract_sources: {},
+  capabilities: { url_refs: {} }
+}
+var @ur24Result = @dispatchResolve(@urDAgent, @ur24State, {
+  phase: "resolve",
+  tool: "get_webpage_via_ref",
+  args: { ref: { source: "resolved", record: "url_ref", handle: "r_url_ref_fake_001" } },
+  purpose: "attempt to fetch a ref with no capability"
+}, "fetch", false)
+var @ur24Ok = @ur24Result.error == "url_ref_capability_missing"
+var @ur24Detail = `error=@ur24Result.error summary=@ur24Result.summary`
+
 exe @allChecks() = [
   => [
   @check("c-c79c/V1-non-empty-inline-schema-passes", @c79cValidNonEmptyOk, @c79cValidNonEmptyDetail),
@@ -4124,6 +4288,10 @@ exe @allChecks() = [
   @check("c-be06/UR-18-recordArgs-rejects-derived-source", @ur18Ok, @ur18Detail),
   @check("c-be06/UR-19-recordArgs-rejects-spike42-forged-handle", @ur19Ok, @ur19Detail),
   @check("c-be06/UR-20-recordArgs-rejects-mismatched-record-type", @ur20Ok, @ur20Detail),
+  @check("c-be06/UR-21-dispatch-find-referenced-urls-mints-records-and-caps", @ur21Ok, @ur21Detail),
+  @check("c-be06/UR-22-dispatch-state-delta-shape-and-no-url-in-records", @ur22Ok, @ur22Detail),
+  @check("c-be06/UR-23-dispatch-get-webpage-via-ref-fetches-via-capability", @ur23Ok, @ur23Detail),
+  @check("c-be06/UR-24-dispatch-get-webpage-via-ref-rejects-missing-capability", @ur24Ok, @ur24Detail),
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
   @check("CAT-1", @catalogTransparentInputRecordOk, @catalogTransparentInputRecordDetail),
   @check("CAT-2", @catalogTransparentMetadataOk, @catalogTransparentMetadataDetail),

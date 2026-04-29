@@ -185,6 +185,43 @@ exe @mergeUrlRefCapabilities(existingMap, deltaMap) = js {
   return out;
 }
 
+>> Attach a url_ref capability delta to a state object. Preserves all
+>> sibling state fields (resolved, extracted, derived, extract_sources,
+>> and any other capabilities namespaces) and merges the delta over the
+>> existing url_refs map (delta wins on collision). Used by the
+>> dispatchResolve rigTransform branch after @updateResolvedStateWithDef.
+exe @withUrlCapabilities(state, deltaMap) = js {
+  if (!state || typeof state !== "object") return state;
+  const out = {};
+  for (const [k, v] of Object.entries(state)) out[k] = v;
+  const existingCaps = (state.capabilities && typeof state.capabilities === "object") ? state.capabilities : {};
+  const existingMap = (existingCaps.url_refs && typeof existingCaps.url_refs === "object") ? existingCaps.url_refs : {};
+  const newMap = {};
+  for (const [k, v] of Object.entries(existingMap)) newMap[k] = v;
+  for (const [k, v] of Object.entries(deltaMap || {})) newMap[k] = v;
+  const newCaps = {};
+  for (const [k, v] of Object.entries(existingCaps)) newCaps[k] = v;
+  newCaps.url_refs = newMap;
+  out.capabilities = newCaps;
+  return out;
+}
+
+>> Returns true iff state.capabilities.url_refs[handle] holds an ok
+>> capability entry with a non-empty url string. Companion to
+>> @lookupUrlCapability that sidesteps mlld's null-wrapping at the
+>> JS-exe boundary — callers can `when !@hasUrlCapability(...)` to
+>> detect missing/blocked refs without comparing to null.
+exe @hasUrlCapability(state, urlRefHandle) = js {
+  if (!state || typeof state !== "object") return false;
+  const caps = state.capabilities;
+  if (!caps || typeof caps !== "object") return false;
+  const map = caps.url_refs;
+  if (!map || typeof map !== "object") return false;
+  const entry = map[urlRefHandle];
+  if (!entry || typeof entry !== "object") return false;
+  return entry.safety_status === "ok" && typeof entry.url === "string" && entry.url.length > 0;
+}
+
 >> Read the URL string for a url_ref handle from state. Returns null when
 >> the handle is unknown or the entry is malformed. This is the only path
 >> the dispatcher should use — public record reads never expose the URL.
@@ -201,19 +238,21 @@ exe @lookupUrlCapability(state, urlRefHandle) = js {
 }
 
 >> Compute a deterministic url_ref id from source message handle + ordinal.
->> Does not leak the URL — id is opaque, derived from provenance only.
+>> Returns the bare hash; the rig handle prefix `r_url_ref_` is composed
+>> by the dispatcher / normalizeResolvedValues. Id does not leak the URL
+>> — it is derived from provenance only.
 exe @urlRefId(sourceMsgHandle, ordinal) = js {
   const input = `${sourceMsgHandle}:${ordinal}`;
   try {
     const crypto = require("crypto");
-    return "url_ref_" + crypto.createHash("sha256").update(input).digest("hex").slice(0, 12);
+    return crypto.createHash("sha256").update(input).digest("hex").slice(0, 12);
   } catch (_) {
     let h = 0;
     for (let i = 0; i < input.length; i++) {
       h = ((h << 5) - h) + input.charCodeAt(i);
       h |= 0;
     }
-    return "url_ref_v1_" + (h >>> 0).toString(16);
+    return "v1_" + (h >>> 0).toString(16);
   }
 }
 
@@ -223,5 +262,7 @@ export {
   @buildUrlRefRecordValue,
   @buildUrlRefCapabilityEntry,
   @mergeUrlRefCapabilities,
+  @withUrlCapabilities,
+  @hasUrlCapability,
   @lookupUrlCapability
 }

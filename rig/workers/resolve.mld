@@ -4,11 +4,21 @@ import {
   @normalizeResolvedValues,
   @updateResolvedStateWithDef
 } from "../runtime.mld"
+import { @pairsToObject } from "../tooling.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @resolveAttestation } from "../records.mld"
-import { @compileToolArgs } from "../intent.mld"
+import { @compileToolArgs, @compileRecordArgs, @lookupResolvedEntry, @resolvedEntryFieldValue } from "../intent.mld"
 import { @phaseToolEntry, @phaseToolNames, @wrongPhaseToolFailure } from "../tooling.mld"
 import { @validatePlannerArgRefs, @plannerValidationFailure } from "../planner_inputs.mld"
+import {
+  @applyUrlRefs,
+  @urlRefId,
+  @buildUrlRefRecordValue,
+  @buildUrlRefCapabilityEntry,
+  @withUrlCapabilities,
+  @hasUrlCapability,
+  @lookupUrlCapability
+} from "../transforms/url_refs.mld"
 
 exe @resolvePrompt(query, decision, toolDocs, stateSummary) = template "../prompts/resolve.att"
 
@@ -26,6 +36,110 @@ exe @resolveDebug(agent, marker) = [
   => null
 ]
 
+>> URL-promotion (c-be06): mint url_ref handles for URLs found in a
+>> resolved slack_msg body. Public records carry no URL; the URL string
+>> lands in state.capabilities.url_refs keyed by handle.
+exe @dispatchFindReferencedUrls(agent, state, tool, descriptors, decision, query, deltaOnly) = [
+  let @msgHandle = @descriptors.message.handle
+  let @msgEntry = @lookupResolvedEntry(@state, "slack_msg", @msgHandle)
+  if !@msgEntry.isDefined() [
+    => {
+      error: "rigTransform_lookup_failed",
+      summary: `slack_msg handle '@msgHandle' not in state.resolved.slack_msg. Resolve the message via read_channel_messages or read_inbox first.`
+    }
+  ]
+  let @bodyField = @tool.transformConfig.bodyField ?? "body"
+  let @body = @resolvedEntryFieldValue(@msgEntry, @bodyField) ?? ""
+  let @parsed = @applyUrlRefs(@body)
+  let @publicRecords = for @ref in @parsed.refs [
+    let @refId = @urlRefId(@msgHandle, @ref.ordinal_in_message)
+    => @buildUrlRefRecordValue(@ref, @msgHandle, @refId)
+  ]
+  let @capPairs = for @ref in @parsed.refs when @ref.safety_status == "ok" [
+    let @refId = @urlRefId(@msgHandle, @ref.ordinal_in_message)
+    let @stateHandleVal = `r_url_ref_@refId`
+    => { key: @stateHandleVal, value: @buildUrlRefCapabilityEntry(@ref, @msgHandle) }
+  ]
+  let @capDelta = @pairsToObject(@capPairs)
+  let @recordType = "url_ref"
+  let @recordDef = @tool.returns
+  let @entries = @normalizeResolvedValues(@recordType, @recordDef, @publicRecords)
+  let @handles = for @e in @entries => @e.handle
+  let @resolvedNext = @updateResolvedStateWithDef(@state, @recordType, @entries, @recordDef)
+  let @nextState = when [
+    @deltaOnly => null
+    * => @withUrlCapabilities(@resolvedNext, @capDelta)
+  ]
+  let @okList = for @ref in @parsed.refs when @ref.safety_status == "ok" => @ref
+  let @blockedList = for @ref in @parsed.refs when @ref.safety_status == "blocked" => @ref
+  => {
+    state: @nextState,
+    state_delta: { resolved: { [@recordType]: @entries }, capabilities: { url_refs: @capDelta } },
+    result: {
+      status: "resolved",
+      record_type: @recordType,
+      count: @entries.length,
+      handles: @handles,
+      summary: `minted @entries.length url_ref(s); @okList.length fetchable, @blockedList.length blocked.`
+    },
+    session_id: null
+  }
+]
+
+>> URL-promotion fetch (c-be06): dereference url_ref handles to the
+>> private capability map, fetch each URL via the suite-provided mlld
+>> exe, and normalize the result as referenced_webpage_content with
+>> source_url_ref provenance and untrusted content.
+exe @dispatchGetWebpageViaRef(agent, state, tool, descriptors, decision, query, deltaOnly) = [
+  let @refDescriptor = @descriptors.ref
+  let @refsList = when [
+    @typeof(@refDescriptor) == "array" => @refDescriptor
+    * => [@refDescriptor]
+  ]
+  let @lookups = for @rd in @refsList => {
+    handle: @rd.handle,
+    has_url: @hasUrlCapability(@state, @rd.handle)
+  }
+  let @missing = for @lr in @lookups when !@lr.has_url => @lr
+  if @missing.length > 0 [
+    => {
+      error: "url_ref_capability_missing",
+      summary: `No fetchable URL for url_ref handle '@missing[0].handle'. The ref may be safety_status=blocked (query/fragment/template URL), or the handle was not minted by find_referenced_urls.`
+    }
+  ]
+  let @composed = for @lr in @lookups [
+    let @url = @lookupUrlCapability(@state, @lr.handle)
+    let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, { url: @url })
+    let @baseId = @lr.handle.replace("r_", "")
+    => {
+      id_: `web_@baseId`,
+      source_url_ref: @lr.handle,
+      content: @raw.content ?? null,
+      fetch_status: @raw.fetch_status ?? "ok"
+    }
+  ]
+  let @recordType = "referenced_webpage_content"
+  let @recordDef = @tool.returns
+  let @entries = @normalizeResolvedValues(@recordType, @recordDef, @composed)
+  let @handles = for @e in @entries => @e.handle
+  let @nextState = when [
+    @deltaOnly => null
+    * => @updateResolvedStateWithDef(@state, @recordType, @entries, @recordDef)
+  ]
+  => {
+    state: @nextState,
+    state_delta: { resolved: { [@recordType]: @entries } },
+    result: {
+      status: "resolved",
+      record_type: @recordType,
+      count: @entries.length,
+      handles: @handles,
+      summary: `fetched @entries.length webpage(s) via url_ref capability.`
+    },
+    session_id: null
+  }
+]
+
 >> Resolve dispatch is mechanical: validate the planner's control refs
 >> through the shared intent compiler, call the read tool, normalize
 >> returned records into rig state, then append the execution log entry.
@@ -40,6 +154,26 @@ exe @dispatchResolve(agent, state, decision, query, deltaOnly) = [
   ]
   let @shapeCheck = @validatePlannerArgRefs(@decision.args ?? {})
   if !@shapeCheck.ok [ => @plannerValidationFailure("planner_ref_validation_failed", @shapeCheck, @shapeCheck.issues) ]
+  >> rigTransform branch (c-be06): resolve-class deterministic transforms
+  >> with record-handle args. Skip @compileToolArgs and @callTool entirely;
+  >> @compileRecordArgs validates the source-class firewall and the
+  >> per-transform handler manages state mutation and capability map writes.
+  let @rigTransform = @tool.rigTransform
+  if @rigTransform.isDefined() [
+    let @recordArgsCheck = @compileRecordArgs(@state, @tool.recordArgs ?? {}, @decision.args ?? {})
+    if !@recordArgsCheck.ok [
+      => @plannerValidationFailure(
+        @recordArgsCheck.error ?? "record_arg_validation_failed",
+        @recordArgsCheck,
+        [{ arg: @recordArgsCheck.arg, error: @recordArgsCheck.error }]
+      )
+    ]
+    => when [
+      @rigTransform == "find_referenced_urls" => @dispatchFindReferencedUrls(@agent, @state, @tool, @recordArgsCheck.descriptors, @decision, @query, @deltaOnly)
+      @rigTransform == "get_webpage_via_ref" => @dispatchGetWebpageViaRef(@agent, @state, @tool, @recordArgsCheck.descriptors, @decision, @query, @deltaOnly)
+      * => { error: "unknown_rig_transform", summary: `Unknown rigTransform '@rigTransform' on tool '@decision.tool'` }
+    ]
+  ]
   @resolveDebug(@agent, "dispatchResolve:tool")
   let @argsCheck = @compileToolArgs(@state, @tool, @decision.args ?? {}, @query)
   if !@argsCheck.ok [ => @plannerValidationFailure(@argsCheck.error ?? "tool_arg_validation_failed", @argsCheck, @argsCheck.issues) ]

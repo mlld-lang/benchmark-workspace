@@ -568,12 +568,18 @@ exe @workerStateSummary(agent, state) = [
   }
 ]
 
-exe @rigState(resolved, extracted, derived, extractSources) = [
+>> capabilities is the rig-private state namespace for fact-bearing
+>> material that must NOT appear in any record's public value. v1 carries
+>> only `url_refs` (URL-promotion, c-be06), keyed by url_ref handle.
+>> Future capabilities (typed-instruction binders, file-read authority)
+>> live alongside under sibling keys.
+exe @rigState(resolved, extracted, derived, extractSources, capabilities) = [
   => {
     resolved: @resolved,
     extracted: @extracted,
     derived: @derived,
-    extract_sources: @extractSources
+    extract_sources: @extractSources,
+    capabilities: @capabilities ?? { url_refs: {} }
   }
 ]
 
@@ -582,7 +588,8 @@ exe @emptyState() = [
     resolved: {},
     extracted: {},
     derived: {},
-    extract_sources: {}
+    extract_sources: {},
+    capabilities: { url_refs: {} }
   }
 ]
 
@@ -819,7 +826,8 @@ exe @updateResolvedState(state, recordName, entries) = [
     @nextResolved,
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
-    @structuredData(@state.extract_sources)
+    @structuredData(@state.extract_sources),
+    @structuredData(@state.capabilities)
   )
 ]
 
@@ -890,7 +898,8 @@ exe @updateResolvedStateWithDef(state, recordName, entries, recordDef) = [
     @nextResolved,
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
-    @structuredData(@state.extract_sources)
+    @structuredData(@state.extract_sources),
+    @structuredData(@state.capabilities)
   )
 ]
 
@@ -902,13 +911,15 @@ exe @updateNamedState(state, bucket, name, entry) = [
       @structuredData(@state.resolved),
       @nextBucket,
       @structuredData(@state.derived),
-      @structuredData(@state.extract_sources)
+      @structuredData(@state.extract_sources),
+      @structuredData(@state.capabilities)
     )
     @bucket == "derived" => @rigState(
       @structuredData(@state.resolved),
       @structuredData(@state.extracted),
       @nextBucket,
-      @structuredData(@state.extract_sources)
+      @structuredData(@state.extract_sources),
+      @structuredData(@state.capabilities)
     )
     * => @state
   ]
@@ -921,7 +932,8 @@ exe @updateExtractSources(state, sourceKey, extractName) = [
     @structuredData(@state.resolved),
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
-    @nextSources
+    @nextSources,
+    @structuredData(@state.capabilities)
   )
 ]
 
