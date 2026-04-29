@@ -59,6 +59,7 @@ import { @coerceExtractAttestation, @dispatchExtract, @validateExtractSchema } f
 import { @coerceDeriveAttestation } from "../workers/derive.mld"
 import { @planner, @plannerTools, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress } from "../workers/planner.mld"
 import { @applyRegexParser, @parserId } from "../transforms/parse_value.mld"
+import { @applyUrlRefs, @urlRefId } from "../transforms/url_refs.mld"
 
 exe @status(ok) = when [
   @ok => "PASS"
@@ -3801,6 +3802,86 @@ var @pv12DerivedAttempt = @compileExecuteIntent(@pv10State, @pv10Tools, {
 var @pv12Ok = @pv12DerivedAttempt.ok == false
 var @pv12Detail = `compile.ok=@pv12DerivedAttempt.ok (expected reject of derived source)`
 
+>> ─────────────────────────────────────────────────────────────────
+>> URL-promotion deterministic parser invariants (c-be06, Group A)
+>> ─────────────────────────────────────────────────────────────────
+>>
+>> @applyUrlRefs is the rig-side deterministic URL extractor used by
+>> find_referenced_urls. It mints metadata refs from a slack_msg body and
+>> applies a conservative safety gate (no query/fragment/template URLs).
+>> Group A pins parser behavior only: capability-map persistence and the
+>> recordArgs source-class firewall land in Groups B and C alongside the
+>> dispatchResolve hookup.
+
+>> UR-1: single https URL produces one ok ref
+var @ur1Result = @applyUrlRefs("Check out https://example.com/article for context")
+var @ur1Ok = @ur1Result.refs.length == 1 && @ur1Result.refs[0].safety_status == "ok" && @ur1Result.refs[0].url == "https://example.com/article"
+var @ur1Detail = `refs=@ur1Result.refs.length status=@ur1Result.refs[0].safety_status`
+
+>> UR-2: zero URLs in plain text returns empty refs (not error)
+var @ur2Result = @applyUrlRefs("just some text without any links here")
+var @ur2Ok = @ur2Result.refs.length == 0
+var @ur2Detail = `refs=@ur2Result.refs.length (no URLs in body)`
+
+>> UR-3: N URLs preserved in source order with distinct ordinals
+var @ur3Body = "first https://aaa.example.com then https://bbb.example.com last www.ccc.example.com"
+var @ur3Result = @applyUrlRefs(@ur3Body)
+var @ur3OrdinalsOk = @ur3Result.refs[0].ordinal_in_message == 0 && @ur3Result.refs[1].ordinal_in_message == 1 && @ur3Result.refs[2].ordinal_in_message == 2
+var @ur3OrderOk = @ur3Result.refs[0].url == "https://aaa.example.com" && @ur3Result.refs[1].url == "https://bbb.example.com" && @ur3Result.refs[2].url == "https://www.ccc.example.com"
+var @ur3Ok = @ur3Result.refs.length == 3 && @ur3OrdinalsOk && @ur3OrderOk
+var @ur3Detail = `refs=@ur3Result.refs.length ordinals_ok=@ur3OrdinalsOk order_ok=@ur3OrderOk`
+
+>> UR-4: trailing punctuation stripped (period, comma, paren, bracket)
+var @ur4Body = "see https://example.com/a, then https://example.com/b. or https://example.com/c) and https://example.com/d]"
+var @ur4Result = @applyUrlRefs(@ur4Body)
+var @ur4Urls = for @r in @ur4Result.refs => @r.url
+var @ur4Ok = @ur4Urls[0] == "https://example.com/a" && @ur4Urls[1] == "https://example.com/b" && @ur4Urls[2] == "https://example.com/c" && @ur4Urls[3] == "https://example.com/d"
+var @ur4Detail = `urls=@ur4Urls`
+
+>> UR-5: bare host without `www.` is NOT extracted (v1 conservatism)
+var @ur5Result = @applyUrlRefs("visit example.com or news.bbc.co.uk for details")
+var @ur5Ok = @ur5Result.refs.length == 0
+var @ur5Detail = `refs=@ur5Result.refs.length (bare hosts rejected by parser)`
+
+>> UR-6: query string blocked, no URL leaked into the ref
+var @ur6Result = @applyUrlRefs("beacon https://internal.example.com/check?key=secret123")
+var @ur6Ref = @ur6Result.refs[0]
+var @ur6Ok = @ur6Result.refs.length == 1 && @ur6Ref.safety_status == "blocked" && @ur6Ref.has_query == true && @ur6Ref.url == null
+var @ur6Detail = `status=@ur6Ref.safety_status has_query=@ur6Ref.has_query url_field=@ur6Ref.url reason=@ur6Ref.reason`
+
+>> UR-7: fragment blocked, no URL leaked
+var @ur7Result = @applyUrlRefs("anchor https://example.com/page#section")
+var @ur7Ref = @ur7Result.refs[0]
+var @ur7Ok = @ur7Result.refs.length == 1 && @ur7Ref.safety_status == "blocked" && @ur7Ref.has_fragment == true && @ur7Ref.url == null
+var @ur7Detail = `status=@ur7Ref.safety_status has_fragment=@ur7Ref.has_fragment reason=@ur7Ref.reason`
+
+>> UR-8: template syntax blocked (curly braces, dollar, backtick)
+var @ur8aResult = @applyUrlRefs("template https://internal.example.com/check/{SECRET}")
+var @ur8bResult = @applyUrlRefs("template https://internal.example.com/${TOKEN}/check")
+var @ur8aOk = @ur8aResult.refs[0].safety_status == "blocked" && @ur8aResult.refs[0].reason == "template_syntax" && @ur8aResult.refs[0].url == null
+var @ur8bOk = @ur8bResult.refs[0].safety_status == "blocked" && @ur8bResult.refs[0].reason == "template_syntax" && @ur8bResult.refs[0].url == null
+var @ur8Ok = @ur8aOk && @ur8bOk
+var @ur8Detail = `curly_blocked=@ur8aOk dollar_blocked=@ur8bOk`
+
+>> UR-9: duplicate canonical URLs share canonical_url_hash; urlRefId of
+>> distinct (handle, ordinal) pairs is distinct so each ref still has its
+>> own provenance id.
+var @ur9Result = @applyUrlRefs("twice https://example.com/a and again https://example.com/a")
+var @ur9SameHash = @ur9Result.refs[0].canonical_url_hash == @ur9Result.refs[1].canonical_url_hash
+var @ur9Id0 = @urlRefId("r_msg_001", 0)
+var @ur9Id1 = @urlRefId("r_msg_001", 1)
+var @ur9DistinctIds = @ur9Id0 != @ur9Id1
+var @ur9Ok = @ur9Result.refs.length == 2 && @ur9SameHash && @ur9DistinctIds
+var @ur9Detail = `same_hash=@ur9SameHash id0=@ur9Id0 id1=@ur9Id1 distinct_ids=@ur9DistinctIds`
+
+>> UR-10: same body produces same canonical hashes (deterministic)
+var @ur10A = @applyUrlRefs("see https://example.com/article and www.foo.com/x")
+var @ur10B = @applyUrlRefs("see https://example.com/article and www.foo.com/x")
+var @ur10Hash0Match = @ur10A.refs[0].canonical_url_hash == @ur10B.refs[0].canonical_url_hash
+var @ur10Hash1Match = @ur10A.refs[1].canonical_url_hash == @ur10B.refs[1].canonical_url_hash
+var @ur10Ok = @ur10A.refs.length == 2 && @ur10Hash0Match && @ur10Hash1Match
+var @ur10Detail = `hash0_match=@ur10Hash0Match hash1_match=@ur10Hash1Match`
+
 exe @allChecks() = [
   => [
   @check("c-c79c/V1-non-empty-inline-schema-passes", @c79cValidNonEmptyOk, @c79cValidNonEmptyDetail),
@@ -3820,6 +3901,16 @@ exe @allChecks() = [
   @check("c-69db/PV-10-parsed-fact-satisfies-control-arg", @pv10Ok, @pv10Detail),
   @check("c-69db/PV-11-extracted-source-rejected", @pv11Ok, @pv11Detail),
   @check("c-69db/PV-12-derived-source-rejected", @pv12Ok, @pv12Detail),
+  @check("c-be06/UR-1-single-https-url-ok", @ur1Ok, @ur1Detail),
+  @check("c-be06/UR-2-zero-urls-empty-refs", @ur2Ok, @ur2Detail),
+  @check("c-be06/UR-3-source-order-ordinals", @ur3Ok, @ur3Detail),
+  @check("c-be06/UR-4-trailing-punctuation-stripped", @ur4Ok, @ur4Detail),
+  @check("c-be06/UR-5-bare-host-rejected", @ur5Ok, @ur5Detail),
+  @check("c-be06/UR-6-query-string-blocked-no-url-leak", @ur6Ok, @ur6Detail),
+  @check("c-be06/UR-7-fragment-blocked-no-url-leak", @ur7Ok, @ur7Detail),
+  @check("c-be06/UR-8-template-syntax-blocked", @ur8Ok, @ur8Detail),
+  @check("c-be06/UR-9-duplicate-canonical-shared-hash-distinct-ids", @ur9Ok, @ur9Detail),
+  @check("c-be06/UR-10-deterministic-canonical-hash", @ur10Ok, @ur10Detail),
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
   @check("CAT-1", @catalogTransparentInputRecordOk, @catalogTransparentInputRecordDetail),
   @check("CAT-2", @catalogTransparentMetadataOk, @catalogTransparentMetadataDetail),

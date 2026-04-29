@@ -62,3 +62,7 @@ parse_value (c-69db) is the deterministic-extraction primitive for non-URL cases
 - c-69db: parse_value sibling primitive
 - c-8738, c-3287, c-a46d, c-1487 (the deferred slack tasks)
 
+
+## Notes
+
+**2026-04-29T17:33:38Z** Group A landed (zero-LLM parser tests). Created rig/transforms/url_refs.mld with @applyUrlRefs(body) + @urlRefId(handle, ordinal). Added UR-1..UR-10 to rig/tests/index.mld. All pass. Group B (capability map invariants) and Group C (recordArgs source-class firewall) deferred to next pass — they need state.capabilities.url_refs + dispatchResolve recordArgs validation hooks first.

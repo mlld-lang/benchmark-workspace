@@ -1,0 +1,153 @@
+>> rig/transforms/url_refs.mld — deterministic URL ref minting (v1, c-be06)
+>>
+>> Extracts URLs from a message body, applies a conservative safety gate
+>> (no query strings, no fragments, no template syntax, http/https/www
+>> only), and returns metadata refs in source order. The actual URL string
+>> is returned ONLY for ok refs so the dispatcher can populate the private
+>> state.capabilities.url_refs map. The URL must NOT be persisted into the
+>> public url_ref record value — see URL_PROMOTION.md "url_ref" section.
+>>
+>> Bounded engine: regex extraction with input-length cap and ref-count cap.
+>> ReDoS-safe pattern (no nested quantifiers on overlapping classes). No
+>> recursive promotion: callers must ensure input is a resolved slack_msg,
+>> never webpage_content or referenced_webpage_content.
+>>
+>> Limits:
+>>   - max body length: 65536 (64 KB)
+>>   - max refs minted per body: 50
+
+exe @applyUrlRefs(body) = js {
+  const MAX_INPUT_LEN = 65536;
+  const MAX_REFS = 50;
+
+  if (typeof body !== "string") {
+    return { refs: [], diagnostics: { reason: `body must be string, got ${typeof body}` } };
+  }
+  if (body.length > MAX_INPUT_LEN) {
+    return { refs: [], diagnostics: { reason: `body length ${body.length} > ${MAX_INPUT_LEN}` } };
+  }
+
+  // Conservative URL extraction: matches http(s)://... or www.host.tld[/...]
+  // Stops at whitespace, angle brackets, quotes, and backticks. Bare hosts
+  // without `www.` are NOT matched in v1 (too risky without a public-suffix
+  // list).
+  const URL_PATTERN = /(https?:\/\/[^\s<>"'`]+|www\.[a-zA-Z0-9][a-zA-Z0-9-]*(?:\.[a-zA-Z0-9-]+)+(?:\/[^\s<>"'`]*)?)/g;
+  const TRAILING_PUNCT = /[.,;:!?)\]}>]+$/;
+  const TEMPLATE_CHARS = /[{}$`]/;
+
+  function hashOf(s) {
+    try {
+      const crypto = require("crypto");
+      return crypto.createHash("sha256").update(s).digest("hex").slice(0, 16);
+    } catch (_) {
+      let h = 0;
+      for (let i = 0; i < s.length; i++) {
+        h = ((h << 5) - h) + s.charCodeAt(i);
+        h |= 0;
+      }
+      return "v1_" + (h >>> 0).toString(16);
+    }
+  }
+
+  const refs = [];
+  let match;
+  let ordinal = 0;
+  while ((match = URL_PATTERN.exec(body)) !== null && refs.length < MAX_REFS) {
+    if (match.index === URL_PATTERN.lastIndex) URL_PATTERN.lastIndex++;
+    const raw = match[0];
+    const startPos = match.index;
+
+    // Strip trailing punctuation iteratively (handles e.g. ").")
+    let stripped = raw;
+    let prev;
+    do {
+      prev = stripped;
+      stripped = stripped.replace(TRAILING_PUNCT, "");
+    } while (stripped !== prev);
+
+    if (stripped.length === 0) continue;
+
+    let blocked_reason = null;
+
+    // Template-syntax check on the stripped literal — done before URL
+    // parsing so a `{` in the path is caught even if the URL parser
+    // accepts it.
+    if (TEMPLATE_CHARS.test(stripped)) {
+      blocked_reason = "template_syntax";
+    }
+
+    // Normalize www. → https://www. so URL() can parse it.
+    let url = stripped;
+    if (/^www\./i.test(url)) {
+      url = "https://" + url;
+    }
+
+    let has_query = false;
+    let has_fragment = false;
+    let canonical = null;
+    try {
+      const u = new URL(url);
+      if (u.protocol !== "http:" && u.protocol !== "https:") {
+        blocked_reason = blocked_reason || "unsupported_scheme";
+      }
+      has_query = !!u.search;
+      has_fragment = !!u.hash;
+      if (has_query) blocked_reason = blocked_reason || "has_query";
+      if (has_fragment) blocked_reason = blocked_reason || "has_fragment";
+
+      // Canonical key: lowercase scheme + host, default port stripped,
+      // fragment dropped, query preserved (so attacker beacon URLs that
+      // differ only in query don't collide).
+      const port = u.port ? `:${u.port}` : "";
+      canonical = `${u.protocol.toLowerCase()}//${u.hostname.toLowerCase()}${port}${u.pathname}${u.search}`;
+    } catch (_) {
+      blocked_reason = blocked_reason || "malformed_url";
+    }
+
+    const safety_status = blocked_reason ? "blocked" : "ok";
+    const canonical_url_hash = hashOf(canonical || stripped);
+
+    refs.push({
+      ordinal_in_message: ordinal,
+      position_in_message: startPos,
+      canonical_url_hash,
+      has_query,
+      has_fragment,
+      safety_status,
+      reason: blocked_reason,
+      // url is populated only for ok refs. Caller writes this into the
+      // private capability map and DROPS it before persisting the public
+      // url_ref record value.
+      url: blocked_reason ? null : url
+    });
+    ordinal++;
+  }
+
+  return {
+    refs,
+    diagnostics: {
+      ref_count: refs.length,
+      ok_count: refs.filter(r => r.safety_status === "ok").length,
+      blocked_count: refs.filter(r => r.safety_status === "blocked").length
+    }
+  };
+}
+
+>> Compute a deterministic url_ref id from source message handle + ordinal.
+>> Does not leak the URL — id is opaque, derived from provenance only.
+exe @urlRefId(sourceMsgHandle, ordinal) = js {
+  const input = `${sourceMsgHandle}:${ordinal}`;
+  try {
+    const crypto = require("crypto");
+    return "url_ref_" + crypto.createHash("sha256").update(input).digest("hex").slice(0, 12);
+  } catch (_) {
+    let h = 0;
+    for (let i = 0; i < input.length; i++) {
+      h = ((h << 5) - h) + input.charCodeAt(i);
+      h |= 0;
+    }
+    return "url_ref_v1_" + (h >>> 0).toString(16);
+  }
+}
+
+export { @applyUrlRefs, @urlRefId }
