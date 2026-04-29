@@ -133,6 +133,73 @@ exe @applyUrlRefs(body) = js {
   };
 }
 
+>> Build the public url_ref record value from a parser-result ref entry.
+>>
+>> The output deliberately omits any URL-bearing field. The url string
+>> lives only in the private capability map; see @buildUrlRefCapabilityEntry
+>> below. Defense-in-depth invariant for UR-14: the URL string must not
+>> appear anywhere inside the returned object, even as substring.
+exe @buildUrlRefRecordValue(refMeta, sourceMsgHandle, refId) = js {
+  if (!refMeta || typeof refMeta !== "object") {
+    return null;
+  }
+  return {
+    id_: refId,
+    source_msg: sourceMsgHandle,
+    ordinal_in_message: refMeta.ordinal_in_message,
+    position_in_message: refMeta.position_in_message,
+    canonical_url_hash: refMeta.canonical_url_hash,
+    has_query: !!refMeta.has_query,
+    has_fragment: !!refMeta.has_fragment,
+    safety_status: refMeta.safety_status
+  };
+}
+
+>> Build the private capability-map entry for a parser-result ref.
+>>
+>> Returns the {url, canonical_url, source_msg_handle, safety_status, reason?}
+>> object for ok refs. Returns null for blocked refs — the dispatcher writes
+>> nothing into state.capabilities.url_refs for blocked refs, so
+>> get_webpage_via_ref cannot dereference them.
+exe @buildUrlRefCapabilityEntry(refMeta, sourceMsgHandle) = js {
+  if (!refMeta || typeof refMeta !== "object") return null;
+  if (refMeta.safety_status !== "ok") return null;
+  if (typeof refMeta.url !== "string" || refMeta.url.length === 0) return null;
+  return {
+    url: refMeta.url,
+    canonical_url_hash: refMeta.canonical_url_hash,
+    source_msg_handle: sourceMsgHandle,
+    safety_status: "ok"
+  };
+}
+
+>> Merge a delta map of {handle: capabilityEntry} into existing
+>> state.capabilities.url_refs. Pure JS so callers can reuse it from
+>> dispatchResolve when the rigTransform branch fires.
+exe @mergeUrlRefCapabilities(existingMap, deltaMap) = js {
+  const existing = existingMap && typeof existingMap === "object" ? existingMap : {};
+  const delta = deltaMap && typeof deltaMap === "object" ? deltaMap : {};
+  const out = {};
+  for (const [k, v] of Object.entries(existing)) out[k] = v;
+  for (const [k, v] of Object.entries(delta)) out[k] = v;
+  return out;
+}
+
+>> Read the URL string for a url_ref handle from state. Returns null when
+>> the handle is unknown or the entry is malformed. This is the only path
+>> the dispatcher should use — public record reads never expose the URL.
+exe @lookupUrlCapability(state, urlRefHandle) = js {
+  if (!state || typeof state !== "object") return null;
+  const caps = state.capabilities;
+  if (!caps || typeof caps !== "object") return null;
+  const map = caps.url_refs;
+  if (!map || typeof map !== "object") return null;
+  const entry = map[urlRefHandle];
+  if (!entry || typeof entry !== "object") return null;
+  if (entry.safety_status !== "ok") return null;
+  return typeof entry.url === "string" ? entry.url : null;
+}
+
 >> Compute a deterministic url_ref id from source message handle + ordinal.
 >> Does not leak the URL — id is opaque, derived from provenance only.
 exe @urlRefId(sourceMsgHandle, ordinal) = js {
@@ -150,4 +217,11 @@ exe @urlRefId(sourceMsgHandle, ordinal) = js {
   }
 }
 
-export { @applyUrlRefs, @urlRefId }
+export {
+  @applyUrlRefs,
+  @urlRefId,
+  @buildUrlRefRecordValue,
+  @buildUrlRefCapabilityEntry,
+  @mergeUrlRefCapabilities,
+  @lookupUrlCapability
+}

@@ -924,6 +924,94 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
   => @compileScalarRef(@state, @tool, @arg, @ref, @query)
 ]
 
+>> Validate record-handle arguments for resolve-phase rigTransform tools.
+>>
+>> Used by tools whose catalog entry has `recordArgs: { argName: <recordType> }`
+>> (URL_PROMOTION.md "Concrete Runtime Mechanism"). Each named arg must be
+>> a fieldless `{ source: "resolved", record: <expected>, handle: <h> }`
+>> ref (or array of same). Source-class firewall: extracted, derived,
+>> known, allow, family, and selection refs are rejected. Field refs are
+>> rejected — record args carry handles, not field values, because the
+>> transform reads the record from state and the URL/payload material
+>> lives in private capability state, not in the public record.
+>>
+>> Returns:
+>>   { ok: true, descriptors: { argName: { record, handle } | [{ record, handle }, ...] } }
+>>   { ok: false, error, arg }
+exe @compileRecordArgs(state, recordArgsSpec, args) = js {
+  if (!recordArgsSpec || typeof recordArgsSpec !== "object") {
+    return { ok: false, error: "recordArgsSpec must be object" };
+  }
+  if (!args || typeof args !== "object") {
+    return { ok: false, error: "args must be object" };
+  }
+  if (!state || typeof state !== "object" || !state.resolved || typeof state.resolved !== "object") {
+    return { ok: false, error: "state.resolved missing" };
+  }
+
+  // Bucket-shape tolerant entry collector.
+  function entriesOf(bucket) {
+    if (Array.isArray(bucket)) return bucket;
+    if (!bucket || typeof bucket !== "object") return [];
+    if (bucket._rig_bucket === "resolved_index_v1") {
+      const byHandle = bucket.by_handle || {};
+      return Object.values(byHandle);
+    }
+    return Object.values(bucket);
+  }
+
+  const descriptors = {};
+  for (const argName of Object.keys(recordArgsSpec)) {
+    const expectedRecord = recordArgsSpec[argName];
+    if (!(argName in args)) {
+      return { ok: false, error: `record arg '${argName}' is missing`, arg: argName };
+    }
+    const argValue = args[argName];
+    const isArray = Array.isArray(argValue);
+    const items = isArray ? argValue : [argValue];
+
+    const validated = [];
+    for (let i = 0; i < items.length; i++) {
+      const ref = items[i];
+      const itemLabel = isArray ? `${argName}[${i}]` : argName;
+
+      if (!ref || typeof ref !== "object") {
+        return { ok: false, error: `${itemLabel}: ref must be object`, arg: argName };
+      }
+      if (ref.source !== "resolved") {
+        return { ok: false, error: `${itemLabel}: source must be 'resolved' for record args, got '${ref.source}'`, arg: argName };
+      }
+      if (ref.record !== expectedRecord) {
+        return { ok: false, error: `${itemLabel}: record must be '${expectedRecord}', got '${ref.record}'`, arg: argName };
+      }
+      if (ref.field !== undefined && ref.field !== null) {
+        return { ok: false, error: `${itemLabel}: field refs are not allowed for record args (got field='${ref.field}')`, arg: argName };
+      }
+      if (typeof ref.handle !== "string" || ref.handle.length === 0) {
+        return { ok: false, error: `${itemLabel}: handle must be non-empty string`, arg: argName };
+      }
+
+      const bucket = state.resolved[expectedRecord];
+      if (!bucket) {
+        return { ok: false, error: `${itemLabel}: no resolved bucket for record '${expectedRecord}'`, arg: argName };
+      }
+      let found = false;
+      for (const entry of entriesOf(bucket)) {
+        if (entry && entry.handle === ref.handle) { found = true; break; }
+      }
+      if (!found) {
+        return { ok: false, error: `${itemLabel}: handle '${ref.handle}' not found in resolved bucket '${expectedRecord}'`, arg: argName };
+      }
+
+      validated.push({ record: expectedRecord, handle: ref.handle });
+    }
+
+    descriptors[argName] = isArray ? validated : validated[0];
+  }
+
+  return { ok: true, descriptors };
+}
+
 >> Read-phase tool args still cross the same provenance boundary as write
 >> control args. Compile them through the shared ref checker, then hand
 >> the original native values to the runtime dispatch layer.
@@ -1057,6 +1145,7 @@ export {
   @resolveControlRefValue,
   @resolveRefValue,
   @compileToolArgs,
+  @compileRecordArgs,
   @compileExecuteIntent,
   @isResolvedIndexBucket,
   @indexedBucketEntries,

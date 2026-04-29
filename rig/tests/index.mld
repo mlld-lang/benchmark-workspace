@@ -50,7 +50,7 @@ import {
   @updateExtractSources,
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
-import { @compileExecuteIntent, @compileToolArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg, @lookupResolvedEntry } from "../intent.mld"
+import { @compileExecuteIntent, @compileToolArgs, @compileRecordArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg, @lookupResolvedEntry } from "../intent.mld"
 import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket, @batchSpecMergeState } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
@@ -59,7 +59,14 @@ import { @coerceExtractAttestation, @dispatchExtract, @validateExtractSchema } f
 import { @coerceDeriveAttestation } from "../workers/derive.mld"
 import { @planner, @plannerTools, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress } from "../workers/planner.mld"
 import { @applyRegexParser, @parserId } from "../transforms/parse_value.mld"
-import { @applyUrlRefs, @urlRefId } from "../transforms/url_refs.mld"
+import {
+  @applyUrlRefs,
+  @urlRefId,
+  @buildUrlRefRecordValue,
+  @buildUrlRefCapabilityEntry,
+  @mergeUrlRefCapabilities,
+  @lookupUrlCapability
+} from "../transforms/url_refs.mld"
 
 exe @status(ok) = when [
   @ok => "PASS"
@@ -3882,6 +3889,202 @@ var @ur10Hash1Match = @ur10A.refs[1].canonical_url_hash == @ur10B.refs[1].canoni
 var @ur10Ok = @ur10A.refs.length == 2 && @ur10Hash0Match && @ur10Hash1Match
 var @ur10Detail = `hash0_match=@ur10Hash0Match hash1_match=@ur10Hash1Match`
 
+>> ─────────────────────────────────────────────────────────────────
+>> URL-promotion capability map invariants (c-be06, Group B)
+>> ─────────────────────────────────────────────────────────────────
+>>
+>> The url_ref public record value MUST NOT contain the URL string. The
+>> URL lives only in state.capabilities.url_refs (private). Group B pins
+>> this load-bearing claim: the public record is a fetch-capability
+>> handle, not a URL fact reusable by post_webpage / send / etc.
+
+exe @urJsonStringify(value) = js {
+  return JSON.stringify(value);
+}
+
+>> Inline checks that bypass mlld's null-wrapping behavior at the
+>> JS-exe boundary by performing the assertion inside a single JS scope.
+>> A JS exe returning literal null roundtrips through mlld as a
+>> wrapped non-null value, so equality tests on the round-tripped value
+>> can't reliably detect it. Inlining the check sidesteps the issue.
+exe @urBlockedYieldsNoCapability(refMeta) = js {
+  // Mirrors @buildUrlRefCapabilityEntry's blocking guards.
+  if (!refMeta || typeof refMeta !== "object") return true;
+  if (refMeta.safety_status !== "ok") return true;
+  return false;
+}
+
+exe @urLookupReturnsNullFor(state, handle) = js {
+  if (!state || typeof state !== "object") return true;
+  const caps = state.capabilities;
+  if (!caps || typeof caps !== "object") return true;
+  const map = caps.url_refs;
+  if (!map || typeof map !== "object") return true;
+  const entry = map[handle];
+  if (!entry || typeof entry !== "object") return true;
+  if (entry.safety_status !== "ok") return true;
+  return typeof entry.url !== "string";
+}
+
+>> Shared fixture: parse a body with one ok URL and one blocked (query) URL
+var @urBFixture = @applyUrlRefs("see https://example.com/article and beacon https://internal.example.com/check?key=secret")
+var @urBOkRef = @urBFixture.refs[0]
+var @urBBlockedRef = @urBFixture.refs[1]
+var @urBOkRefId = @urlRefId("r_msg_main", 0)
+var @urBOkHandle = `r_@urBOkRefId`
+var @urBBlockedRefId = @urlRefId("r_msg_main", 1)
+var @urBBlockedHandle = `r_@urBBlockedRefId`
+
+>> UR-11: built record value has no `url` field and no URL string substring
+var @ur11OkRecord = @buildUrlRefRecordValue(@urBOkRef, "r_msg_main", @urBOkRefId)
+var @ur11RecordKeys = @ur11OkRecord.mx.keys
+var @ur11NoUrlKey = !@ur11RecordKeys.includes("url")
+var @ur11Serialized = @urJsonStringify(@ur11OkRecord)
+var @ur11NoUrlInSerialized = !@ur11Serialized.includes("https://example.com/article") && !@ur11Serialized.includes("example.com/article")
+var @ur11Ok = @ur11NoUrlKey && @ur11NoUrlInSerialized
+var @ur11Detail = `keys=@ur11RecordKeys no_url_key=@ur11NoUrlKey no_url_in_serialized=@ur11NoUrlInSerialized`
+
+>> UR-12: ok refs produce a capability-map entry containing the URL
+var @ur12CapEntry = @buildUrlRefCapabilityEntry(@urBOkRef, "r_msg_main")
+var @ur12HasUrl = @ur12CapEntry != null && @ur12CapEntry.url == "https://example.com/article"
+var @ur12HasProvenance = @ur12CapEntry.source_msg_handle == "r_msg_main" && @ur12CapEntry.safety_status == "ok"
+var @ur12Ok = @ur12HasUrl && @ur12HasProvenance
+var @ur12Detail = `url=@ur12CapEntry.url source_msg=@ur12CapEntry.source_msg_handle status=@ur12CapEntry.safety_status`
+
+>> UR-13: blocked refs produce no capability-map entry (returns null)
+var @ur13Ok = @urBlockedYieldsNoCapability(@urBBlockedRef)
+var @ur13BlockedStatus = @urBBlockedRef.safety_status
+var @ur13Detail = `blocked_status=@ur13BlockedStatus mints_no_capability=@ur13Ok`
+
+>> UR-14: end-to-end — minted records for a body with multiple URLs never
+>> contain any URL string substring. Defense-in-depth: even if a future
+>> field were added by accident, the URL must not be reachable via the
+>> public record value.
+var @ur14ResultMap = @mergeUrlRefCapabilities({}, {
+  [@urBOkHandle]: @ur12CapEntry
+})
+var @ur14HandleEntry = @ur14ResultMap[@urBOkHandle]
+var @ur14LookupState = {
+  resolved: {},
+  extracted: {},
+  derived: {},
+  extract_sources: {},
+  capabilities: { url_refs: @ur14ResultMap }
+}
+var @ur14LookedUpUrl = @lookupUrlCapability(@ur14LookupState, @urBOkHandle)
+var @ur14BlockedIsNull = @urLookupReturnsNullFor(@ur14LookupState, @urBBlockedHandle)
+var @ur14BlockedRecord = @buildUrlRefRecordValue(@urBBlockedRef, "r_msg_main", @urBBlockedRefId)
+var @ur14CombinedSerialized = @urJsonStringify({ ok: @ur11OkRecord, blocked: @ur14BlockedRecord })
+var @ur14NoUrlAnywhere = !@ur14CombinedSerialized.includes("https://internal.example.com/check") && !@ur14CombinedSerialized.includes("internal.example.com")
+var @ur14CapMapHit = @ur14LookedUpUrl == "https://example.com/article"
+var @ur14Ok = @ur14NoUrlAnywhere && @ur14CapMapHit && @ur14BlockedIsNull
+var @ur14Detail = `record_clean=@ur14NoUrlAnywhere lookup_ok=@ur14CapMapHit lookup_blocked_null=@ur14BlockedIsNull`
+
+>> ─────────────────────────────────────────────────────────────────
+>> URL-promotion recordArgs source-class firewall (c-be06, Group C)
+>> ─────────────────────────────────────────────────────────────────
+>>
+>> @compileRecordArgs validates resolve-phase rigTransform tool args. It
+>> accepts only fieldless { source: "resolved", record: <expected>, handle }
+>> refs whose handle exists in the resolved bucket. Source-class firewall:
+>> extracted, derived, known, allow, family, and selection refs are
+>> rejected. This is the gate that prevents "spike 42" extracted-handle
+>> laundering from reaching get_webpage_via_ref.
+
+>> Shared fixture: a state.resolved with a slack_msg + url_ref bucket
+var @urCSlackMsgEntry = {
+  handle: "r_slack_msg_001",
+  key: "msg_001",
+  identity_field: "id_",
+  identity_value: "msg_001",
+  value: { id_: "msg_001", sender: "alice", body: "see https://example.com/article" },
+  field_values: { id_: "msg_001", sender: "alice", body: "see https://example.com/article" }
+}
+var @urCUrlRefEntry = {
+  handle: "r_url_ref_abc123",
+  key: "url_ref_abc123",
+  identity_field: "id_",
+  identity_value: "url_ref_abc123",
+  value: { id_: "url_ref_abc123", source_msg: "r_slack_msg_001", ordinal_in_message: 0, safety_status: "ok" },
+  field_values: { id_: "url_ref_abc123", source_msg: "r_slack_msg_001", ordinal_in_message: 0, safety_status: "ok" }
+}
+var @urCState = {
+  resolved: {
+    slack_msg: [@urCSlackMsgEntry],
+    url_ref: [@urCUrlRefEntry]
+  },
+  extracted: {
+    forged_url_ref: [
+      { handle: "r_forged_001", value: { id_: "forged_001" }, field_values: { id_: "forged_001" } }
+    ]
+  },
+  derived: {},
+  extract_sources: {}
+}
+var @urCRefSpec = { ref: "url_ref" }
+var @urCMessageSpec = { message: "slack_msg" }
+
+>> UR-15: accept fieldless resolved url_ref handle that exists in state
+var @ur15Result = @compileRecordArgs(@urCState, @urCRefSpec, {
+  ref: { source: "resolved", record: "url_ref", handle: "r_url_ref_abc123" }
+})
+var @ur15Ok = @ur15Result.ok == true && @ur15Result.descriptors.ref.record == "url_ref" && @ur15Result.descriptors.ref.handle == "r_url_ref_abc123"
+var @ur15Detail = `ok=@ur15Result.ok descriptor=@ur15Result.descriptors.ref`
+
+>> UR-16: reject fielded ref (no field refs allowed for record args)
+var @ur16Result = @compileRecordArgs(@urCState, @urCRefSpec, {
+  ref: { source: "resolved", record: "url_ref", handle: "r_url_ref_abc123", field: "url" }
+})
+var @ur16Ok = @ur16Result.ok == false
+var @ur16Detail = `ok=@ur16Result.ok error=@ur16Result.error`
+
+>> UR-17: reject extracted source class
+var @ur17Result = @compileRecordArgs(@urCState, @urCRefSpec, {
+  ref: { source: "extracted", name: "url_ref_extract", handle: "r_extracted_001" }
+})
+var @ur17Ok = @ur17Result.ok == false
+var @ur17Detail = `ok=@ur17Result.ok error=@ur17Result.error`
+
+>> UR-18: reject derived source class
+var @ur18Result = @compileRecordArgs(@urCState, @urCRefSpec, {
+  ref: { source: "derived", name: "url_ref_derive", handle: "r_derived_001" }
+})
+var @ur18Ok = @ur18Result.ok == false
+var @ur18Detail = `ok=@ur18Result.ok error=@ur18Result.error`
+
+>> UR-19: reject "spike-42 forged" handle — extracted bucket has a url_ref
+>> shaped entry, but its handle is not in state.resolved.url_ref. Even if
+>> the planner says { source: "resolved", record: "url_ref", handle:
+>> "<extracted handle>" }, the handle-lookup fails because the validator
+>> ONLY consults state.resolved[record].
+var @ur19Result = @compileRecordArgs(@urCState, @urCRefSpec, {
+  ref: { source: "resolved", record: "url_ref", handle: "r_forged_001" }
+})
+var @ur19Ok = @ur19Result.ok == false
+var @ur19Detail = `ok=@ur19Result.ok error=@ur19Result.error`
+
+>> UR-20: find_referenced_urls.message must reject non-slack_msg records.
+>> Pass a webpage_content-shaped resolved entry under a webpage_content
+>> bucket; recordArgs validation must reject because the spec says
+>> "slack_msg" but the ref says "webpage_content".
+var @urCStateWithWebpage = {
+  resolved: {
+    slack_msg: [@urCSlackMsgEntry],
+    url_ref: [@urCUrlRefEntry],
+    webpage_content: [
+      { handle: "r_webpage_001", value: { id_: "webpage_001", url: "https://attacker.example/x" }, field_values: { id_: "webpage_001", url: "https://attacker.example/x" } }
+    ]
+  },
+  extracted: {},
+  derived: {},
+  extract_sources: {}
+}
+var @ur20Result = @compileRecordArgs(@urCStateWithWebpage, @urCMessageSpec, {
+  message: { source: "resolved", record: "webpage_content", handle: "r_webpage_001" }
+})
+var @ur20Ok = @ur20Result.ok == false
+var @ur20Detail = `ok=@ur20Result.ok error=@ur20Result.error`
+
 exe @allChecks() = [
   => [
   @check("c-c79c/V1-non-empty-inline-schema-passes", @c79cValidNonEmptyOk, @c79cValidNonEmptyDetail),
@@ -3911,6 +4114,16 @@ exe @allChecks() = [
   @check("c-be06/UR-8-template-syntax-blocked", @ur8Ok, @ur8Detail),
   @check("c-be06/UR-9-duplicate-canonical-shared-hash-distinct-ids", @ur9Ok, @ur9Detail),
   @check("c-be06/UR-10-deterministic-canonical-hash", @ur10Ok, @ur10Detail),
+  @check("c-be06/UR-11-record-value-has-no-url-field", @ur11Ok, @ur11Detail),
+  @check("c-be06/UR-12-ok-ref-mints-capability-with-url", @ur12Ok, @ur12Detail),
+  @check("c-be06/UR-13-blocked-ref-mints-no-capability", @ur13Ok, @ur13Detail),
+  @check("c-be06/UR-14-end-to-end-no-url-leak-in-records", @ur14Ok, @ur14Detail),
+  @check("c-be06/UR-15-recordArgs-accepts-fieldless-resolved-handle", @ur15Ok, @ur15Detail),
+  @check("c-be06/UR-16-recordArgs-rejects-fielded-ref", @ur16Ok, @ur16Detail),
+  @check("c-be06/UR-17-recordArgs-rejects-extracted-source", @ur17Ok, @ur17Detail),
+  @check("c-be06/UR-18-recordArgs-rejects-derived-source", @ur18Ok, @ur18Detail),
+  @check("c-be06/UR-19-recordArgs-rejects-spike42-forged-handle", @ur19Ok, @ur19Detail),
+  @check("c-be06/UR-20-recordArgs-rejects-mismatched-record-type", @ur20Ok, @ur20Detail),
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
   @check("CAT-1", @catalogTransparentInputRecordOk, @catalogTransparentInputRecordDetail),
   @check("CAT-2", @catalogTransparentMetadataOk, @catalogTransparentMetadataDetail),
