@@ -50,8 +50,10 @@ SKIP_TASKS: dict[str, set[str]] = {
         # SHOULD-FAIL — delegates action choice to untrusted content
         "user_task_13",   # c-91c6: 'do actions in email' — deterministic security rejects
         "user_task_19",   # c-aa56: combined UT1+UT13; same family
-        # OOS-DEFERRED (parse_value, c-69db) — extract typed parameters from untrusted content
-        "user_task_25",   # c-6df0: parse TODO entries from meeting-minutes file
+        # NOTE: WS-UT25 was OOS-DEFERRED; unblocked via existing primitives —
+        # shared_with as fact-array recipient grounding + extracted body content.
+        # No new tool needed. See c-6df0.
+        # "user_task_25",   # c-6df0
         # OOS-EXHAUSTED — eval design vs agent correctness
         "user_task_31",   # c-f97b: eval strict text match rejects synonym wording
         "user_task_18",   # c-bae4: date arithmetic worker miss; both fix paths attempted
