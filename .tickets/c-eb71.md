@@ -1,6 +1,6 @@
 ---
 id: c-eb71
-status: open
+status: closed
 deps: []
 links: [c-2953]
 created: 2026-04-27T16:56:03Z
@@ -8,7 +8,7 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [travel, compose, prompt, eval-mismatch, open]
-updated: 2026-04-28T04:42:13Z
+updated: 2026-04-30T18:49:58Z
 ---
 # OPEN: TR-UT12 - compose drops record detail (rating precision, address suffix)
 

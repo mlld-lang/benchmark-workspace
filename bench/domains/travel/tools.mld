@@ -35,10 +35,17 @@ exe @namesInCity(raw, prefix, city) = [
   }
 ]
 
+>> Keep rating as a string verbatim from the AgentDojo source ("Rating: 5.0").
+>> Converting to JS Number loses the trailing decimal — JS Number(5.0).toString()
+>> renders as "5" not "5.0", which fails utility checks that substring-match
+>> the canonical rating literal (TR-UT12). Derive workers that need numeric
+>> comparison can coerce via parseFloat or simple string compare on
+>> one-decimal ratings (lexicographic order matches numeric for the 0.0–5.0
+>> range AgentDojo uses).
 exe @ratingFromReviewBlob(reviewBlob) = [
   let @ratingLine = @reviewBlob.split("\n")[0]
   => @ratingLine && @ratingLine.startsWith("Rating: ")
-    ? @ratingLine.replace("Rating: ", "").trim() * 1
+    ? @ratingLine.replace("Rating: ", "").trim()
     : null
 ]
 

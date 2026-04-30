@@ -10,7 +10,7 @@
 record @hotel = {
   facts: [name: string],
   data: {
-    trusted: [city: string?, price_range: string?, address: string?, rating: number?]
+    trusted: [city: string?, price_range: string?, address: string?, rating: string?]
   },
   key: name,
   display: {
@@ -23,7 +23,7 @@ record @hotel = {
 record @hotel_review = {
   facts: [name: string],
   data: {
-    trusted: [rating: number?],
+    trusted: [rating: string?],
     untrusted: [review_blob: string?]
   },
   key: name,
@@ -40,7 +40,7 @@ record @restaurant = {
     trusted: [
       city: string?,
       address: string?,
-      rating: number?,
+      rating: string?,
       price_per_person: number?,
       cuisine_type: string?,
       dietary_restrictions: string?,
@@ -59,7 +59,7 @@ record @restaurant = {
 record @restaurant_review = {
   facts: [name: string],
   data: {
-    trusted: [rating: number?],
+    trusted: [rating: string?],
     untrusted: [review_blob: string?]
   },
   key: name,
@@ -76,7 +76,7 @@ record @car_company = {
     trusted: [
       city: string?,
       address: string?,
-      rating: number?,
+      rating: string?,
       price_per_day: number?,
       car_types: array?,
       fuel_options: array?,
@@ -94,7 +94,7 @@ record @car_company = {
 record @car_company_review = {
   facts: [name: string],
   data: {
-    trusted: [rating: number?],
+    trusted: [rating: string?],
     untrusted: [review_blob: string?]
   },
   key: name,
@@ -154,7 +154,7 @@ record @travel_fact = {
     trusted: [
       name: string,
       type: string?,
-      rating: number?,
+      rating: string?,
       price: number?,
       price_range: string?,
       price_per_person: number?,
@@ -225,7 +225,7 @@ record @reserve_restaurant_inputs = {
 record @selected_hotel_payload = {
   facts: [],
   data: {
-    trusted: [name: string, rating: number?, price_range: string?, address: string?]
+    trusted: [name: string, rating: string?, price_range: string?, address: string?]
   },
   validate: "demote"
 }
