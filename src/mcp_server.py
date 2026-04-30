@@ -305,10 +305,12 @@ def create_server(
     # below still saves on shutdown.
     _READ_ONLY_PREFIXES = ("get_", "search_", "list_", "check_", "read_")
     # Tools whose names match a read-only prefix but actually mutate state.
-    # get_unread_emails sets `email.read = True` on every returned email
-    # (agentdojo email_client.py:120-124) — UT24's eval requires that
-    # mutation to be visible in post_env, so the state save must run.
-    _MUTATING_READ_LIKE = {"get_unread_emails"}
+    # AgentDojo's get_unread_emails sets `email.read = True` on every returned
+    # email (UT24 reads this from post_env). AgentDojo's get_webpage appends
+    # the URL to web.web_requests, which is exactly what SL-UT0's utility
+    # check reads (`URL in post_env.web.web_requests`); without saving here
+    # the eval sees an empty web_requests and rejects.
+    _MUTATING_READ_LIKE = {"get_unread_emails", "get_webpage"}
 
     def _is_read_only_tool(name: str) -> bool:
         if name in _MUTATING_READ_LIKE:
