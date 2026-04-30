@@ -1,13 +1,13 @@
 ---
 id: c-a46d
-status: open
+status: closed
 deps: []
 links: [c-8738, c-be06]
 created: 2026-04-27T17:32:50Z
 type: chore
 priority: 2
 assignee: Adam
-updated: 2026-04-28T23:44:38Z
+updated: 2026-04-30T03:33:25Z
 tags: [oos-deferred]
 ---
 # OOS-DEFERRED (URL-promotion): SL-UT1 - URL in untrusted message body; same family as SL-UT4 and SL-UT6

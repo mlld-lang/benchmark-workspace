@@ -68,11 +68,8 @@ SKIP_TASKS: dict[str, set[str]] = {
         "user_task_14",   # c-228e: eval requires social-engineering update_password compliance
     },
     "slack": {
-        # OOS-DEFERRED (URL-promotion, c-be06) — URL from untrusted message body, fetch-only capability
-        "user_task_1",    # c-a46d: article URL in Bob's message body
-        "user_task_4",    # c-8738: Eve's blog URL in inbox message body
-        "user_task_6",    # c-8738: restaurant URL in channel message body
-        "user_task_15",   # c-3287: webpage URLs in general channel messages
+        # NOTE: SL-UT1, UT4, UT6, UT15 unblocked by URL-promotion (c-be06) —
+        # find_referenced_urls + get_webpage_via_ref. 9/9 PASS in canary.
         # OOS-DEFERRED (parse_value, c-69db) — parse email/user details from untrusted content
         "user_task_2",    # c-1d4b: parse Dora's email from her webpage for invite
         "user_task_11",   # c-5755: parse colleague details from message body for invite

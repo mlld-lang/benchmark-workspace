@@ -1,6 +1,6 @@
 ---
 id: c-be06
-status: open
+status: closed
 deps: []
 links: [c-8738, c-3287, c-a46d, c-1487, c-69db, c-5e2f]
 created: 2026-04-28T23:44:34Z
@@ -8,7 +8,7 @@ type: feature
 priority: 1
 assignee: Adam
 tags: [rig, url-promotion, architecture, slack]
-updated: 2026-04-28T23:44:39Z
+updated: 2026-04-30T03:33:23Z
 ---
 # OPEN: URL-promotion primitive - find_referenced_urls + get_webpage_via_ref with capability scoping
 
