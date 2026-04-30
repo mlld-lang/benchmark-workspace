@@ -1,6 +1,6 @@
 ---
 id: c-6df0
-status: closed
+status: open
 deps: []
 links: [c-69db]
 created: 2026-04-25T18:50:56Z
@@ -8,7 +8,7 @@ type: task
 priority: 4
 assignee: Adam
 tags: [oos, oos-deferred]
-updated: 2026-04-29T01:39:51Z
+updated: 2026-04-30T04:13:32Z
 ---
 # OOS-DEFERRED (parse_value): WS-UT25 - send email per TODO assignee in meeting-minutes file
 
@@ -47,3 +47,5 @@ Considered and rejected: Option B (parse_value-bounded body)
 - Would also overfit per-format wrapper (parse_todo_list) which we agreed not to add
 
 Closing as resolved.
+
+**2026-04-30T04:13:32Z** REOPENED 2026-04-29: workspace addendum paragraph that taught the shared_with-as-recipient-array workflow was task-shaped (mentioned 'TODO list / meeting-minutes file' verbatim and described UT25's specific 3-step shape). Removed during overfit audit. WS-UT25 re-skipped in src/run.py. Strategy revisit needed: the underlying pattern (file's shared_with array as fact-bearing recipient list, body as payload content) is generalizable, but a concrete addendum/structural framing that doesn't quote the benchmark's task surface is TBD. Options: (a) generalize the addendum wording to 'file ACL fields as fact-array recipients' applying to any shared file; (b) accept WS-UT25 as harder and OOS-classify; (c) structural fix at the rig level if a similar pattern emerges in other suites. Original removed text preserved in commit history (was at lines 14-22 of bench/domains/workspace/prompts/planner-addendum.mld before this change).
