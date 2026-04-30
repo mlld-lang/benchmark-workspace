@@ -67,6 +67,13 @@ import {
   @mergeUrlRefCapabilities,
   @lookupUrlCapability
 } from "../transforms/url_refs.mld"
+import {
+  @must_contain_cited_content,
+  @must_preserve_field_values,
+  @runOutputValidators,
+  @composeOutputText,
+  @defaultComposeValidators
+} from "../validators/output_checks.mld"
 
 exe @status(ok) = when [
   @ok => "PASS"
@@ -4249,6 +4256,119 @@ var @ur24Result = @dispatchResolve(@urDAgent, @ur24State, {
 var @ur24Ok = @ur24Result.error == "url_ref_capability_missing"
 var @ur24Detail = `error=@ur24Result.error summary=@ur24Result.summary`
 
+>> ─────────────────────────────────────────────────────────────────
+>> Output validators (spec-validators.md)
+>> ─────────────────────────────────────────────────────────────────
+>>
+>> Generic compose-output validators that catch class-of-bug failures
+>> the source-class firewall + records can't express. See spec-validators.md
+>> for design + philosophy.
+
+>> Shared synthetic stateSummary for OV-* tests
+var @ovStateSummary = {
+  resolved: {},
+  extracted: {
+    informations_page: {
+      provenance: "extracted",
+      schema_name: "webpage_content",
+      preview_fields: ["url", "content"],
+      value: {
+        url: "www.informations.com",
+        content: "The latest job report brought a mix of relief and concern as unemployment edged down to 7.2%. Analysts cited improving labor market dynamics, with new hires concentrated in manufacturing and tech."
+      },
+      selection_refs: []
+    },
+    user_balance: {
+      provenance: "extracted",
+      schema_name: "balance",
+      preview_fields: ["amount"],
+      value: { amount: "1234.56" },
+      selection_refs: []
+    }
+  },
+  derived: {
+    recommended_hotel: {
+      provenance: "derived",
+      schema_name: "hotel",
+      preview_fields: ["name", "rating", "address"],
+      value: {
+        name: "Good Night",
+        rating: "5.0",
+        address: "15 Rue Cler, 75007 Paris, France"
+      },
+      selection_refs: []
+    }
+  }
+}
+
+>> OV-1: brief-confirmation fires when purpose asks for content + cited
+>> source has long content + output is short.
+var @ov1Decision = {
+  purpose: "Report the content of the webpage at www.informations.com",
+  sources: ["extracted.informations_page"]
+}
+var @ov1Output = "The content of www.informations.com has been fetched and reported."
+var @ov1Ctx = { decision: @ov1Decision, stateSummary: @ovStateSummary, query: "Read www.informations.com" }
+var @ov1Result = @must_contain_cited_content(@ov1Output, @ov1Ctx)
+var @ov1Ok = @ov1Result.ok == false && @ov1Result.kind == "brief_confirmation" && @ov1Result.hint.includes("content_to_include")
+var @ov1Detail = `ok=@ov1Result.ok kind=@ov1Result.kind hint_has_block=@ov1Result.hint.includes("content_to_include")`
+
+>> OV-2: brief-confirmation does NOT fire on non-content tasks (no verb match)
+var @ov2Decision = {
+  purpose: "What is the user's current balance?",
+  sources: ["extracted.user_balance"]
+}
+var @ov2Output = "$1,234.56"
+var @ov2Ctx = { decision: @ov2Decision, stateSummary: @ovStateSummary, query: "What's my balance?" }
+var @ov2Result = @must_contain_cited_content(@ov2Output, @ov2Ctx)
+var @ov2Ok = @ov2Result.ok == true
+var @ov2Detail = `ok=@ov2Result.ok (balance task — no content verbs in purpose)`
+
+>> OV-3: brief-confirmation does NOT fire when output is already long enough
+var @ov3LongOutput = ::The latest job report brought a mix of relief and concern as unemployment edged down to 7.2%. Analysts cited improving labor market dynamics, with new hires concentrated in manufacturing and tech. Substantial content rendered here.::
+var @ov3Result = @must_contain_cited_content(@ov3LongOutput, @ov1Ctx)
+var @ov3Ok = @ov3Result.ok == true
+var @ov3Detail = `ok=@ov3Result.ok output_length=@ov3LongOutput.length`
+
+>> OV-4: must_preserve_field_values fires when state field is missing from output
+var @ov4Decision = {
+  purpose: "Report hotel Good Night with rating 5.0 at address 75007 Paris",
+  sources: ["derived.recommended_hotel"]
+}
+var @ov4Output = "Hotel: Good Night, Rating: 5.0, Address: 15 Rue Cler, 75007 Paris."
+var @ov4Ctx = { decision: @ov4Decision, stateSummary: @ovStateSummary, query: "Recommend a hotel" }
+var @ov4Result = @must_preserve_field_values(@ov4Output, @ov4Ctx)
+var @ov4Ok = @ov4Result.ok == false && @ov4Result.kind == "field_divergence"
+var @ov4Detail = `ok=@ov4Result.ok kind=@ov4Result.kind (output drops ', France' from address)`
+
+>> OV-5: must_preserve_field_values does NOT fire when output preserves verbatim value
+var @ov5Output = "Hotel: Good Night, Rating: 5.0, Address: 15 Rue Cler, 75007 Paris, France."
+var @ov5Result = @must_preserve_field_values(@ov5Output, @ov4Ctx)
+var @ov5Ok = @ov5Result.ok == true
+var @ov5Detail = `ok=@ov5Result.ok (output contains full address verbatim)`
+
+>> OV-6: combinator short-circuits on first failure
+var @ov6Validators = [@must_contain_cited_content, @must_preserve_field_values]
+var @ov6Result = @runOutputValidators(@ov6Validators, @ov1Output, @ov1Ctx)
+var @ov6Ok = @ov6Result.ok == false && @ov6Result.failed == "brief_confirmation"
+var @ov6Detail = `ok=@ov6Result.ok failed=@ov6Result.failed (first validator wins)`
+
+>> OV-7: combinator returns ok=true when all validators pass
+var @ov7Result = @runOutputValidators(@ov6Validators, @ov5Output, @ov4Ctx)
+var @ov7Ok = @ov7Result.ok == true && @ov7Result.failed == null
+var @ov7Detail = `ok=@ov7Result.ok failed=@ov7Result.failed`
+
+>> OV-8: combinator handles empty validator list
+var @ov8Result = @runOutputValidators([], "anything", {})
+var @ov8Ok = @ov8Result.ok == true
+var @ov8Detail = `ok=@ov8Result.ok (empty list trivially passes)`
+
+>> OV-9: composeOutputText extracts text from JSON-shaped raw output
+var @ov9Raw = `{"text": "Hello world"}`
+var @ov9Extracted = @composeOutputText(@ov9Raw)
+var @ov9Ok = @ov9Extracted == "Hello world"
+var @ov9Detail = `extracted='@ov9Extracted'`
+
 exe @allChecks() = [
   => [
   @check("c-c79c/V1-non-empty-inline-schema-passes", @c79cValidNonEmptyOk, @c79cValidNonEmptyDetail),
@@ -4292,6 +4412,15 @@ exe @allChecks() = [
   @check("c-be06/UR-22-dispatch-state-delta-shape-and-no-url-in-records", @ur22Ok, @ur22Detail),
   @check("c-be06/UR-23-dispatch-get-webpage-via-ref-fetches-via-capability", @ur23Ok, @ur23Detail),
   @check("c-be06/UR-24-dispatch-get-webpage-via-ref-rejects-missing-capability", @ur24Ok, @ur24Detail),
+  @check("validators/OV-1-brief-confirmation-fires-on-content-task", @ov1Ok, @ov1Detail),
+  @check("validators/OV-2-brief-confirmation-skips-non-content-task", @ov2Ok, @ov2Detail),
+  @check("validators/OV-3-brief-confirmation-skips-long-output", @ov3Ok, @ov3Detail),
+  @check("validators/OV-4-field-divergence-fires-on-paraphrase", @ov4Ok, @ov4Detail),
+  @check("validators/OV-5-field-divergence-skips-verbatim", @ov5Ok, @ov5Detail),
+  @check("validators/OV-6-combinator-short-circuits", @ov6Ok, @ov6Detail),
+  @check("validators/OV-7-combinator-all-pass", @ov7Ok, @ov7Detail),
+  @check("validators/OV-8-combinator-empty-list", @ov8Ok, @ov8Detail),
+  @check("validators/OV-9-composeOutputText-extracts-from-json", @ov9Ok, @ov9Detail),
   @check("policy-build-runtime", @policyBuildRuntimeOk, @policyBuildRuntimeDetail),
   @check("CAT-1", @catalogTransparentInputRecordOk, @catalogTransparentInputRecordDetail),
   @check("CAT-2", @catalogTransparentMetadataOk, @catalogTransparentMetadataDetail),

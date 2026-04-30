@@ -1,0 +1,254 @@
+>> rig/validators/output_checks.mld — generic output validators (spec-validators.md)
+>>
+>> Native mlld, no JS. Validators are pure functions: (output, context) → { ok, kind, hint }.
+>> The combinator @runOutputValidators short-circuits on first failure and returns the
+>> first failing validator's hint so a guard can issue `=> resume <hint>`.
+>>
+>> See spec-validators.md for philosophy, contract, anti-patterns.
+
+>> Extract the `text` field from a compose-attestation-shaped raw output.
+>> Falls back to the raw string when the output isn't well-formed JSON,
+>> so validators always have a string to inspect even when the malformed-
+>> retry would have fired first under normal dispatch.
+exe @composeOutputText(rawOutput) = [
+  if @typeof(@rawOutput) == "object" [
+    if @rawOutput.text.isDefined() && @typeof(@rawOutput.text) == "string" [
+      => @rawOutput.text
+    ]
+    => `@rawOutput`
+  ]
+  if @typeof(@rawOutput) != "string" [
+    => `@rawOutput`
+  ]
+  let @trimmed = @rawOutput.trim()
+  let @looksLikeJson = @trimmed.startsWith("{") || @trimmed.startsWith("[")
+  if !@looksLikeJson [
+    => @rawOutput
+  ]
+  let @parsed = @rawOutput | @parse.llm
+  if @typeof(@parsed) == "object" && @parsed.text.isDefined() && @typeof(@parsed.text) == "string" [
+    => @parsed.text
+  ]
+  => @rawOutput
+]
+
+>> @must_contain_cited_content
+>>
+>> Triggers when ALL of:
+>>   - decision.purpose contains a content-asking verb
+>>   - a source cited in decision.sources has a string field >50 chars in stateSummary
+>>   - the output (extracted text) is < 150 chars
+>>
+>> The hint quotes the longest cited content verbatim so the worker has the exact
+>> material to render on resume. Generic — domain-agnostic, applies to any worker.
+exe @must_contain_cited_content(rawOutput, context) = [
+  let @decision = @context.decision ?? {}
+  let @stateSummary = @context.stateSummary ?? {}
+  let @purposeText = @decision.purpose ?? ""
+  let @purpose = @purposeText.toLowerCase()
+  let @askingForContent = @purpose.includes("read") || @purpose.includes("show") || @purpose.includes("summarize") || @purpose.includes("report") || @purpose.includes("content") || @purpose.includes("article")
+  if !@askingForContent [
+    => { ok: true, kind: null, hint: null }
+  ]
+
+  let @text = @composeOutputText(@rawOutput)
+  if @text.length >= 150 [
+    => { ok: true, kind: null, hint: null }
+  ]
+
+  let @sources = @decision.sources ?? []
+  let @blocks = @collectLongStringFields(@sources, @stateSummary, 50)
+  if @blocks.length == 0 [
+    => { ok: true, kind: null, hint: null }
+  ]
+
+  let @longest = @longestBlock(@blocks)
+  let @hintMsg = `Your previous answer ('@text') is shorter than what the user asked for. The state has content from @longest.source.@longest.field that you must render in your answer. Include the actual content below verbatim (or a faithful summary of it), not a confirmation that fetch happened.
+
+<content_to_include source="@longest.source" field="@longest.field">
+@longest.value
+</content_to_include>
+
+Return the JSON object {"text": "<final answer>"} with the content rendered.`
+  => { ok: false, kind: "brief_confirmation", hint: @hintMsg }
+]
+
+>> @must_preserve_field_values
+>>
+>> Triggers when ANY cited source has a string field whose name appears in
+>> decision.purpose AND whose verbatim value is non-empty AND is not a substring
+>> of the output text.
+>>
+>> Catches the "compose paraphrased the planner's purpose instead of reading the
+>> canonical record value" failure mode. Generic.
+exe @must_preserve_field_values(rawOutput, context) = [
+  let @decision = @context.decision ?? {}
+  let @stateSummary = @context.stateSummary ?? {}
+  let @purposeText = @decision.purpose ?? ""
+  let @purpose = @purposeText.toLowerCase()
+  let @sources = @decision.sources ?? []
+  let @text = @composeOutputText(@rawOutput)
+  let @textLower = @text.toLowerCase()
+
+  >> Collect (source, field, value) tuples for short string fields (≤300 chars)
+  >> whose names appear in purpose.
+  let @candidates = @collectFieldDivergenceCandidates(@sources, @stateSummary, @purpose)
+
+  >> Find the first candidate whose value isn't in the output (verbatim or lowercase).
+  let @missing = for @c in @candidates when !@text.includes(@c.value) && !@textLower.includes(@c.value.toLowerCase()) => @c
+  if @missing.length == 0 [
+    => { ok: true, kind: null, hint: null }
+  ]
+
+  let @first = @missing[0]
+  let @hintMsg = `Your previous answer rendered field '@first.field' but did not preserve its verbatim value from state. The record at @first.source has @first.field = "@first.value". Use that exact string, character-for-character, including any trailing tokens, prefixes, or punctuation. Re-render with the canonical value substituted in.
+
+Return the JSON object {"text": "<final answer>"} with the corrected output.`
+  => { ok: false, kind: "field_divergence", hint: @hintMsg }
+]
+
+>> ─────────────────────────────────────────────────────────────────
+>> Helpers (private to this module — not exported)
+>> ─────────────────────────────────────────────────────────────────
+
+>> Collect string fields >threshold chars from cited sources. Returns flat
+>> array of { source, field, value }.
+exe @collectLongStringFields(sources, stateSummary, threshold) = [
+  let @nested = for @src in @sources [
+    let @entry = @entryForSource(@src, @stateSummary)
+    if !@entry.isDefined() || @entry == null [ => [] ]
+    let @value = @entry.value ?? {}
+    => for @k, @v in @value when @typeof(@v) == "string" && @v.length > @threshold => {
+      source: @src,
+      field: @k,
+      value: @v
+    }
+  ]
+  => @flattenOne(@nested)
+]
+
+>> Collect (source, field, value) candidates for short string fields whose
+>> names appear in the purpose text. Used by @must_preserve_field_values.
+exe @collectFieldDivergenceCandidates(sources, stateSummary, purpose) = [
+  let @nested = for @src in @sources [
+    let @entry = @entryForSource(@src, @stateSummary)
+    if !@entry.isDefined() || @entry == null [ => [] ]
+    let @value = @entry.value ?? {}
+    => for @k, @v in @value when @typeof(@v) == "string" && @v.length > 0 && @v.length <= 300 && @purpose.includes(@k.toLowerCase()) => {
+      source: @src,
+      field: @k,
+      value: @v
+    }
+  ]
+  => @flattenOne(@nested)
+]
+
+>> Resolve "<bucket>.<name>" source ref to the entry in stateSummary.
+>> Tolerates extracted/derived/resolved buckets. Returns null when the
+>> bucket or name doesn't exist.
+exe @entryForSource(src, stateSummary) = [
+  if @typeof(@src) != "string" [ => null ]
+  let @parts = @src.split(".")
+  if @parts.length < 2 [ => null ]
+  let @bucket = @parts[0]
+  let @name = @parts[1]
+  => when [
+    @bucket == "extracted" && @stateSummary.extracted.isDefined() => @stateSummary.extracted[@name]
+    @bucket == "derived" && @stateSummary.derived.isDefined() => @stateSummary.derived[@name]
+    @bucket == "resolved" && @stateSummary.resolved.isDefined() => @stateSummary.resolved[@name]
+    * => null
+  ]
+]
+
+>> Single-level array flatten. mlld's array methods don't include .flat() so
+>> we accumulate via loop. Used by collectLongStringFields and
+>> collectFieldDivergenceCandidates whose nested-for produces array-of-arrays.
+exe @flattenOne(nested) = [
+  => loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "flattenOne" => @input
+      * => { _rig_cursor: "flattenOne", index: 0, accumulator: [] }
+    ]
+    if @ctx.index >= @nested.length [ done @ctx.accumulator ]
+    let @inner = @nested[@ctx.index] ?? []
+    let @innerArr = when [
+      @typeof(@inner) == "array" => @inner
+      * => []
+    ]
+    continue {
+      _rig_cursor: "flattenOne",
+      index: @ctx.index + 1,
+      accumulator: @ctx.accumulator.concat(@innerArr)
+    }
+  ]
+]
+
+>> Pick the longest-value block in a list. Used by @must_contain_cited_content
+>> to choose which content to quote in the retry hint.
+exe @longestBlock(blocks) = [
+  if @blocks.length == 0 [ => null ]
+  => loop(1000) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "longest" => @input
+      * => { _rig_cursor: "longest", index: 0, best: @blocks[0] }
+    ]
+    if @ctx.index >= @blocks.length [ done @ctx.best ]
+    let @candidate = @blocks[@ctx.index]
+    let @nextBest = when [
+      @candidate.value.length > @ctx.best.value.length => @candidate
+      * => @ctx.best
+    ]
+    continue {
+      _rig_cursor: "longest",
+      index: @ctx.index + 1,
+      best: @nextBest
+    }
+  ]
+]
+
+>> ─────────────────────────────────────────────────────────────────
+>> Combinator
+>> ─────────────────────────────────────────────────────────────────
+
+>> Run validators in order, short-circuit on first failure.
+>> Returns: { ok: bool, failed: <validator-kind>?, hint: <message>? }
+>> Always returns { ok: true } when validators is empty or undefined.
+exe @runOutputValidators(validators, rawOutput, context) = [
+  let @list = @validators ?? []
+  if @list.length == 0 [
+    => { ok: true, failed: null, hint: null }
+  ]
+  => loop(100) [
+    let @ctx = when [
+      @input["_rig_cursor"] == "runValidators" => @input
+      * => { _rig_cursor: "runValidators", index: 0 }
+    ]
+    if @ctx.index >= @list.length [ done { ok: true, failed: null, hint: null } ]
+    let @validator = @list[@ctx.index]
+    let @result = @validator(@rawOutput, @context)
+    if @result.ok == false [ done { ok: false, failed: @result.kind ?? "unknown", hint: @result.hint ?? "Validation failed; revise your output." } ]
+    continue {
+      _rig_cursor: "runValidators",
+      index: @ctx.index + 1
+    }
+  ]
+]
+
+>> ─────────────────────────────────────────────────────────────────
+>> Default validator list
+>> ─────────────────────────────────────────────────────────────────
+
+>> The default compose-validator set. Suites can pass their own list to
+>> @rig.build via composeValidators; this is what they inherit if they don't.
+var @defaultComposeValidators = [
+  @must_contain_cited_content,
+  @must_preserve_field_values
+]
+
+export {
+  @must_contain_cited_content,
+  @must_preserve_field_values,
+  @runOutputValidators,
+  @composeOutputText,
+  @defaultComposeValidators
+}
