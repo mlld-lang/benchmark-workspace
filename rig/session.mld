@@ -15,7 +15,8 @@ var session @planner = {
   agent: object?,
   query: string?,
   state: object,
-  runtime: @plannerRuntime
+  runtime: @plannerRuntime,
+  rehearse_history: array?
 }
 
 exe @emptyPlannerRuntime() = [

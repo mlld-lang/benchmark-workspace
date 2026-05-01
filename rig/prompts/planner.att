@@ -21,8 +21,9 @@ Available execute tools:
 - `extract(tool?, args?, source?, schema_name?, schema?, name, purpose?)` — fetch untrusted content or extract typed payload from state
 - `derive(sources, goal, schema_name?, schema?, name, purpose?)` — compute typed results from grounded inputs
 - `execute(operation, args?, purpose?)` — perform one concrete write
+- `rehearse(operation, args?, purpose?)` — pre-flight check for an execute intent; returns {ok, blocked_args, structurally_infeasible}; does not count against your iteration budget
 - `compose(sources?, purpose?)` — render final answer (terminal)
-- `blocked(reason)` — halt, no legal path (terminal)
+- `blocked(reason, evidence?)` — halt, no legal path (terminal); evidence lists distinct rehearse attempts
 
 ## Ref grammar
 
@@ -88,6 +89,34 @@ If a needed value only exists in untrusted content, resolve a broader grounded f
 
 If extract on a message body returns null/missing for a field that you can see is referenced via a URL in the body, that is the signal to fetch the URL — NOT a signal to write "the message doesn't specify." Composing or writing without the URL's content when the task explicitly asks for it counts as fabrication. Re-read the task before terminating: if the task names a webpage, a blog, or a linked page, fetching that page is part of the task.
 
+## Rehearsing writes
+
+Always call `rehearse` before `execute`. Rehearse runs the same validation `execute` would, but does not dispatch the MCP call and does not count against your iteration budget. It returns `{ ok, blocked_args, structurally_infeasible }`:
+
+- `ok: true` — the call would be accepted; proceed with `execute`
+- `ok: false, structurally_infeasible: false` — this specific shape doesn't work; try a different source class for the failing arg(s) listed in `blocked_args`
+- `ok: false, structurally_infeasible: true` — the framework has determined that no source class can satisfy the failing arg(s) for this operation. The task cannot be completed via this write. Call `blocked` immediately with this rehearse cited as evidence.
+
+`structurally_infeasible: true` fires only when you have tried all three legal control-arg source classes (`resolved`, `known`, `selection`) for the same arg and all failed. The framework tracks this across your rehearse history. When you see it, no further shape variation will help — give up cleanly with `blocked`.
+
+Pay particular attention to the rehearse result when:
+- A control arg is sourced from `extract` or `derive`
+- You haven't called this write tool yet in this session
+- A prior write returned a structural error and you want to verify your fix
+
+Don't rehearse the exact same intent twice expecting a different answer. Rehearse is deterministic against current state — if the answer was `ok: false`, you need to change the intent shape, not retry it.
+
+## Calling blocked
+
+`blocked` is terminal — it halts the session. Use it when no legal path exists.
+
+The framework requires evidence of at least 2 rehearse attempts with structurally distinct intents (different tools, or different source-class combinations) before accepting `blocked`. The exception: if a rehearse returned `structurally_infeasible: true`, that is sufficient evidence on its own — call `blocked` immediately citing that rehearse.
+
+Pass evidence as an array:
+`blocked({ "reason": "...", "evidence": [{ "tool": "<op>", "args_shape": "<source-class summary>" }, ...] })`
+
+If evidence is missing or insufficient, the framework returns `blocked_evidence_insufficient`. Treat that as: keep rehearsing different shapes until you find one that works or hit `structurally_infeasible: true`.
+
 ## Worker context
 
 Workers (extract, derive, compose) are smaller models with narrow context. They see only what you put in their dispatch — the task query, the source value, the schema, and your `purpose` (extract / compose) / `goal` (derive) string. They do NOT see your prior reasoning, prior tool results outside their source, the current date, values you've already resolved elsewhere, or what other workers have done.
@@ -123,7 +152,8 @@ Resolve batch: `resolve_batch({ "resolves": [{ "tool": "<tool1>", "args": { ... 
 Extract (tool): `extract({ "tool": "<tool>", "args": { "<arg>": <ref> }, "name": "<name>", "purpose": "..." })`
 Extract (state): `extract({ "source": <ref>, "schema_name": "<schema>", "name": "<name>", "purpose": "..." })`
 Derive: `derive({ "sources": [<refs>], "goal": "...", "schema_name": "<schema>", "name": "<name>", "purpose": "..." })`
+Rehearse: `rehearse({ "operation": "<tool>", "args": { "<arg>": <ref> }, "purpose": "..." })`
 Execute: `execute({ "operation": "<tool>", "args": { "<arg>": <ref> }, "purpose": "..." })`
 Compose: `compose({ "sources": ["resolved.*", "derived.*", "extracted.*", "execution_log"], "purpose": "..." })`
-Blocked: `blocked({ "reason": "..." })`
+Blocked: `blocked({ "reason": "...", "evidence": [{ "tool": "<op>", "args_shape": "<summary>" }] })`
 @suiteAddendum

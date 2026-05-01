@@ -33,7 +33,7 @@ import { @planner, @emptyPlannerRuntime, @emptyState } from "../session.mld"
 import { @dispatchResolve } from "./resolve.mld"
 import { @dispatchExtract } from "./extract.mld"
 import { @dispatchDerive } from "./derive.mld"
-import { @dispatchExecute } from "./execute.mld"
+import { @dispatchExecute, @compileForDispatch } from "./execute.mld"
 import { @dispatchCompose } from "./compose.mld"
 import "../diagnostics.mld"
 
@@ -83,7 +83,12 @@ record @planner_compose_inputs = {
 }
 
 record @planner_blocked_inputs = {
-  data: [reason: string],
+  data: [reason: string, evidence: array?],
+  validate: "strict"
+}
+
+record @planner_rehearse_inputs = {
+  data: [operation: string, args: object?, purpose: string?],
   validate: "strict"
 }
 
@@ -106,7 +111,10 @@ record @planner_tool_result = {
     result_handles: array?,
     results: array?,
     summary: string?,
-    issues: array?
+    issues: array?,
+    ok: boolean?,
+    blocked_args: array?,
+    structurally_infeasible: boolean?
   ],
   validate: "demote"
 }
@@ -769,6 +777,167 @@ exe @plannerDerive(input) = [
   => @result
 ] => record @planner_tool_result
 
+>> Hash an intent's source-class tuple (without values) for blocked-evidence
+>> distinctness. JSON-serialized shape only — actual values are stripped
+>> so two intents that differ only in value (e.g., recipient="alice@x.com"
+>> vs "bob@x.com") count as the same shape.
+exe @rehearseShapeHash(decision) = js {
+  const op = decision && decision.operation ? decision.operation : "";
+  const args = decision && decision.args ? decision.args : null;
+  const json = JSON.stringify(args);
+  return op + ":" + json;
+}
+
+exe @blockedArgsFromIssues(issues) = [
+  let @list = @issues ?? []
+  let @args = for @issue in @list when @issue.arg.isDefined() => @issue.arg
+  => @args
+]
+
+>> Build per-arg source-class map from a decision's args. Each value's
+>> source field (or null for malformed) keys the entry. Arrays of refs
+>> are folded — array source-class set unioned across elements.
+exe @argSourceClasses(decision) = js {
+  const args = decision && decision.args ? decision.args : {};
+  const out = {};
+  const keys = Object.keys(args);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const v = args[k];
+    let src = null;
+    if (Array.isArray(v)) {
+      const seen = [];
+      for (let j = 0; j < v.length; j++) {
+        const el = v[j];
+        const s = el && typeof el === "object" && el.source ? el.source : null;
+        if (s && seen.indexOf(s) < 0) seen.push(s);
+      }
+      src = seen.length === 1 ? seen[0] : (seen.length === 0 ? null : seen.join("+"));
+    } else if (v && typeof v === "object") {
+      src = v.source || null;
+    }
+    out[k] = src;
+  }
+  return out;
+}
+
+>> Multi-call structural-infeasibility detector.
+>>
+>> Walks rehearse_history (and the current attempt), collects the set of
+>> source classes the planner has tried for THIS (operation, arg) where
+>> each attempt failed with that arg in blocked_args. If the set covers
+>> the legal control-arg classes (resolved, known, selection), the arg
+>> is structurally infeasible — no remaining shape can satisfy the
+>> firewall.
+>>
+>> "extracted" and "derived" attempts ARE included in the tried-set
+>> (they count as evidence of exploration) but the legal-classes set
+>> is just resolved/known/selection. Once the planner has tried at
+>> least one of each of those AND failed, infeasibility is confirmed.
+exe @exhaustedControlArgClasses(history, operation, arg) = js {
+  const list = Array.isArray(history) ? history : [];
+  const tried = new Set();
+  for (let i = 0; i < list.length; i++) {
+    const entry = list[i];
+    if (!entry || entry.ok) continue;
+    if (entry.operation !== operation) continue;
+    const args = entry.blocked_args || [];
+    let argHit = false;
+    for (let j = 0; j < args.length; j++) {
+      if (args[j] === arg) { argHit = true; break; }
+    }
+    if (!argHit) continue;
+    const cls = entry.arg_source_classes || {};
+    const src = cls[arg];
+    if (src) tried.add(src);
+  }
+  const legal = ["resolved", "known", "selection"];
+  for (let i = 0; i < legal.length; i++) {
+    if (!tried.has(legal[i])) return false;
+  }
+  return true;
+}
+
+>> Compute the structurally_infeasible flag for the CURRENT rehearse
+>> attempt: any blocked_arg whose set of tried source classes (this
+>> attempt + history) covers all legal control-arg classes flips it.
+exe @rehearseStructurallyInfeasible(history, operation, blockedArgs) = [
+  let @list = @blockedArgs ?? []
+  let @results = for @arg in @list => @exhaustedControlArgClasses(@history, @operation, @arg)
+  let @anyTrue = for @r in @results when @r => @r
+  => @anyTrue.length > 0
+]
+
+exe @plannerRehearse(input) = [
+  let @coerced = @input ?? {}
+  let @operation = @coerced.operation
+  let @args = @coerced.args ?? {}
+  let @purpose = @coerced.purpose ?? null
+  let @decision = {
+    phase: "rehearse",
+    operation: @operation,
+    args: @args,
+    purpose: @purpose
+  }
+  let @toolCtx = @plannerToolContext("rehearse", @decision)
+  if !@toolCtx.ok [
+    -> @toolCtx.result
+    => @toolCtx.result
+  ]
+  >> Run compileForDispatch only — no MCP, no state mutation other than
+  >> the rehearse_history append + tool_calls bump below.
+  let @prep = @compileForDispatch(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query)
+  let @rehearseOk = @prep.ok == true
+  let @blockedArgs = when [
+    @rehearseOk => []
+    * => @blockedArgsFromIssues(@prep.failure.issues ?? [])
+  ]
+  >> Append history entry FIRST so structural-infeasibility check sees
+  >> the current attempt's source-class info alongside prior failures.
+  let @priorHistory = @planner.rehearse_history ?? []
+  let @historyEntry = {
+    operation: @operation,
+    shape_hash: @rehearseShapeHash(@decision),
+    ok: @rehearseOk,
+    blocked_args: @blockedArgs,
+    arg_source_classes: @argSourceClasses(@decision)
+  }
+  let @nextHistory = @priorHistory.concat([@historyEntry])
+  let @structurallyInfeasible = when [
+    @rehearseOk => false
+    * => @rehearseStructurallyInfeasible(@nextHistory, @operation, @blockedArgs)
+  ]
+  let @summary = when [
+    @rehearseOk => "rehearse ok"
+    @structurallyInfeasible => "rehearse structurally infeasible"
+    * => "rehearse blocked"
+  ]
+  let @result = {
+    status: "rehearsed",
+    ok: @rehearseOk,
+    blocked_args: @blockedArgs,
+    structurally_infeasible: @structurallyInfeasible,
+    summary: @summary
+  }
+  >> Rehearse is FREE against the iteration budget — it's deterministic
+  >> framework compute, no LLM, no MCP. Don't bump tool_calls. But DO
+  >> increment calls_since_progress (rehearse never advances state, so
+  >> the c-3438 no-progress detector still catches rehearse spam).
+  >> Don't update progress_fingerprint or last_decision — reserved for
+  >> state-progressing calls.
+  let @nextRuntime = @plannerRuntimeStateWithProgress(
+    @toolCtx.runtime.tool_calls,
+    @toolCtx.runtime.invalid_calls,
+    @toolCtx.runtime.terminal,
+    @toolCtx.runtime.last_decision,
+    @toolCtx.runtime.progress_fingerprint ?? "",
+    (@toolCtx.runtime.calls_since_progress ?? 0) + 1
+  )
+  @planner.set({ runtime: @nextRuntime, rehearse_history: @nextHistory })
+  -> @result
+  => @result
+] => record @planner_tool_result
+
 exe @plannerExecute(input) = [
   let @coerced = @input ?? {}
   let @operation = @coerced.operation
@@ -915,6 +1084,12 @@ var tools @terminalTools = {
 }
 
 var tools @plannerTools = {
+  rehearse: {
+    mlld: @plannerRehearse,
+    inputs: @planner_rehearse_inputs,
+    labels: ["tool:w"],
+    description: "Pre-flight check for an `execute` intent. Same args shape as execute. Returns {ok, blocked_args} without dispatching the MCP call. Use when uncertain whether a write would be accepted by policy. Counts against tool-call budget. blocked_args names the failing arg(s); no reason is exposed."
+  },
   resolve: {
     mlld: @plannerResolve,
     inputs: @planner_resolve_inputs,

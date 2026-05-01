@@ -69,11 +69,29 @@ exe @mergeArgSources(values) = [
 ]
 
 
-exe role:planner @dispatchExecute(agent, state, decision, query) = [
+>> @compileForDispatch — shared "preflight" for execute and rehearse.
+>>
+>> Runs the deterministic, side-effect-free portion of dispatchExecute:
+>> ref shape validation, intent compile, control/payload arg
+>> classification, prepared-args construction, update-field check,
+>> correlate check, policy compile.
+>>
+>> Returns either:
+>>   { ok: true, tool, operation_name, control_args, optional_args,
+>>     payload_args, update_fields, compiled, built, prepared_args }
+>>   { ok: false, stage, failure: { error, payload, issues } }
+>>
+>> dispatchExecute calls this then continues with MCP dispatch.
+>> dispatchRehearse calls this and reports {ok, blocked_args} only.
+exe role:planner @compileForDispatch(agent, state, decision, query) = [
   let @shapeCheck = @validatePlannerArgRefs(@decision.args ?? {})
-  if !@shapeCheck.ok [ => @plannerValidationFailure("planner_ref_validation_failed", @shapeCheck, @shapeCheck.issues) ]
+  if !@shapeCheck.ok [
+    => { ok: false, stage: "shape", failure: { error: "planner_ref_validation_failed", payload: @shapeCheck, issues: @shapeCheck.issues } }
+  ]
   let @compiled = @compileExecuteIntent(@state, @agent.tools, @decision, @query)
-  if !@compiled.ok [ => @plannerValidationFailure(@compiled.error ?? "intent_compile_failed", @compiled, @compiled.issues ?? null) ]
+  if !@compiled.ok [
+    => { ok: false, stage: "compile", failure: { error: @compiled.error ?? "intent_compile_failed", payload: @compiled, issues: @compiled.issues ?? null } }
+  ]
   let @tool = @compiled.tool
   let @operationName = @decision.operation
   let @controlArgs = for @argName in @toolControlArgs(@tool) => `@argName`
@@ -92,14 +110,16 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   >> already validates shape against `inputs:` at call time.
   let @preparedArgs = @inputValues
   if @updateFields.length > 0 && !@hasNonNullFieldValue(@preparedArgs, @updateFields) [
-    => @plannerValidationFailure("no_update_fields", {
+    => { ok: false, stage: "update_fields", failure: { error: "no_update_fields", payload: {
       update_fields: @updateFields,
       hint: `Update tools require at least one changed field in args alongside the control args. None of the declared update fields (@updateFields.join(", ")) are present. Pass the new value(s) directly — known literals or derived refs are both fine for update fields. Example: { args: { <control_arg>: { source: "resolved", ... }, @updateFields[0]: { source: "known", value: "<new value>" } } }. The error is NOT about source-class — switching between known/derived/selection won't fix it; you must include the field name itself.`
-    }, null)
+    }, issues: null } }
   ]
   if @toolCorrelateControlArgs(@tool) [
     let @correlated = @correlatedControlArgsCheck(@compiled.compiled_entries, @controlArgs)
-    if !@correlated.ok [ => @plannerValidationFailure(@correlated.error ?? "correlated_control_args_failed", @correlated, @correlated.issues ?? null) ]
+    if !@correlated.ok [
+      => { ok: false, stage: "correlate", failure: { error: @correlated.error ?? "correlated_control_args_failed", payload: @correlated, issues: @correlated.issues ?? null } }
+    ]
   ]
   let @policyIntent = when [
     @controlArgs.length == 0 && !@compiled.policy_intent[@operationName].isDefined() => { allow: [@operationName] }
@@ -115,7 +135,33 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
     )
     * => { valid: true, policy: null, issues: [] }
   ]
-  if !@built.valid [ => @plannerValidationFailure("policy_build_invalid", @built, @built.issues ?? null) ]
+  if !@built.valid [
+    => { ok: false, stage: "policy", failure: { error: "policy_build_invalid", payload: @built, issues: @built.issues ?? null } }
+  ]
+  => {
+    ok: true,
+    tool: @tool,
+    operation_name: @operationName,
+    control_args: @controlArgs,
+    optional_args: @optionalArgs,
+    payload_args: @payloadArgs,
+    update_fields: @updateFields,
+    compiled: @compiled,
+    built: @built,
+    prepared_args: @preparedArgs
+  }
+]
+
+exe role:planner @dispatchExecute(agent, state, decision, query) = [
+  let @prep = @compileForDispatch(@agent, @state, @decision, @query)
+  if !@prep.ok [
+    => @plannerValidationFailure(@prep.failure.error, @prep.failure.payload, @prep.failure.issues)
+  ]
+  let @tool = @prep.tool
+  let @operationName = @prep.operation_name
+  let @compiled = @prep.compiled
+  let @built = @prep.built
+  let @preparedArgs = @prep.prepared_args
   let @finalArgs = @mergeArgSources([@preparedArgs, @compiled.bind_args])
   >> `@policy.build(..., { basePolicy })` already returns the compiled
   >> task policy layered onto the active base policy. Re-merging
@@ -165,4 +211,4 @@ exe role:planner @dispatchExecute(agent, state, decision, query) = [
   }
 ]
 
-export { @executePrompt, @coerceExecuteAttestation, @dispatchExecute }
+export { @executePrompt, @coerceExecuteAttestation, @compileForDispatch, @dispatchExecute }
