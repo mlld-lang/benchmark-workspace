@@ -65,8 +65,25 @@ echo
 echo "[bench-remote] $ uv run --project bench python3 src/run.py ${ARGS[*]}"
 echo
 
+# Periodic results.tgz heartbeat — preserves partial bench/results data
+# across cancellation/timeout. Without this, all per-pair task logs are
+# lost if the workflow is killed mid-run (we hit this on cycle 1 attacks).
+heartbeat_loop() {
+  while true; do
+    sleep 60
+    tar czf "$ARTIFACTS/results.tgz.tmp" -C /workspace/clean bench/results 2>/dev/null \
+      && mv "$ARTIFACTS/results.tgz.tmp" "$ARTIFACTS/results.tgz" 2>/dev/null
+  done
+}
+heartbeat_loop &
+HEARTBEAT_PID=$!
+trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
+
 uv run --project bench python3 src/run.py "${ARGS[@]}" 2>&1 | tee "$ARTIFACTS/console.log"
 RUN_STATUS=${PIPESTATUS[0]}
+
+kill "$HEARTBEAT_PID" 2>/dev/null || true
+wait "$HEARTBEAT_PID" 2>/dev/null || true
 
 END_TS=$(date +%s)
 

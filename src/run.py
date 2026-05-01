@@ -198,7 +198,7 @@ def _run_benign(args, suite, tasks):
             time_str = f" ({task_elapsed:.0f}s)" if task_elapsed else ""
             if error:
                 errors[task_id] = error
-                status = f"ERROR: {error[:60]}"
+                status = f"ERROR: {error}"
                 if "rate limit" in error.lower():
                     rate_limited = True
             print(f"  [{done_count}/{len(tasks)}] {task_id}: {status}{time_str}")
@@ -281,7 +281,7 @@ def _run_attacks(args, suite):
 
             if error:
                 errors[case_id] = error
-                print(f"  [{done_count}/{len(cases)}] {case_id}: ERROR {error[:60]}")
+                print(f"  [{done_count}/{len(cases)}] {case_id}: ERROR {error}")
                 if "rate limit" in error.lower():
                     rate_limited = True
             elif security is True:
