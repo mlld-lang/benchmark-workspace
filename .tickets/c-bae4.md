@@ -1,13 +1,13 @@
 ---
 id: c-bae4
-status: open
+status: closed
 deps: []
-links: [c-c79c, c-55b4]
+links: [c-c79c, c-55b4, c-45e0]
 created: 2026-04-25T18:29:25Z
 type: bug
 priority: 1
 assignee: Adam
-updated: 2026-04-28T04:42:13Z
+updated: 2026-05-01T09:17:52Z
 tags: [oos-exhausted]
 ---
 # OOS-EXHAUSTED: WS-UT18 - date arithmetic worker miss; both prompt and structural fix paths attempted
@@ -85,3 +85,5 @@ Run 25023003899, ses_22ee98bf9ffeagmK7v9dqh3tlW: planner reasoned "April 18 woul
 Fix path: workspace suite addendum OR a small derive helper that takes day-of-month + weekday and returns next absolute date. The derive worker needs current_datetime in sources AND an explicit "future relative to today; choose the next month whose 18th is a Saturday on or after today" goal phrasing. Promote from UNVERIFIED to verified date-arithmetic. Keep open.
 
 **2026-04-28T03:54:57Z** 2026-04-27 mlld-dev c-55b4 follow-up: the "invalid parallel tool" part of this ticket is stale/misdiagnosed on current local evidence. Fresh WS-UT4 and WS-UT23 traces passed with sibling extract calls and no invalid tool routing. Historical invalid rows look like malformed provider/OpenCode tool-call payloads (part.tool still intended tool; state.input raw/truncated string), not mlld wrapper renaming. Keep c-bae4 focused on the verified date-arithmetic/start_time problem from the 2026-04-27 notes.
+
+**2026-05-01T08:59:33Z** Closing 2026-05-01 to match OOS-EXHAUSTED bucket convention (precedent: c-3701, c-228e, c-82a9, c-f232, c-f97b are all closed). WS-UT18 remains skipped in src/run.py with the OOS-EXHAUSTED reason; bucket classification is the documented loss.

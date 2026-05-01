@@ -2,15 +2,15 @@
 id: c-69db
 status: closed
 deps: []
-links: [c-4ab7, c-6df0, c-1d4b, c-5755, c-4814, c-9cd0, c-be06]
+links: [c-4ab7, c-6df0, c-1d4b, c-5755, c-4814, c-9cd0, c-be06, c-2923, c-1d65, c-e4d2]
 created: 2026-04-28T23:43:40Z
 type: feature
 priority: 1
 assignee: Adam
 tags: [rig, parse-value, architecture]
-updated: 2026-04-29T00:42:07Z
+updated: 2026-05-01T07:03:23Z
 ---
-# OPEN: parse_value primitive - rig deterministic transform with bounded regex + post-ops, mints fact-bearing values from untrusted content
+# parse_value primitive - rig deterministic transform (CLOSED, fact-promotion claim retired — see notes)
 
 Implementation work for the parse_value primitive. Design locked at rig/PARSE_VALUE.md (Claude draft + GPT5.5 review).
 
@@ -121,3 +121,19 @@ Next: same primitive can be applied to other parse_value-deferred tasks (WS-UT25
 - Addendum entries
 
 Closing this ticket as the v1 primitive is implemented and verified. Per-suite extensions are tracked separately under each task's deferred ticket.
+
+**2026-04-30T20:49:14Z** Fact-promotion-from-untrusted-content rejected as unsound 2026-04-30 (bench-grind-14).
+
+ARCHITECTURAL RATCHET — DO NOT EXTEND parse_value AS A FACT-PROMOTER:
+
+Determinism does not promote attacker-controllable content to fact. CaMeL-aligned: 'Q-LLM output is not considered clean just because it came from an LLM'. The same logic applies to deterministic regex extraction — the value's content is still attacker-chosen even if a deterministic parser extracted it. parse_value's original design claim (parser output is fact-bearing because the parser spec is fixed by the planner-authored function code, not by content) does not hold: the parser spec being fixed bounds the *shape* of the output, not the *trustworthiness* of the value.
+
+Salvageable shape: parse_value as extracted-class output (typed payload, can satisfy payload args, cannot reach control args). That is just extract-with-deterministic-backend — useful for shape coercion but not a security primitive. Future use of parse_value should mint extracted-class records, never resolved-class.
+
+Banking @parse_invoice_iban wrapper removed 2026-04-30 (bench-grind-14): the wrapper minted fact-bearing iban_value satisfying send_money.recipient — same defect class as the slack untrusted-content → control-arg family. BK-UT0 reclassified SHOULD-FAIL (c-4ab7).
+
+The rig-level parse_value primitive (rig/transforms/parse_value.mld) was not removed pending a separate decision about whether to keep it as an extracted-class deterministic-shape-coercion utility. The 12 invariant tests (PV-1..PV-12) and the source-class allowlist still encode useful structural assertions even if no consumer ships in the bench agent.
+
+Open downstream cleanup if the primitive is fully retired: remove tests PV-1..PV-12, remove the transform module, remove rig/PARSE_VALUE.md, archive the design doc.
+
+Sibling primitive URL-promotion (c-be06) is the safe pattern for the same threat surface: capability-scoping (URL stored in private state map, url_ref has no public field, fetch-only deref path) does not promote untrusted-source data to fact. It scopes a capability without exposing the raw value for control-arg use.

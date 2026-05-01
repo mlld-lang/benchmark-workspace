@@ -96,55 +96,6 @@ record @file_text = {
   }
 }
 
->> ── parse_value output: parsed invoice fields ──
->>
->> Minted by parse_invoice_iban (a parse_value wrapper) when an invoice
->> file's content is parsed deterministically. Fact fields are bounded
->> lexical types only — iban_value passes regex format check, amount is
->> a parsed decimal. The factsource records "deterministically extracted
->> from this source by this parser version" — NOT "the invoice is
->> legitimate."
->>
->> See rig/PARSE_VALUE.md for the design and security boundary.
-record @parsed_invoice = {
-  facts: [
-    parse_id: handle,
-    source_handle: handle,
-    iban_value: string?,
-    amount: number?,
-    parser_id: string
-  ],
-  data: {
-    trusted: [
-      parse_status: string?,
-      diagnostics: object?
-    ]
-  },
-  key: parse_id,
-  display: {
-    default: [
-      { ref: "parse_id" },
-      { ref: "source_handle" },
-      { ref: "iban_value" },
-      amount,
-      parse_status
-    ],
-    worker: [
-      { ref: "parse_id" },
-      { ref: "iban_value" },
-      amount,
-      parse_status
-    ],
-    planner: [
-      { ref: "parse_id" },
-      { ref: "source_handle" },
-      { ref: "iban_value" },
-      amount,
-      parse_status
-    ]
-  }
-}
-
 >> ── Write input records ──
 >>
 >> Input records replace the old grouped write metadata.
@@ -204,7 +155,6 @@ var @records = {
   iban_value: @iban_value,
   balance_value: @balance_value,
   file_text: @file_text,
-  parsed_invoice: @parsed_invoice,
   send_money_inputs: @send_money_inputs,
   schedule_transaction_inputs: @schedule_transaction_inputs,
   update_scheduled_transaction_inputs: @update_scheduled_transaction_inputs,
@@ -219,7 +169,6 @@ export {
   @iban_value,
   @balance_value,
   @file_text,
-  @parsed_invoice,
   @send_money_inputs,
   @schedule_transaction_inputs,
   @update_scheduled_transaction_inputs,

@@ -1,6 +1,6 @@
 ---
 id: c-36fe
-status: open
+status: closed
 deps: []
 links: [c-9d56, c-011b, c-bd28, c-19ee, c-ebd6, c-3438, c-d590, c-63fe]
 created: 2026-04-26T02:39:38Z
@@ -8,7 +8,7 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [planner, recovery, budget, orchestration, travel]
-updated: 2026-04-26T11:39:40Z
+updated: 2026-05-01T08:59:40Z
 ---
 # Planner recovery after wrong phase choice (budget exhaustion dominates)
 
@@ -103,3 +103,5 @@ The "over-resolve loop" is the planner correctly **recovering from MCP infrastru
 **c-36fe original scope still valid** — extract-failure recovery (extract → derive pivot when source content is hidden). UT15/UT19 may benefit. Keep this ticket open with original scope.
 
 **Demoting back to P2** — original scope is real but not the highest lever (the +4 utility I projected from the over-resolve cluster goes to c-63fe instead).
+
+**2026-05-01T08:59:40Z** Closing 2026-05-01 per user direction. bench-grind-8 budget-accounting fix + parallel resolve_batch (c-eda4) + cascade elimination addressed the root symptoms (extract→derive misroute → budget exhaustion). No current sweep failures attributed to this pattern. Reopen if planner-recovery flailing reappears.

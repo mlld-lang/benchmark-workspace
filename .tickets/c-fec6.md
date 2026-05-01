@@ -1,6 +1,6 @@
 ---
 id: c-fec6
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-30T04:12:29Z
@@ -8,6 +8,7 @@ type: chore
 priority: 3
 assignee: Adam
 tags: [travel, prompt-history, breadcrumb]
+updated: 2026-04-30T20:47:38Z
 ---
 # Breadcrumb: travel literal-template addendum examples removed (was overfit-suspect)
 

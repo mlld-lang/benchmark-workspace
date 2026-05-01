@@ -1,6 +1,6 @@
 ---
 id: c-b0a4
-status: open
+status: closed
 deps: []
 links: [c-45f0]
 created: 2026-04-27T17:06:18Z
@@ -8,7 +8,7 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [travel, planner, double-write, addendum-gap, open]
-updated: 2026-04-28T04:42:13Z
+updated: 2026-05-01T08:59:27Z
 ---
 # OPEN: TR-UT8 - title-template not constructed pre-flight; first execute uses raw entity name
 
@@ -43,3 +43,5 @@ Transcript confirms: first execute used pure ref `title: {source: derived, name:
 Quote from prt_dcfe0761e: "But wait - the task specifies the title should be 'Dinner at {restaurant_name}'. I passed just the restaurant name as the title, not 'Dinner at {restaurant_name}'."
 The activity-at-place addendum did NOT catch this at purpose-construction time; it only fired after the first execute.
 Recommended action: amend activity-at-place addendum to require purpose-inspection rule that detects template literals (`{name}`, `{restaurant_name}`, etc.) in the user prompt and forces a derive step to construct the final title string before the first execute. General class — applies to any title-template task.
+
+**2026-05-01T08:59:27Z** Closing 2026-05-01. TR-UT8 verified passing in bench-grind-14 closeout-pre-sweep verifications. Title-template construction is no longer the bottleneck observed in current sweeps.

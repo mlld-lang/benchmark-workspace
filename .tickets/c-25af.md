@@ -1,6 +1,6 @@
 ---
 id: c-25af
-status: open
+status: closed
 deps: []
 links: [c-aed5]
 created: 2026-04-23T04:39:52Z
@@ -8,7 +8,7 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [extract, mcp, tool-bridge]
-updated: 2026-04-26T03:50:21Z
+updated: 2026-05-01T08:59:27Z
 ---
 # WS-UT36 tool-backed extract on resolved file content silently returns null
 
@@ -52,3 +52,5 @@ C. Worker behavior under context. The production session had budget warnings + m
 E11 worker test locks in the clean-prompt baseline. If WS-UT36 starts working post a multi-extract investigation, the regression test stays as a canary.
 
 Recommendation: defer further investigation — the spike has shown the structural path is clean, so the next move is a focused production trace pull on UT36's 4th extract specifically, looking for whether dedup fired or whether the worker actually got called at all. Lower priority than c-d52c (which is structural and has a clear fix in flight).
+
+**2026-05-01T08:59:27Z** Closing 2026-05-01. WS-UT36 verified passing in bench-grind-14 (alongside UT8/UT22/UT24/UT37). Watch for regression.

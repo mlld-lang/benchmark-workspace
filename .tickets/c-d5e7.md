@@ -1,6 +1,6 @@
 ---
 id: c-d5e7
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-26T20:49:10Z
@@ -8,7 +8,7 @@ type: bug
 priority: 3
 assignee: Adam
 tags: [travel, derive, worker, regression-watch]
-updated: 2026-04-27T01:03:05Z
+updated: 2026-05-01T08:59:27Z
 ---
 # [Travel UT8] Watch: derive_empty_response on vegan-restaurant task
 
@@ -44,3 +44,7 @@ The c-eda4 fix only touched batch state-merge. UT8 ran a single resolve (no batc
 
 Session bench-grind-9 — full transcript scan of failing remote tasks.
 
+
+## Notes
+
+**2026-05-01T08:59:27Z** Closing 2026-05-01. TR-UT8 verified passing in bench-grind-14; derive_empty_response watch no longer needed.
