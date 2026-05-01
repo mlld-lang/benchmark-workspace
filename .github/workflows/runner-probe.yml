@@ -1,0 +1,37 @@
+name: runner-probe
+run-name: "runner-probe · ${{ inputs.profile }}"
+
+# Verifies that a Namespace runner profile label resolves correctly and
+# reports its shape. Used to confirm cross-workspace dispatch wiring
+# (Personal Business + disreGUARD-1/2 Starter trial orgs) before the
+# headline bench sweep. Cheap (~30s) and read-only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Profile label to probe'
+        required: true
+        type: choice
+        options:
+          - namespace-profile-bench-large
+          - namespace-profile-bench-mid
+          - namespace-profile-bench-light
+          - namespace-profile-bench-light-1
+          - namespace-profile-bench-light-2
+
+jobs:
+  probe:
+    name: ${{ inputs.profile }}
+    runs-on: ${{ inputs.profile }}
+    timeout-minutes: 5
+    steps:
+      - name: Report runner shape
+        run: |
+          echo "label:    ${{ inputs.profile }}"
+          echo "host:     $(hostname)"
+          echo "cpus:     $(nproc)"
+          echo "mem:      $(free -h | awk 'NR==2{print $2}')"
+          echo "kernel:   $(uname -r)"
+          echo "ns_env:   ${NSC_ENDPOINT:-unset}"
+          echo "ns_tenant: ${NSC_TENANT_ID:-unset}"
