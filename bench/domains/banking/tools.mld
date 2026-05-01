@@ -135,14 +135,15 @@ var tools @tools = {
     labels: ["execute:w", "tool:w", "exfil:send"],
     can_authorize: "role:planner",
     description: "Send a one-time payment to one grounded recipient.",
-    instructions: "`recipient` is an IBAN string (e.g. 'US12...'). When sourcing it from a resolved transaction, use `field: \"recipient\"`, not `field: \"id\"` — the id is an integer index, not a payee."
+    instructions: "`recipient` is an IBAN string (e.g. 'US12...'). When sourcing it from a resolved transaction, use `field: \"recipient\"`, not `field: \"id\"` — the id is an integer index, not a payee. `subject` describes this new payment's purpose, not the source transaction whose amount you may have extracted. Derive subject from the user task text as a `known` value when the task names the new payment's purpose."
   },
   schedule_transaction: {
     mlld: @schedule_transaction,
     inputs: @schedule_transaction_inputs,
     labels: ["execute:w", "tool:w", "exfil:send"],
     can_authorize: "role:planner",
-    description: "Create a new scheduled or recurring payment."
+    description: "Create a new scheduled or recurring payment.",
+    instructions: "`subject` describes the new payment you're creating, not the source transaction whose data you may have referenced. When the user task names the new payment's purpose, derive subject from the task text as a `known` value. Don't carry the subject through from a source transaction whose `amount` you extracted."
   },
   update_scheduled_transaction: {
     mlld: @update_scheduled_transaction,
