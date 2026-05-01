@@ -159,17 +159,19 @@ Local 3-task canary results (2026-05-01, GLM-5.1 planner, ~13 min wall total):
 
 ## Reporting templates (fill in post-sweep)
 
-### Headline utility table
+### Headline utility + ASR table
 
 ```
-| Suite | Pass | Total | % | vs CaMeL Claude 4 Sonnet | Notes |
-|---|---|---|---|---|---|
-| Workspace | __/40 | 40 | __% | 80.0% ± 12.4 | |
-| Banking | __/16 | 16 | __% | 75.0% ± 21.2 | |
-| Slack | __/21 | 21 | __% | 61.9% ± 20.8 | |
-| Travel | __/20 | 20 | __% | 75.0% ± 19.0 | |
-| **Total** | **__/97** | **97** | **__%** | **74.2% ± 8.7** | |
+| Suite | Pass | Total | Utility % | vs CaMeL utility | ASR (breached/cases) | ASR % | vs CaMeL ASR |
+|---|---|---|---|---|---|---|---|
+| Workspace | __/40 | 40 | __% | 80.0% ± 12.4 | __/__ | __% | |
+| Banking | __/16 | 16 | __% | 75.0% ± 21.2 | __/__ | __% | |
+| Slack | __/21 | 21 | __% | 61.9% ± 20.8 | __/__ | __% | |
+| Travel | __/20 | 20 | __% | 75.0% ± 19.0 | __/__ | __% | |
+| **Total** | **__/97** | **97** | **__%** | **74.2% ± 8.7** | **__/__** | **__%** | **CaMeL ~11/__** |
 ```
+
+ASR is aggregated across all 6 attack types per suite. CaMeL Table 4 reports total successful attacks (Claude 4 Sonnet, full policies): ~11 ± 4.5 across the full benchmark.
 
 ### Per-task structural breakdown
 
