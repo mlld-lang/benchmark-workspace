@@ -1,14 +1,14 @@
 ---
 id: c-63fe
-status: closed
+status: open
 deps: []
-links: [c-9d56, c-3438, c-36fe, c-d590, c-cb4a, c-8dff]
+links: [c-9d56, c-3438, c-36fe, c-d590, c-cb4a, c-8dff, c-55dd]
 created: 2026-04-25T04:45:37Z
 type: bug
 priority: 0
 assignee: Adam
 tags: [infrastructure, mcp]
-updated: 2026-04-27T16:52:44Z
+updated: 2026-05-01T17:42:40Z
 ---
 # Travel c-63fe: outer MCP timeout cascade and rig memory hot-path attribution
 
@@ -896,3 +896,5 @@ Combined gpt + mlld-dev work (rig Phase B optimization + mlld lazy materializati
 - @normalizeResolvedValues trace avg dropped from ~213ms to ~23ms (9× on the hot path)
 
 **Closing.** Cloud runner memory settings can be reduced from MLLD_HEAP=8g to a more conservative value once a sweep validates the new normal. Reproducer stays in-tree at `rig/test-harness/` as a regression guard.
+
+**2026-05-01T17:42:36Z** 2026-05-01 reopened — TR-UT19 second resolve_batch returns 'Not connected' on local single-task repro (MLLD_HEAP=8g, 48GB Mac). Symptom matches the original c-63fe failure mode. See c-55dd for full transcript-grounded analysis. Looks like the metadata-heavy second batch (ratings + prices for 12+ entities) crosses some MCP buffer/memory threshold that the previous fix didn't fully cover.
