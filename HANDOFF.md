@@ -8,7 +8,7 @@ Last updated: 2026-05-01
 
 We are at the architectural ceiling (77–80/97). The remaining 19.6% gap to 100% is structural by design: 10 SHOULD-FAIL + 9 OOS-EXHAUSTED.
 
-**Pre-sweep prep complete (bench-grind-15):** OOS-CANDIDATE audit resolved (UT17 → EXHAUSTED, UT16 → OPEN structural-bug stochastic); `--no-skip` flag added to `src/run.py`; attack runner end-to-end smoke verified (banking UT1 × injection_task_0 / direct + important_instructions both clean). Local canaries ran 2026-05-01 — see "Pre-sweep canary results" below.
+**Pre-sweep prep complete (bench-grind-15):** OOS-CANDIDATE audit resolved (UT17 → EXHAUSTED, UT16 → OPEN structural-bug stochastic); `SKIP_TASKS` removed entirely from `src/run.py` — every sweep runs all 97 tasks; attack runner end-to-end smoke verified (banking UT1 × injection_task_0 / direct + important_instructions both clean). Local canaries ran 2026-05-01 — see "Pre-sweep canary results" below.
 
 **Next session is the headline measurement run: full benign sweep + full attack suite (~949 attacks across 6 attack types). Costly and unrecoverable if misconfigured. Detailed prep checklist below.**
 
@@ -66,14 +66,10 @@ This is the headline run. Costly (~$100–300, several hours wall-clock with par
 
 ### A. Skip removal (load-bearing) ✅ DONE bench-grind-15
 
-**`--no-skip` flag landed in `src/run.py`.** Pass it on the headline benign sweep to bypass `SKIP_TASKS` and run all 97 tasks. Verified via `--help` registration and reads `args.no_skip` to compute `skip = set() if args.no_skip else SKIP_TASKS.get(...)`.
-
-The 19 skipped tasks (10 SHOULD-FAIL + 9 OOS-EXHAUSTED) will produce 0% utility but their security results are the load-bearing data — the architectural claim is that even when these can't pass utility, attacks against them must fail.
+**`SKIP_TASKS` deleted entirely from `src/run.py`.** Every sweep runs all user_tasks in the suite — no skip dict, no flag. Bucket classifications (SHOULD-FAIL, OOS-EXHAUSTED, etc.) are descriptive only; they don't gate dispatch. The 19 known-fail tasks (10 SHOULD-FAIL + 9 OOS-EXHAUSTED) produce 0% utility under defense but their attack-resilience is what the security evaluation tests — load-bearing data we need.
 
 ```bash
-# Full benign with no skips:
-scripts/bench.sh workspace banking slack travel  # need to check if scripts/bench.sh threads --no-skip; otherwise:
-uv run --project bench python3 src/run.py -s workspace --no-skip -d defended -p 20
+scripts/bench.sh workspace banking slack travel  # full 97 tasks, defended
 ```
 
 ### B. Attack configuration ✅ DONE bench-grind-15

@@ -12,8 +12,10 @@
 # 8x16 = 64 vCPU, exact fit under the 64 vCPU concurrency cap). Wall
 # time ~10-15 min for the full bench surface.
 #
-# Skip lists (oos/non-gating) are honored by src/run.py's SKIP_TASKS
-# when no -t is passed.
+# Every benign run executes all user_tasks in the suite (full 97-task
+# denominator). No skip list — SHOULD-FAIL and OOS-EXHAUSTED tasks
+# stay in scope; they count as failures and their attack-resilience
+# is what the security evaluation tests.
 
 set -euo pipefail
 

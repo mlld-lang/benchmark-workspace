@@ -314,9 +314,9 @@ Each per-task ticket carries one of these prefixes in its title:
 
 **OOS-EXHAUSTED: {SUITE}-{ID}** — we've tried; further attempts would be benchmark-shaping or overfitting. Examples: eval requires literal `'{k}-th'` substitution where models naturally produce `'1st/2nd/3rd/4th'` (SL-UT14); eval requires `pre_env == post_env` while task wording asks to update (BK-UT9/UT10); linguistic ambiguity where eval picks one valid reading and three sweeps converge on the other (TR-UT11). EXHAUSTED is a documented loss, not a recategorization — it acknowledges that prioritizing a fix would violate Cardinal Rule A.
 
-**OOS-CANDIDATE: {SUITE}-{ID}** — we believe it should be EXHAUSTED but want explicit evidence first. Often stochastic tasks (sweep FAIL, retest PASS) where one more sweep cycle would settle whether the failure mode is structural or noise. CANDIDATE entries are typically NOT in `SKIP_TASKS` so they keep showing up in sweeps and produce evidence.
+**OOS-CANDIDATE: {SUITE}-{ID}** — we believe it should be EXHAUSTED but want explicit evidence first. Often stochastic tasks (sweep FAIL, retest PASS) where one more sweep cycle would settle whether the failure mode is structural or noise.
 
-**SHOULD-FAIL: {SUITE}-{ID}** — the deterministic-security model **correctly rejects** this task. The task delegates action choice (or other security-critical decisions) to untrusted content in a way that no structural invariant can safely permit. Solving it would require **probabilistic / audit-based security** (action-type allowlists, payload schemas, profile authorization, content sanitizers) that we explicitly exclude from the benchmark agent. SHOULD-FAIL is a positive statement about the security model: 0% utility on these tasks is the correct outcome. Future production deployments can opt into probabilistic-security extensions to pass them; the benchmark cannot. See `futr-action-type-allowlist.md` for the canonical example. SHOULD-FAIL entries belong in `SKIP_TASKS` for workflow convenience but count as full failures against the 97 denominator like every other bucket.
+**SHOULD-FAIL: {SUITE}-{ID}** — the deterministic-security model **correctly rejects** this task. The task delegates action choice (or other security-critical decisions) to untrusted content in a way that no structural invariant can safely permit. Solving it would require **probabilistic / audit-based security** (action-type allowlists, payload schemas, profile authorization, content sanitizers) that we explicitly exclude from the benchmark agent. SHOULD-FAIL is a positive statement about the security model: 0% utility on these tasks is the correct outcome. Future production deployments can opt into probabilistic-security extensions to pass them; the benchmark cannot. See `futr-action-type-allowlist.md` for the canonical example. SHOULD-FAIL counts as a full failure against the 97 denominator like every other bucket.
 
 **CLOSED: {SUITE}-{ID}** — currently passing.
 
@@ -327,7 +327,7 @@ Each per-task ticket carries one of these prefixes in its title:
 - Demotion from OPEN → CANDIDATE requires a note saying *what's been tried*.
 - Demotion from CANDIDATE → DEFERRED requires identifying the specific architectural primitive that would fix the family, and the named ticket where that primitive is tracked.
 - DEFERRED tickets reference the architectural primitive on which they depend. When the primitive lands, the DEFERRED tickets get reopened for verification.
-- `SKIP_TASKS` in `src/run.py` is the workflow-convenience skip list. EXHAUSTED and DEFERRED entries are typically there. CANDIDATE entries usually stay visible in sweeps.
+- All 97 tasks run on every sweep. Bucket classifications are descriptive (what's failing and why), not prescriptive (which tasks to skip). Per Convention E, sweeps measure against the full 97-task denominator unconditionally.
 
 These buckets do not change reporting (Convention E still holds — always cite full denominators). They only change what we work on next.
 
