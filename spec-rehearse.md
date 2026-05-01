@@ -1,203 +1,208 @@
-# spec-rehearse — execute preflight (compile + advisory)
+# spec-rehearse — pre-flight policy check for execute
 
-**Status:** draft for review (incorporates GPT feedback round 1)
+**Status:** draft v2 — security-tightened: minimal information surface, no policy reasons exposed
 **Owner:** Adam
-**Related:** c-3438 (planner can't see structural impossibility), c-0589 (WS-UT8), c-b0a4 (TR-UT8), c-5929 (WS-UT33)
-
-## Scope clarification (per GPT)
-
-This is **execute preflight + advisory validation**, not a general "prevent wrong writes" mechanism.
-
-- For source-class / field-path **compile failures**: the runtime already rejects before MCP dispatch. Rehearse helps these cases by saving planner iterations and giving better corrective feedback.
-- For writes that **compile successfully but are semantically risky** (wrong recipient, unresolved template intent, ambiguous handle choice): rehearse only helps if we add advisory checks. Compile-only dry-run gives false confidence here.
-
-The spec's scope is execute only — resolves/extracts/derives don't have the commit-precedes-verification problem because they don't have side effects.
+**Related:** c-3438 (planner can't see structural impossibility), SHOULD-FAIL ticket family (untrusted-content → control-arg)
+**Supersedes:** v1 with hint tables + reason codes (too much info leakage to planner)
 
 ## Problem
 
-The planner has to author tool calls that satisfy the security model — correct source classes for control args, correct ref shapes, correct payload schemas. When it gets one wrong, the runtime rejects, but **the rejection comes after the LLM has already committed to a turn's worth of tokens, and after a write may have already fired.**
+The planner authors `execute` calls that have to satisfy the security model — correct source classes for control args, correct ref shapes, valid policy compilation. Today's failure modes:
 
-Two failure shapes recur from this:
+1. **Commitment precedes verification.** Planner emits an `execute`, the runtime rejects at intent-compile or policy-build, planner has already burned a turn and possibly partially-mutated state.
+2. **No fail-fast on structural infeasibility.** Tasks where no possible source class can satisfy the policy (e.g., a `send_email.recipient` that must be sourced from untrusted webpage content) currently iterate to budget exhaustion. The planner tries `extracted`, gets a denial, tries `derived`, gets a denial, tries another tool, gets a denial — never recognizes that the structural constraint is firm.
+3. **`blocked` as easy out.** The current `blocked` terminal can be called by the planner with a free-text reason and no evidence. Risk: planner gives up after one denial without exploring alternatives.
 
-1. **Self-correct-too-late on writes** (TR-UT8: title-template construction). Planner emits an execute, sees the result, recognizes its mistake, retries with a corrected version — but the wrong write already happened. The eval punishes the duplicate.
-2. **Source-class fumbling** (WS-UT8: derived for control arg). Planner emits `{source: derived}` for an event_id arg, gets `payload_only_source_in_control_arg`, isn't sure how to fix, retries with another wrong shape, exhausts iteration budget.
-3. **Wrong-recipient resolution** (UT33: "client" → wrong contact). Planner picks one of several plausible interpretations, calls the write tool, locks in. By the time it could have reconsidered, the write has happened.
+## Proposal: `rehearse(intent)` + tightened `blocked(reason, evidence)`
 
-In all three cases the planner is *capable* of getting it right — and often does, on retry. The failure is that **commitment precedes verification**. The planner has no way to test the shape of its plan before paying the side-effect cost.
+### `rehearse(intent)`
 
-## Proposal: a `rehearse_execute` tool
+Same intent shape as `execute`. Runs the existing intent-compile + `@policy.build` pipeline, **does not dispatch the MCP call**, **does not mutate state** other than appending to a rehearse history.
 
-Add a new tool the planner can call before commit. Same arg shape as `execute`, no MCP dispatch, returns advisory feedback. The tool sits inside the existing execute phase rather than introducing a new phase (per GPT note: easier mental model than a parallel phase).
+Returns one of:
 
-```
-rehearse_execute(operation, args)
-  → on compile success: {
-      compiled: true,
-      operation,
-      normalized_args,                      // resolved refs flattened to concrete values
-      proof_summary: { policy_pass, witnesses_attached },
-      warnings: [<advisory checks the runtime can run cheaply>],
-      rehearsal_token: <fingerprint(op, normalized_args, state_fingerprint)>
-    }
-  → on compile failure: {
-      compiled: false,
-      operation,
-      issues: [{arg, error_code, message}],
-      hints: [<concrete corrective guidance per issue>]
-    }
+```json
+{ "ok": true }
 ```
 
-**Important: NO `predicted_state_diff`** — that overpromises and is unknowable without the MCP call. We return what the runtime would dispatch (operation + normalized args + policy verdict), not what the world would look like after.
+```json
+{ "ok": false, "blocked_args": ["recipient"] }
+```
 
-The planner can rehearse zero or more times before committing. Once satisfied, calls `execute`. The runtime guarantees rehearse has no MCP side effects.
+That's the entire surface. **No reason codes, no required source classes, no hints, no policy details.** The planner sees:
+- `ok: true` → "this exact intent would dispatch successfully (modulo MCP-side errors)"
+- `ok: false` → "this intent is blocked. The blocking is in these arg(s)."
 
-### Rehearsal token
+The planner re-shapes the intent and tries again. The arg names are already in the planner's emitted intent — `blocked_args` adds no new information about policy structure, just helps the planner localize which fields to change without bisecting via repeated rehearses.
 
-On success rehearse returns a `rehearsal_token` = fingerprint of `(operation, normalized_args, relevant_state_fingerprint)`. The planner can pass this to `execute` (optionally), and execute logs the match. This gives us:
+`ok: true` does not guarantee the eventual `execute` will succeed. It guarantees the framework's compile + policy-build verdict is positive. Dispatch-time failures (MCP server errors, network, worker LLM hallucinations, tool runtime errors) remain possible.
 
-- Audit trail of "rehearsed-then-committed" pairs for telemetry
-- Detection of "rehearsed call A but committed call B" — divergence flag
-- Future option: enforce rehearsal-required for high-risk write operations
+### `blocked(reason, evidence)`
 
-Token is informational at first; enforcement is a later choice.
+Tightened from the current free-text terminal:
 
-### Budget accounting (per GPT)
+```json
+{
+  "reason": "no input shape passes for this task — alternatives exhausted",
+  "evidence": [
+    { "tool": "send_email", "args_shape": "<hash>" },
+    { "tool": "invite_user_to_slack", "args_shape": "<hash>" }
+  ]
+}
+```
 
-- Rehearsals count against planner LLM budget (they cost a turn) but do **not** count against "bad execute attempts" — they're cheaper feedback, intentionally
-- Cap rehearsals-per-execute at e.g. 3 (configurable)
-- Worker-test discipline: assert rehearse-before-execute on shaped scenarios where it should fire
+Runtime validates:
+1. **≥2 distinct `(tool, args_shape)` entries**. Distinctness defined by hash of source-class tuple (not values), so retrying the same shape twice doesn't count.
+2. **Each entry maps to an actual `rehearse` call** in this session's `rehearse_history` with `ok: false`. Planner can't fabricate evidence.
 
-## Why this is a useful skill, not just a debug surface
+If validation fails: returns `blocked_evidence_insufficient`. **No hint about which alternatives haven't been tried** — that would require exposing reason codes. Planner has to rehearse more on its own initiative.
 
-Teaching agents to **plan how to navigate security complexity** and **test the shape of their plan** is a generally valuable skill. The benchmark exposes the failure mode; the skill is portable to any agent system with non-trivial validation. Specifically:
+### Iteration budget
 
-- It separates **intent expression** from **commitment**. LLM tokens get spent on shape iteration in a sandboxed phase, not on uncommittable retries.
-- It gives the planner an **explicit test surface** rather than asking it to be careful in one shot.
-- It pairs with c-3438's "loud refusal" work: rehearse is the surface where richer hints land before the user sees a side-effect.
-- It generalizes outside the benchmark: any defended-mode write benefits.
+Rehearse counts 1:1 against the iteration budget. Same as any other tool call. The planner pays for the structural check; if rehearsing every execute is wasteful, the planner learns to skip rehearse on simple cases.
 
-## How it differs from current intent_compile
+### Freshness
 
-The runtime already does intent_compile validation when execute is called. Today's behavior:
+Rehearse always evaluates against current state. No caching. The `rehearse_history` is a rolling list of `(intent, result, timestamp)` for blocked-evidence validation only — it isn't consulted for the rehearse computation itself. If the planner believes state changed since a prior rehearse, it should re-rehearse; that's a new history entry.
 
-- `intent_compile` runs, returns ok/error
-- on ok: dispatches to MCP, side-effect happens
-- on error: surfaces error, no dispatch
+## What rehearse output does NOT contain
 
-`rehearse` separates the validation from the dispatch:
+- No reason codes (`source_class_violation`, `untrusted_destructive`, etc.)
+- No required values for the failing arg
+- No alternative suggestions
+- No taint / label info
+- No policy structure
+- No state-fingerprint or witness info
 
-- Same intent_compile, but **always returns** without dispatching
-- On success, returns *what* would be dispatched (predicted_state_diff)
-- On failure, returns the same error shape but enriched with **hints** built from runtime state (resolved records in scope, candidate ref shapes, expected source classes)
+The planner's only signals are:
+- The tool catalog's `inputs:` record (declares static expected shape per tool)
+- Its own working memory of resolved/extracted/derived values
+- Rehearse's binary `ok` + arg-level `blocked_args`
 
-The hint-generation work is c-3438. Rehearse is the **interface**.
+That's enough for the planner to plan without exposing internal policy mechanics.
 
-## Implementation surface (per GPT)
+## Planner discipline (rig/prompts/planner.att additions)
 
-`dispatchExecute` already separates `@compileExecuteIntent` from the MCP dispatch path in `rig/workers/execute.mld`. The right implementation is:
+Two rules added to the rig prompt:
 
-1. Factor a shared "prepare/compile execute" helper that runs intent_compile + collects normalized_args + proof_summary + advisory warnings
-2. `rehearse_execute` calls the helper and returns
-3. `execute` calls the same helper, then continues to `@callToolWithPolicy` for actual dispatch
+> **Rehearsing writes.** If you're uncertain whether an `execute` would succeed under defense — especially when control args are sourced from extract or derive — call `rehearse` first. Rehearse is a normal tool call against the iteration budget; on simple writes you've used before in this session, you can skip it.
 
-This keeps the surface change small and ensures rehearse and execute see the same compile semantics. No new phase loop wiring needed; rehearse is just a sibling tool inside the execute phase namespace.
+> **Calling `blocked`.** Don't call `blocked` after a single rehearse failure. The framework requires evidence of at least 2 rehearse attempts with structurally distinct intents (different tools, or different source-class combinations) before accepting `blocked`. If your first rehearse fails, try a different shape and rehearse again before concluding the task is infeasible.
 
-## Hint generation (the c-3438 hand-off)
+These are domain-agnostic — belong in `rig/prompts/planner.att`, not in suite addendums.
 
-The value of rehearse depends on hints being *useful*. For each error code, list what the runtime knows that would help:
+## Reliability
 
-| Error code | Runtime state available | Example hint |
-|---|---|---|
-| `payload_only_source_in_control_arg` | which arg, expected source classes, resolved records currently in scope | `"event_id requires resolved/known/selection. Resolved candidates: r_calendar_evt_3 (from search_calendar_events 'team meeting')."` |
-| `known_value_not_in_task_text` | the value, the task text, similar resolved values | `"'Hawaii vacation' is not in the task text. r_file_entry_7 ('hawaii-itinerary.docx') is a resolved file_entry handle in scope; reference it as {source: resolved, record: file_entry, handle: r_file_entry_7}."` |
-| `resolved_field_missing` | the requested field, fields that exist on the record | `"field 'recipient' not on contact record. Available facts: id_, email, name."` |
-| `derived_field_missing` | the requested path, the actual derive output shape | `"path 'messages[0].body' not in derived 'messages'. Top-level shape: array of objects with [name, rank, message]. Try '0.message'."` |
-| `template_arg_with_raw_field_ref` (new) | the user prompt's template literal, the arg name | `"Title template '{restaurant_name}' detected in user prompt. Construct the full title in a derive step before passing to title arg."` |
+Rehearse runs steps 1–3 of `dispatchExecute`:
+1. `validatePlannerArgRefs` — shape validation (deterministic)
+2. `compileExecuteIntent` — source class + provenance validation (deterministic)
+3. `@policy.build` — policy compilation (deterministic)
 
-The "new" error code is the kind of advisory check rehearse can run cheaply that execute today doesn't bother with.
+These are pure functions of `(intent, current_state, agent.tools)`. Same inputs → same outputs. No LLM, no MCP, no network.
 
-## Budget cost
+`ok: true` is reliable for what it covers (framework-level acceptance). `ok: false` is reliable for what it covers (framework-level rejection — no possible MCP dispatch will succeed with the rejected shape).
 
-| Item | Cost |
+What rehearse can NOT predict:
+- MCP server errors / disconnects (c-63fe class)
+- Network errors
+- Tool runtime errors (e.g., `reserve_hotel` raising `ValueError` on a bad date)
+- Worker LLM hallucinations during the execute phase's worker call
+- Anything semantic (right shape, wrong values — UT33-style "the client" interpretation)
+
+That's a clear contract. Rehearse is a structural-feasibility check, not an end-to-end success predictor.
+
+## Risk to existing implementation
+
+**Low for `rehearse`**: it's purely additive. Shares the existing compile + policy-build code via a refactored helper; doesn't touch dispatch.
+
+**Medium for `blocked` tightening**: changes a behavior contract. Existing planner sessions that called `blocked` with a free-text reason would now fail with `blocked_evidence_insufficient`. Migration path:
+- Phase 1: ship rehearse + history tracking. `blocked` keeps current behavior; new `evidence` field optional.
+- Phase 2: after rehearse adoption is confirmed in worker tests, make `evidence` required. Old callers fail with a structured error directing them to rehearse first.
+
+**Progress detector (c-3438) interaction**: rehearse calls must NOT count as state-progressing in the progress signature. Otherwise rehearse spam could mask stalled tasks. Rehearse history is a separate ledger; the progress signature stays keyed on resolved/extracted/derived state.
+
+**Iteration budget pressure**: a planner that rehearses before every execute doubles tool calls per write. Default budget is 25 iterations. We may need to bump to 30 or accept that defended runs use more iterations than current. Worker tests will surface budget-exhaust regressions.
+
+## What's missing in mlld?
+
+Nothing. The pieces exist:
+- `@policy.build` accepts intent + tools + task config, returns `{valid, policy, issues}` — works ✓
+- `@compileExecuteIntent` already separates compile from dispatch in `rig/intent.mld` — works ✓
+- `var session @planner` for rehearse history persistence — works ✓
+- `for parallel`, record coercion, exe wrappers — works ✓
+
+The compile-without-dispatch refactor is rig-level: factor a shared helper that both `dispatchExecute` (steps 1–3 then 4–5) and `dispatchRehearse` (steps 1–3 only) call. No new mlld primitive needed.
+
+## Implementation surface
+
+| File | Change |
 |---|---|
-| Per rehearse call | one planner LLM round-trip + one intent_compile cycle |
-| Compile cycle | ms-scale (no LLM, no MCP) |
-| Iteration overhead per execute | typically 1-2 rehearses before commit |
-| Per-task overhead | bounded; cap rehearse-per-execute at e.g. 3 |
+| `rig/workers/execute.mld` | Extract steps 1–3 of `dispatchExecute` into `@compileForDispatch(state, agent, decision, query) → {ok, blocked_args[], compiled, built}`. `dispatchExecute` calls it then continues with steps 4–5. |
+| `rig/workers/planner.mld` | New `@planner_rehearse_inputs` record (mirrors `@planner_execute_inputs` arg shape). New `rehearse:` tool entry. Tighten `@planner_blocked_inputs` to include optional `evidence: array?`; required in Phase 2. |
+| `rig/runtime.mld` (or new module) | `@dispatchRehearse(state, agent, decision, query)` — calls `@compileForDispatch`, never dispatches MCP. Appends `{intent, ok, blocked_args, ts}` to planner-session `rehearse_history`. Returns `{ok, blocked_args}`. |
+| `rig/runtime.mld` | `@validateBlockedEvidence(history, evidence)` — checks ≥2 distinct (tool, args-shape-hash) pairs in evidence, all map to rehearse_history entries with `ok: false`. |
+| `rig/prompts/planner.att` | Two discipline rules above. |
 
-Sessions today already do 8-10 planner iterations per task; adding 1-2 per execute is small relative to budget. The expected savings come from **fewer wrong-execute retries** (which already cost an iteration each) — this should be net-positive on most tasks.
+Total: ~150–250 lines of mlld, mostly mechanical given the existing intent-compile path.
 
-## Risks
+## Test plan
 
-| Risk | Mitigation |
-|---|---|
-| Planner over-rehearses (5x before committing simple cases) | Cap rehearse-per-execute at 3; planner addendum: "rehearse for tasks with template literals or write tools you've not used in this session, otherwise commit directly" |
-| Planner under-rehearses (skips rehearse on cases where it would help) | Worker test that asserts rehearse-before-execute on a TR-UT8-shaped scenario; addendum rule |
-| Hint quality is poor | Iterate per error code; treat hint generation as c-3438 follow-on work |
-| Rehearse becomes a new attack surface | Same source-class checks as execute; no MCP dispatch means no exfil; injected content still can't promote source class |
+**Phase 1 (zero-LLM spike, $0): ✅ DONE 2026-05-01**
 
-## Where compile rehearsal does NOT help (per GPT)
+Spike at `tmp/rehearse-spike/probe.mld`. 7-row matrix exercising the source-class space against the rig test fixtures (records, tools, sampleState):
 
-UT33-style **wrong-recipient** failures are not fixed by compile rehearsal alone. The planner's call compiles cleanly; the failure is semantic (chose the wrong contact). For those, rehearse needs **advisory ambiguity warnings**:
+| Row | Source class | Expected | Result | Stage caught |
+|---|---|---|---|---|
+| A | resolved.contact.email | ok | ok ✓ | ok |
+| B | derived raw → control | blocked | blocked ["recipients"] ✓ | compile |
+| C | extracted raw → control | blocked | blocked ["recipients"] ✓ | compile |
+| D | selection ref (derive→resolved bridge) | ok | ok ✓ | ok |
+| E | known literal in task | ok | ok ✓ | ok |
+| F | known literal NOT in task | blocked | blocked ["recipients"] ✓ | compile |
+| det | row B re-run | identical | identical ✓ | — |
 
-- `multiple_candidate_handles_match`: e.g., search_contacts_by_name returned 3 contacts, planner picked one — warn if there's no clear textual disambiguator in the user prompt
-- `selected_handle_lacks_grounding`: warn if the chosen control-arg ref doesn't have direct textual grounding in the user task
-- `template_arg_with_raw_field_ref`: warn if user prompt has a template literal but the planner is passing a raw field ref to a string arg
+**Validated:**
+1. compile + `@policy.build` are deterministic — same inputs always produce same `(ok, blocked_args)`.
+2. The `{ok, blocked_args}` surface contract reduces cleanly from compile/policy issue lists.
+3. The structural firewall (derive/extract → control arg) is caught at compile stage.
+4. The known-bucket task-text check is caught at compile stage.
+5. The selection_ref pattern (the legitimate derive→resolved bridge) passes correctly.
+6. The `role:planner` gate is enforced at policy.build — rehearse exe needs the same role declaration as `dispatchExecute`.
+7. Re-running same intent yields identical output with no state mutation.
 
-These are advisory checks layered on top of compile-only rehearsal. Each check is its own design decision; not all will land in Phase 1.
+**Implementation caveat surfaced**: policy-stage rejections sometimes lack per-arg attribution (e.g., `invalid_authorization` is operation-level). In those cases `blocked_args` ends up `[]`. v1 accepts this — `ok: false` with empty `blocked_args` means "operation-level block, planner must bisect by varying the intent shape." Future revision could add a synthetic `op_blocked: true` marker without leaking the reason.
 
-## Implementation phases
+**Phase 2 (worker tests, ~30s):**
+- New worker test asserting rehearse output shape on success + failure cases.
+- Worker test asserting `blocked` is rejected without evidence.
+- Worker test asserting `blocked` is accepted with valid evidence.
+- Regression: existing `dispatchExecute` smoke tests still pass.
 
-### Phase 0 (per GPT): enrich existing intent_compile hints first
+**Phase 3 (live SHOULD-FAIL targeted run, ~$0.50):**
+- Re-run WS-UT13 (delegates action choice to untrusted email content). Goal: planner fails fast in 3–5 iterations instead of burning to budget.
+- Re-run BK-UT0 (untrusted-content → recipient IBAN). Same goal.
+- Re-run TR-UT11 (interpretation ambiguity). Should NOT fail-fast — this is semantic, not structural; rehearse should return `ok: true` and the planner proceeds normally.
 
-**Before building rehearse**, do the cheaper experiment: enrich today's static `payload_only_source_in_control_arg` hint with `@state.resolved` candidates **at the existing rejection site** in `rig/intent.mld`. This requires no new tool, no new phase — just better error text. Re-run UT8 and see if the planner self-corrects on retry.
-
-If yes: most of the value of rehearse for compile failures is captured without the new tool. Defer rehearse_execute.
-If no: planner needs to *call into* validation, not just receive richer error text — proceed to Phase 1.
-
-This is the empirical gate before committing to the new tool. ~1-2 hours of work plus a single live UT8 run.
-
-**Caveats per GPT:**
-- "~15 lines" estimate may be optimistic. Tricky parts: reliably mapping a failing control arg to its expected record type; formatting candidates without leaking hidden/untrusted fields. Hint should only show planner-safe handle labels/fields already legitimate in resolved state.
-- Phase 0 success doesn't fully eliminate the case for rehearse_execute — better hints help only AFTER a failed execute attempt. Rehearse still matters for avoiding successful-but-wrong writes (TR-UT8 double-create). Phase 0 deferral is conditional, not permanent.
-
-### Phase 1: zero-LLM probe (1-2 hours)
-
-Goal: verify the runtime can dry-run intent_compile cleanly and that hints can be synthesized from existing state.
-
-1. Take a known-bad execute intent (`event_id` with `{source: derived}`, from a real UT8 transcript)
-2. Call intent_compile in dry-run mode (currently this means call it without dispatching; see how cleanly it separates)
-3. Capture the rejection payload
-4. Synthesize the richest hint message we can from runtime state (resolved records in scope, expected source classes, candidate refs)
-5. Compare hint against what would have unstuck the actual session
-
-Pass criteria: hint message would have plausibly led the planner to the correct ref shape on next emit.
-
-### Phase 2: rehearse phase implementation (1-2 days)
-
-1. New tool `rehearse_execute` registered alongside `execute`
-2. Same intent_compile path, dispatch-suppressed
-3. Return predicted_state_diff (use existing state-fingerprint infrastructure if available, or simple before/after diff snippet)
-4. Hint generation per error code (start with 2-3 most common)
-5. Worker test: assert rehearse output has correct shape on success and failure
-
-### Phase 3: planner adoption (rolling)
-
-1. Workspace + travel + slack planner addendums: rule for when to rehearse
-2. Worker tests: assert rehearse-before-execute on shaped scenarios
-3. Measure: UT8, TR-UT8, UT33 pass rates over 5 local reruns each
-4. Iterate hint phrasing based on what actually unsticks the planner
-
-## Open questions
-
-1. Does the existing `intent.mld` separate intent_compile from MCP dispatch cleanly today? (Phase 1 answers this.)
-2. Should rehearse return one hint per issue, or a synthesized "here's what to do next" message?
-3. Should rehearse expose the planner to *which security rule* fired, or only *the corrective shape*? Per c-3438's principle: corrective shape only.
-4. Is rehearse a single phase, or do we want `rehearse_resolve`, `rehearse_extract`, etc. for symmetry? (My read: only execute needs it; resolves/extracts/derives don't have the commit-precedes-verification problem because they don't have side effects.)
+**Phase 4 (cycle-1 attack canary, ~$5):**
+- Re-run banking attack `direct` with rehearse landed. Goal: SHOULD-FAIL targets continue to block all attacks (security invariant); benign-class targets show no regression.
+- Compare iteration count distribution: SHOULD-FAIL tasks should drop from ~25 to ~5 average iterations.
 
 ## Success criteria
 
-- Phase 1 spike produces a hint string that would have unstuck a real UT8 session
-- Phase 2 worker tests pass with rehearse correctly returning compile-success + compile-failure shapes
-- Phase 3 ≥4/5 local UT8 / TR-UT8 reruns PASS
-- No regressions on currently-passing tasks
+- Phase 1 spike: synthetic test matrix produces deterministic `ok` results matching policy verdict.
+- Phase 2 worker tests: 100% pass on the new assertions.
+- Phase 3 SHOULD-FAIL fail-fast: verifiable iteration-count drop on at least 3 of the 10 SHOULD-FAIL tickets.
+- Phase 4 attack canary: 0 SHOULD-FAIL breaches; no regression on benign passes.
+
+## Open design questions
+
+1. **Should `rehearse` be exposed in undefended mode?** In undefended, policy is `null` so rehearse always returns `ok: true`. Either: (a) hide rehearse from the catalog when undefended, or (b) keep it and rely on the prompt rule "rehearse when uncertain about defense outcome" naturally being a no-op. I lean (a) — fewer planner footguns.
+2. **Should the rehearse history have a max size?** A long session could accumulate many entries. Cap at e.g. 50 most recent? Or unlimited and trust the iteration budget to bound it.
+3. **Phase 2 migration**: how long do we run with `evidence: optional` before making it required? Probably until cycle 1 of the next benchmark sweep validates the path; then tighten.
+
+## Out of scope (deferred)
+
+- Rehearse for `resolve`, `extract`, `derive` phases. Those don't have the commit-precedes-verification problem (no side effects).
+- Hint generation (the v1 spec's reason-code-to-hint table). Excluded for security: it leaks policy structure to the planner.
+- Rehearsal tokens / divergence detection. Useful audit feature but not core to the fail-fast goal.
+- Static lookahead ("would the planner's *next* execute succeed if it does *this* resolve first?"). Combinatorial.
