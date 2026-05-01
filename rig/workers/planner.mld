@@ -1,5 +1,5 @@
 import { @claude } from "@mlld/claude"
-import { @opencode } from "@mlld/opencode"
+import { @opencode } from "../../llm/lib/opencode/index.mld"
 import { @phaseToolDocs } from "../tooling.mld"
 import {
   @llmCall,

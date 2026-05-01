@@ -898,3 +898,102 @@ Combined gpt + mlld-dev work (rig Phase B optimization + mlld lazy materializati
 **Closing.** Cloud runner memory settings can be reduced from MLLD_HEAP=8g to a more conservative value once a sweep validates the new normal. Reproducer stays in-tree at `rig/test-harness/` as a regression guard.
 
 **2026-05-01T17:42:36Z** 2026-05-01 reopened — TR-UT19 second resolve_batch returns 'Not connected' on local single-task repro (MLLD_HEAP=8g, 48GB Mac). Symptom matches the original c-63fe failure mode. See c-55dd for full transcript-grounded analysis. Looks like the metadata-heavy second batch (ratings + prices for 12+ entities) crosses some MCP buffer/memory threshold that the previous fix didn't fully cover.
+
+**2026-05-01T18:43:31Z** ## 2026-05-01 UT19 local "Not connected" investigation
+
+Root cause:
+
+- The local UT19 session does not show the large second `resolve_batch` crashing `clean/src/mcp_server.py`. The first `mlld_tools_resolve_batch` completed at 2026-05-01 17:30:33Z; the second was not attempted until 17:41:17Z, after about 10m44s of Together `dynamic_rate_limit` stream retries in the OpenCode log.
+- `bench/results/togetherai/zai-org/GLM-5.1/travel/defended.142.jsonl` has exactly six AgentDojo MCP calls, all from the first entity-grounding batch, all pid 77819, all <1ms. There are no metadata calls from the second batch. That means the second batch failed before reaching the Python MCP server, so this is not an AgentDojo tool crash or second-payload parse failure.
+- The `Not connected` string originates in the TypeScript MCP SDK used by OpenCode/mlld. `Client.callTool()` calls `Protocol.request()`, which rejects with `Error("Not connected")` once the protocol `_transport` has been cleared by `transport.onclose`. Local SDK path observed: `/opt/homebrew/lib/node_modules/mlld/node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js` around the `if (!this._transport)` guard.
+- OpenCode creates the `mlld_tools` MCP client once at session startup (`service=mcp key=mlld_tools toolCount=7 create() successfully created client`) and the tool wrapper calls `client.callTool(...)` directly. Once that stdio transport closes during the long LLM retry gap, subsequent `mlld_tools_*` calls reuse the stale client and fail immediately with `Not connected`.
+- I did not find evidence for the Python MCP server being OOM-killed or for a fixed buffer/frame limit in the second batch. The important differentiator in this local repro is the idle/retry gap between batches; the larger second payload never reaches mlld or AgentDojo.
+
+Reproducer:
+
+A zero-LLM SDK repro is enough to reproduce the observed failure shape: start a stdio MCP server, make one successful `tools/call`, let the child exit, then call the same captured `Client` again. The second call throws `Not connected` before any server-side code runs.
+
+Observed output from the local synthetic:
+
+```text
+first: ok
+second: Not connected
+```
+
+For a regression test, use the same synthetic server but make it respawnable through the OpenCode MCP service: the first call exits the child, the second call should recreate/reinitialize the local MCP client and retry once successfully.
+
+Minimal fix:
+
+- Fix the OpenCode MCP client lifetime for local stdio MCP servers. In `packages/opencode/src/mcp/index.ts`, avoid permanently capturing an unrecoverable MCP `Client` in each tool closure. Route tool execution through a current-client lookup/wrapper; when `callTool` fails with a closed transport / `Not connected`, recreate and initialize that MCP client for the server, refresh the stored tool list if needed, then retry the tool call once.
+- Do not change `mcp_timeout`, `for parallel(8)`, or travel/planner prompts for this symptom. Those changes do not address the stale-client failure and would not make the second payload reach the server.
+- A separate mlld hardening follow-up could make the generated function MCP bridge proxy tolerate backend Unix-socket churn instead of exiting, but that is not the primary evidence path from this repro. The direct failing code path is OpenCode reusing a closed MCP SDK client.
+
+Verification plan:
+
+- Add an OpenCode MCP regression test with a stdio MCP child that exits after the first successful call. Assert the second tool invocation reconnects and succeeds, with only one retry and no retry for ordinary tool errors.
+- Re-run UT19 locally with `MLLD_HEAP=8g MLLD_TRACE=effects`. Success criterion for this ticket is that the second metadata `resolve_batch` reaches `clean/src/mcp_server.py` and appears in `mcp_calls` instead of failing client-side with `Not connected`.
+- Re-run the c-8dff Phase B mock to ensure the memory/merge fixes remain intact, then run a small single-task travel smoke over the high-risk multi-tool tasks (including UT19) before any broader sweep.
+
+Risk assessment:
+
+- This fix does not solve real tool calls that legitimately run longer than the configured MCP timeout; those should still report timeout.
+- This fix does not solve provider rate limiting. It prevents a closed MCP transport from poisoning all later tool calls after a long provider retry gap.
+- If the mlld bridge/backend socket is closing for an independent reason, reconnecting the OpenCode client restores later calls but does not explain that lower-level close. Add bridge close/restart logging if this recurs after the reconnect fix.
+
+**2026-05-01T18:46:40Z** ## 2026-05-01 upstream OpenCode status check
+
+I checked upstream `anomalyco/opencode` / `sst/opencode` for the MCP `Not connected` failure.
+
+Known upstream issues/PRs:
+
+- `anomalyco/opencode#23997` is the closest known issue: MCP tools lose connection mid-session and later calls return `Not connected`. It is open.
+- `anomalyco/opencode#24955` is an open PR linked to #23997. It hooks `client.onclose` and marks the MCP connection failed / removes cached client defs when the transport closes. That improves status correctness, but it does not reconnect and retry a failed `callTool`, so it does not fully fix UT19's in-flight recovery need.
+- `anomalyco/opencode#25137` / `#25135` are an open issue/PR for stale streamable-HTTP MCP sessions. #25135 changes `convertMcpTool` to avoid stale captured clients, reconnect through `createAndStore()`, and retry once, but only for session-expired errors such as `Session not found`. This is the same architectural shape needed here, but not generalized to local stdio `Not connected`.
+- `anomalyco/opencode#25287` is an open issue requesting transport-level retry for remote MCP socket/connection errors. It explicitly points at the same `convertMcpTool` / `client.callTool` no-retry path.
+- `anomalyco/opencode#19042` is merged and fixed transient `listTools()` failures, but that is not this bug. UT19 fails on the later `callTool()` path after tools have already been registered.
+
+Release/source check:
+
+- Latest release as of this check is `v1.14.31` (published 2026-05-01T06:13:50Z). Its release notes do not include this fix.
+- In both `v1.14.31` and `dev`, `packages/opencode/src/mcp/index.ts` still has `convertMcpTool(mcpTool, client, timeout)` and the tool closure still calls the captured `client.callTool(...)` directly. I found no merged `dropConnection`, `onclose`, `session expired`, or generalized `Not connected` reconnect path in current release/dev.
+
+Conclusion:
+
+The issue is known upstream, but not fixed in a released OpenCode version and not fixed on current `dev` at the time of this check. The closest patch shape is #25135, but UT19 needs that recovery generalized to closed local stdio transports / MCP SDK `Not connected`, not only remote streamable-HTTP `Session not found`.
+
+**2026-05-01T19:00:33Z** ## 2026-05-01 local OpenCode fix/integration
+
+Implemented the MCP tool-call reconnect fix in local checkout `/Users/adam/dev/opencode`.
+
+OpenCode changes:
+
+- `packages/opencode/src/mcp/index.ts`
+  - `convertMcpTool` no longer captures a permanently stale MCP `Client`.
+  - Tool execution now looks up the current client at invocation time.
+  - On recoverable stale-transport/session errors (`Not connected`, SDK transport closed/not connected, stale streamable-HTTP session), it reconnects via `createAndStore()` and retries the tool call once.
+  - Ordinary tool errors are not retried.
+- `packages/opencode/test/mcp/lifecycle.test.ts`
+  - Added regression coverage for local stdio-style `Not connected`: reconnect + retry succeeds.
+  - Added non-retry coverage for ordinary tool errors.
+  - Added bounded retry coverage: persistent `Not connected` gets exactly one retry.
+
+Verification:
+
+- `bunx bun@1.3.13 test test/mcp/ --timeout 30000` from `/Users/adam/dev/opencode/packages/opencode`: 36 pass / 0 fail.
+- `bunx bun@1.3.13 typecheck` from `/Users/adam/dev/opencode/packages/opencode`: pass.
+- Built local dev binary with `bunx bun@1.3.13 run --cwd packages/opencode build --single --skip-install --skip-embed-web-ui`; smoke version: `0.0.0-dev-202605011901`.
+
+Clean integration:
+
+- `llm/lib/opencode/index.mld` now honors `OPENCODE_BIN`, defaulting to `opencode` on PATH.
+- Clean rig imports the repo-local `llm/lib/opencode/index.mld` instead of registry `@mlld/opencode` in `rig/runtime.mld`, `rig/workers/planner.mld`, and `rig/tests/index.mld`, so package changes are exercised by local bench runs.
+- Local fixed binary for repro runs:
+  `OPENCODE_BIN=/Users/adam/dev/opencode/packages/opencode/dist/opencode-darwin-arm64/bin/opencode`
+
+Clean validation:
+
+- `mlld validate llm/lib/opencode/index.mld`: valid, with pre-existing anti-pattern warnings about `@parsed.text`.
+- `mlld validate rig/runtime.mld`: valid.
+- `mlld validate rig/workers/planner.mld`: valid.
+- `mlld rig/test-opencode.mld --stdout`: ok.
+- `mlld validate rig/tests/index.mld` still fails on pre-existing unknown test records (`@test_file_create_inputs`, `@ut8_add_parts_inputs`), unrelated to this integration.

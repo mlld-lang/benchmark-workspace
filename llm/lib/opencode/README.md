@@ -37,6 +37,8 @@ Runs `opencode run --format json` and returns the final agent message. Session i
 | `tools` | array | — | Standard mlld `exe llm` tools convention. The runtime builds an MCP bridge at `@mx.llm.config`; this module translates it into opencode's `{ mcp: { name: { type: "local", command, environment } } }` config and exposes it via a shadow `XDG_CONFIG_HOME`. Opencode has no per-tool gating, so `@mx.llm.native` is informational only. |
 | `mcpTimeoutMs` | number | — | Optional per-request timeout (ms) opencode applies to MCP tool calls. Maps to opencode's `experimental.mcp_timeout`. When omitted, opencode's built-in default applies. Only takes effect when an inline MCP config is emitted (i.e. when `tools` is set or the runtime has bridged tools). Set this only when you have a specific reason to override opencode's default — for example, when long tool calls indicate planner failure rather than legitimate slow work, a short value lets the planner LLM see failures faster and exit cleanly via a terminal call instead of consuming wall budget. |
 
+Set `OPENCODE_BIN=/path/to/opencode` to run a local OpenCode build instead of the `opencode` binary found on `PATH`.
+
 ```mlld
 >> Simple call
 var @answer = @opencode("Explain TCP/IP")

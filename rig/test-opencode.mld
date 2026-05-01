@@ -1,2 +1,2 @@
-/import { buildOpencodeArgs } from "@mlld/opencode"
+/import { @opencodeStreamFormat } from "../llm/lib/opencode/index.mld"
 /show "ok"

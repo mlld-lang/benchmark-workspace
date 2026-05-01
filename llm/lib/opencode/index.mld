@@ -382,7 +382,8 @@ exe @runOpencodeSh(prompt, dir, model, agent, variant, bypass, inlineConfig, doR
     promptArg=$(printf '%s' "$prompt" | perl -0pe 's/\r//g; s/\n+/ /g')
   fi
 
-  opencode run "${pureFlag[@]}" --format json "${dirFlag[@]}" "${modelFlag[@]}" "${agentFlag[@]}" "${variantFlag[@]}" "${bypassFlag[@]}" "${sessionFlag[@]}" "$promptArg"
+  opencodeBin="${OPENCODE_BIN:-opencode}"
+  "$opencodeBin" run "${pureFlag[@]}" --format json "${dirFlag[@]}" "${modelFlag[@]}" "${agentFlag[@]}" "${variantFlag[@]}" "${bypassFlag[@]}" "${sessionFlag[@]}" "$promptArg"
 }
 
 >> ── Core invocation ──
