@@ -1,5 +1,5 @@
 name: bench-run
-run-name: "bench-run · ${{ inputs.suite }}${{ inputs.tasks && format(' ({0})', inputs.tasks) || '' }}"
+run-name: "bench-run · ${{ inputs.suite }}${{ inputs.attack && format(' atk:{0}', inputs.attack) || '' }}${{ inputs.tasks && format(' ({0})', inputs.tasks) || '' }}"
 
 on:
   workflow_dispatch:
@@ -41,6 +41,12 @@ on:
         type: choice
         options: [defended, undefended]
         default: defended
+      attack:
+        description: 'Attack type (empty = benign run)'
+        required: false
+        type: choice
+        options: ['', direct, ignore_previous, important_instructions, injecagent, system_message, tool_knowledge]
+        default: ''
       trace:
         description: 'Enable MLLD_TRACE=effects'
         required: false
@@ -204,6 +210,7 @@ jobs:
           PARALLELISM: ${{ inputs.parallelism }}
           STAGGER: ${{ inputs.stagger }}
           DEFENSE: ${{ inputs.defense }}
+          ATTACK: ${{ inputs.attack }}
           MLLD_TRACE_VAL: ${{ inputs.trace && 'effects' || '' }}
           MLLD_HEAP: ${{ inputs.heap }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
@@ -212,7 +219,7 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/artifacts:/artifacts" \
             -e RUN_ID -e SUITE -e TASKS -e PLANNER -e WORKER -e HARNESS \
-            -e PARALLELISM -e STAGGER -e DEFENSE \
+            -e PARALLELISM -e STAGGER -e DEFENSE -e ATTACK \
             -e MLLD_TRACE="$MLLD_TRACE_VAL" \
             -e MLLD_HEAP \
             -e CEREBRAS_API_KEY -e TOGETHER_API_KEY \

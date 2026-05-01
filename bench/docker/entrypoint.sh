@@ -6,7 +6,7 @@
 #
 # Required env: RUN_ID, SUITE
 # Optional env: TASKS (space-separated), PLANNER, WORKER, HARNESS, PARALLELISM,
-#               STAGGER, DEFENSE, MLLD_TRACE, IMAGE_SHA, MLLD_REF
+#               STAGGER, DEFENSE, ATTACK, MLLD_TRACE, IMAGE_SHA, MLLD_REF
 #
 # Provider keys (passed through from workflow secrets):
 #   CEREBRAS_API_KEY, TOGETHER_API_KEY
@@ -30,6 +30,7 @@ fi
 [[ -n "${PLANNER:-}" ]] && ARGS+=(--planner "$PLANNER")
 [[ -n "${WORKER:-}" ]] && ARGS+=(--worker "$WORKER")
 [[ -n "${HARNESS:-}" ]] && ARGS+=(--harness "$HARNESS")
+[[ -n "${ATTACK:-}" ]] && ARGS+=(-a "$ATTACK")
 ARGS+=(-p "${PARALLELISM:-40}")
 [[ -n "${STAGGER:-}" ]] && ARGS+=(--stagger "$STAGGER")
 
@@ -82,6 +83,7 @@ manifest = {
     "harness": os.environ.get("HARNESS", ""),
     "parallelism": os.environ.get("PARALLELISM", "40"),
     "defense": os.environ.get("DEFENSE", "defended"),
+    "attack": os.environ.get("ATTACK", ""),
     "started_at": ${START_TS},
     "ended_at": ${END_TS},
     "elapsed_sec": ${END_TS} - ${START_TS},
