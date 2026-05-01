@@ -68,12 +68,26 @@ def _locked_path(path: Path):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def _prepare_run_log(model, suite, defense, attack=None):
+def _prepare_run_log(model, suite, defense, attack=None, resume=False):
     log_dir = AGENT_DIR.parent / "results" / model / suite
     log_dir.mkdir(parents=True, exist_ok=True)
     suffix = _log_suffix(defense, attack)
     canonical_path = log_dir / f"{suffix}.jsonl"
     lock_path = log_dir / f"{suffix}.lock"
+
+    if resume:
+        # Resume mode: append to the existing canonical jsonl. Don't rotate;
+        # don't create a new file. The caller has already decided to skip
+        # already-completed (task, injection) pairs based on this file.
+        if canonical_path.is_symlink():
+            target = canonical_path.resolve()
+            if target.exists():
+                return target
+            # Dangling symlink — fall through to fresh-create.
+            canonical_path.unlink()
+        if canonical_path.exists():
+            return canonical_path
+        # No existing log to resume; treat as fresh start.
 
     with _locked_path(lock_path):
         numeric_runs = []
@@ -94,6 +108,35 @@ def _prepare_run_log(model, suite, defense, attack=None):
         run_log_path.touch(exist_ok=False)
         canonical_path.symlink_to(run_log_path.name)
         return run_log_path
+
+
+def _completed_attack_pairs(model, suite, defense, attack):
+    """Read existing JSONL for resume mode; return set of (user_task, injection_task)
+    pairs that have a non-null utility/security verdict (i.e., the agent ran)."""
+    log_dir = AGENT_DIR.parent / "results" / model / suite
+    suffix = _log_suffix(defense, attack)
+    canonical_path = log_dir / f"{suffix}.jsonl"
+    if not canonical_path.exists():
+        return set()
+
+    completed = set()
+    import json as _json
+    with open(canonical_path) as f:
+        for line in f:
+            try:
+                row = _json.loads(line)
+            except _json.JSONDecodeError:
+                continue
+            ut = row.get("task_id")
+            it = row.get("injection_task_id")
+            if not ut or not it:
+                continue
+            # Only count pairs with a real verdict — infrastructure errors
+            # (utility=None, security=None) should be retried.
+            if row.get("utility") is None and row.get("security") is None:
+                continue
+            completed.add((ut, it))
+    return completed
 
 
 def _make_agent(model, debug, suite_name, defense, attack=None, injection_task_id=None, run_log_path=None, harness=None, fast_model=None):
@@ -229,7 +272,10 @@ def _run_benign(args, suite, tasks):
 
 
 def _run_attacks(args, suite):
-    run_log_path = _prepare_run_log(args.model, args.suite, args.defense, attack=args.attack)
+    run_log_path = _prepare_run_log(
+        args.model, args.suite, args.defense, attack=args.attack,
+        resume=getattr(args, 'resume', False),
+    )
     user_tasks = list(suite.user_tasks.values())
     injection_tasks = list(suite.injection_tasks.values())
 
@@ -250,6 +296,19 @@ def _run_attacks(args, suite):
             except Exception:
                 continue
             cases.append((ut, it))
+
+    total_cases = len(cases)
+    if getattr(args, 'resume', False):
+        completed = _completed_attack_pairs(args.model, args.suite, args.defense, args.attack)
+        before = len(cases)
+        cases = [(ut, it) for ut, it in cases if (ut.ID, it.ID) not in completed]
+        skipped = before - len(cases)
+        if skipped:
+            print(f"--resume: skipping {skipped} already-completed (user, injection) pairs")
+
+    if not cases:
+        print(f"All {total_cases} cases already completed; nothing to run.")
+        return
 
     n = min(args.parallel, len(cases))
     print(
@@ -350,6 +409,12 @@ def main():
     parser.add_argument("-a", "--attack", choices=ATTACKS,
                         help="Run attack suite")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--resume", action="store_true",
+                        help="For attack runs: read the existing canonical JSONL and "
+                             "skip (user_task, injection_task) pairs already completed. "
+                             "Append to that JSONL instead of rotating to a fresh file. "
+                             "Use after a cancelled or timed-out attack sweep to pick up "
+                             "where it left off without re-running completed pairs.")
     args = parser.parse_args()
 
     # Resolve model defaults: --model sets both, --planner/--worker override individually.

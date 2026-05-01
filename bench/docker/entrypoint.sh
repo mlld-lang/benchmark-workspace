@@ -31,6 +31,7 @@ fi
 [[ -n "${WORKER:-}" ]] && ARGS+=(--worker "$WORKER")
 [[ -n "${HARNESS:-}" ]] && ARGS+=(--harness "$HARNESS")
 [[ -n "${ATTACK:-}" ]] && ARGS+=(-a "$ATTACK")
+[[ "${RESUME:-}" == "1" || "${RESUME:-}" == "true" ]] && ARGS+=(--resume)
 ARGS+=(-p "${PARALLELISM:-40}")
 [[ -n "${STAGGER:-}" ]] && ARGS+=(--stagger "$STAGGER")
 

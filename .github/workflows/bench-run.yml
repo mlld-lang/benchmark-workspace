@@ -47,6 +47,11 @@ on:
         type: choice
         options: ['', direct, ignore_previous, important_instructions, injecagent, system_message, tool_knowledge]
         default: ''
+      resume:
+        description: 'Resume mode: skip pairs already in the canonical JSONL'
+        required: false
+        type: boolean
+        default: false
       trace:
         description: 'Enable MLLD_TRACE=effects'
         required: false
@@ -215,6 +220,7 @@ jobs:
           STAGGER: ${{ inputs.stagger }}
           DEFENSE: ${{ inputs.defense }}
           ATTACK: ${{ inputs.attack }}
+          RESUME: ${{ inputs.resume && '1' || '' }}
           MLLD_TRACE_VAL: ${{ inputs.trace && 'effects' || '' }}
           MLLD_HEAP: ${{ inputs.heap }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
@@ -228,7 +234,7 @@ jobs:
             -v "${{ github.workspace }}/artifacts:/artifacts" \
             -e PYTHONUNBUFFERED=1 \
             -e RUN_ID -e SUITE -e TASKS -e PLANNER -e WORKER -e HARNESS \
-            -e PARALLELISM -e STAGGER -e DEFENSE -e ATTACK \
+            -e PARALLELISM -e STAGGER -e DEFENSE -e ATTACK -e RESUME \
             -e MLLD_TRACE="$MLLD_TRACE_VAL" \
             -e MLLD_HEAP \
             -e CEREBRAS_API_KEY -e TOGETHER_API_KEY \
