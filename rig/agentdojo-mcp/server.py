@@ -54,6 +54,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from coerce import coerce_tool_args  # noqa: E402
+from extensions import ExtensionTool, load_extensions  # noqa: E402
 from format import tool_result_to_str, yaml_dump  # noqa: E402
 from state import (  # noqa: E402
     is_read_only_tool,
@@ -86,9 +87,16 @@ def create_server(
     state_file: str | None,
     log_file: str | None = None,
     phase_state_file: str | None = None,
+    extension_tools: dict[str, ExtensionTool] | None = None,
 ) -> Server:
     server = Server("agentdojo-tools")
     tools = _build_tools(runtime)
+    extension_tools = extension_tools or {}
+    native_names = {t.name for t in tools}
+    for name, (tool, _handler) in extension_tools.items():
+        if name in native_names:
+            continue
+        tools.append(tool)
 
     def _log(entry: dict) -> None:
         if not log_file:
@@ -142,12 +150,16 @@ def create_server(
         coerced = coerce_tool_args(runtime, name, arguments)
 
         try:
-            tool_result, error = runtime.run_function(env, name, coerced)
-            if isinstance(tool_result, dict):
-                formatted = yaml_dump(tool_result)
+            if name in extension_tools and name not in runtime.functions:
+                _tool, handler = extension_tools[name]
+                result_text = handler(coerced)
             else:
-                formatted = tool_result_to_str(tool_result)
-            result_text = f"ERROR: {error}\n{formatted}" if error else formatted
+                tool_result, error = runtime.run_function(env, name, coerced)
+                if isinstance(tool_result, dict):
+                    formatted = yaml_dump(tool_result)
+                else:
+                    formatted = tool_result_to_str(tool_result)
+                result_text = f"ERROR: {error}\n{formatted}" if error else formatted
         except Exception as e:
             result_text = f"ERROR: {e}"
 
@@ -267,12 +279,20 @@ async def main_async() -> None:
     config = _read_config(sys.argv)
     runtime, env, _env_type = _build_env_from_config(config)
 
+    extension_tools = load_extensions(
+        modules=config.get("extensions") or [],
+        paths=config.get("extension_paths") or [],
+        env=env,
+        runtime=runtime,
+    )
+
     server = create_server(
         runtime,
         env,
         state_file=config.get("state_file"),
         log_file=config.get("log_file"),
         phase_state_file=config.get("phase_state_file"),
+        extension_tools=extension_tools,
     )
 
     async with stdio_server() as (read_stream, write_stream):

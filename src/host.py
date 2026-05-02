@@ -89,11 +89,18 @@ def _build_local_mcp_command(config: dict[str, Any]) -> str:
     env_json can exceed that for large suites, so the config is written to
     a temp file and passed by path instead of base64-on-argv.
     """
+    script_resolved = _resolve_mcp_script(config)
+    if script_resolved.parent.name == "agentdojo-mcp":
+        config = {
+            **config,
+            "extension_paths": [str(SRC_DIR)],
+            "extensions": ["bench_mcp_extras"],
+        }
     cfg_fd, cfg_path = tempfile.mkstemp(suffix=".json", prefix="mcp_cfg_")
     with os.fdopen(cfg_fd, "w") as f:
         json.dump(config, f)
     project_dir = shlex.quote(str(CLEAN_BENCH_PROJECT_DIR))
-    script_path = shlex.quote(str(_resolve_mcp_script(config)))
+    script_path = shlex.quote(str(script_resolved))
     return f"uv run --project {project_dir} python3 {script_path} --config-file {shlex.quote(cfg_path)}"
 
 
