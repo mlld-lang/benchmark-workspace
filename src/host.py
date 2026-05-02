@@ -59,19 +59,23 @@ class MlldInfrastructureError(RuntimeError):
 def _resolve_mcp_script(config: dict[str, Any]) -> Path:
     """Pick which MCP server to launch based on suite + env var.
 
-    `AGENTDOJO_MCP_NEW` is a comma-separated list of suite names to route
-    to `clean/rig/agentdojo-mcp/server.py` (vanilla agentdojo, no fork).
-    Anything not listed routes to the legacy `clean/src/mcp_server.py`.
-    Use `AGENTDOJO_MCP_NEW=all` to route every suite. Default is empty
-    (everyone uses the legacy server).
+    Default: every suite routes to `clean/rig/agentdojo-mcp/server.py`
+    (vanilla agentdojo, suite-agnostic, with bench_mcp_extras for the
+    workspace helpers).
+
+    `AGENTDOJO_MCP_LEGACY` is a comma-separated list of suite names to
+    route to the legacy `clean/src/mcp_server.py` instead. Use
+    `AGENTDOJO_MCP_LEGACY=all` to route every suite to the legacy
+    server. Provided as a rollback knob until the legacy server is
+    deleted.
     """
-    new_suites_env = os.environ.get("AGENTDOJO_MCP_NEW", "")
+    legacy_suites_env = os.environ.get("AGENTDOJO_MCP_LEGACY", "")
     suite_name = config.get("suite_name") or config.get("env_name") or ""
-    new_suites = {s.strip() for s in new_suites_env.split(",") if s.strip()}
-    use_new = "all" in new_suites or suite_name in new_suites
-    if use_new:
-        return ROOT_DIR / "rig" / "agentdojo-mcp" / "server.py"
-    return SRC_DIR / "mcp_server.py"
+    legacy_suites = {s.strip() for s in legacy_suites_env.split(",") if s.strip()}
+    use_legacy = "all" in legacy_suites or suite_name in legacy_suites
+    if use_legacy:
+        return SRC_DIR / "mcp_server.py"
+    return ROOT_DIR / "rig" / "agentdojo-mcp" / "server.py"
 
 
 def _build_local_mcp_command(config: dict[str, Any]) -> str:
