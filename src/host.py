@@ -29,12 +29,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
-if LOCAL_AGENTDOJO_SRC.exists():
-    sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from agentdojo.results import AgentResult, ToolCallRecord
+from agentdojo_results import AgentResult, ToolCallRecord
 
 import mlld as mlld_sdk
 from mlld import Client

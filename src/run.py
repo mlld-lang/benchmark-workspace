@@ -17,15 +17,10 @@ from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
-if LOCAL_AGENTDOJO_SRC.exists():
-    sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
+sys.path.insert(0, str(Path(__file__).parent))
 
 from agentdojo.attacks import load_attack
-from agentdojo.runner import run_task as run_agentdojo_task
-
-sys.path.insert(0, str(Path(__file__).parent))
+from agentdojo_runner import run_task as run_agentdojo_task
 
 from host import MlldAgent, MlldInfrastructureError, AGENT_DIR
 from date_shift import get_shifted_suite

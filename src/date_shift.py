@@ -19,11 +19,6 @@ import sys
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
-if LOCAL_AGENTDOJO_SRC.exists():
-    sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
-
 import agentdojo.task_suite.task_suite as _ts_mod
 from agentdojo.task_suite import get_suite
 from agentdojo.task_suite.task_suite import validate_injections

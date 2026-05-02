@@ -5,7 +5,7 @@ description = "AgentDojo benchmark runner"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "agentdojo>=0.1.35",
+    "agentdojo==0.1.35",
     "mcp>=1.26.0",
     "mlld-sdk",
 ]

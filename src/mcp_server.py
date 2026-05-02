@@ -39,11 +39,6 @@ from typing import Any
 import yaml
 from pydantic import BaseModel
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-LOCAL_AGENTDOJO_SRC = REPO_ROOT / "agentdojo" / "src"
-if LOCAL_AGENTDOJO_SRC.exists():
-    sys.path.insert(0, str(LOCAL_AGENTDOJO_SRC))
-
 from agentdojo.functions_runtime import FunctionReturnType, FunctionsRuntime
 from agentdojo.task_suite import get_suite
 from date_shift import REFERENCE_DATE, compute_offset
