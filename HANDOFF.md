@@ -159,13 +159,13 @@ CaMeL **does NOT pass** SL-UT19 / WS-UT13 — they fail utility deliberately to 
 
 **AgentDojo task definitions** (for transcript analysis + classification):
 
-- `~/mlld/agentdojo/src/agentdojo/default_suites/v1/`
+- `bench/.venv/lib/python3.13/site-packages/agentdojo/default_suites/v1/`
   - `slack/user_tasks.py`, `slack/injection_tasks.py`, `slack/task_suite.py`
   - `workspace/user_tasks.py`, `workspace/injection_tasks.py`
   - `banking/user_tasks.py`, `banking/injection_tasks.py`
   - `travel/user_tasks.py`, `travel/injection_tasks.py`
-- `~/mlld/agentdojo/src/agentdojo/default_suites/v1_1_1/` — version we currently run (slight task-text updates over v1)
-- `~/mlld/agentdojo/src/agentdojo/default_suites/v1_2/` — newer; we don't use yet
+- `.../default_suites/v1_1_1/` — version we currently run (slight task-text updates over v1)
+- `.../default_suites/v1_2/` — newer; we don't use yet
 
 When reading task evals, follow Cardinal Rule A: read **only** to *classify failures* (e.g., decide if eval is loose vs strict, whether it's looking for substrings or env-state changes), never to shape behavior.
 

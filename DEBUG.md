@@ -392,7 +392,7 @@ How to diagnose a "wrong date" failure honestly:
 
 1. Don't propose a derive-prompt rule yet. The agent may be doing the right arithmetic on a shifted date that the evaluator didn't expect.
 2. Check `_patch_<suite>_utilities` in `src/date_shift.py` — does this task have a patched utility? If not, the original AgentDojo utility runs.
-3. Trace the original task's expected answer in `~/mlld/agentdojo/src/agentdojo/default_suites/v1_1_1/<suite>/user_tasks.py` (you already read taskdata.txt for ground-truth tools — this is the same path for evaluator code, but **only check evaluator dates, not behavior** to stay within Cardinal Rule A).
+3. Trace the original task's expected answer in `bench/.venv/lib/python3.13/site-packages/agentdojo/default_suites/v1_1_1/<suite>/user_tasks.py` (you already read taskdata.txt for ground-truth tools — this is the same path for evaluator code, but **only check evaluator dates, not behavior** to stay within Cardinal Rule A).
 4. Compute `expected_shifted = original_expected + offset`. Compare against what the agent passed.
 5. If they differ by some fixed delta (e.g., one day), that's an off-by-one in the shift — possibly a missing utility patch, possibly a model arithmetic error.
 6. If they match, the agent did the right thing and the failure is somewhere else (recipient field, missing arg, etc.).
