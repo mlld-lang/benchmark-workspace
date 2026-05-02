@@ -1,5 +1,3 @@
->> Slack benchmark entrypoint on rig v2.
->>
 >> Slack's suite-specific behavior is entirely in the record and tool
 >> catalogs. The entrypoint just builds the agent and runs the task.
 

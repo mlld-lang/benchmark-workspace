@@ -1,5 +1,3 @@
->> Banking benchmark entrypoint on rig v2.
->>
 >> The suite file stays intentionally thin: records + tools in, final
 >> composed result out. All orchestration, security, and lifecycle work
 >> lives in rig.

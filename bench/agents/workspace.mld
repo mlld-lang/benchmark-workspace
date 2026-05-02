@@ -1,7 +1,4 @@
->> Workspace benchmark entrypoint on rig v2.
->>
->> Keep the suite surface thin: one authored domain catalog in, phase
->> loop out. Routing, policy synthesis, and live dispatch all run
+>> Routing, policy synthesis, and live dispatch all run
 >> directly from the same `@tools` catalog.
 
 import { @rig } from "../../rig/index.mld"
