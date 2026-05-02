@@ -30,7 +30,6 @@ from pathlib import Path
 
 CLEAN_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CLEAN_ROOT))
-sys.path.insert(0, str(CLEAN_ROOT.parent / "agentdojo" / "src"))
 sys.path.insert(0, str(CLEAN_ROOT.parent / "mlld" / "sdk" / "python"))
 
 from src.host import _build_local_mcp_command  # noqa: E402

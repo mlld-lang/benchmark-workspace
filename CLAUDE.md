@@ -228,7 +228,7 @@ If you don't need workspace in the run, prefer pure remote (`scripts/bench.sh tr
 
 ### Image freshness
 
-The image bakes mlld@2.1.0 + clean@main + agentdojo@mlld-rig. bench-run.yml inspects each pulled image's `mlld.sha` AND `clean.sha` Docker labels:
+The image bakes mlld@2.1.0 + clean@main. AgentDojo is pinned in `bench/pyproject.toml` (currently `agentdojo==0.1.35` from PyPI) and installed via `uv sync` during the image build — the forked runner/grading code lives at `src/agentdojo_*.py` in clean. bench-run.yml inspects each pulled image's `mlld.sha` AND `clean.sha` Docker labels:
 
 - Compares baked `mlld.sha` against `mlld-lang/mlld:<baked-ref>` HEAD via the GitHub API.
 - Compares baked `clean.sha` against the dispatched `github.sha` (clean@main at dispatch time).

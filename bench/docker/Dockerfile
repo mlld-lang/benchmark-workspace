@@ -1,9 +1,11 @@
 # Bench image for remote runs on Namespace.
 #
-# Build context expects three repos checked out side-by-side:
+# Build context expects two repos checked out side-by-side:
 #   <context>/clean/      → mlld-lang/benchmark-workspace
 #   <context>/mlld/       → mlld-lang/mlld
-#   <context>/agentdojo/  → ethz-spylab/agentdojo (git head; PyPI is stale)
+#
+# AgentDojo is installed from PyPI (pinned in bench/pyproject.toml).
+# The forked runner/grading code now lives at clean/src/agentdojo_*.py.
 #
 # See .github/workflows/bench-image.yml for the canonical build.
 
@@ -54,12 +56,7 @@ COPY mlld /opt/mlld
 WORKDIR /opt/mlld
 RUN npm ci && npm run build && npm link
 
-# AgentDojo (git head — PyPI version lacks agentdojo.runner). Lives at
-# /workspace/agentdojo so src/run.py's REPO_ROOT/agentdojo/src lookup
-# resolves (REPO_ROOT inside the container == /workspace).
-COPY agentdojo /workspace/agentdojo
-
-# Bench repo
+# Bench repo (AgentDojo comes from PyPI via uv sync below)
 COPY clean /workspace/clean
 WORKDIR /workspace/clean
 
