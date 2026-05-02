@@ -1,0 +1,75 @@
+>> Example: attaching records to AgentDojo tools served via agentdojo-mcp.
+>>
+>> The MCP server (clean/rig/agentdojo-mcp/server.py) exposes each
+>> AgentDojo tool by its native name. mlld imports the surface, then
+>> wraps each call with an `exe` that adds:
+>>   - source-class labels (resolve:r, execute:w, exfil:send, ...)
+>>   - return-type record coercion (=> record @x)
+>>   - input record attachment (write tools — facts: become control args)
+>>   - description and instructions for planner/worker prompts
+>>
+>> The MCP layer knows nothing about records. This file is where the
+>> security model is configured.
+
+import tools from mcp "tools" as @mcp
+
+import {
+  @transaction,
+  @iban_value,
+  @send_money_inputs
+} from "./records.mld"
+
+>> ── Read tools ──
+
+>> Returns a fact-bearing IBAN. `resolve:r` + `known` mark the result
+>> as authoritative for control-arg use downstream.
+exe resolve:r, known, tool:r @get_iban() = [
+  => { value: @mcp.getIban() }
+] => record @iban_value
+
+>> Returns transactions. `untrusted` because subject lines can be
+>> attacker-controlled — the trust split is in the record itself.
+exe resolve:r, untrusted, tool:r @get_recent(n) = [
+  => @mcp.getMostRecentTransactions(@n)
+] => record @transaction
+
+>> ── Write tool ──
+>>
+>> No `=> record` on writes (writes don't return identity-bearing
+>> values). Instead, the tool catalog entry below attaches
+>> `inputs: @send_money_inputs` — the record's `facts:` field declares
+>> which args are control args. That's how the security model is
+>> configured for this tool.
+exe @send_money(recipient, amount, subject, date) = [
+  => @mcp.sendMoney(@recipient, @amount, @subject, @date)
+]
+
+>> ── Tool catalog ──
+>>
+>> `var tools` is what rig.run({...tools}) consumes. Each entry binds
+>> the mlld exe to its record metadata, labels, and instructions.
+
+var tools @tools = {
+  get_iban: {
+    mlld: @get_iban,
+    returns: @iban_value,
+    labels: ["resolve:r", "known"],
+    description: "Return the user's own IBAN."
+  },
+  get_recent: {
+    mlld: @get_recent,
+    returns: @transaction,
+    labels: ["resolve:r", "untrusted"],
+    unconstrainedArgs: ["n"],
+    description: "Load the most recent N transactions."
+  },
+  send_money: {
+    mlld: @send_money,
+    inputs: @send_money_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send a one-time payment to a grounded recipient."
+  }
+}
+
+export { @tools, @get_iban, @get_recent, @send_money }

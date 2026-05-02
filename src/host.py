@@ -59,6 +59,24 @@ class MlldInfrastructureError(RuntimeError):
     """
 
 
+def _resolve_mcp_script(config: dict[str, Any]) -> Path:
+    """Pick which MCP server to launch based on suite + env var.
+
+    `AGENTDOJO_MCP_NEW` is a comma-separated list of suite names to route
+    to `clean/rig/agentdojo-mcp/server.py` (vanilla agentdojo, no fork).
+    Anything not listed routes to the legacy `clean/src/mcp_server.py`.
+    Use `AGENTDOJO_MCP_NEW=all` to route every suite. Default is empty
+    (everyone uses the legacy server).
+    """
+    new_suites_env = os.environ.get("AGENTDOJO_MCP_NEW", "")
+    suite_name = config.get("suite_name") or config.get("env_name") or ""
+    new_suites = {s.strip() for s in new_suites_env.split(",") if s.strip()}
+    use_new = "all" in new_suites or suite_name in new_suites
+    if use_new:
+        return ROOT_DIR / "rig" / "agentdojo-mcp" / "server.py"
+    return SRC_DIR / "mcp_server.py"
+
+
 def _build_local_mcp_command(config: dict[str, Any]) -> str:
     """Launch the local MCP bridge with an explicit JSON config blob.
 
@@ -75,7 +93,7 @@ def _build_local_mcp_command(config: dict[str, Any]) -> str:
     with os.fdopen(cfg_fd, "w") as f:
         json.dump(config, f)
     project_dir = shlex.quote(str(CLEAN_BENCH_PROJECT_DIR))
-    script_path = shlex.quote(str(SRC_DIR / "mcp_server.py"))
+    script_path = shlex.quote(str(_resolve_mcp_script(config)))
     return f"uv run --project {project_dir} python3 {script_path} --config-file {shlex.quote(cfg_path)}"
 
 

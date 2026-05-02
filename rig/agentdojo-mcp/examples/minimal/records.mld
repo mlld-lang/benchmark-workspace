@@ -1,0 +1,44 @@
+>> Minimal record set for the AgentDojo banking suite, attached to the
+>> MCP tools served by clean/rig/agentdojo-mcp.
+>>
+>> This is a teaching example — the production records and trust modes
+>> live in clean/bench/domains/banking/records.mld. The shape is the
+>> same; this version is trimmed to the smallest set that demonstrates
+>> the record-attachment pattern.
+
+>> ── Read records ──
+
+>> A transaction. `id`/`recipient` are facts (control-arg eligible);
+>> `amount`/`date`/`subject` are content.
+record @transaction = {
+  facts: [id: handle, recipient: string?],
+  data: {
+    trusted: [amount: number?, date: string?],
+    untrusted: [subject: string?]
+  },
+  key: id,
+  display: [{ ref: "id" }, { ref: "recipient" }, amount, subject, date]
+}
+
+>> The user's IBAN. Singleton fact-bearing value.
+record @iban_value = {
+  facts: [value: string],
+  key: value,
+  display: [{ ref: "value" }]
+}
+
+>> ── Write input records ──
+>>
+>> Input records replace the fork's `controlArgs`/`payloadArgs` split.
+>> Fact fields become control args; data fields become payload args.
+
+record @send_money_inputs = {
+  facts: [recipient: string],
+  data: {
+    trusted: [amount: number, date: string],
+    untrusted: [subject: string]
+  },
+  validate: "strict"
+}
+
+export { @transaction, @iban_value, @send_money_inputs }
