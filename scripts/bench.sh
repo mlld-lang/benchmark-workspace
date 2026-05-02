@@ -41,6 +41,11 @@ SHAPE_TRAVEL_FANOUT=nscloud-ubuntu-22.04-amd64-16x32
 SHAPE_TRAVEL_SOLO=nscloud-ubuntu-22.04-amd64-32x64
 SHAPE_LIGHT=nscloud-ubuntu-22.04-amd64-8x16
 
+# High-fanout benign runs are container-memory bound before they are
+# V8-heap bound. A modest per-worker cap forces earlier GC and avoids
+# runner-level OOM on the 8x16/32x64 shapes without raising machine size.
+MLLD_HEAP_FANOUT=${MLLD_HEAP_FANOUT:-1536m}
+
 dispatch() {
   local label=$1; shift
   printf '→ %-14s ' "$label"
@@ -54,9 +59,9 @@ dispatch() {
 
 run_target() {
   case "$1" in
-    workspace|w) dispatch workspace -f suite=workspace -f shape="$SHAPE_WORKSPACE" ;;
-    banking|b)   dispatch banking   -f suite=banking   -f shape="$SHAPE_LIGHT" ;;
-    slack|s)     dispatch slack     -f suite=slack     -f shape="$SHAPE_LIGHT" ;;
+    workspace|w) dispatch workspace -f suite=workspace -f shape="$SHAPE_WORKSPACE" -f heap="$MLLD_HEAP_FANOUT" ;;
+    banking|b)   dispatch banking   -f suite=banking   -f shape="$SHAPE_LIGHT" -f heap="$MLLD_HEAP_FANOUT" ;;
+    slack|s)     dispatch slack     -f suite=slack     -f shape="$SHAPE_LIGHT" -f heap="$MLLD_HEAP_FANOUT" ;;
     travel|t)
       # c-63fe: MCP server destabilizes under travel's tool load. Fan-out
       # mode throttles to -p 5 (16x32 shape) because of the 64 vCPU
