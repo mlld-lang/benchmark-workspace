@@ -43,7 +43,7 @@ case "$SOURCE" in
 esac
 ```
 
-Verify `$OPENCODE_HOME/opencode.db` and `$JSONL_PATH` exist. Print the resolved run label + paths so the user can sanity-check.
+Verify `$OPENCODE_HOME/opencode.db` or `$OPENCODE_HOME/opencode-dev.db`, and `$JSONL_PATH`, exist. Print the resolved run label + paths so the user can sanity-check.
 
 Then list failures (utility=false), filtered by the task spec:
 
@@ -76,6 +76,7 @@ Each subagent prompt MUST include:
    ```
    OPENCODE_HOME=<resolved path>
    DB="$OPENCODE_HOME/opencode.db"
+   [ -f "$DB" ] || DB="$OPENCODE_HOME/opencode-dev.db"
 
    # Pick a distinctive phrase from the task query (>= 12 chars, avoid common words).
    # Example phrase for user_task_8: "channel starting with External"

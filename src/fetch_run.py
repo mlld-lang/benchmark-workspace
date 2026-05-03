@@ -110,7 +110,7 @@ def main() -> int:
 
     summarize(out)
 
-    if (out / "opencode" / "opencode.db").exists():
+    if (out / "opencode" / "opencode.db").exists() or (out / "opencode" / "opencode-dev.db").exists():
         print()
         print("Browse transcripts:")
         print(f"  uv run --project bench python3 src/opencode_debug.py "

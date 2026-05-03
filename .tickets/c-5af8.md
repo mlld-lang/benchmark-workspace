@@ -1,6 +1,6 @@
 ---
 id: c-5af8
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-02T21:01:27Z
@@ -8,6 +8,7 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [perf, cloud, bench, oom, agentdojo-mcp, migration]
+updated: 2026-05-03T18:47:20Z
 ---
 # Cloud bench OOM regression after agentdojo-mcp migration (UNVERIFIED)
 
@@ -160,3 +161,24 @@ produces the expected utility numbers (12/16 PASS).
 Found a meaningful mlld-side amplifier while reproducing: AuditLogIndex bulk-read <project>/.llm/sec/audit.jsonl to recover write labels. The main checkout had accumulated multi-GB audit logs (bench/.llm/sec/audit.jsonl ~3.0GB, .llm/sec/audit.jsonl ~1.0GB), so each parallel mlld worker could allocate huge memory before doing real work. Patched mlld to append write events to a compact .llm/sec/audit-writes.jsonl sidecar, prefer that for descriptor recovery, and cap historical full-audit fallback reads at 16MB (MLLD_AUDIT_INDEX_MAX_BYTES override). After patch, contaminated main banking -p16 dropped from ~17.9-20.5GB to ~9.44GB; contaminated main slack -p21 exits 0 at ~12.90GB. Focused AuditLogger/AuditLogIndex vitest tests and npm run build passed.
 
 Interpretation: heap-capping was masking pressure, not fixing root cause. The old-vs-new AgentDojo architecture likely costs ~0.5-0.8GB at suite fanout in stub runs; the large observed jump came from mlld's audit index behavior plus dirty/shared state growth. Cloud real-LLM runs can still exceed local stub peaks, so scripts/bench.sh remains revised toward larger shapes/lower competing fanout rather than relying on a 1536m heap cap.
+
+**2026-05-03T18:47:20Z** Verification sweep (run 25286169825 banking, 25286170410 slack,
+25286169292 workspace, 25286170887 travel) — audit-fix + opencode-fork
+mitigations both in place. Banking went 11/16 → 12/16; UT12 (was 4 MCP
+errors pre-fix) shows 0 errors and PASSES; UT15 (was a real multi-write
+failure I'd flagged) PASSES. Banking now at its OOS-only floor.
+
+The OOM regression this ticket scoped is fully resolved:
+  - mlld AuditLogIndex bulk-read amplification — fixed (mlld a944d7eb1)
+  - bench.sh shape revisions — fixed (bigger shapes for slack/banking)
+  - heap-cap mitigation — superseded; not needed after audit fix
+  - cloud OOMs across all four suites — none in this sweep
+
+What c-5af8 does NOT cover and is worth tracking separately:
+  - Workspace UT26/UT27/UT35 cascade pattern — survives the audit fix
+    AND the opencode reconnect-once fork. Distinct root cause; filed
+    as c-2565.
+  - Per-task OOS classification refresh after the fork sweep — filed
+    as c-0eb5.
+
+Closing c-5af8 as resolved.

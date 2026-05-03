@@ -15,6 +15,7 @@ from typing import Iterable
 
 DEFAULT_DB = Path.home() / ".local/share/opencode/opencode.db"
 DEFAULT_LOG_DIR = Path.home() / ".local/share/opencode/log"
+OPENCODE_DB_NAMES = ("opencode.db", "opencode-dev.db")
 
 
 @dataclass
@@ -30,6 +31,14 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def resolve_home_db(home: Path) -> Path:
+    for name in OPENCODE_DB_NAMES:
+        candidate = home / name
+        if candidate.exists():
+            return candidate
+    return home / OPENCODE_DB_NAMES[0]
 
 
 def format_ms(value: int | None) -> str:
@@ -218,7 +227,8 @@ def print_logs(session: SessionRef, log_dir: Path, limit: int) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Inspect OpenCode sessions for clean bench debugging.")
     parser.add_argument("--home", type=Path, default=None,
-                        help="Path to an opencode home dir (sets --db and --log-dir relative to it). "
+                        help="Path to an opencode home dir (sets --db to opencode.db or opencode-dev.db, "
+                             "and --log-dir relative to it). "
                              "Use this to browse transcripts fetched by src/fetch_run.py: "
                              "--home runs/<run_id>/opencode")
     parser.add_argument("--db", type=Path, default=None, help="Path to opencode.db (overrides --home)")
@@ -249,7 +259,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.db is None:
-        args.db = (args.home / "opencode.db") if args.home else DEFAULT_DB
+        args.db = resolve_home_db(args.home) if args.home else DEFAULT_DB
     if args.log_dir is None:
         args.log_dir = (args.home / "log") if args.home else DEFAULT_LOG_DIR
 

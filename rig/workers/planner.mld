@@ -12,6 +12,7 @@ import {
   @appendLlmDebug,
   @updateExtractSources,
   @projectResolvedEntry,
+  @cachedPlannerEntries,
   @bucketItems,
   @isResolvedIndexBucket,
   @valueField,
@@ -255,6 +256,10 @@ exe @plannerResolvedRecords(records, state, recordType, handles) = [
   let @bucket = @state.resolved[@recordType]
   => when [
     @isResolvedIndexBucket(@bucket) => [
+      let @cached = @cachedPlannerEntries(@bucket)
+      if @cached != null [
+        => for @entry in @arrayItems(@cached) when @handleList.includes(@stringValue(@entry.handle)) => @entry
+      ]
       let @order = @valueField(@bucket, "order") ?? []
       let @byHandle = @valueField(@bucket, "by_handle") ?? {}
       => for @handle in @order when @handleList.includes(@stringValue(@handle)) [
