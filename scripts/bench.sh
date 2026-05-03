@@ -7,10 +7,9 @@
 #   scripts/bench.sh workspace                # just workspace
 #   scripts/bench.sh banking slack            # subset
 #
-# Each invocation triggers a separate Namespace runner. All 4 fan out at
-# once on the Team plan (workspace 32x64 + travel 16x32 + banking/slack
-# 8x16 = 64 vCPU, exact fit under the 64 vCPU concurrency cap). Wall
-# time ~10-15 min for the full bench surface.
+# Each invocation triggers a separate Namespace runner. Current shapes
+# favor memory headroom over the old exact-64-vCPU packing because MCP
+# disconnects in these runs have historically tracked runner memory pressure.
 #
 # Every benign run executes all user_tasks in the suite (full 97-task
 # denominator). No skip list — SHOULD-FAIL and OOS-EXHAUSTED tasks
@@ -27,24 +26,23 @@ WORKFLOW=bench-run.yml
 #   - workspace 36 parallel on 8x16  → OOM (run 24922643802/4218)
 #   - travel    20 parallel on 8x16  → OOM (run 24922900959)
 #   - travel    20 parallel on 16x32 → OOM (run 24923046920)
-#   - banking   15 parallel on 8x16  → fine
-#   - slack     14 parallel on 8x16  → fine (run 24922900581)
+#   - banking   15 parallel on 8x16  → historically fine, but full 16-task
+#     cloud runs later showed MCP errors at the margin.
+#   - slack     14 parallel on 8x16  → historically fine (run 24922900581);
+#     full 21-task cloud runs OOM after the agentdojo-mcp switch.
 #
 # Travel mode switching:
 #   - Fan-out (workspace in the dispatch set): 16x32 + -p 5. Throttled
-#     for both the 64 vCPU concurrency cap and c-63fe MCP destabilization.
+#     to keep travel's high-memory tasks from competing with the larger
+#     workspace/banking/slack runners.
 #   - Solo (workspace absent): 32x64 + -p 20 (full parallelism). 64 GB
 #     fits all 20 tasks; c-63fe MCP errors are still possible but the
 #     memory headroom mitigates the OOM-driven part of the failure mode.
 SHAPE_WORKSPACE=nscloud-ubuntu-22.04-amd64-32x64
 SHAPE_TRAVEL_FANOUT=nscloud-ubuntu-22.04-amd64-16x32
 SHAPE_TRAVEL_SOLO=nscloud-ubuntu-22.04-amd64-32x64
-SHAPE_LIGHT=nscloud-ubuntu-22.04-amd64-8x16
-
-# High-fanout benign runs are container-memory bound before they are
-# V8-heap bound. A modest per-worker cap forces earlier GC and avoids
-# runner-level OOM on the 8x16/32x64 shapes without raising machine size.
-MLLD_HEAP_FANOUT=${MLLD_HEAP_FANOUT:-1536m}
+SHAPE_MEDIUM=nscloud-ubuntu-22.04-amd64-16x32
+SHAPE_LARGE=nscloud-ubuntu-22.04-amd64-32x64
 
 dispatch() {
   local label=$1; shift
@@ -59,15 +57,15 @@ dispatch() {
 
 run_target() {
   case "$1" in
-    workspace|w) dispatch workspace -f suite=workspace -f shape="$SHAPE_WORKSPACE" -f heap="$MLLD_HEAP_FANOUT" ;;
-    banking|b)   dispatch banking   -f suite=banking   -f shape="$SHAPE_LIGHT" -f heap="$MLLD_HEAP_FANOUT" ;;
-    slack|s)     dispatch slack     -f suite=slack     -f shape="$SHAPE_LIGHT" -f heap="$MLLD_HEAP_FANOUT" ;;
+    workspace|w) dispatch workspace -f suite=workspace -f shape="$SHAPE_WORKSPACE" -f parallelism=20 ;;
+    banking|b)   dispatch banking   -f suite=banking   -f shape="$SHAPE_MEDIUM" -f parallelism=16 ;;
+    slack|s)     dispatch slack     -f suite=slack     -f shape="$SHAPE_LARGE" -f parallelism=21 ;;
     travel|t)
       # c-63fe: MCP server destabilizes under travel's tool load. Fan-out
-      # mode throttles to -p 5 (16x32 shape) because of the 64 vCPU
-      # concurrency cap. Solo travel takes 32x64 with -p 20 — 64 GB has
-      # the memory headroom even if MCP errors are still expected on
-      # some tasks until c-63fe lands.
+      # mode throttles to -p 5 (16x32 shape) so travel's high-memory tasks
+      # don't compete with the other suites. Solo travel takes 32x64 with
+      # -p 20 — 64 GB has the memory headroom even if MCP errors are still
+      # expected on some tasks until c-63fe lands.
       #
       # MLLD_HEAP=8g: the local repro showed the mlld Node process
       # spiking to ~5 GB heap during travel; without an explicit limit
