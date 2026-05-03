@@ -144,6 +144,35 @@ tk ls             # all open
 tk show <id>      # details
 ```
 
+## Diagnosing failures with /diagnose
+
+`/diagnose` (defined at `.claude/commands/diagnose.md`) fans out one Explore subagent per failing task to read its opencode transcript, apply the DEBUG.md A–E triage, and return a transcript-cited diagnosis. Use it after a sweep when you want a parallel read of every `utility=false` row instead of paging through transcripts by hand.
+
+```
+/diagnose <suite> [tasks=all] [source=latest|local|<run-id>] [model=sonnet]
+```
+
+Examples:
+
+```
+/diagnose slack all latest                       # all failing slack tasks in the most recent cloud run
+/diagnose workspace user_task_8,user_task_32     # specific tasks, latest workspace run
+/diagnose banking all 24922644697                # explicit run id
+/diagnose travel all local                       # most recent local opencode session set
+```
+
+What it does:
+
+1. Resolves `OPENCODE_HOME` + `defended.jsonl` for the chosen source (`latest` matches the newest `runs/*/manifest.json` whose `suite` field matches; `local` reads `~/.local/share/opencode` plus `bench/results/.../defended.jsonl`; bare run-id reads `runs/<id>/`).
+2. Filters `utility=false` rows from the JSONL, scoped by the task list.
+3. Dispatches all subagents in a single message (parallel, capped ~10/batch). Each subagent self-locates its session by sqlite substring match on a distinctive query phrase against `part.data` — opencode `session.title` is a model-summary, not the verbatim query, so title matching does NOT work.
+4. Each subagent returns: triage class A–E, 100–200 word transcript-grounded verdict, 3–5 citations (`part:<id>` reasoning excerpts preferred over raw tool calls, `denial:<rule>`, `mcp[<n>]`), and a proposed next move.
+5. Main agent collates per-task results, groups them into root-cause clusters, and surfaces existing `tk ls` ticket ids per task (read-only — does not file or modify tickets).
+
+The subagent prompt enforces Cardinal Rules C/D (no model blame, no "flakiness"), the transcript-grounded discipline (unverified claims must be marked `UNVERIFIED`), and the prompt-approval rule (subagents do not propose task-id-shaped prompt edits or evaluator-shaped rules). Known infra traps are flagged: travel `Not connected` errors are c-63fe, not planning failures; "wrong date" suspicions check `_patch_<suite>_utilities` in `src/date_shift.py` before being attributed to model arithmetic.
+
+Output is conversational. Decide what to ticket / fix / spike from the report; the command does not write to disk.
+
 ## Running benchmarks
 
 Bench runs come in three shapes — match the shape to the question. See DEBUG.md "Spike First. Sweep Last." for the spike-vs-sweep guidance and "Troubleshooting parallel runs" for shape/OOM postmortems.
