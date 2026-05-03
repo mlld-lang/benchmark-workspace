@@ -16,7 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/root/.local/bin:/root/.opencode/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl git jq xz-utils \
+      ca-certificates curl git jq xz-utils unzip \
       build-essential python3 python3-pip python3-venv \
  && rm -rf /var/lib/apt/lists/*
 
