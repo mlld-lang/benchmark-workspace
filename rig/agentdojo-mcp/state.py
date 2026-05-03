@@ -8,15 +8,23 @@ sync step the mutations are lost on a serialization round-trip.
 
 This module owns:
 - env type resolution from a fully-qualified name
-- env load/save against a JSON state file
+- env load/save against a JSON state file (with per-phase timing)
 - the read-only-tool optimization (skip save when the call cannot mutate)
 - the mutating-read-like exception list (tools whose names look read-only
   but actually mutate observable state)
+
+`save_env` returns a SaveTiming dataclass so callers can log a per-phase
+breakdown (sync-runtime / model-dump / write). Heavy environments
+(workspace, with 40 emails + calendar + cloud drive + contacts) can have
+multi-second model_dump_json calls; tracking each phase lets us see which
+phase blocks. See ticket c-2565.
 """
 
 from __future__ import annotations
 
 import importlib
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -53,15 +61,64 @@ def sync_runtime_state(env: Any) -> None:
         env.cloud_drive.initial_files = list(env.cloud_drive.files.values())
 
 
-def save_env(env: Any, state_file: str | None) -> bool:
+@dataclass
+class SaveTiming:
+    """Per-phase timing for one save_env call. All durations in seconds.
+
+    `ok=False` indicates the save failed (caller should still log timings
+    of whatever phases ran before the failure). `bytes_written=None` for
+    failed or skipped saves.
+    """
+    ok: bool
+    sync_s: float
+    dump_s: float
+    write_s: float
+    total_s: float
+    bytes_written: int | None
+
+
+def save_env(env: Any, state_file: str | None) -> SaveTiming:
+    """Persist env to state_file, returning per-phase timing.
+
+    Three phases that can each be slow on heavy envs:
+      sync   — sync_runtime_state (rebuild initial_* lists from runtime dicts)
+      dump   — env.model_dump_json (pydantic serialization to JSON)
+      write  — Path.write_text (filesystem write)
+
+    Failures return ok=False with whatever phase timings were captured
+    before the exception. The caller can decide whether to log warnings
+    for slow phases regardless of overall success.
+    """
+    t_total = time.monotonic()
+    timing = SaveTiming(
+        ok=False, sync_s=0.0, dump_s=0.0, write_s=0.0, total_s=0.0,
+        bytes_written=None,
+    )
     if not state_file:
-        return False
+        return timing
+
     try:
+        t = time.monotonic()
         sync_runtime_state(env)
-        Path(state_file).write_text(env.model_dump_json())
-        return True
+        timing.sync_s = time.monotonic() - t
+
+        t = time.monotonic()
+        payload = env.model_dump_json()
+        timing.dump_s = time.monotonic() - t
+
+        t = time.monotonic()
+        Path(state_file).write_text(payload)
+        timing.write_s = time.monotonic() - t
+
+        timing.bytes_written = len(payload)
+        timing.ok = True
     except Exception:
-        return False
+        # leave whatever phase timings were captured
+        pass
+    finally:
+        timing.total_s = time.monotonic() - t_total
+
+    return timing
 
 
 def load_env_from_state_file(env_type: type, state_file: str | None) -> Any | None:

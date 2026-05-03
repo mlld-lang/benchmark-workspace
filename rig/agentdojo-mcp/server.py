@@ -57,11 +57,20 @@ from coerce import coerce_tool_args  # noqa: E402
 from extensions import ExtensionTool, load_extensions  # noqa: E402
 from format import tool_result_to_str, yaml_dump  # noqa: E402
 from state import (  # noqa: E402
+    SaveTiming,
     is_read_only_tool,
     load_env_from_state_file,
     resolve_env_type,
     save_env,
 )
+
+
+# Threshold for emitting slow-phase warnings to stderr. Anything below this
+# is normal and uninteresting; anything above is a candidate for the
+# c-2565 event-loop-block hypothesis. Per the planner-side mcpTimeoutMs
+# of 500s, any single phase taking >5s is a meaningful chunk of budget.
+_SLOW_PHASE_S = 1.0
+_SLOW_DUMP_BYTES = 200_000  # warn on serialization >200KB regardless of time
 
 
 def _build_tools(runtime: FunctionsRuntime) -> list[types.Tool]:
@@ -107,13 +116,36 @@ def create_server(
         except Exception:
             pass
 
-    def _save() -> float | None:
+    async def _save_async() -> SaveTiming:
+        """Run save_env in a worker thread so the asyncio event loop
+        stays responsive while pydantic serializes the env. Emits
+        per-phase warnings to stderr when any phase exceeds
+        _SLOW_PHASE_S; this is the c-2565 instrumentation."""
+        timing = await asyncio.to_thread(save_env, env, state_file)
         if not state_file:
-            return None
-        t0 = time.monotonic()
-        if save_env(env, state_file):
-            return time.monotonic() - t0
-        return None
+            return timing
+        slow_phase = (
+            timing.sync_s > _SLOW_PHASE_S
+            or timing.dump_s > _SLOW_PHASE_S
+            or timing.write_s > _SLOW_PHASE_S
+        )
+        big_dump = (
+            timing.bytes_written is not None
+            and timing.bytes_written > _SLOW_DUMP_BYTES
+        )
+        if slow_phase or big_dump:
+            print(
+                f"[mcp] pid={os.getpid()} save SLOW "
+                f"sync={timing.sync_s*1000:.0f}ms "
+                f"dump={timing.dump_s*1000:.0f}ms "
+                f"write={timing.write_s*1000:.0f}ms "
+                f"total={timing.total_s*1000:.0f}ms "
+                f"bytes={timing.bytes_written or 0} "
+                f"ok={timing.ok}",
+                file=sys.stderr,
+                flush=True,
+            )
+        return timing
 
     def _read_phase_state() -> dict[str, Any]:
         if not phase_state_file:
@@ -149,25 +181,56 @@ def create_server(
         arguments = arguments or {}
         coerced = coerce_tool_args(runtime, name, arguments)
 
+        # Per-phase timing for the c-2565 investigation. The dispatch
+        # phase (tool function execution) and the format phase (yaml
+        # serialization of the result) both run synchronously here; we
+        # offload only the post-call save() to a thread because it's
+        # the dominant cost on heavy workspace envs.
+        dispatch_s = 0.0
+        format_s = 0.0
+        result_bytes = 0
         try:
             if name in extension_tools and name not in runtime.functions:
                 _tool, handler = extension_tools[name]
-                result_text = handler(coerced)
+                t = time.monotonic()
+                result_text = await asyncio.to_thread(handler, coerced)
+                dispatch_s = time.monotonic() - t
             else:
-                tool_result, error = runtime.run_function(env, name, coerced)
+                t = time.monotonic()
+                tool_result, error = await asyncio.to_thread(
+                    runtime.run_function, env, name, coerced
+                )
+                dispatch_s = time.monotonic() - t
+
+                t = time.monotonic()
                 if isinstance(tool_result, dict):
-                    formatted = yaml_dump(tool_result)
+                    formatted = await asyncio.to_thread(yaml_dump, tool_result)
                 else:
-                    formatted = tool_result_to_str(tool_result)
+                    formatted = await asyncio.to_thread(
+                        tool_result_to_str, tool_result
+                    )
+                format_s = time.monotonic() - t
                 result_text = f"ERROR: {error}\n{formatted}" if error else formatted
+            result_bytes = len(result_text)
         except Exception as e:
             result_text = f"ERROR: {e}"
 
-        save_elapsed_s = None
+        if dispatch_s > _SLOW_PHASE_S or format_s > _SLOW_PHASE_S:
+            print(
+                f"[mcp] pid={os.getpid()} call={n} tool={name} SLOW "
+                f"dispatch={dispatch_s*1000:.0f}ms "
+                f"format={format_s*1000:.0f}ms "
+                f"result_bytes={result_bytes}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        save_timing: SaveTiming | None = None
         saved = False
         if not is_read_only_tool(name):
-            save_elapsed_s = _save()
-            saved = save_elapsed_s is not None
+            save_timing = await _save_async()
+            saved = save_timing.ok
+        save_elapsed_s = save_timing.total_s if save_timing else None
 
         elapsed_ms = round((time.monotonic() - t0) * 1000, 1)
         phase_state = _read_phase_state()
@@ -183,6 +246,13 @@ def create_server(
                 "phase": phase_state.get("phase"),
                 "phase_id": phase_state.get("phase_id"),
                 "phase_iteration": phase_state.get("iteration"),
+                "dispatch_ms": round(dispatch_s * 1000, 1),
+                "format_ms": round(format_s * 1000, 1),
+                "save_sync_ms": round(save_timing.sync_s * 1000, 1) if save_timing else None,
+                "save_dump_ms": round(save_timing.dump_s * 1000, 1) if save_timing else None,
+                "save_write_ms": round(save_timing.write_s * 1000, 1) if save_timing else None,
+                "save_bytes": save_timing.bytes_written if save_timing else None,
+                "result_bytes": result_bytes,
                 "pid": os.getpid(),
                 "call_num": n,
                 "elapsed_ms": elapsed_ms,
@@ -194,15 +264,23 @@ def create_server(
             }
         )
 
+        save_total_ms = (
+            round(save_timing.total_s * 1000, 1) if save_timing else 0
+        )
         print(
             f"[mcp] pid={os.getpid()} call={n} tool={name} done "
-            f"elapsed={elapsed_ms}ms result_len={len(result_text)} saved={saved}",
+            f"elapsed={elapsed_ms}ms dispatch={dispatch_s*1000:.0f}ms "
+            f"format={format_s*1000:.0f}ms save={save_total_ms}ms "
+            f"result_len={len(result_text)} saved={saved}",
             file=sys.stderr,
             flush=True,
         )
         return [types.TextContent(type="text", text=result_text)]
 
-    atexit.register(lambda: _save())
+    # atexit fallback save: process is shutting down so the asyncio loop
+    # is gone; call save_env directly. The synchronous block here is
+    # acceptable — there are no concurrent calls to compete with at exit.
+    atexit.register(lambda: save_env(env, state_file))
     return server
 
 
