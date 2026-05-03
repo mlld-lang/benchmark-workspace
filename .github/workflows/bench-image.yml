@@ -16,6 +16,10 @@ on:
         description: 'mlld runtime ref (branch, tag, or sha)'
         default: '2.1.0'
         required: false
+      opencode_ref:
+        description: 'adamavenir/opencode ref (mlld fork w/ MCP reconnect fix)'
+        default: 'dev'
+        required: false
       tag:
         description: 'Image tag suffix (e.g., main, sha-abc1234)'
         default: 'main'
@@ -43,6 +47,17 @@ jobs:
           repository: mlld-lang/mlld
           path: mlld
           ref: ${{ inputs.mlld_ref || '2.1.0' }}
+
+      - name: Checkout opencode (mlld fork)
+        uses: actions/checkout@v4
+        with:
+          repository: adamavenir/opencode
+          path: opencode
+          ref: ${{ inputs.opencode_ref || 'dev' }}
+
+      - name: Capture opencode SHA
+        id: opencode_sha
+        run: echo "sha=$(git -C opencode rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -80,6 +95,8 @@ jobs:
             IMAGE_SHA=${{ github.sha }}
             MLLD_REF=${{ inputs.mlld_ref || '2.1.0' }}
             MLLD_SHA=${{ steps.mlld_sha.outputs.sha }}
+            OPENCODE_REF=${{ inputs.opencode_ref || 'dev' }}
+            OPENCODE_SHA=${{ steps.opencode_sha.outputs.sha }}
             CLEAN_REF=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
