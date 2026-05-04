@@ -467,3 +467,25 @@ Likely next targets:
 - Reduce guard input materialization. The current profile still shows `prepareExecGuardInputs` and `materializeGuardInput` as meaningful inclusive costs; we should avoid creating full Variables unless a matching guard actually needs them.
 - Continue reducing structured URL extraction. The duplicate text/data scan is fixed, but URL provenance still walks large object/text values. The next safe version is boundary-only extraction or object-level URL caches for immutable structured values.
 - Revisit captured-scope rehydration. `rehydrateNestedCapturedModuleScope` is no longer the top offender, but still appears around 6.5s inclusive in the profiled full-B path.
+
+### Regression Fix Follow-Up
+
+After the first optimization commit, the full suite exposed four security/metadata regressions:
+
+- Condition descriptors from `if`/`when` tests were isolated in child condition environments and not recorded back to the parent.
+- Imported block-style `llm` wrappers could return an imported scalar variable object instead of the scalar text after LLM result metadata wrapping.
+- Nested exe calls inside an exe block could be assigned to locals and then omitted from the block's local security descriptor when the block returned an unrelated literal.
+- A first attempt to normalize block returns fixed the imported scalar case but was too broad: direct `.mx` access on a returned let-bound variable lost the variable wrapper.
+
+Runtime fixes:
+
+- `interpreter/eval/when/condition-evaluator.ts` now records the child condition environment's local descriptor back into the parent.
+- `interpreter/eval/exe/block-execution.ts` records descriptors from let/augmented assignments into the block environment, so nested tool/helper effects are folded into the invocation result without adding auditless nested tool provenance.
+- `interpreter/eval/exe-return.ts` unwraps non-executable return variables when they do not need metadata-preserving variable wrappers.
+- `interpreter/eval/exec-invocation.ts` unwraps non-executable variable results before LLM metadata wrapping, keeping ordinary block returns available for post-invocation field access like `.mx`.
+
+Verification:
+
+- Full mlld suite: `npx vitest run --reporter=dot` -> 569 files passed, 7 skipped; 6688 tests passed, 131 skipped.
+- Build: `npm run build` passed.
+- Zero-LLM UT19 B[all] merge-stop sanity: reported 29.3s, wall 30.8s. This is in the same band as the 29.0s post-optimization result, so the semantic fixes did not materially undo the performance gain.
