@@ -71,6 +71,7 @@ def main() -> int:
     print(f"  CLEAN_ROOT:  {CLEAN_ROOT}")
     print(f"  SCRIPT:      {SCRIPT_PATH}")
     print(f"  HEAP:        {os.environ.get('MLLD_HEAP', '<unset>')}")
+    print(f"  MAX_STEPS:   {os.environ.get('UT19_MAX_STEPS', '<all>')}")
     print(f"  TRACE:       {os.environ.get('MLLD_TRACE', '<unset>')} memory={os.environ.get('MLLD_TRACE_MEMORY', '<unset>')}")
     print(f"  state_file:  {state_file}")
     print(f"  mcp_log:     {mcp_log_file}")
@@ -92,7 +93,12 @@ def main() -> int:
 
     t0 = time.monotonic()
     try:
-        result = client.execute(str(SCRIPT_PATH), {}, **execute_kwargs)
+        payload = {}
+        if os.environ.get("UT19_MAX_STEPS"):
+            payload["max_steps"] = int(os.environ["UT19_MAX_STEPS"])
+        if os.environ.get("UT19_FIXTURE_PATH"):
+            payload["fixture_path"] = os.environ["UT19_FIXTURE_PATH"]
+        result = client.execute(str(SCRIPT_PATH), payload, **execute_kwargs)
     except Exception as e:
         print(f"FAILED: {e}", file=sys.stderr)
         return 1

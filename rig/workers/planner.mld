@@ -516,6 +516,7 @@ exe @plannerResolveBatch(input) = [
   let @coerced = @input ?? {}
   let @resolves = @coerced.resolves ?? []
   let @batchPurpose = @coerced.purpose ?? null
+  let @debugStop = @coerced._debug_stop ?? null
 
   >> Phase A — parallel dispatch. resolve_batch is for parallel-safe
   >> resolves only. All specs share the same starting @toolCtx;
@@ -531,6 +532,20 @@ exe @plannerResolveBatch(input) = [
     let @decision = { phase: "resolve", tool: @spec.tool, args: @spec.args ?? {}, purpose: @spec.purpose ?? @batchPurpose }
     let @phaseResult = @dispatchResolve(@initialCtx.agent, @initialCtx.state, @decision, @initialCtx.query, true)
     => { spec: @spec, decision: @decision, phaseResult: @phaseResult }
+  ]
+
+  if @debugStop == "dispatch" [
+    let @debugResults = for @item in @dispatched [
+      => {
+        tool: @item.spec.tool,
+        error: @item.phaseResult.error ?? null,
+        record_type: @item.phaseResult.result.record_type ?? null,
+        count: @item.phaseResult.result.count ?? null
+      }
+    ]
+    let @debugCombined = { status: "debug_dispatch", results: @debugResults }
+    -> @debugCombined
+    => @debugCombined
   ]
 
   >> Phase B — merge all spec deltas in memory. c-eda4 established that
@@ -556,6 +571,16 @@ exe @plannerResolveBatch(input) = [
       index: @ctx.index + 1,
       state: @nextState
     }
+  ]
+
+  if @debugStop == "merge" [
+    let @debugCombined = {
+      status: "debug_merge",
+      resolved_keys: @mergedState.resolved.mx.keys ?? [],
+      dispatched: @dispatched.length
+    }
+    -> @debugCombined
+    => @debugCombined
   ]
 
   >> Preserve the error-log side effect from @settlePhaseDispatch for
@@ -599,6 +624,12 @@ exe @plannerResolveBatch(input) = [
         summary: @item.phaseResult.result.summary
       }
     ]
+  ]
+
+  if @debugStop == "results" [
+    let @debugCombined = { status: "debug_results", results: @results }
+    -> @debugCombined
+    => @debugCombined
   ]
 
   >> Phase C — one runtime/state settlement for the whole batch. Charge

@@ -20,13 +20,14 @@ import { @planner, @emptyPlannerRuntime, @emptyState } from "../session.mld"
 
 >> Load UT19 fixture (script + prompt). The fixture contains the exact
 >> sequence captured from a real UT19 run.
-var @fixturePath = `@root/rig/test-harness/fixtures/ut19-tool-script.json`
+var @fixturePath = @payload.fixture_path ?? `@root/rig/test-harness/fixtures/ut19-tool-script.json`
 var @fixtureRaw = <@fixturePath>
 var @fixture = @fixtureRaw | @parse
 
 show "c-8dff mock UT19 reproducer"
 show `Fixture: @fixturePath`
 show `Script steps: @fixture.script.length`
+show `Max steps: @payload.max_steps ?? @fixture.script.length`
 show ""
 
 >> Build a rig agent the same way bench/agents/travel.mld does, but we
@@ -46,7 +47,10 @@ show ""
 show "START Phase B-exercising script"
 var @startTs = run cmd { date +%s%3N }
 
-var @final = @mockOpencode(@fixture.prompt, { toolScript: @fixture.script }) with {
+var @maxSteps = @payload.max_steps ?? @fixture.script.length
+var @script = @fixture.script.slice(0, @maxSteps)
+
+var @final = @mockOpencode(@fixture.prompt, { toolScript: @script }) with {
   display: "role:planner",
   session: @planner,
   seed: { agent: @agent, query: @fixture.prompt, state: @emptyState(), runtime: @emptyPlannerRuntime() }
