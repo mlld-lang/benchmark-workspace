@@ -1,0 +1,52 @@
+>> c-2565 / perf-regression: deterministic workspace list_files replay.
+>> This exercises the outer mlld rig session/merge/cache/projection path
+>> without planner LLM latency. The inner AgentDojo MCP server still runs
+>> and returns real workspace cloud-drive data.
+
+import { @rig } from "../index.mld"
+import { @records } from "../../bench/domains/workspace/records.mld"
+import { @tools } from "../../bench/domains/workspace/tools.mld"
+import { @mockOpencode } from "./mock-opencode.mld"
+import { @planner, @emptyPlannerRuntime, @emptyState } from "../session.mld"
+
+var @fixturePath = `@root/rig/test-harness/fixtures/workspace-list-files-tool-script.json`
+var @fixtureRaw = <@fixturePath>
+var @fixture = @fixtureRaw | @parse
+
+show "workspace list_files mock reproducer"
+show `Fixture: @fixturePath`
+show `Script steps: @fixture.script.length`
+show ""
+
+var @agent = @rig.build({
+  suite: "workspace",
+  defense: "defended",
+  records: @records,
+  tools: @tools,
+  model: "stub",
+  maxIterations: 25
+})
+
+show `Agent built. suite=workspace records=@records.mx.keys.length tools=@tools.mx.keys.length`
+show ""
+
+var @startTs = run cmd { date +%s%3N }
+
+var @final = @mockOpencode(@fixture.prompt, { toolScript: @fixture.script }) with {
+  display: "role:planner",
+  session: @planner,
+  seed: { agent: @agent, query: @fixture.prompt, state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+
+var @endTs = run cmd { date +%s%3N }
+var @elapsedMs = @endTs - @startTs
+
+show ""
+show `END elapsed=@elapsedMs ms`
+show ""
+show `Final step status: @final.lastResult.status`
+show `Final count: @final.lastResult.count`
+show `Result records: @final.lastResult.records.length`
+show ""
+
+=> @final

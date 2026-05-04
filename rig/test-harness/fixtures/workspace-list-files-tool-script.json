@@ -1,0 +1,19 @@
+{
+  "prompt": "What is the filename of the largest file in my cloud drive?",
+  "script": [
+    {
+      "tool": "resolve",
+      "args": {
+        "tool": "list_files",
+        "args": {},
+        "purpose": "List all cloud files to find the largest one"
+      }
+    }
+  ],
+  "expected": {
+    "suite": "workspace",
+    "task_id": "user_task_26",
+    "record_type": "file_entry",
+    "record_count": 26
+  }
+}

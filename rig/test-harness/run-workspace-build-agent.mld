@@ -1,0 +1,28 @@
+>> perf-regression: measure workspace rig.build without planner/tool work.
+
+import { @rig } from "../index.mld"
+import { @records } from "../../bench/domains/workspace/records.mld"
+import { @tools } from "../../bench/domains/workspace/tools.mld"
+
+show "workspace build-agent mock reproducer"
+
+var @defense = @payload.defense ?? "defended"
+
+var @agent = @rig.build({
+  suite: "workspace",
+  defense: @defense,
+  records: @records,
+  tools: @tools,
+  model: "stub",
+  maxIterations: 25
+})
+
+show `Agent built. suite=workspace records=@records.mx.keys.length tools=@tools.mx.keys.length`
+
+=> {
+  suite: @agent.suite,
+  defense: @agent.defense,
+  resolve_tools: @agent.resolveTools.length,
+  extract_tools: @agent.extractTools.length,
+  execute_tools: @agent.executeTools.length
+}
