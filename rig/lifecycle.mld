@@ -10,26 +10,45 @@ exe @serializeLifecycleJson(input) = js {
   return JSON.stringify(input);
 }
 
-exe @appendPhaseEvent(phaseLogFile, eventJson) = sh {
-  if [ -n "$phaseLogFile" ] && [ -n "$eventJson" ]; then
-    printf '%s\n' "$eventJson" >> "$phaseLogFile"
-  fi
+exe @appendPhaseEventRaw(phaseLogFile, eventJson) = sh {
+  printf '%s\n' "$eventJson" >> "$phaseLogFile"
 }
 
-exe @writePhaseStateFile(phaseStateFile, stateJson) = sh {
-  if [ -n "$phaseStateFile" ]; then
-    printf '%s' "$stateJson" > "$phaseStateFile"
-  fi
+exe @appendPhaseEvent(phaseLogFile, eventJson) = [
+  if !@phaseLogFile.isDefined() [ => false ]
+  if @phaseLogFile == "" [ => false ]
+  if !@eventJson.isDefined() [ => false ]
+  if @eventJson == "" [ => false ]
+  @appendPhaseEventRaw(@phaseLogFile, @eventJson)
+  => true
+]
+
+exe @writePhaseStateFileRaw(phaseStateFile, stateJson) = sh {
+  printf '%s' "$stateJson" > "$phaseStateFile"
 }
+
+exe @writePhaseStateFile(phaseStateFile, stateJson) = [
+  if !@phaseStateFile.isDefined() [ => false ]
+  if @phaseStateFile == "" [ => false ]
+  @writePhaseStateFileRaw(@phaseStateFile, @stateJson)
+  => true
+]
 
 >> LLM call logging uses the same NDJSON file discipline as phase events:
 >> append-only lines written by rig, consumed later by the benchmark host.
 >> These logs are debug-only and never participate in authorization.
-exe @appendLlmCall(llmCallLogFile, entryJson) = sh {
-  if [ -n "$llmCallLogFile" ] && [ -n "$entryJson" ]; then
-    printf '%s\n' "$entryJson" >> "$llmCallLogFile"
-  fi
+exe @appendLlmCallRaw(llmCallLogFile, entryJson) = sh {
+  printf '%s\n' "$entryJson" >> "$llmCallLogFile"
 }
+
+exe @appendLlmCall(llmCallLogFile, entryJson) = [
+  if !@llmCallLogFile.isDefined() [ => false ]
+  if @llmCallLogFile == "" [ => false ]
+  if !@entryJson.isDefined() [ => false ]
+  if @entryJson == "" [ => false ]
+  @appendLlmCallRaw(@llmCallLogFile, @entryJson)
+  => true
+]
 
 exe @betweenState() = [
   => { phase: "between" }
@@ -42,29 +61,43 @@ exe @resetLifecycleFiles(phaseLogFile, phaseStateFile) = [
   => true
 ]
 
-exe @truncateLlmCallLog(llmCallLogFile) = sh {
-  if [ -n "$llmCallLogFile" ]; then
-    : > "$llmCallLogFile"
-  fi
+exe @truncateFileRaw(filePath) = sh {
+  : > "$filePath"
 }
 
-exe @truncatePhaseLog(phaseLogFile) = sh {
-  if [ -n "$phaseLogFile" ]; then
-    : > "$phaseLogFile"
-  fi
+exe @truncateLlmCallLog(llmCallLogFile) = [
+  if !@llmCallLogFile.isDefined() [ => false ]
+  if @llmCallLogFile == "" [ => false ]
+  @truncateFileRaw(@llmCallLogFile)
+  => true
+]
+
+exe @truncatePhaseLog(phaseLogFile) = [
+  if !@phaseLogFile.isDefined() [ => false ]
+  if @phaseLogFile == "" [ => false ]
+  @truncateFileRaw(@phaseLogFile)
+  => true
+]
+
+exe @appendExecutionLogEntryRaw(executionLogFile, entryJson) = sh {
+  printf '%s\n' "$entryJson" >> "$executionLogFile"
 }
 
-exe @appendExecutionLogEntry(executionLogFile, entryJson) = sh {
-  if [ -n "$executionLogFile" ] && [ -n "$entryJson" ]; then
-    printf '%s\n' "$entryJson" >> "$executionLogFile"
-  fi
-}
+exe @appendExecutionLogEntry(executionLogFile, entryJson) = [
+  if !@executionLogFile.isDefined() [ => false ]
+  if @executionLogFile == "" [ => false ]
+  if !@entryJson.isDefined() [ => false ]
+  if @entryJson == "" [ => false ]
+  @appendExecutionLogEntryRaw(@executionLogFile, @entryJson)
+  => true
+]
 
-exe @truncateExecutionLog(executionLogFile) = sh {
-  if [ -n "$executionLogFile" ]; then
-    : > "$executionLogFile"
-  fi
-}
+exe @truncateExecutionLog(executionLogFile) = [
+  if !@executionLogFile.isDefined() [ => false ]
+  if @executionLogFile == "" [ => false ]
+  @truncateFileRaw(@executionLogFile)
+  => true
+]
 
 exe @readExecutionLogFile(executionLogFile) = js {
   if (!executionLogFile) return [];

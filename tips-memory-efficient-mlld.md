@@ -13,7 +13,7 @@ The trade-off is real:
 
 ## Principles
 
-### 1. Spread is a metadata stripper
+### Spread is a metadata stripper
 
 `{ ...obj, key: value }` materializes the spread into plain data. All wrappers, factsources, and security labels on the original keys are stripped.
 
@@ -28,7 +28,7 @@ let @nextPairs = @ctx.pairs.concat([{ key: @handleKey, value: @entry }])
 
 This bit the c-63fe Phase 2.0 implementation. The merge built `by_handle` via spread; the `session-resolved-factsources-survive-boundary` test failed; the fix was switching to `@pairsToObject`. Same trap CLAUDE.md mlld-quickstart calls out, easy to miss in a hot path.
 
-### 2. exe-returned `null` is a wrapper whose `.isDefined()` returns true
+### exe-returned `null` is a wrapper whose `.isDefined()` returns true
 
 When an exe returns `=> null`, the result is a *wrapped null* — `.isDefined()` reports true, masking degenerate output. Use `== null` for the actual null check.
 
@@ -45,7 +45,7 @@ if @cached != null [ => @cached ]
 
 Same family as c-aed5 / c-4a08 — derive/extract returning null silently looking like success. Bit Phase 2.5 in the same way: every cache miss returned an empty cached array because `if @cached.isDefined()` was always true.
 
-### 3. Don't drop into JS to traverse mlld objects
+### Don't drop into JS to traverse mlld objects
 
 JS auto-unwraps `StructuredValue` into plain data when values cross the `js {}` boundary. If the value re-enters mlld via the JS return, factsources and labels are gone — even on what looks like the same data.
 
@@ -81,19 +81,19 @@ exe @indexedBucketEntries(bucket) = [
 
 The exception: when the JS code only computes a scalar from the data (e.g., `@previewFields` extracting key names from an array's first object) and that scalar isn't proof-bearing, JS is fine. But never use JS to *return collections of mlld values intended to keep their wrappers*.
 
-### 4. `for @x in @collection => @transform(@x)` produces a `for-result` envelope
+### `for @x in @collection => @transform(@x)` produces a `for-result` envelope
 
 When a `for` produces an array as a value (assigned to a `let`), the result has shape `{type: "array", name: "for-result", value: [...]}`. Iterating it again with `for` may not auto-unwrap. If you're chaining `for` over computed arrays, use a `loop` accumulator with explicit `.concat([@entry])` so the inner sequence stays as a plain mlld array.
 
 This is what made the JS detour tempting in the first place — the `for`-of-`for` pattern doesn't always behave as expected on wrapped arrays.
 
-### 5. Use `@valueField` for cross-shape field access
+### Use `@valueField` for cross-shape field access
 
 `@valueField(@obj, "key")` walks the wrapper chain (`mx.data[key]`, `data[key]`, `[key]`) and returns the first defined match. Direct `@obj.key` works on plain objects and most wrapped objects, but breaks on certain checkpoint-restored shapes. For internal helpers that traverse state, default to `@valueField`.
 
 For *constructing* objects with computed keys, native `{ [@key]: @value }` works and preserves the value's wrapper.
 
-### 6. Separate authoritative state from acceleration artifacts
+### Separate authoritative state from acceleration artifacts
 
 The c-63fe rework lesson: durable proof-bearing state (`by_handle[handle] = entry` with full wrappers) stays canonical. Acceleration artifacts (`planner_cache.entries`) are a sidecar that can be rebuilt from authoritative state.
 
@@ -102,7 +102,7 @@ Why this matters:
 - **Cache can be aggressive without weakening security.** Worker projections are NOT cached (they may include raw tainted content per GPT decision D); planner projections are cached because they only contain pre-stripped fact handles + display fields.
 - **Storage cost stays bounded.** The cache is one projection per record, not per call. Even with wrapper overhead, planner_cache scales O(N entries) not O(N entries × M calls).
 
-### 7. Cache projections — pick the strategy that fits the call shape
+### Cache projections — pick the strategy that fits the call shape
 
 Three strategies, in order of safety:
 
@@ -127,7 +127,7 @@ exe @cachedPlannerEntries(bucket) = [
 ]
 ```
 
-### 8. Avoid append-one-to-growing-array loops
+### Avoid append-one-to-growing-array loops
 
 `@acc.concat([@entry])` repeated over a growing array copies the growing prefix on every iteration — classic O(N²). On a hot state path this is the most common path to super-linear memory.
 
@@ -146,7 +146,7 @@ let @pairs = for @item in @incoming => { key: `@item.handle`, value: @item }
 
 When lookups/replacements dominate, an indexed structure (`{by_handle: {h1: entry, h2: entry, ...}}`) avoids the rebuild entirely.
 
-### 9. Watch for super-linear allocation patterns
+### Watch for super-linear allocation patterns
 
 The c-63fe Phase 3 measurement showed:
 - batch 1 (40 entries): +30MB RSS
@@ -161,13 +161,13 @@ Diagnostics for this:
 - Compare growth slope: linear growth is healthy. Quadratic or worse means you're rebuilding accumulating state.
 - Suppress stderr (`mlld script.mld 2>/dev/null`) when measuring — `[rig:diag:*]` lines are large and slow.
 
-### 10. Heap limit is diagnostic, not an optimization
+### Heap limit is diagnostic, not an optimization
 
 `MLLD_HEAP=6g` (or higher) lets a run complete past the default heap cap. That's useful for **confirming** "this is OOM pressure, not a logic failure" — if the run completes with more heap, the failure was capacity-sensitive, not algorithmic.
 
 It is NOT proof the memory shape is acceptable. The c-63fe travel investigation completed with `MLLD_HEAP=6g` but underlying state was still growing super-linearly; the heap headroom only postponed the cliff. Fixing the growth pattern is the optimization; raising the heap is the workaround.
 
-### 11. Measure per process, not just suite aggregate
+### Measure per process, not just suite aggregate
 
 With `-p 20`, the OOM-killer fires per-process, not per-suite. Total container RSS may sit comfortably under the cap while individual mlld/node processes cross the danger zone. When investigating an OOM:
 
@@ -175,7 +175,7 @@ With `-p 20`, the OOM-killer fires per-process, not per-suite. Total container R
 - Look at the *worst* process in the fan-out, not the average
 - Per-task timing matters too: a single long task whose memory keeps growing will OOM even when 19 short tasks would have been fine
 
-### 12. Operational measurement pattern
+### Operational measurement pattern
 
 `MLLD_TRACE_MEMORY=1` is decoupled from `--trace effects` since the docs fix landed. Use it independently for memory profiling without paying the verbose-trace cost:
 
@@ -191,7 +191,7 @@ MLLD_TRACE_MEMORY=1 MLLD_TRACE_FILE=/tmp/run.jsonl \
 
 Diagnostic chatter can dominate wall time and skew memory peaks. For benchmark/measurement runs, redirect stderr to `/dev/null`. Use `MLLD_TRACE=effects` (default) over `verbose` unless you need unredacted content.
 
-### 13. Watch finalization spikes separately from steady-state growth
+### Watch finalization spikes separately from steady-state growth
 
 Memory peaks at `llm.call:finish`, checkpoint write, SDK result construction, or session-snapshot serialization may look like state growth but are different in kind: they're momentary materialization spikes around a session boundary that drop after the boundary completes.
 
@@ -202,7 +202,7 @@ Travel sessions that complete will sometimes show a large spike near `llm.call:f
 
 Measure with and without checkpointing where possible (`--no-checkpoint`) to separate steady-state from boundary effects.
 
-### 14. Keep planner display modes intentionally small
+### Keep planner display modes intentionally small
 
 Before optimizing wrappers, reduce what's projected. Long raw fields, reviews, notes, tool transcripts, and tainted payloads should stay out of planner-visible display unless there's a security/design reason they must be there.
 
@@ -223,7 +223,25 @@ record @restaurant = {
 
 The planner sees the small fields; the worker sees content. Projection cache then stores only the small projection. Even with 1000 entries with 2KB reviews each, the planner cache holds ~1KB per entry, not 3KB.
 
-### 15. Don't materialize through `| @pretty` mid-pipeline
+### Don't eagerly materialize derivative structures
+
+If a derivative data structure is computed once at build time but consumers can hit the source directly with cheap filtering, the materialization is dead weight on every build.
+
+Found in workspace agent build: `validateConfig` was eagerly producing `routedTools` (a per-task tool routing index). But every consumer (dispatch helpers, doc generators) had already converged on filtering directly from the flat `agent.tools` catalog. `routedTools` only survived as a fallback that nobody hit.
+
+Removing the eager build saved ~2s on every workspace agent setup — measurable on the build-only harness (`scripts/repro_workspace_build_agent.py` 12.3s → 10.0s).
+
+The pattern: if a derivative structure exists "for performance" but the consumers don't use it, it's pure cost. Periodically grep the consumers; if every read does something like `for @t in @agent.tools when @taskNeedsTool(@t)`, the derivative is dead weight.
+
+### Guard no-op work in hot paths
+
+`finishPlannerTool` (called per planner step) invokes lifecycle helpers that write to `phaseLogFile` / `phaseStateFile` / `llmCallLogFile`. When those paths are null (the common bench case), the helpers were checking-and-returning *inside the shell body* — meaning a shell was still spawned per step just to discover there's nothing to write.
+
+Splitting the helpers into mlld-side guards plus raw shell writers means null/empty paths return before any shell spawn. Cost on the hot path drops by hundreds of ms × N planner steps.
+
+Pattern: any helper that is dispatch-frequent and conditionally a no-op should have the no-op check *outside* the syscall boundary. `if @paramIsEmpty [ => null ]` in mlld before invoking the shell/JS, not inside.
+
+### Don't materialize through `| @pretty` mid-pipeline
 
 `| @pretty` produces a STRING. All `.mx` metadata is gone; the only thing that survives downstream is whatever a JSON parse can recover from text. It's fine for debug `show` calls; it's wrong inside any chain that proceeds to `@parse` or treats the result as data.
 
