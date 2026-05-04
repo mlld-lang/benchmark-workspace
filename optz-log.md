@@ -489,3 +489,47 @@ Verification:
 - Full mlld suite: `npx vitest run --reporter=dot` -> 569 files passed, 7 skipped; 6688 tests passed, 131 skipped.
 - Build: `npm run build` passed.
 - Zero-LLM UT19 B[all] merge-stop sanity: reported 29.3s, wall 30.8s. This is in the same band as the 29.0s post-optimization result, so the semantic fixes did not materially undo the performance gain.
+
+## 2026-05-04 Follow-Up: Projection, URL Walk, Captured Env
+
+Goal: continue the runtime-level investigation after the fastpath control showed that native resolved-family expansion still spent time in projection metadata interning, URL extraction, guard input materialization, and captured module scope rehydration.
+
+Retained runtime changes:
+
+- `core/types/record.ts`
+  - Cache record display serialization by display object identity.
+  - Build record projection intern keys directly from already-serialized display/field components.
+  - Avoid the old `stableSerialize -> JSON.parse -> stableSerialize` cycle for every projection metadata intern.
+- `core/security/url-provenance.ts`
+  - Replace `Object.entries(Object.getOwnPropertyDescriptors(record))` with `Object.keys(record)` plus per-key descriptor checks.
+  - This keeps getter safety while avoiding descriptor-map allocation for every ordinary object walked during URL extraction.
+- `interpreter/eval/import/variable-importer/executable/CapturedEnvRehydrator.ts`
+  - Memoize captured module `Map`s that have already had nested executable scopes rehydrated.
+  - Repeated calls now skip already-normalized module envs instead of walking and resealing the same executable internals.
+
+Rejected experiments:
+
+- Guard-local structured variable construction bypassed the general variable factory. Focused tests passed, but B[all] merge-stop regressed badly to 78.6s reported / 80.2s wall. Reverted.
+- `core/types/security.ts` empty/small-array fast paths for `freezeArray` and `stableStringArrayKey` passed tests but regressed B[all] to ~28.1-28.4s reported. Reverted.
+- URL text `://` prefilter and `RegExp.exec()` loop were essentially noise on top of the captured-env fix. The `://` gate also conflicts with future scheme-less URL support, so both were reverted.
+
+Measurements:
+
+| Change | B[all] merge-stop |
+| --- | ---: |
+| Native baseline before this follow-up | ~29.9s reported / ~31.1s wall under profile |
+| Record projection metadata cache | 26.9s reported / 28.3s wall |
+| URL object-walk descriptor allocation reduction | 26.4s reported / 27.6s wall |
+| Captured module env rehydration memo | 24.4-24.8s reported / 25.6-26.0s wall |
+
+Profile deltas:
+
+- Record projection change: `stableSerialize` fell from ~1937ms self to below the top buckets; `internRecordFieldProjectionMetadata` fell from ~415ms to ~2ms.
+- URL object-walk change: `extractUrlsFromValueInternal` fell from ~1939ms self to ~876ms in the retained profile.
+- Captured-env memo: `rehydrateNestedCapturedModuleScope` fell from ~1071ms self to ~2ms; `sealCapturedModuleEnv` fell from ~174ms to ~5ms.
+
+Current profile shape after retained changes:
+
+- URL text extraction remains largest (`extractUrlsFromText` ~2430ms self, regex ~1112ms self).
+- Descriptor array/key work remains visible (`freezeArray` ~1482ms, `stableStringArrayKey` ~876ms), but the naive small-array shortcut was not beneficial.
+- The fastpath control still wins by several seconds, so the remaining large product-level opportunity is a native primitive for the resolved-family argument compilation pattern rather than more piecemeal guard-variable rewrites.
