@@ -77,13 +77,47 @@ heartbeat_loop() {
 }
 heartbeat_loop &
 HEARTBEAT_PID=$!
-trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
+
+# Memory sampler — track minimum MemAvailable seen during the run so
+# peak usage = MemTotal - min(MemAvailable). Lets us size shapes against
+# real data instead of extrapolating from old per-task estimates.
+MEM_PEAK_FILE="$ARTIFACTS/mem-peak.txt"
+mem_sampler_loop() {
+  local avail min_avail=0
+  while true; do
+    avail=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+    if [[ "$min_avail" == "0" ]] || (( avail < min_avail )); then
+      min_avail=$avail
+      echo "$min_avail" > "$MEM_PEAK_FILE"
+    fi
+    sleep 5
+  done
+}
+mem_sampler_loop &
+MEM_SAMPLER_PID=$!
+trap 'kill "$HEARTBEAT_PID" "$MEM_SAMPLER_PID" 2>/dev/null || true' EXIT
 
 uv run --project bench python3 src/run.py "${ARGS[@]}" 2>&1 | tee "$ARTIFACTS/console.log"
 RUN_STATUS=${PIPESTATUS[0]}
 
 kill "$HEARTBEAT_PID" 2>/dev/null || true
 wait "$HEARTBEAT_PID" 2>/dev/null || true
+
+kill "$MEM_SAMPLER_PID" 2>/dev/null || true
+wait "$MEM_SAMPLER_PID" 2>/dev/null || true
+
+# Compute and report peak memory before manifest is written.
+MEM_PEAK_USED_KB=0
+MEM_TOTAL_KB=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null || echo 0)
+if [[ -f "$MEM_PEAK_FILE" ]]; then
+  MIN_AVAIL_KB=$(cat "$MEM_PEAK_FILE")
+  if [[ "$MEM_TOTAL_KB" -gt 0 && "$MIN_AVAIL_KB" -gt 0 ]]; then
+    MEM_PEAK_USED_KB=$((MEM_TOTAL_KB - MIN_AVAIL_KB))
+    PEAK_GB=$(awk -v kb=$MEM_PEAK_USED_KB 'BEGIN{printf "%.1f", kb/1024/1024}')
+    TOTAL_GB=$(awk -v kb=$MEM_TOTAL_KB 'BEGIN{printf "%.1f", kb/1024/1024}')
+    echo "[bench-remote] memory: peak ${PEAK_GB} GB / ${TOTAL_GB} GB total"
+  fi
+fi
 
 END_TS=$(date +%s)
 
@@ -107,6 +141,8 @@ manifest = {
     "exit_code": ${RUN_STATUS},
     "image_sha": os.environ.get("IMAGE_SHA", "unknown"),
     "mlld_ref": os.environ.get("MLLD_REF", "unknown"),
+    "mem_peak_kb": ${MEM_PEAK_USED_KB},
+    "mem_total_kb": ${MEM_TOTAL_KB},
 }
 with open(out, "w") as f:
     json.dump(manifest, f, indent=2)
