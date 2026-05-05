@@ -35,3 +35,19 @@ Reason: with parallel resolve_batch + mlld cancellation + cascade dead, every pl
 - New task patterns that flail in ways we predict (B) would catch
 - Major rig refactor that touches @plannerRuntime schema or @settlePhaseDispatch
 
+
+## Notes
+
+**2026-05-04T21:13:52Z** 2026-05-04: still unfired across additional sweeps post-c-2565 fix.
+The cascade was the dominant cost. With cascade resolved (commit
+820f0d9), the SHOULD-FAIL grinding-to-timeout pattern is now the
+dominant remaining wall cost — but the no-progress detector still
+doesn't fire on those because the planner IS making progress
+(emitting fresh rehearse shapes); it just can't reach a satisfiable
+shape. The detector watches for "no state change," not "no
+satisfiability progress." Different problem.
+
+Recommend removal during the upcoming structurally_infeasible
+work (c-5ef9 / c-3438). The detector was wired with the right
+intent but the empirical pattern it was watching for doesn't
+appear under the current rig architecture.
