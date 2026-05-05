@@ -1,0 +1,100 @@
+name: mlld-prebuild
+
+# Builds mlld@<ref> into a standalone image that bench/docker/Dockerfile
+# pulls via `COPY --from=`. Manual dispatch with a self-skip: if the
+# requested ref's HEAD SHA already matches the baked image's mlld.sha
+# label, the build is skipped and the workflow exits success quickly.
+# Re-running this on every full sweep dispatch is therefore safe and cheap
+# (~30s for the no-op check; ~2-3 min if a rebuild is actually needed).
+#
+# Output:
+#   ghcr.io/mlld-lang/mlld-prebuilt:<ref>     (e.g. :2.1.0 — moving tag)
+#   ghcr.io/mlld-lang/mlld-prebuilt:sha-<sha> (immutable pin)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mlld_ref:
+        description: 'mlld ref (branch, tag, or sha)'
+        default: '2.1.0'
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/mlld-lang/mlld-prebuilt
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve mlld@<ref> SHA
+        id: head_sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REF="${{ inputs.mlld_ref || '2.1.0' }}"
+          SHA=$(gh api repos/mlld-lang/mlld/commits/$REF -q .sha)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "mlld@$REF HEAD=$SHA"
+
+      - name: Inspect existing prebuilt image
+        id: existing
+        run: |
+          REF="${{ inputs.mlld_ref || '2.1.0' }}"
+          IMG="${{ env.IMAGE }}:$REF"
+          BAKED=""
+          if docker pull "$IMG" >/dev/null 2>&1; then
+            BAKED=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$IMG" 2>/dev/null || echo "")
+          fi
+          echo "baked=$BAKED" >> "$GITHUB_OUTPUT"
+          if [ -n "$BAKED" ] && [ "$BAKED" = "${{ steps.head_sha.outputs.sha }}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::mlld-prebuilt:$REF already at $BAKED — skipping rebuild"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::mlld@$REF HEAD=${{ steps.head_sha.outputs.sha }} vs baked=$BAKED — rebuilding"
+          fi
+
+      - name: Checkout bench (clean) for Dockerfile.mlld
+        if: steps.existing.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          path: clean
+
+      - name: Checkout mlld@<ref>
+        if: steps.existing.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: mlld-lang/mlld
+          path: mlld
+          ref: ${{ inputs.mlld_ref || '2.1.0' }}
+
+      - name: Set up Buildx
+        if: steps.existing.outputs.skip != 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push mlld-prebuilt image
+        if: steps.existing.outputs.skip != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: mlld
+          file: clean/bench/docker/Dockerfile.mlld
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ inputs.mlld_ref || '2.1.0' }}
+            ${{ env.IMAGE }}:sha-${{ steps.head_sha.outputs.sha }}
+          labels: |
+            mlld.sha=${{ steps.head_sha.outputs.sha }}
+            mlld.ref=${{ inputs.mlld_ref || '2.1.0' }}
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max

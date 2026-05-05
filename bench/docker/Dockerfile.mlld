@@ -1,0 +1,28 @@
+# Pre-builds mlld@<ref> into a scratch image whose only content is /opt/mlld
+# (source + node_modules + dist), intended to be referenced via `COPY --from=`
+# from bench/docker/Dockerfile. The bench Dockerfile runs `npm link` against
+# this to wire /usr/local/bin/mlld.
+#
+# Built by .github/workflows/mlld-prebuild.yml on manual dispatch only.
+# That workflow self-skips when the current mlld@<ref> HEAD SHA already
+# matches the baked mlld.sha label — so re-running the workflow is a fast
+# no-op when nothing has changed.
+
+FROM ubuntu:24.04 AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl git \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+ && apt-get install -y nodejs \
+ && rm -rf /var/lib/apt/lists/*
+
+# Build context is a checkout of mlld-lang/mlld at the chosen ref.
+COPY . /opt/mlld
+WORKDIR /opt/mlld
+RUN npm ci && npm run build
+
+FROM scratch
+COPY --from=builder /opt/mlld /opt/mlld
