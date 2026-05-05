@@ -266,6 +266,123 @@ def _run_benign(args, suite, tasks):
         print(f"\nFailed ({len(failed)}): {', '.join(failed)}")
 
 
+def _parse_multi_suite_tasks(task_args, default_suite):
+    """Resolve --task entries into (suite_name, task_id) pairs.
+
+    Accepts both bare ids (uses ``default_suite``) and qualified
+    ``suite:task_id`` form. Mixed input is allowed. Used to dispatch
+    cross-suite grind/canary runs on a single worker via one --task list.
+    """
+    pairs = []
+    for arg in task_args:
+        if ":" in arg:
+            suite_name, tid = arg.split(":", 1)
+            if suite_name not in SUITES:
+                print(f"Unknown suite '{suite_name}' in '{arg}' (valid: {', '.join(SUITES)})",
+                      file=sys.stderr)
+                sys.exit(1)
+            pairs.append((suite_name, tid))
+        else:
+            pairs.append((default_suite, arg))
+    return pairs
+
+
+def _run_multi_suite_benign(args, pairs):
+    """Run (suite_name, task_id) pairs across multiple suites on one pool.
+
+    Per-suite agents/envs/run-logs (existing per-suite results JSONLs are
+    preserved). Output keyed by ``suite:task_id`` so cross-suite duplicates
+    don't collide in the summary.
+    """
+    suites_in_play = sorted({s for s, _ in pairs})
+    suite_loaded = {s: get_shifted_suite(BENCHMARK_VERSION, s) for s in suites_in_play}
+    run_logs = {s: _prepare_run_log(args.model, s, args.defense) for s in suites_in_play}
+
+    resolved = []
+    for suite_name, tid in pairs:
+        s = suite_loaded[suite_name]
+        task = s.user_tasks.get(tid) or s.injection_tasks.get(tid)
+        if task is None:
+            print(f"Task '{tid}' not found in {suite_name}", file=sys.stderr)
+            sys.exit(1)
+        resolved.append((suite_name, task))
+
+    n = min(args.parallel, len(resolved))
+    summary = ", ".join(f"{s}:{sum(1 for ss, _ in resolved if ss == s)}" for s in suites_in_play)
+    print(
+        f"Running multi-suite benign ({len(resolved)} tasks across {summary}, "
+        f"{n} parallel, defense={args.defense})..."
+    )
+    start = time.time()
+
+    utility_results = {}
+    errors = {}
+    task_times = {}
+
+    stagger = getattr(args, "stagger", 2.0)
+    with ThreadPoolExecutor(max_workers=n) as pool:
+        futures = {}
+        for i, (suite_name, task) in enumerate(resolved):
+            futures[pool.submit(
+                _run_task, suite_name, task, args.model, args.debug,
+                args.defense, run_logs[suite_name],
+                getattr(args, "harness", None), getattr(args, "fast_model", None)
+            )] = (suite_name, task)
+            if stagger > 0 and i < len(resolved) - 1:
+                time.sleep(stagger)
+
+        done_count = 0
+        rate_limited = False
+        for future in as_completed(futures):
+            suite_name, _ = futures[future]
+            task_id, utility, security, error, task_elapsed = future.result()
+            key = f"{suite_name}:{task_id}"
+            utility_results[key] = utility
+            task_times[key] = task_elapsed
+            done_count += 1
+            status = "PASS" if utility else "FAIL"
+            time_str = f" ({task_elapsed:.0f}s)" if task_elapsed else ""
+            if error:
+                errors[key] = error
+                status = f"ERROR: {error}"
+                if "rate limit" in error.lower():
+                    rate_limited = True
+            print(f"  [{done_count}/{len(resolved)}] {key}: {status}{time_str}")
+            if rate_limited:
+                print("\nRate limited — cancelling remaining tasks.")
+                pool.shutdown(wait=False, cancel_futures=True)
+                break
+
+    elapsed = time.time() - start
+    graded = {k: v for k, v in utility_results.items() if v is not None}
+    infra_failures = sorted(k for k, v in utility_results.items() if v is None)
+    passed = sum(1 for v in graded.values() if v)
+    total = len(graded)
+    pct = (100 * passed / total) if total else 0.0
+    avg_time = sum(task_times.values()) / len(task_times) if task_times else 0
+    print(f"\nUtility: {passed}/{total} ({pct:.1f}%) in {elapsed:.1f}s wall, {avg_time:.0f}s avg/task")
+
+    for s in suites_in_play:
+        s_keys = [k for k in graded if k.startswith(f"{s}:")]
+        if not s_keys:
+            continue
+        s_passed = sum(1 for k in s_keys if graded[k])
+        s_total = len(s_keys)
+        s_pct = (100 * s_passed / s_total) if s_total else 0.0
+        print(f"  {s}: {s_passed}/{s_total} ({s_pct:.1f}%)")
+
+    if infra_failures:
+        print(f"Infrastructure errors (excluded from utility): {len(infra_failures)}")
+
+    if errors:
+        for k, err in sorted(errors.items()):
+            print(f"  {k}: {err}")
+
+    failed = sorted(k for k, v in graded.items() if not v)
+    if failed:
+        print(f"\nFailed ({len(failed)}): {', '.join(failed)}")
+
+
 def _run_attacks(args, suite):
     run_log_path = _prepare_run_log(
         args.model, args.suite, args.defense, attack=args.attack,
@@ -431,6 +548,18 @@ def main():
     # Legacy compat: args.model used for result paths and logging
     args.model = args.planner
     args.fast_model = args.worker
+
+    # Multi-suite mode: any task carrying a 'suite:' prefix triggers a
+    # cross-suite run on a single worker. Bare task ids fall back to
+    # --suite. Useful for grind/canary sets that span suites.
+    multi_suite = bool(args.task and any(":" in t for t in args.task))
+    if multi_suite:
+        if args.attack:
+            print("Multi-suite mode does not support --attack", file=sys.stderr)
+            sys.exit(1)
+        pairs = _parse_multi_suite_tasks(args.task, args.suite)
+        _run_multi_suite_benign(args, pairs)
+        return
 
     suite = get_shifted_suite(BENCHMARK_VERSION, args.suite)
 
