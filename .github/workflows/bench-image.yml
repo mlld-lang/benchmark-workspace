@@ -37,13 +37,6 @@ jobs:
         with:
           path: clean
 
-      - name: Checkout mlld runtime
-        uses: actions/checkout@v4
-        with:
-          repository: mlld-lang/mlld
-          path: mlld
-          ref: ${{ inputs.mlld_ref || '2.1.0' }}
-
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -54,9 +47,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Capture mlld SHA
+      - name: Capture mlld SHA from prebuilt image
         id: mlld_sha
-        run: echo "sha=$(git -C mlld rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          REF="${{ inputs.mlld_ref || '2.1.0' }}"
+          IMG="ghcr.io/mlld-lang/mlld-prebuilt:$REF"
+          docker pull "$IMG" >/dev/null
+          SHA=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$IMG")
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "mlld-prebuilt:$REF baked at $SHA"
 
       - name: Resolve tags
         id: tags

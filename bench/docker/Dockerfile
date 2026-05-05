@@ -63,10 +63,16 @@ LABEL mlld.ref="${MLLD_REF}"
 LABEL mlld.sha="${MLLD_SHA}"
 LABEL clean.sha="${CLEAN_REF}"
 
-# Build mlld runtime
-COPY mlld /opt/mlld
+# mlld runtime — pre-built tree from ghcr.io/mlld-lang/mlld-prebuilt:<ref>.
+# Built by .github/workflows/mlld-prebuild.yml; that workflow self-skips
+# when the requested ref's HEAD SHA already matches the baked image's
+# mlld.sha label. Re-run the workflow to refresh.
+#
+# We still run `npm link` here to wire /usr/local/bin/mlld → the package's
+# bin entry. Cheap (just symlinks); doesn't rebuild anything.
+COPY --from=ghcr.io/mlld-lang/mlld-prebuilt:2.1.0 /opt/mlld /opt/mlld
 WORKDIR /opt/mlld
-RUN npm ci && npm run build && npm link
+RUN npm link
 
 # Bench repo (AgentDojo comes from PyPI via uv sync below)
 COPY clean /workspace/clean
