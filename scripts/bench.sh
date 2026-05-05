@@ -100,13 +100,13 @@ shape_for() {
   esac
 }
 
+# Default parallelism = task count for the suite. The fast/grind helpers
+# already pass len(tasks) explicitly. Per-task memory after the recent
+# mlld memory reduction is ~0.9 GB on workspace (measured 30.3 GB peak
+# at -p 34 on 32x64 / 62.9 GB available — 48% utilization, plenty of
+# headroom for the full suite at -p 40).
 parallelism_for() {
-  case "$1" in
-    workspace) echo 20 ;;
-    travel)    echo 20 ;;
-    banking)   echo 16 ;;
-    slack)     echo 21 ;;
-  esac
+  jq -r ".task_counts.$1" "$GRIND_FILE"
 }
 
 # Compute fast tasks for a suite = all tasks - grind tasks. Returns a
