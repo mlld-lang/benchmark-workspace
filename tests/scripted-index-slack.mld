@@ -1,0 +1,35 @@
+>> clean/tests/scripted-index-slack.mld
+>>
+>> Scripted-LLM runner for slack-domain security tests. Loaded by
+>>   uv run --project bench python3 tests/run-scripted.py --suite slack \
+>>     --index tests/scripted-index-slack.mld
+>>
+>> Per-suite indexes exist because each scripted suite imports its own
+>> bench domain's tools.mld, which connects to MCP at import time. Only
+>> one suite's tools can be wired up per process. See tests/README.md
+>> "Bench-suite scoping".
+
+import { @runSuites } from "./runner.mld"
+import { @securitySlackSuite } from "./suites-scripted/security-slack.mld"
+
+var @suites = [
+  @securitySlackSuite
+]
+
+var @result = @runSuites(@suites)
+
+show "clean/tests (scripted-slack)"
+show ""
+show @result.report
+show ""
+
+if @result.timingLines.length > 0 [
+  for @tl in @result.timingLines => show `  @tl`
+  show ""
+]
+
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+
+show `__SCRIPTED_STATUS__: passes=@result.passes.length fails=@result.fails.length xfails=@result.xfails.length xpasses=@result.xpasses.length`

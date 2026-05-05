@@ -1,0 +1,118 @@
+>> clean/tests/lib/security-fixtures.mld
+>>
+>> Helpers for seeding planner-session state in scripted-LLM security tests.
+>> The default `@emptyState()` returns empty buckets, which means
+>> rehearse failures bottom out at "extracted_field_missing" /
+>> "derived_field_missing" / "resolved_handle_not_found" — i.e. the
+>> firewall never gets a chance to fire because the lookup short-circuits.
+>>
+>> Real firewall tests need state with the referenced extract/derive/
+>> resolved entries actually present, so `@resolveRefValue` succeeds
+>> and the source-class firewall has to do its job.
+>>
+>> Each helper returns a state object compatible with the rig planner
+>> session schema. Pass it into the `seed:` block of your scripted query.
+
+>> Build a state with one named `extracted` entry. The entry shape mirrors
+>> what the real extract worker writes (rig/workers/extract.mld:203):
+>>   { provenance, schema_name, preview_fields, value }
+>>
+>> Use this when you want a control-arg test where the extracted name
+>> exists in state — the rehearse will resolve the field successfully
+>> and then the firewall has to fire on `payload_only_source_in_control_arg`.
+exe @stateWithExtracted(name, schemaName, payload) = [
+  let @previewFields = @payload.mx.keys ?? []
+  => {
+    resolved: {},
+    extracted: {
+      "@name": {
+        provenance: "extracted",
+        schema_name: @schemaName,
+        preview_fields: @previewFields,
+        value: @payload
+      }
+    },
+    derived: {},
+    extract_sources: {},
+    capabilities: { url_refs: {} }
+  }
+]
+
+>> Same as above but for the `derived` bucket.
+exe @stateWithDerived(name, schemaName, payload) = [
+  let @previewFields = @payload.mx.keys ?? []
+  => {
+    resolved: {},
+    extracted: {},
+    derived: {
+      "@name": {
+        provenance: "derived",
+        schema_name: @schemaName,
+        preview_fields: @previewFields,
+        value: @payload
+      }
+    },
+    extract_sources: {},
+    capabilities: { url_refs: {} }
+  }
+]
+
+>> Build a state with one resolved entry (handle + value). The shape mirrors
+>> what real resolve workers write into state.resolved[record][handle]
+>> per rig/runtime.mld merge logic (indexed bucket with version).
+>>
+>> Use this for tests that need a concrete resolved instance to point
+>> selection refs at, or to exercise resolved.field firewall paths.
+exe @stateWithResolved(record, handle, payload) = [
+  => {
+    resolved: {
+      "@record": {
+        version: 1,
+        by_handle: {
+          "@handle": { value: @payload }
+        }
+      }
+    },
+    extracted: {},
+    derived: {},
+    extract_sources: {},
+    capabilities: { url_refs: {} }
+  }
+]
+
+>> Build a state with both a resolved instance and an extracted entry —
+>> the shape needed for UT16-style tests where the planner has fetched
+>> a webpage (resolved.referenced_webpage_content) and also extracted
+>> something (extracted.<name>). For more complex compositions, build
+>> the state object directly in your test.
+exe @stateResolvedAndExtracted(record, handle, recordValue, extractName, extractSchema, extractValue) = [
+  let @previewFields = @extractValue.mx.keys ?? []
+  => {
+    resolved: {
+      "@record": {
+        version: 1,
+        by_handle: {
+          "@handle": { value: @recordValue }
+        }
+      }
+    },
+    extracted: {
+      "@extractName": {
+        provenance: "extracted",
+        schema_name: @extractSchema,
+        preview_fields: @previewFields,
+        value: @extractValue
+      }
+    },
+    derived: {},
+    extract_sources: {},
+    capabilities: { url_refs: {} }
+  }
+]
+
+export {
+  @stateWithExtracted,
+  @stateWithDerived,
+  @stateWithResolved,
+  @stateResolvedAndExtracted
+}

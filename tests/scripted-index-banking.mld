@@ -1,0 +1,30 @@
+>> clean/tests/scripted-index-banking.mld
+>>
+>> Scripted-LLM runner for banking-domain security tests. Loaded by:
+>>   uv run --project bench python3 tests/run-scripted.py --suite banking \
+>>     --index tests/scripted-index-banking.mld
+
+import { @runSuites } from "./runner.mld"
+import { @securityBankingSuite } from "./suites-scripted/security-banking.mld"
+
+var @suites = [
+  @securityBankingSuite
+]
+
+var @result = @runSuites(@suites)
+
+show "clean/tests (scripted-banking)"
+show ""
+show @result.report
+show ""
+
+if @result.timingLines.length > 0 [
+  for @tl in @result.timingLines => show `  @tl`
+  show ""
+]
+
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+
+show `__SCRIPTED_STATUS__: passes=@result.passes.length fails=@result.fails.length xfails=@result.xfails.length xpasses=@result.xpasses.length`
