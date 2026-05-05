@@ -2,13 +2,13 @@
 id: c-5ef9
 status: open
 deps: []
-links: [c-3438]
+links: [c-3438, c-3c2b]
 created: 2026-05-04T17:44:28Z
 type: bug
 priority: 2
 assignee: Adam
 tags: [rig, planner, rehearse, wall-time, slack, workspace]
-updated: 2026-05-04T21:13:32Z
+updated: 2026-05-05T03:13:32Z
 ---
 # structurally_infeasible tracker doesn't fire when 'selection' is N/A
 
