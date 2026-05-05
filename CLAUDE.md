@@ -200,8 +200,11 @@ Local CPU caps at ~10 parallel tasks; Namespace's Team plan (64 vCPU concurrent 
 git push                                  # image rebuilds on bench/, rig/, src/, agents/ paths
 
 # Targeted (debugging)
-scripts/bench.sh workspace                # one suite
-scripts/bench.sh banking slack            # subset
+scripts/bench.sh workspace                # one suite, full task set
+scripts/bench.sh banking slack            # subset of suites
+scripts/bench.sh --fast                   # all suites, grind tasks excluded (iteration cycle)
+scripts/bench.sh --grind                  # ALL suites' grind tasks on ONE runner (multi-suite)
+scripts/bench.sh --fast workspace         # subset filtering also works
 gh workflow run bench-run.yml -f suite=workspace -f tasks="user_task_8 user_task_32"   # specific tasks
 
 # Full (closeout / regression)
@@ -216,11 +219,13 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 
 | Target | Shape | Parallelism | Tasks | Notes |
 |---|---|---|---|---|
-| `workspace` | 32x64 | -p 20 | 40 | Heaviest — needs 64 GB |
+| `workspace` | 32x64 | -p 40 | 40 | Heaviest — needs 64 GB; ~30 GB peak at -p 34 fast |
 | `travel` | 32x64 | -p 20 | 20 | Full parallelism; no fan-out throttle |
 | `banking` | 16x32 | -p 16 | 16 | Light |
 | `slack` | 32x64 | -p 21 | 21 | Light |
 | (no args) | per-target | per-target | all 4 above | Dispatched concurrently |
+
+Parallelism defaults to `task_counts.<suite>` from `bench/grind-tasks.json` — the same source-of-truth file that drives `--fast` / `--grind` carve-outs. Update the JSON if AgentDojo's task count changes.
 
 ### One-off / targeted runs
 
@@ -292,7 +297,7 @@ done
 - **Never use `show` in exe functions during bench runs.** It writes to stdout and corrupts the host's JSON parsing. Use `log` (stderr) or `MLLD_TRACE` instead.
 - **Never rename record fields to match MCP parameter names.** The intent compiler maps arg keys to resolved values — the names don't need to match. Field renaming across the MCP boundary destroys StructuredValue metadata.
 - **Run worker tests before and after prompt changes.** `mlld rig/tests/workers/run.mld --no-checkpoint` catches regressions in ~50s. If tests pass too easily, the assertions are too weak.
-- **Workspace and travel remote runs need bigger shapes.** Workspace (40 parallel tasks) and travel (20 parallel tasks) both need 32x64 (64 GB) at full -p 20. Both OOM on 8x16 (exit 137). Banking and slack survive 16x32. `scripts/bench.sh` already sets the right shape per target; if you call `bench-run.yml` directly, pass `-f shape=nscloud-ubuntu-22.04-amd64-32x64` for workspace or travel.
+- **Per-task memory ≈ 0.9 GB on workspace at full parallelism (measured 2026-05-05).** Workspace at -p 34 on 32x64 hit 30.3 GB peak / 62.9 GB available (48% utilization, plenty of headroom). Earlier "1.5-2 GB per task" estimates predated the recent mlld memory reduction. Workspace and travel still want 32x64 for headroom; banking and slack are fine on 16x32. `scripts/bench.sh` sets the shape per suite. Memory peaks land in `manifest.json` (`mem_peak_kb` / `mem_total_kb`) per `bench/docker/entrypoint.sh`'s sampler.
 
 ## Ticket Conventions
 
