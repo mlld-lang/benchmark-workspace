@@ -18,10 +18,11 @@
 FROM ubuntu:24.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
-# build-essential + python3 are for node-gyp (tree-sitter-powershell among
-# others has a native install script).
+# Toolchain matches the original bench Dockerfile's needs:
+# - git, jq, xz-utils, unzip — opencode's build scripts shell out to these
+# - build-essential, python3 — node-gyp for native deps (tree-sitter-*)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates curl unzip \
+      ca-certificates curl git jq xz-utils unzip \
       build-essential python3 \
  && rm -rf /var/lib/apt/lists/*
 
