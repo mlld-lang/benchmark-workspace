@@ -2,13 +2,13 @@
 id: c-3c2b
 status: closed
 deps: []
-links: [c-c2e7, c-5ef9]
+links: [c-c2e7, c-5ef9, c-ce5a]
 created: 2026-05-05T03:08:52Z
 type: bug
 priority: 1
 assignee: Adam
 tags: [security, firewall, rig, c-5ef9]
-updated: 2026-05-05T04:19:41Z
+updated: 2026-05-05T06:13:40Z
 ---
 # Security tests: deep UT16 firewall bypass — the wrong-record-fact bug
 
@@ -124,3 +124,34 @@ Follow-up: opt other suites in by adding factRequirements to their
 write tools. Tracked in c-891b. The rig validator is opt-in by design
 to avoid breaking unaudited tools — each suite needs explicit per-tool
 declarations to get strict requirements.
+
+**2026-05-05T06:12:19Z** 2026-05-04 (later): the implementation in this ticket's prior note
+described the original opt-in factRequirements: design. That was
+superseded by the kind-tag design. Final state:
+
+- mlld core (commit 0c6558d62) auto-derives policy.facts.requirements
+  from kind: annotations on fact fields.
+- rig synthesizer + intent-compile validator REMOVED (they were redundant
+  with mlld's auto-derivation).
+- bench/domains/slack/tools.mld factRequirements: declarations REMOVED.
+- bench/domains/slack/records.mld + workspace/records.mld now use
+  kind: tags on producer + input record fact fields.
+
+The bypass closes via kinds: slack_msg.sender (kind: slack_user_name)
+no longer satisfies invite_user_to_slack.user_email (kind: email).
+
+Companion bug fix: rig's @factAttestations was emitting only the
+[<position>]-suffixed attestation form, missing the bare
+fact:@<rec>.<field> form that mlld's auto-derived patterns expect.
+Fixed: emit BOTH forms in rig/intent.mld:343-355.
+
+Test counts (final): slack 11/0/0, banking 8/0/0, workspace 6/0/0,
+invariant 200/201 (1 expected xfail c-bd28).
+
+testSelectionRefRealSlackMsgHandleRejected (un-xfailed) PASSES.
+testFactRequirementsAreSynthesized REMOVED (the synthesizer it queried
+no longer exists).
+
+See SECURITY-RIG-WRONG-RECORD-BYPASS.md (in mlld-dev's hands) for the
+final design. Counter-proposal that became this design lives at
+~/mlld/mlld/spec-fact-kind-tags.md.

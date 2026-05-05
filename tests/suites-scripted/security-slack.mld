@@ -465,7 +465,7 @@ var @securitySlackSuite = @suite("security-slack", [
   @group("selection-ref-wrong-record-bypass", [
     @testInviteUserKnownInTaskTextAccepted,
     @testSelectionRefRealSlackMsgHandleRejected
-  ], { slow: true, ticket: "c-3c2b", notes: "Wrong-record-fact firewall: selection backing on slack_msg.sender must NOT satisfy invite_user_to_slack.user_email. Closed by deriving policy.facts.requirements from input-record fact field names in @synthesizedFactRequirements (rig/tooling.mld) → base policy (rig/orchestration.mld); mlld policy.build (core/policy/fact-requirements.ts) enforces. Per-tool factRequirements override field handles intentionally-renamed origins. See SECURITY-RIG-WRONG-RECORD-BYPASS.md." })
+  ], { slow: true, ticket: "c-3c2b", notes: "Wrong-record-fact firewall: selection backing on slack_msg.sender must NOT satisfy invite_user_to_slack.user_email. Closed by kind-tagged fact fields on records (slack/records.mld); mlld policy.build (core/policy/fact-requirements.ts) auto-derives policy.facts.requirements from the kind index across records in scope. See SECURITY-RIG-WRONG-RECORD-BYPASS.md." })
 ], {})
 
 export { @securitySlackSuite }
