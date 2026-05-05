@@ -7,10 +7,14 @@
 >>      Per-task tool routing is allowed (see CLAUDE.md Cardinal Rule A.1):
 >>      tool-set selection is configuration, not capability under test.
 >>      Populate from `archive/travel.taskdata.txt` ground-truth sequences.
->>   2. **Keyword classifier fallback** — keyword match against `@toolGroups`.
+>>   2. **Keyword classifier fallback** — keyword match against `@toolSets`.
 >>      Deterministic — no LLM call. Synonyms ("place to stay", "lodge",
 >>      "accommodation", "reservation", "booking", "dine", "food", "cuisine",
 >>      "rental", "drive", "fly", "airline" etc.) cover common phrasings.
+>>
+>> This deterministic keyword path is the workaround referenced in c-5d98.
+>> It is being replaced by an LLM-driven classifier in the advice-gate
+>> work; until that lands, this file remains the active router.
 >>
 >> Design notes:
 >>   - The previous LLM-driven router imported `@mlld/opencode` directly at the
@@ -22,11 +26,11 @@
 >>   - User group is included only when the query references preferences/profile.
 >>   - If no category keywords match, fall back to all groups (safe default).
 
-import { @toolGroups } from "./tools.mld"
+import { @toolSets } from "./tools.mld"
 
 >> Per-task ground-truth tool groupings, populated from
 >> `archive/travel.taskdata.txt` (Section 4: User task catalog).
->> Each value is an array of group names from `@toolGroups`. Tasks
+>> Each value is an array of set names from `@toolSets`. Tasks
 >> without an entry fall back to the keyword classifier.
 >> v1.1.1 user_task_18/19 are not in archived taskdata; left to fallback.
 var @taskTools = {
@@ -50,22 +54,22 @@ var @taskTools = {
   user_task_17: ["hotel", "restaurant", "car"]
 }
 
-exe @matchGroup(query, group) = [
+exe @matchSet(query, set) = [
   let @q = @query.toLowerCase()
   => when [
-    @group == "hotel"      => @q.includes("hotel") || @q.includes("place to stay") || @q.includes("lodge") || @q.includes("lodging") || @q.includes("accommodation") || @q.includes("stay at") || @q.includes("stay in") || @q.includes("staying at") || @q.includes("staying in") || @q.includes("reservation") || @q.includes("booking") || @q.includes("book a room")
-    @group == "restaurant" => @q.includes("restaurant") || @q.includes("dine") || @q.includes("food") || @q.includes("eat") || @q.includes("lunch") || @q.includes("dinner") || @q.includes("breakfast") || @q.includes("cuisine") || @q.includes("meal")
-    @group == "car"        => @q.includes("car") || @q.includes("rental") || @q.includes("rent a") || @q.includes("drive")
-    @group == "flight"     => @q.includes("flight") || @q.includes("fly") || @q.includes("airline")
-    @group == "calendar"   => true
-    @group == "email"      => true
-    @group == "user"       => @q.includes("my ") || @q.includes("preference") || @q.includes("profile") || @q.includes("information about me")
+    @set == "hotel"      => @q.includes("hotel") || @q.includes("place to stay") || @q.includes("lodge") || @q.includes("lodging") || @q.includes("accommodation") || @q.includes("stay at") || @q.includes("stay in") || @q.includes("staying at") || @q.includes("staying in") || @q.includes("reservation") || @q.includes("booking") || @q.includes("book a room")
+    @set == "restaurant" => @q.includes("restaurant") || @q.includes("dine") || @q.includes("food") || @q.includes("eat") || @q.includes("lunch") || @q.includes("dinner") || @q.includes("breakfast") || @q.includes("cuisine") || @q.includes("meal")
+    @set == "car"        => @q.includes("car") || @q.includes("rental") || @q.includes("rent a") || @q.includes("drive")
+    @set == "flight"     => @q.includes("flight") || @q.includes("fly") || @q.includes("airline")
+    @set == "calendar"   => true
+    @set == "email"      => true
+    @set == "user"       => @q.includes("my ") || @q.includes("preference") || @q.includes("profile") || @q.includes("information about me")
     * => false
   ]
 ]
 
 exe @routeTravel(query, config) = [
-  let @groupNames = for @name, @tools in @toolGroups => @name
+  let @setNames = for @name, @tools in @toolSets => @name
   let @taskId = @config.task_id ?? null
   let @override = when [
     @taskId.isDefined() && @taskTools[@taskId].isDefined() => @taskTools[@taskId]
@@ -73,15 +77,15 @@ exe @routeTravel(query, config) = [
   ]
   let @selected = when [
     @override.isDefined() => @override
-    * => for @g in @groupNames when @matchGroup(@query, @g) => @g
+    * => for @s in @setNames when @matchSet(@query, @s) => @s
   ]
   let @final = when [
-    @selected.length == 0 => @groupNames
+    @selected.length == 0 => @setNames
     * => @selected
   ]
-  let @toolNames = for @group in @final [
-    let @groupTools = @toolGroups[@group] ?? []
-    => for @tool in @groupTools => @tool
+  let @toolNames = for @set in @final [
+    let @setTools = @toolSets[@set] ?? []
+    => for @tool in @setTools => @tool
   ]
   let @flat = loop(1000) [
     let @ctx = when [

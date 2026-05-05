@@ -1,0 +1,246 @@
+>> bench/tests/travel-classifiers.mld
+>>
+>> Live-LLM accuracy tests for the travel advice + tool-router classifiers.
+>>
+>> Two phases:
+>>   1. tuning — synthetic exemplars from classifiers/exemplars.mld.
+>>      Loud per-class breakdown. Iterate the classifier prompts against
+>>      this until accuracy on each class is acceptable.
+>>   2. eval — held-out AgentDojo labels from classifier-labels.mld.
+>>      Silent except for aggregate. Per discipline (see ADVICE_GATE.md
+>>      and SCIENCE.md): if eval accuracy is low after tuning converges,
+>>      broaden the synthetic classes — do not add the failing AgentDojo
+>>      prompt as an exemplar.
+>>
+>> Run:
+>>   mlld clean/bench/tests/travel-classifiers.mld --no-checkpoint                 # tuning (default)
+>>   mlld clean/bench/tests/travel-classifiers.mld --no-checkpoint --phase eval   # held-out
+>>   mlld clean/bench/tests/travel-classifiers.mld --no-checkpoint --phase both   # both
+>>
+>> Wall time: ~25s tuning, ~10s eval on Cerebras (parallel-batched).
+
+import { @travelAdviceClassifier } from "../domains/travel/classifiers/advice.mld"
+import { @travelToolRouter } from "../domains/travel/classifiers/tool-router.mld"
+import { @adviceExemplars, @toolRouterExemplars } from "../domains/travel/classifiers/exemplars.mld"
+import { @travelClassifierLabels } from "../domains/travel/classifier-labels.mld"
+import { @timestamp } from "../../rig/tests/workers/lib.mld"
+
+var @phase = @payload.phase ?? "tuning"
+
+>> --- Scoring helpers ----------------------------------------------------
+
+exe @setEquals(a, b) = js {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  const sa = [...a].map(String).sort();
+  const sb = [...b].map(String).sort();
+  return sa.every((x, i) => x === sb[i]);
+}
+
+exe @scoreAdvice(exemplar, cls) = [
+  let @expected = @exemplar.expected
+  let @isAdviceMatch = @cls.is_advice == @expected.is_advice
+  let @kindRelevant = when [
+    @expected.is_advice => true
+    * => false
+  ]
+  let @kindMatch = when [
+    !@kindRelevant => true
+    @cls.advice_kind == @expected.advice_kind => true
+    * => false
+  ]
+  let @pass = @isAdviceMatch && @kindMatch
+  let @reason = when [
+    @pass => null
+    !@isAdviceMatch => `is_advice exp=@expected.is_advice got=@cls.is_advice`
+    * => `advice_kind exp=@expected.advice_kind got=@cls.advice_kind`
+  ]
+  => { pass: @pass, reason: @reason }
+]
+
+exe @scoreRouter(exemplar, cls) = [
+  let @ok = @setEquals(@cls.tool_sets, @exemplar.expected.tool_sets)
+  let @expectedStr = @exemplar.expected.tool_sets | @pretty
+  let @gotStr = @cls.tool_sets | @pretty
+  => when [
+    @ok => { pass: true, reason: null }
+    * => { pass: false, reason: `tool_sets exp=@expectedStr got=@gotStr` }
+  ]
+]
+
+>> --- Per-exemplar runners (return rich result row) ----------------------
+
+exe @runAdviceExemplar(exemplar) = [
+  let @started = @timestamp()
+  let @result = @travelAdviceClassifier(@exemplar.query)
+  let @elapsed = @timestamp() - @started
+  let @score = @scoreAdvice(@exemplar, @result)
+  => {
+    classifier: "advice",
+    class: @exemplar.class,
+    query: @exemplar.query,
+    expected: @exemplar.expected,
+    got: @result,
+    pass: @score.pass,
+    reason: @score.reason,
+    time_ms: @elapsed
+  }
+]
+
+exe @runRouterExemplar(exemplar) = [
+  let @started = @timestamp()
+  let @result = @travelToolRouter(@exemplar.query)
+  let @elapsed = @timestamp() - @started
+  let @score = @scoreRouter(@exemplar, @result)
+  => {
+    classifier: "tool-router",
+    class: @exemplar.class,
+    query: @exemplar.query,
+    expected: @exemplar.expected,
+    got: @result,
+    pass: @score.pass,
+    reason: @score.reason,
+    time_ms: @elapsed
+  }
+]
+
+>> --- Aggregation --------------------------------------------------------
+
+exe @aggregateByClass(rows) = js {
+  const buckets = new Map();
+  for (const r of rows) {
+    const key = r.classifier + "/" + r.class;
+    if (!buckets.has(key)) buckets.set(key, { classifier: r.classifier, class: r.class, total: 0, passed: 0 });
+    const b = buckets.get(key);
+    b.total += 1;
+    if (r.pass) b.passed += 1;
+  }
+  return Array.from(buckets.values()).sort((x, y) => (x.classifier + x.class).localeCompare(y.classifier + y.class));
+}
+
+exe @overallStats(rows) = js {
+  const total = rows.length;
+  const passed = rows.filter(r => r.pass).length;
+  const totalMs = rows.reduce((s, r) => s + Number(r.time_ms || 0), 0);
+  const avgMs = total > 0 ? Math.round(totalMs / total) : 0;
+  return { total, passed, accuracy: total > 0 ? passed / total : 0, avg_ms: avgMs };
+}
+
+exe @pctStr(num) = js {
+  return (num * 100).toFixed(1) + "%";
+}
+
+>> --- Phase: tuning (synthetic) ------------------------------------------
+
+exe @runTuning() = [
+  show "=== Phase: tuning (synthetic exemplars) ==="
+  show ""
+
+  let @adviceEx = @adviceExemplars()
+  let @routerEx = @toolRouterExemplars()
+  let @taggedAdvice = for @e in @adviceEx => { kind: "advice", e: @e }
+  let @taggedRouter = for @e in @routerEx => { kind: "router", e: @e }
+  let @all = @taggedAdvice.concat(@taggedRouter)
+
+  let @rows = for parallel(20) @t in @all [
+    => when [
+      @t.kind == "advice" => @runAdviceExemplar(@t.e)
+      * => @runRouterExemplar(@t.e)
+    ]
+  ]
+
+  for @r in @rows [
+    let @icon = when [
+      @r.pass => "PASS"
+      * => "FAIL"
+    ]
+    let @failInfo = when [
+      @r.pass => ""
+      * => `  | @r.reason`
+    ]
+    show `[@icon] @r.classifier/@r.class  @r.time_ms\ms@failInfo`
+    if !@r.pass [ show `        query: @r.query` ]
+  ]
+
+  show ""
+  show "=== By class ==="
+  let @byClass = @aggregateByClass(@rows)
+  for @b in @byClass [
+    let @pct = @pctStr(@b.passed / @b.total)
+    show `  @b.classifier/@b.class  @b.passed/@b.total  @pct`
+  ]
+
+  show ""
+  show "=== Overall (tuning) ==="
+  let @stats = @overallStats(@rows)
+  let @overallPct = @pctStr(@stats.accuracy)
+  show `  @stats.passed/@stats.total  @overallPct  avg @stats.avg_ms\ms`
+  => @stats
+]
+
+>> --- Phase: eval (held-out labels) --------------------------------------
+
+exe @runEval() = [
+  show "=== Phase: eval (held-out AgentDojo labels) ==="
+  show ""
+
+  let @labels = @travelClassifierLabels()
+
+  >> Convert labels into the same exemplar shape (advice + router each get
+  >> their own scoring path). Tool-router expected sets come from the
+  >> labels' tool_groups field (renamed from earlier exploration).
+  let @taggedAdvice = for @l in @labels => {
+    kind: "advice",
+    e: { query: @l.prompt, class: "labels", expected: { is_advice: @l.is_advice, advice_kind: @l.advice_kind } }
+  }
+  let @taggedRouter = for @l in @labels => {
+    kind: "router",
+    e: { query: @l.prompt, class: "labels", expected: { tool_sets: @l.tool_groups } }
+  }
+  let @all = @taggedAdvice.concat(@taggedRouter)
+
+  let @rows = for parallel(20) @t in @all [
+    => when [
+      @t.kind == "advice" => @runAdviceExemplar(@t.e)
+      * => @runRouterExemplar(@t.e)
+    ]
+  ]
+
+  let @failures = for @r in @rows when !@r.pass => @r
+  if @failures.length > 0 [
+    show "=== Eval failures ==="
+    for @f in @failures [
+      show `[FAIL] @f.classifier  @f.reason`
+      show `        query: @f.query`
+      show `        got:   @f.got | @pretty`
+      show ""
+    ]
+  ]
+
+  show "=== Aggregate (eval) ==="
+  let @adviceRows = for @r in @rows when @r.classifier == "advice" => @r
+  let @routerRows = for @r in @rows when @r.classifier == "tool-router" => @r
+  let @adviceStats = @overallStats(@adviceRows)
+  let @routerStats = @overallStats(@routerRows)
+  let @adviceP = @pctStr(@adviceStats.accuracy)
+  let @routerP = @pctStr(@routerStats.accuracy)
+  show `  advice:      @adviceStats.passed/@adviceStats.total  @adviceP`
+  show `  tool-router: @routerStats.passed/@routerStats.total  @routerP`
+  let @overall = @overallStats(@rows)
+  let @overallPct = @pctStr(@overall.accuracy)
+  show `  overall:     @overall.passed/@overall.total  @overallPct`
+  => @overall
+]
+
+>> --- Dispatch -----------------------------------------------------------
+
+show `Travel classifier tests | phase: @phase`
+show ""
+
+if @phase == "tuning" [ let @_ = @runTuning() ]
+if @phase == "eval" [ let @_ = @runEval() ]
+if @phase == "both" [
+  let @_t = @runTuning()
+  show ""
+  let @_e = @runEval()
+]

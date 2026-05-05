@@ -1,0 +1,137 @@
+>> rig/workers/advice.mld
+>>
+>> Advice worker — replaces compose for advice-classified queries.
+>>
+>> The primary structural defense is at @adviceVisibleState (runtime.mld):
+>> projecting state through `role:advice` strips data.untrusted fields
+>> (notably @hotel_review.review_blob and siblings) before any LLM call
+>> sees the state. Review prose can carry injection text; rating, price,
+>> and other fact-classified or trusted-data fields cannot be planted by
+>> an attacker — see how-we-defend-advice.md.
+>>
+>> @adviceGate is the routing primitive. Direct-when body, `advice`
+>> label. The * arm runs @directAnswer on the projected state. The
+>> denied arm (defense in depth) catches any influenced data that slips
+>> through the projection — currently this means an upstream extract or
+>> derive that read untrusted content and produced an output that
+>> retained the influenced label despite advice projection. In that
+>> case the gate routes to @factOnlyAnswer which strips the named
+>> extract/derive entries entirely and answers from resolved-records
+>> only.
+
+import {
+  @llmCall,
+  @llmCallEntry,
+  @llmSessionId,
+  @adviceVisibleState
+} from "../runtime.mld"
+import { @composeAttestation } from "../records.mld"
+
+>> ── Module-scope policy ──
+>>
+>> The `no-influenced-advice` rule fires on this module's
+>> `advice`-labeled exes when their inputs carry the `influenced`
+>> label. Per spike 23 / labels-policies-guards.md §3, declaring the
+>> policy in the same module as the wrapper is the canonical pattern
+>> for catching denials reliably across module boundaries.
+
+policy @adviceGatePolicy = { defaults: { rules: ["no-influenced-advice"] } }
+
+>> ── Prompt template ──
+
+exe @advicePrompt(query, stateSummary) = template "../prompts/advice.att"
+
+>> ── Output coercion ──
+
+exe @coerceAdviceAttestation(raw) = [
+  if @raw == null [ => null ]
+  let @parsed = @raw | @parse.llm
+  => @parsed
+] => record @composeAttestation
+
+>> ── Direct-answer LLM call ──
+>>
+>> The primary path. Called by the * arm of @adviceGate when state is
+>> uninfluenced (which is the normal case under role:advice projection
+>> since the projection structurally drops fields that could carry
+>> influence). No tools — pure narration over already-projected facts.
+
+exe @directAnswer(agent, query, stateSummary) = [
+  let @stateText = @stateSummary | @pretty
+  let @prompt = @advicePrompt(@query, @stateText)
+  let @callConfig = {
+    model: @agent.workerModel ?? @agent.model,
+    pure: @agent.opencodePure,
+    dir: @agent.innerWorkerDir,
+    dataHome: @agent.innerWorkerDataHome,
+    stateHome: @agent.innerWorkerStateHome,
+    tools: [],
+    stubPhase: "advice",
+    stubResponses: @agent.stub.advice ?? [],
+    stubIndex: 0
+  }
+  => @llmCall(@agent.harness, @prompt, @callConfig)
+]
+
+>> ── Fact-only fallback ──
+>>
+>> Defense-in-depth path: if extract or derive produced an entry that
+>> retained the `influenced` label even after advice projection (e.g. a
+>> derive that ran in non-advice mode and is now being narrated under
+>> advice), strip those named entries entirely and answer from
+>> resolved-records only. The resolved bucket is the most authoritative
+>> surface — it carries fact labels straight from records.
+
+exe @factOnlyAnswer(agent, query, stateSummary) = [
+  let @factOnly = {
+    resolved: @stateSummary.resolved,
+    extracted: {},
+    derived: {}
+  }
+  => @directAnswer(@agent, @query, @factOnly)
+]
+
+>> ── Advice gate ──
+>>
+>> Direct-when body so the `denied =>` arm catches the
+>> `no-influenced-advice` rule firing inside this exe scope. Labeled
+>> `advice` so the rule applies to its calls.
+>>
+>> Called by @dispatchAdvice (orchestration) with stateSummary already
+>> projected through role:advice via @adviceVisibleState.
+
+exe advice @adviceGate(agent, query, stateSummary) = when [
+  denied => @factOnlyAnswer(@agent, @query, @stateSummary)
+  * => @directAnswer(@agent, @query, @stateSummary)
+]
+
+>> ── Dispatcher (compose-shaped output) ──
+>>
+>> Same return shape as @dispatchCompose so the planner can substitute
+>> transparently. State is projected through `role:advice` here — the
+>> structural defense — before the LLM ever sees it.
+
+exe @dispatchAdvice(agent, state, query, decision) = [
+  let @stateSummary = @adviceVisibleState(@agent, @state)
+  let @raw = @adviceGate(@agent, @query, @stateSummary)
+  let @attestation = @coerceAdviceAttestation(@raw)
+  let @sessionId = @llmSessionId(@raw)
+  => {
+    text: @attestation["text"] ?? @raw,
+    session_id: @sessionId,
+    llm_log: @llmCallEntry("advice", @query, @raw, @attestation, @sessionId, {
+      call_kind: "inner_worker",
+      inner_worker_session_id: @sessionId,
+      advice_mode: true
+    })
+  }
+]
+
+export {
+  @advicePrompt,
+  @coerceAdviceAttestation,
+  @directAnswer,
+  @factOnlyAnswer,
+  @adviceGate,
+  @dispatchAdvice
+}

@@ -1,0 +1,24 @@
+>> bench/domains/travel/classifiers/preflight.mld
+>>
+>> Subprocess-invoked classifier runner. Reads the query from --input,
+>> runs the classifier(s), prints a single JSON line on stdout. Used by
+>> bench/agents/travel.mld via cmd-shell to fully isolate the classifier
+>> from the planner's evaluation context (b-a496 — classifier output
+>> wrappers cause stack overflow when bound to the planner exe in the
+>> same module).
+
+import { @travelAdviceClassifier } from "./advice.mld"
+import { @travelToolRouter } from "./tool-router.mld"
+
+import { @query } from @input
+
+var @advice = @travelAdviceClassifier(@query)
+var @tools = @travelToolRouter(@query)
+
+var @combined = {
+  is_advice: @advice.is_advice ?? false,
+  advice_kind: @advice.advice_kind ?? null,
+  tool_sets: @tools.tool_sets ?? []
+}
+
+show @combined | @pretty

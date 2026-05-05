@@ -1,0 +1,147 @@
+>> tests/suites/bench/travel-classifier-exemplars.mld
+>>
+>> Sanity tests for synthetic tuning exemplars in
+>> bench/domains/travel/classifiers/exemplars.mld.
+>>
+>> These tests verify exemplar SHAPE (every entry has expected fields,
+>> classes are from the declared taxonomy, advice_kind values are valid).
+>> They do NOT verify classifier accuracy — that's the worker test surface
+>> against a live LLM.
+
+import { @assertOk, @assertEq, @assertContains } from "../../assert.mld"
+import { @suite, @group, @runSuites } from "../../runner.mld"
+import { @adviceExemplars, @toolRouterExemplars } from "../../../bench/domains/travel/classifiers/exemplars.mld"
+
+var @advice = @adviceExemplars()
+var @router = @toolRouterExemplars()
+
+var @adviceClasses = [
+  "objective-rank-single",
+  "objective-rank-multi",
+  "subjective-fluff",
+  "mixed-verify-then-pick",
+  "recommendation-then-action",
+  "named-entity-verify",
+  "factual-lookup",
+  "booking-named",
+  "pure-side-effect",
+  "conditional-verify-named"
+]
+
+var @routerClasses = [
+  "single-set-hotel",
+  "single-set-restaurant",
+  "single-set-car",
+  "single-set-flight",
+  "multi-set-hotel-restaurant",
+  "multi-set-three",
+  "multi-set-flight-car",
+  "with-calendar",
+  "with-email",
+  "mentions-user-prefs",
+  "synonym-hotel",
+  "synonym-restaurant",
+  "synonym-car",
+  "synonym-flight",
+  "ambiguity-broad",
+  "agent-vs-self-action"
+]
+
+var @validToolSets = ["hotel", "restaurant", "car", "flight", "calendar", "email", "user"]
+var @validAdviceKinds = ["hotel", "restaurant", "car", "flight", null]
+
+exe @testAdviceExemplarsHaveExpectedFields() = [
+  let @missing = for @e in @advice when !@e.query.isDefined() || !@e.class.isDefined() || !@e.expected.isDefined() => @e.class ?? "<missing class>"
+  => @assertEq(@missing, [])
+]
+
+exe @testAdviceExemplarClassesAreFromTaxonomy() = [
+  let @bad = for @e in @advice when !@adviceClasses.includes(@e.class) => @e.class
+  => @assertEq(@bad, [])
+]
+
+exe @testAdviceExemplarKindsAreFromVocabulary() = [
+  let @bad = for @e in @advice when !@validAdviceKinds.includes(@e.expected.advice_kind) => `@e.class:@e.expected.advice_kind`
+  => @assertEq(@bad, [])
+]
+
+exe @testEveryAdviceClassHasAtLeastOneExemplar() = [
+  let @missing = for @c in @adviceClasses [
+    let @hits = for @e in @advice when @e.class == @c => @e
+    => when [
+      @hits.length == 0 => @c
+      * => null
+    ]
+  ]
+  let @real = for @m in @missing when @m => @m
+  => @assertEq(@real, [])
+]
+
+exe @testAdviceExemplarQueriesNonEmpty() = [
+  let @empty = for @e in @advice when @e.query.length == 0 => @e.class
+  => @assertEq(@empty, [])
+]
+
+exe @testRouterExemplarsHaveExpectedFields() = [
+  let @missing = for @e in @router when !@e.query.isDefined() || !@e.class.isDefined() || !@e.expected.isDefined() || !@e.expected.tool_sets.isDefined() => @e.class ?? "<missing class>"
+  => @assertEq(@missing, [])
+]
+
+exe @testRouterExemplarClassesAreFromTaxonomy() = [
+  let @bad = for @e in @router when !@routerClasses.includes(@e.class) => @e.class
+  => @assertEq(@bad, [])
+]
+
+exe @testRouterExemplarToolSetsAreValid() = [
+  let @bad = for @e in @router [
+    let @invalid = for @s in @e.expected.tool_sets when !@validToolSets.includes(@s) => @s
+    => when [
+      @invalid.length > 0 => `@e.class: @invalid`
+      * => null
+    ]
+  ]
+  let @real = for @b in @bad when @b => @b
+  => @assertEq(@real, [])
+]
+
+exe @testEveryRouterClassHasAtLeastOneExemplar() = [
+  let @missing = for @c in @routerClasses [
+    let @hits = for @e in @router when @e.class == @c => @e
+    => when [
+      @hits.length == 0 => @c
+      * => null
+    ]
+  ]
+  let @real = for @m in @missing when @m => @m
+  => @assertEq(@real, [])
+]
+
+exe @testRouterToolSetsNonEmpty() = [
+  let @empty = for @e in @router when @e.expected.tool_sets.length == 0 => @e.class
+  => @assertEq(@empty, [])
+]
+
+var @travelClassifierExemplarsSuite = @suite("bench/travel-classifier-exemplars", [
+  @group("advice", [
+    @testAdviceExemplarsHaveExpectedFields,
+    @testAdviceExemplarClassesAreFromTaxonomy,
+    @testAdviceExemplarKindsAreFromVocabulary,
+    @testEveryAdviceClassHasAtLeastOneExemplar,
+    @testAdviceExemplarQueriesNonEmpty
+  ], {}),
+  @group("tool-router", [
+    @testRouterExemplarsHaveExpectedFields,
+    @testRouterExemplarClassesAreFromTaxonomy,
+    @testRouterExemplarToolSetsAreValid,
+    @testEveryRouterClassHasAtLeastOneExemplar,
+    @testRouterToolSetsNonEmpty
+  ], {})
+], {})
+
+export { @travelClassifierExemplarsSuite }
+
+var @result = @runSuites([@travelClassifierExemplarsSuite])
+show @result.report
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

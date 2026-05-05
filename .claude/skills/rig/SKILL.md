@@ -84,6 +84,5 @@ mlld rig/tests/workers/run.mld --no-checkpoint     # worker LLM tests (17 tests,
 CLAUDE.md "Running benchmarks" is the operational guide — you've already read it as part of step 4 above. Two reminders worth carrying into the session:
 
 - **Match shape to question.** Spike (zero-LLM) for runtime/contract questions; targeted sweep (1 suite or task subset) for iterating on a fix; full `scripts/bench.sh` for closeout regression checks only. Iterating with full sweeps is the most expensive mistake.
-- **Travel needs heap.** `scripts/bench.sh travel` sets `MLLD_HEAP=8g` automatically. Direct `gh workflow run bench-run.yml -f suite=travel` invocations should add `-f heap=8g` (c-63fe).
 
 Never use `--debug` on bench runs — it triggers OOM. `MLLD_TRACE=effects MLLD_TRACE_FILE=tmp/trace.jsonl` is the right tracing knob.

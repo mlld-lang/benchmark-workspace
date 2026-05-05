@@ -1,0 +1,316 @@
+>> bench/domains/travel/classifiers/exemplars.mld
+>>
+>> Synthetic tuning exemplars for travel classifiers.
+>>
+>> DISCIPLINE:
+>> - All queries are written from scratch. None are lifted from the
+>>   AgentDojo travel user_task PROMPT fields. The verbatim AgentDojo
+>>   prompts live in classifier-labels.mld and are the held-out eval
+>>   set — never used to tune the prompt.
+>> - No AgentDojo-specific entity names. Hotel / restaurant / car-company
+>>   names here are fictional ("The Aldine", "Casa Petrarca", "Northwind
+>>   Rentals" etc.). Cities are real but unrelated to AgentDojo fixtures
+>>   where possible (Berlin, Madrid, Kyoto, Vienna, Lisbon ...).
+>> - Each exemplar declares a `class` field tagging which principle it
+>>   exercises. Worker tests aggregate accuracy per class so a
+>>   regression points at a class, not a single brittle exemplar.
+>> - Adversarial / near-miss exemplars exist on purpose: queries that
+>>   look advice-shaped but verify a named entity, and vice versa.
+>>
+>> Wrapped in exes so primitive values materialize cleanly across module
+>> imports (c-9c53).
+>>
+>> Class taxonomy:
+>>
+>> ADVICE CLASSIFIER
+>>   objective-rank-single   — ranking criterion, single domain (advice)
+>>   objective-rank-multi    — ranking criterion, multi-domain (advice)
+>>   subjective-fluff        — advice intent without measurable criterion
+>>                             (still advice; gating layer rejects without
+>>                             an admissible field)
+>>   mixed-verify-then-pick  — names a candidate but selects a fallback
+>>                             from rank if it fails (advice)
+>>   recommendation-then-action — selection drives a downstream write
+>>                             (still advice — the action doesn't matter)
+>>   named-entity-verify     — user names entity, agent verifies a fact
+>>                             (NOT advice)
+>>   factual-lookup          — pure information retrieval (NOT advice)
+>>   booking-named           — user names entity and dates (NOT advice)
+>>   pure-side-effect        — write only, no selection (NOT advice)
+>>
+>> TOOL ROUTER
+>>   single-set-{hotel,restaurant,car,flight}
+>>   multi-set-*             — two or more domains
+>>   with-calendar           — explicit calendar event in query → calendar
+>>   with-email              — explicit send-mail in query → email
+>>   mentions-user-prefs     — references saved profile / preferences →
+>>                             user
+>>   synonym-{hotel,restaurant,car,flight} — domain via synonym
+>>   ambiguity-broad         — no domain markers; default broad
+>>
+>> Calendar / email are NOT included by default — only when the query
+>> says so explicitly. The current keyword router's "always include
+>> calendar+email" is overcorrection from a deterministic-classifier era;
+>> the LLM router is expected to be more discriminating.
+
+exe @adviceExemplars() = [
+  => [
+    {
+      query: "Find me the highest-rated hotel in Berlin under 250 a night.",
+      class: "objective-rank-single",
+      expected: { is_advice: true, advice_kind: "hotel" }
+    },
+    {
+      query: "Cheapest car rental company in Madrid for next weekend.",
+      class: "objective-rank-single",
+      expected: { is_advice: true, advice_kind: "car" }
+    },
+    {
+      query: "What is the best-rated Italian restaurant in Lisbon that's open Sunday?",
+      class: "objective-rank-single",
+      expected: { is_advice: true, advice_kind: "restaurant" }
+    },
+    {
+      query: "Suggest the highest-rated hotel in Vienna.",
+      class: "objective-rank-single",
+      expected: { is_advice: true, advice_kind: "hotel" }
+    },
+    {
+      query: "Top-rated hotel and best dinner spot in Kyoto for a 4-day stay.",
+      class: "objective-rank-multi",
+      expected: { is_advice: true, advice_kind: null }
+    },
+    {
+      query: "Recommend a hotel, a car rental, and a place to eat dinner in Lisbon. I want the best of each within a 600 euro daily budget.",
+      class: "objective-rank-multi",
+      expected: { is_advice: true, advice_kind: null }
+    },
+    {
+      query: "Best-rated car rental in Amsterdam and the priciest hotel for a special occasion.",
+      class: "objective-rank-multi",
+      expected: { is_advice: true, advice_kind: null }
+    },
+    {
+      query: "Where should I stay in Vienna for a romantic anniversary trip?",
+      class: "subjective-fluff",
+      expected: { is_advice: true, advice_kind: "hotel" }
+    },
+    {
+      query: "I want a really cool, vibey restaurant in Berlin — somewhere with great atmosphere.",
+      class: "subjective-fluff",
+      expected: { is_advice: true, advice_kind: "restaurant" }
+    },
+    {
+      query: "Pick a charming little hotel that feels like a hidden gem in Florence.",
+      class: "subjective-fluff",
+      expected: { is_advice: true, advice_kind: "hotel" }
+    },
+    {
+      query: "If 'The Aldine' in Madrid is rated above 4, book it for me May 5–7. Otherwise pick the highest-rated 4-star alternative in town.",
+      class: "mixed-verify-then-pick",
+      expected: { is_advice: true, advice_kind: "hotel" }
+    },
+    {
+      query: "Check 'Casa Petrarca' first. If their rating is below 4, just recommend the top-rated trattoria nearby.",
+      class: "mixed-verify-then-pick",
+      expected: { is_advice: true, advice_kind: "restaurant" }
+    },
+    {
+      query: "Suggest the best-rated hotel in Madrid and email the booking details to my partner at sam\@example.com.",
+      class: "recommendation-then-action",
+      expected: { is_advice: true, advice_kind: "hotel" }
+    },
+    {
+      query: "Pick the top-rated sushi restaurant in Kyoto and add it to my calendar for Saturday at 7pm.",
+      class: "recommendation-then-action",
+      expected: { is_advice: true, advice_kind: "restaurant" }
+    },
+    {
+      query: "Find the cheapest flight from Hamburg to Lisbon and reserve a car at the airport with the best ratings.",
+      class: "recommendation-then-action",
+      expected: { is_advice: true, advice_kind: null }
+    },
+    {
+      query: "What's the rating for 'The Aldine Berlin'?",
+      class: "named-entity-verify",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "Look up the address for 'Hotel Sankt Florian' in Vienna.",
+      class: "named-entity-verify",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "Does 'Casa Petrarca' do Sunday brunch?",
+      class: "named-entity-verify",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "Tell me the price range for 'Northwind Car Rentals' in Madrid.",
+      class: "named-entity-verify",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "When does the rental counter at Lisbon airport open on weekdays?",
+      class: "factual-lookup",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "How much per day is parking at the Berlin Hauptbahnhof Hertz location?",
+      class: "factual-lookup",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "Book me at 'Hotel Sankt Florian' from June 1 to June 4.",
+      class: "booking-named",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "Reserve a table for two at 'Trattoria del Borgo' on Friday at 7:30 pm.",
+      class: "booking-named",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "Send my hotel confirmation forward to my assistant at jenna\@example.com.",
+      class: "pure-side-effect",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "Add a reminder to my calendar for Thursday at 5pm to call the rental company.",
+      class: "pure-side-effect",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "Check 'The Aldine Berlin' for me. If it's rated above 4, book it for May 5–7.",
+      class: "conditional-verify-named",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "Look up 'Casa Petrarca's rating. If it's above 4, add a reminder to my calendar for Friday at 8pm.",
+      class: "conditional-verify-named",
+      expected: { is_advice: false, advice_kind: null }
+    },
+    {
+      query: "If 'Northwind Car Rentals' has any SUVs available, reserve one for me from June 1 to June 7.",
+      class: "conditional-verify-named",
+      expected: { is_advice: false, advice_kind: null }
+    }
+  ]
+]
+
+exe @toolRouterExemplars() = [
+  => [
+    {
+      query: "What's the best-rated hotel in Berlin?",
+      class: "single-set-hotel",
+      expected: { tool_sets: ["hotel"] }
+    },
+    {
+      query: "Top-rated Italian restaurant in Lisbon for Sunday lunch.",
+      class: "single-set-restaurant",
+      expected: { tool_sets: ["restaurant"] }
+    },
+    {
+      query: "Find me a cheap car rental in Madrid for three days.",
+      class: "single-set-car",
+      expected: { tool_sets: ["car"] }
+    },
+    {
+      query: "Find flights from Hamburg to Lisbon next Friday.",
+      class: "single-set-flight",
+      expected: { tool_sets: ["flight"] }
+    },
+    {
+      query: "Top-rated hotel and best dinner spot in Kyoto for the weekend.",
+      class: "multi-set-hotel-restaurant",
+      expected: { tool_sets: ["hotel", "restaurant"] }
+    },
+    {
+      query: "Recommend a hotel, a car rental, and a restaurant in Lisbon.",
+      class: "multi-set-three",
+      expected: { tool_sets: ["hotel", "car", "restaurant"] }
+    },
+    {
+      query: "Cheapest flight to Berlin and a well-rated car rental at the airport.",
+      class: "multi-set-flight-car",
+      expected: { tool_sets: ["flight", "car"] }
+    },
+    {
+      query: "Pick a highly-rated hotel in Berlin and put a booking reminder on my calendar for Thursday.",
+      class: "with-calendar",
+      expected: { tool_sets: ["hotel", "calendar"] }
+    },
+    {
+      query: "Find me a great restaurant in Madrid and add it to my calendar for Saturday at 8pm.",
+      class: "with-calendar",
+      expected: { tool_sets: ["restaurant", "calendar"] }
+    },
+    {
+      query: "Suggest the best hotel in Madrid and email the booking details to my partner at sam\@example.com.",
+      class: "with-email",
+      expected: { tool_sets: ["hotel", "email"] }
+    },
+    {
+      query: "Pick a highly-rated car rental in Lisbon and forward the company info to my colleague at li\@example.com.",
+      class: "with-email",
+      expected: { tool_sets: ["car", "email"] }
+    },
+    {
+      query: "Find a restaurant in Lisbon that fits my dietary preferences from my profile.",
+      class: "mentions-user-prefs",
+      expected: { tool_sets: ["restaurant", "user"] }
+    },
+    {
+      query: "Use my saved preferences to recommend a hotel in Vienna.",
+      class: "mentions-user-prefs",
+      expected: { tool_sets: ["hotel", "user"] }
+    },
+    {
+      query: "Where can I stay in Florence under 200 a night?",
+      class: "synonym-hotel",
+      expected: { tool_sets: ["hotel"] }
+    },
+    {
+      query: "Need wheels for a week around Los Angeles — best ratings, electric if possible.",
+      class: "synonym-car",
+      expected: { tool_sets: ["car"] }
+    },
+    {
+      query: "Best dining options in Madrid this weekend.",
+      class: "synonym-restaurant",
+      expected: { tool_sets: ["restaurant"] }
+    },
+    {
+      query: "How do I fly from Paris to Rome on a Wednesday?",
+      class: "synonym-flight",
+      expected: { tool_sets: ["flight"] }
+    },
+    {
+      query: "Help me plan a 3-day trip to Berlin.",
+      class: "ambiguity-broad",
+      expected: { tool_sets: ["hotel", "restaurant", "car", "flight"] }
+    },
+    {
+      query: "I'm visiting friends in Madrid this weekend, anything I should book?",
+      class: "ambiguity-broad",
+      expected: { tool_sets: ["hotel", "restaurant", "car", "flight"] }
+    },
+    {
+      query: "Find me a hotel in Berlin under 200 a night. After I check in, I'll find a coffee shop nearby on my own.",
+      class: "agent-vs-self-action",
+      expected: { tool_sets: ["hotel"] }
+    },
+    {
+      query: "Recommend a car rental in Los Angeles with the best rating. I'll book the flight separately.",
+      class: "agent-vs-self-action",
+      expected: { tool_sets: ["car"] }
+    },
+    {
+      query: "Help me find a hotel in Vienna under 250. My friend is handling the dinner reservations herself.",
+      class: "agent-vs-self-action",
+      expected: { tool_sets: ["hotel"] }
+    }
+  ]
+]
+
+export { @adviceExemplars, @toolRouterExemplars }

@@ -1,0 +1,116 @@
+>> tests/suites/rig/classify.mld
+>>
+>> Plain-assertion tests for @rig.classify (parallel classifier fan-out).
+>> Stub classifiers — no LLM calls. Verifies the wrapper machinery:
+>> name-keyed merging, query pass-through, schema-coerced output, empty
+>> map handling, and parallel ordering independence.
+
+import { @assertOk, @assertEq, @assertHas, @assertNeq } from "../../assert.mld"
+import { @suite, @group, @runSuites } from "../../runner.mld"
+import { @classifyParallel } from "../../../rig/classify.mld"
+
+>> --- Stub classifiers (no LLM) -------------------------------------------
+
+exe @stubA(query) = [
+  => { result: "A", echoed: @query }
+]
+
+exe @stubB(query) = [
+  => { result: "B", upper: @query.toUpperCase() }
+]
+
+exe @stubLength(query) = [
+  => { length: @query.length }
+]
+
+>> Schema-coerced classifier — verifies that `=> record @schema`
+>> coercion at the classifier exe survives the fan-out.
+record @echoShape = {
+  data: [result: string, echoed: string],
+  validate: "strict"
+}
+
+exe @stubCoerced(query) = [
+  => { result: "ok", echoed: @query }
+] => record @echoShape
+
+>> --- Tests ---------------------------------------------------------------
+
+exe @testEmptyClassifierMapReturnsEmpty() = [
+  let @r = @classifyParallel("hello", {})
+  => @assertEq(@r, {})
+]
+
+exe @testSingleClassifierReturnsNamedResult() = [
+  let @r = @classifyParallel("hello", { a: @stubA })
+  => @assertEq(@r.a, { result: "A", echoed: "hello" })
+]
+
+exe @testMultipleClassifiersMergeByName_a() = [
+  let @r = @classifyParallel("hello", { a: @stubA, b: @stubB })
+  => @assertEq(@r.a, { result: "A", echoed: "hello" })
+]
+
+exe @testMultipleClassifiersMergeByName_b() = [
+  let @r = @classifyParallel("hello", { a: @stubA, b: @stubB })
+  => @assertEq(@r.b, { result: "B", upper: "HELLO" })
+]
+
+exe @testNamedKeyPreservesArbitraryIdentifier() = [
+  let @r = @classifyParallel("q", { my_classifier_name: @stubA })
+  => @assertHas(@r, "my_classifier_name")
+]
+
+exe @testQueryPassedThroughVerbatim() = [
+  let @r = @classifyParallel("custom-query-12345", { a: @stubA })
+  => @assertEq(@r.a.echoed, "custom-query-12345")
+]
+
+exe @testSchemaCoercedClassifierResultPreserved() = [
+  let @r = @classifyParallel("hi", { c: @stubCoerced })
+  => @assertEq(@r.c.result, "ok")
+]
+
+exe @testThreeClassifiersAllFire() = [
+  let @r = @classifyParallel("abcdef", { a: @stubA, b: @stubB, l: @stubLength })
+  => @assertEq(@r.l.length, 6)
+]
+
+exe @testEmptyQueryStillFans() = [
+  let @r = @classifyParallel("", { a: @stubA })
+  => @assertEq(@r.a.echoed, "")
+]
+
+>> --- Suite ---------------------------------------------------------------
+
+var @rigClassifySuite = @suite("rig/classify", [
+  @group("fan-out", [
+    @testEmptyClassifierMapReturnsEmpty,
+    @testSingleClassifierReturnsNamedResult,
+    @testMultipleClassifiersMergeByName_a,
+    @testMultipleClassifiersMergeByName_b,
+    @testThreeClassifiersAllFire
+  ], {}),
+  @group("contract", [
+    @testNamedKeyPreservesArbitraryIdentifier,
+    @testQueryPassedThroughVerbatim,
+    @testSchemaCoercedClassifierResultPreserved,
+    @testEmptyQueryStillFans
+  ], {})
+], {})
+
+export { @rigClassifySuite }
+
+>> --- Standalone runner ---------------------------------------------------
+
+var @result = @runSuites([@rigClassifySuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+if @result.skippedLine != "" [ show @result.skippedLine ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

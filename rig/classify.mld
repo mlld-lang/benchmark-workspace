@@ -1,0 +1,52 @@
+>> rig/classify.mld
+>>
+>> Parallel classifier fan-out at task entry.
+>>
+>> A classifier is an exe `(query) -> typedJson`. Output validation is
+>> the classifier's responsibility (typically `=> record @schema`).
+>>
+>> @classifyParallel(query, classifiers) takes a name->exe map, fans
+>> the entries out via `for parallel`, and returns a name->result map.
+>>
+>> Wall time is dominated by the slowest classifier. Each entry should
+>> own its own error handling — a classifier exe that wants a default
+>> on failure should wrap its call in mlld's normal error handling
+>> (e.g. `for parallel` errors yield `.error`-bearing values; a wrapper
+>> exe can catch and substitute).
+>>
+>> Rig features that consume classification take their flag from the
+>> caller's @rig.run config, not from peeking inside a classification
+>> map. The contract here is one-way: bench fans out, bench computes
+>> flags, bench passes flags to rig.
+
+>> Merge: take the array of {name, value} pairs and build a name→value
+>> map. Done in JS but the values are pre-flattened to plain JSON via
+>> JSON.parse(JSON.stringify(.data)) so mlld's metadata wrappers can't
+>> introduce cycles when the merged object flows downstream into the
+>> rig debug envelope.
+exe @mergeClassificationResults(pairs) = js {
+  const out = {};
+  for (const p of pairs) {
+    const raw = p.value && typeof p.value === 'object' && 'data' in p.value ? p.value.data : p.value;
+    try {
+      out[p.name] = JSON.parse(JSON.stringify(raw));
+    } catch (e) {
+      out[p.name] = null;
+    }
+  }
+  return out;
+}
+
+exe @classifyParallel(query, classifiers) = [
+  let @entries = @classifiers.mx.entries
+  if @entries.length == 0 [ => {} ]
+  let @results = for parallel(@entries.length) @entry in @entries [
+    let @name = @entry[0]
+    let @clsExe = @entry[1]
+    let @value = @clsExe(@query)
+    => { name: @name, value: @value }
+  ]
+  => @mergeClassificationResults(@results)
+]
+
+export { @classifyParallel }

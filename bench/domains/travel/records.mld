@@ -8,7 +8,7 @@
 >> details.
 
 record @hotel = {
-  facts: [name: string],
+  facts: [name: { type: string, kind: "hotel_name" }],
   data: {
     trusted: [city: string?, price_range: string?, address: string?, rating: string?]
   },
@@ -16,12 +16,13 @@ record @hotel = {
   display: {
     default: [{ ref: "name" }, city, price_range, address, rating],
     worker: [{ ref: "name" }, city, price_range, address, rating],
-    planner: [{ ref: "name" }, city, price_range, address, rating]
+    planner: [{ ref: "name" }, city, price_range, address, rating],
+    advice: [{ ref: "name" }, city, price_range, address, rating]
   }
 }
 
 record @hotel_review = {
-  facts: [name: string],
+  facts: [name: { type: string, kind: "hotel_name" }],
   data: {
     trusted: [rating: string?],
     untrusted: [review_blob: string?]
@@ -30,12 +31,13 @@ record @hotel_review = {
   display: {
     default: [{ ref: "name" }, rating],
     worker: [{ ref: "name" }, review_blob, rating],
-    planner: [{ ref: "name" }, rating]
+    planner: [{ ref: "name" }, rating],
+    advice: [{ ref: "name" }, rating]
   }
 }
 
 record @restaurant = {
-  facts: [name: string],
+  facts: [name: { type: string, kind: "restaurant_name" }],
   data: {
     trusted: [
       city: string?,
@@ -52,12 +54,13 @@ record @restaurant = {
   display: {
     default: [{ ref: "name" }, city, address, rating, price_per_person, cuisine_type, dietary_restrictions, operating_hours, contact_information],
     worker: [{ ref: "name" }, city, address, rating, price_per_person, cuisine_type, dietary_restrictions, operating_hours, contact_information],
-    planner: [{ ref: "name" }, city, address, rating, price_per_person, cuisine_type, dietary_restrictions, operating_hours]
+    planner: [{ ref: "name" }, city, address, rating, price_per_person, cuisine_type, dietary_restrictions, operating_hours],
+    advice: [{ ref: "name" }, city, address, rating, price_per_person, cuisine_type, dietary_restrictions, operating_hours]
   }
 }
 
 record @restaurant_review = {
-  facts: [name: string],
+  facts: [name: { type: string, kind: "restaurant_name" }],
   data: {
     trusted: [rating: string?],
     untrusted: [review_blob: string?]
@@ -66,12 +69,13 @@ record @restaurant_review = {
   display: {
     default: [{ ref: "name" }, rating],
     worker: [{ ref: "name" }, review_blob, rating],
-    planner: [{ ref: "name" }, rating]
+    planner: [{ ref: "name" }, rating],
+    advice: [{ ref: "name" }, rating]
   }
 }
 
 record @car_company = {
-  facts: [name: string],
+  facts: [name: { type: string, kind: "car_rental_name" }],
   data: {
     trusted: [
       city: string?,
@@ -87,12 +91,13 @@ record @car_company = {
   display: {
     default: [{ ref: "name" }, city, address, rating, price_per_day, car_types, fuel_options, contact_information],
     worker: [{ ref: "name" }, city, address, rating, price_per_day, car_types, fuel_options, contact_information],
-    planner: [{ ref: "name" }, city, rating, price_per_day, car_types, fuel_options]
+    planner: [{ ref: "name" }, city, rating, price_per_day, car_types, fuel_options],
+    advice: [{ ref: "name" }, city, rating, price_per_day, car_types, fuel_options]
   }
 }
 
 record @car_company_review = {
-  facts: [name: string],
+  facts: [name: { type: string, kind: "car_rental_name" }],
   data: {
     trusted: [rating: string?],
     untrusted: [review_blob: string?]
@@ -101,14 +106,19 @@ record @car_company_review = {
   display: {
     default: [{ ref: "name" }, rating],
     worker: [{ ref: "name" }, review_blob, rating],
-    planner: [{ ref: "name" }, rating]
+    planner: [{ ref: "name" }, rating],
+    advice: [{ ref: "name" }, rating]
   }
 }
 
 >> Passport / bank / credit card fields exist for schema fidelity but are
 >> intentionally omitted from every display projection in this pass.
 record @user_info = {
-  facts: [first_name: string, last_name: string, email: string],
+  facts: [
+    first_name: string,
+    last_name: string,
+    email: { type: string, kind: "email" }
+  ],
   data: {
     trusted: [
       phone_number: string?,
@@ -134,7 +144,10 @@ record @flight_info = {
 }
 
 record @calendar_evt = {
-  facts: [id_: handle, participants: array?],
+  facts: [
+    id_: { type: handle, kind: "calendar_event_id" },
+    participants: { type: array?, kind: "email" }
+  ],
   data: {
     trusted: [start_time: string?, end_time: string?],
     untrusted: [title: string?, description: string?, location: string?]
@@ -172,7 +185,7 @@ record @travel_fact = {
 >> Write input records live with the domain records so travel's tool
 >> catalog can reference the fact/data split directly.
 record @create_calendar_event_inputs = {
-  facts: [participants: array?],
+  facts: [participants: { type: array?, kind: "email" }],
   data: {
     trusted: [title: string, location: string?, start_time: string, end_time: string],
     untrusted: [description: string?]
@@ -182,13 +195,17 @@ record @create_calendar_event_inputs = {
 }
 
 record @cancel_calendar_event_inputs = {
-  facts: [event_id: handle],
+  facts: [event_id: { type: handle, kind: "calendar_event_id" }],
   data: [],
   validate: "strict"
 }
 
 record @send_email_inputs = {
-  facts: [recipients: array, cc: array?, bcc: array?],
+  facts: [
+    recipients: { type: array, kind: "email" },
+    cc: { type: array?, kind: "email" },
+    bcc: { type: array?, kind: "email" }
+  ],
   data: {
     trusted: [subject: string, attachments: array?],
     untrusted: [body: string]
@@ -199,7 +216,7 @@ record @send_email_inputs = {
 }
 
 record @reserve_hotel_inputs = {
-  facts: [hotel: string],
+  facts: [hotel: { type: string, kind: "hotel_name" }],
   data: {
     trusted: [start_day: string, end_day: string]
   },
@@ -207,7 +224,7 @@ record @reserve_hotel_inputs = {
 }
 
 record @reserve_car_rental_inputs = {
-  facts: [company: string],
+  facts: [company: { type: string, kind: "car_rental_name" }],
   data: {
     trusted: [start_time: string, end_time: string]
   },
@@ -215,7 +232,7 @@ record @reserve_car_rental_inputs = {
 }
 
 record @reserve_restaurant_inputs = {
-  facts: [restaurant: string],
+  facts: [restaurant: { type: string, kind: "restaurant_name" }],
   data: {
     trusted: [start_time: string]
   },

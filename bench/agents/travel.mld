@@ -1,13 +1,47 @@
 import { @rig } from "../../rig/index.mld"
 import { @records } from "../domains/travel/records.mld"
-import { @tools } from "../domains/travel/tools.mld"
+import { @tools, @toolSets } from "../domains/travel/tools.mld"
 import { @travelAddendum, @travelDeriveAddendum } from "../domains/travel/prompts/planner-addendum.mld"
-import { @routeTravel } from "../domains/travel/router.mld"
+import { @travelAdviceClassifier } from "../domains/travel/classifiers/advice.mld"
+import { @travelToolRouter } from "../domains/travel/classifiers/tool-router.mld"
 
 import { @query, @model } from @payload
 
+>> Classifier fan-out at task entry — one LLM call per classifier in
+>> parallel. Output drives:
+>>   - @adviceMode → routes compose through @dispatchAdvice with
+>>     `role:advice` projection, structurally stripping `review_blob`
+>>     and other untrusted-prose fields before any worker LLM call.
+>>   - @toolFilter → narrows the planner's tool surface to the families
+>>     the task actually needs.
+>>
+>> The bench currently fails INFRASTRUCTURE ERROR with this wiring —
+>> referencing classifier-exe output anywhere in this module poisons
+>> downstream planner-exe arg binding (stack overflow at planner.mld:1265).
+>> Tracked at ~/mlld/mlld/.tickets/m-fff2 (mlld interpreter side) and
+>> clean/.tickets/b-a496 (bench-side). The classifiers themselves are
+>> validated standalone (100% on tuning + AgentDojo eval per
+>> bench/tests/travel-classifiers.mld); the dispatch + projection
+>> mechanism is verified zero-LLM (tests/suites/rig/advice-gate.mld)
+>> and live-LLM at the compose level (bench/tests/travel-advice-gate-live.mld).
+>> The bug is specifically in how mlld binds module-level classifier
+>> output through to a separately-imported worker exe call.
+
+var @cls = @rig.classify(@query, {
+  tools: @travelToolRouter,
+  advice: @travelAdviceClassifier
+})
+
+exe @flattenSets(setNames, sets) = js {
+  if (!Array.isArray(setNames) || setNames.length === 0) return null;
+  return setNames.flatMap(n => sets[n] || []);
+}
+
+var @defaultSets = ["hotel", "restaurant", "car", "flight", "calendar", "email", "user"]
+var @resolvedSets = @cls.tools.tool_sets ?? @defaultSets
+var @toolFilter = @flattenSets(@resolvedSets, @toolSets) ?? @flattenSets(@defaultSets, @toolSets)
+var @adviceMode = @cls.advice.is_advice ?? false
 var @workerModel = @payload.worker_model ?? @model
-var @toolFilter = @routeTravel(@query, { model: @workerModel, task_id: @payload.task_id ?? null })
 
 var @result = @rig.run({
   suite: "travel",
@@ -17,6 +51,7 @@ var @result = @rig.run({
   model: @model,
   workerModel: @payload.worker_model,
   toolFilter: @toolFilter,
+  adviceMode: @adviceMode,
   plannerAddendum: @travelAddendum,
   deriveAddendum: @travelDeriveAddendum,
   harness: @payload.harness,

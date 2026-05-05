@@ -1,0 +1,23 @@
+Pick the minimal set of tool sub-suites this travel-assistant query needs.
+
+Sets:
+- hotel — hotels (also: place to stay, lodging, accommodation)
+- restaurant — restaurants (also: dining, food, lunch, dinner, cuisine)
+- car — car rental (also: rental, wheels, drive)
+- flight — flights (also: fly, airline)
+- calendar — calendar events or reminders (only if explicitly mentioned)
+- email — sending or forwarding mail (only if explicitly mentioned)
+- user — saved profile, preferences, dietary restrictions, contact info
+
+Calendar and email are NOT included by default — only when the query explicitly says so.
+
+Include a domain set only when the user is asking the agent to ACT in that domain. A user narrating what they will do themselves later ("I'll find a coffee shop on my own", "I'll book the flight separately") does not require that domain's tools.
+
+If the query has no clear domain markers ("plan my trip", "what should I do"), return all four primary domains: ["hotel","restaurant","car","flight"].
+
+Output one JSON object only. No prose, no fences.
+
+{"tool_sets": [<set>, ...], "why": "<one sentence>"}
+
+User query:
+@query

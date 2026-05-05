@@ -18,6 +18,8 @@ import {
   @toolPayloadArgs
 } from "./tooling.mld"
 import { @compileExecuteIntent, @lowerSelectionRef } from "./intent.mld"
+import { @classifyParallel } from "./classify.mld"
+import { @llmCall, @defaultHarness } from "./runtime.mld"
 exe @rigBuild(config) = [
   let @validated = @validateConfig(@config)
   if !@validated.ok [ => @validated ]
@@ -61,6 +63,9 @@ exe @rigRun(agent, query) = [
 var @rig = {
   build: @rigBuild,
   run: @rigRun,
+  classify: @classifyParallel,
+  llmCall: @llmCall,
+  defaultHarness: @defaultHarness,
   validateConfig: @validateConfig,
   synthesizePolicy: @synthesizedPolicy,
   compileExecuteIntent: @compileExecuteIntent,

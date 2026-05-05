@@ -347,10 +347,39 @@ exe @previewFields(inputValue) = when [
   * => []
 ]
 
+>> @nullFields — companion to @previewFields. Returns the keys whose value
+>> is explicitly null (or undefined) at the same projection level previewFields
+>> walks. Used by extract/derive to surface to the planner which schema-declared
+>> fields the worker did not fill. The planner reads `null_fields` on the
+>> result and pivots (use a different source class for that arg, fetch a
+>> richer source, or skip the arg) without having to bounce off rehearse.
+exe @nullFields(inputValue) = when [
+  !@inputValue.isDefined() => []
+  @inputValue.data.items.isDefined() &&
+    @typeof(@inputValue.data.items) == "array" &&
+    @inputValue.data.items.length > 0 &&
+    @typeof(@inputValue.data.items[0]) == "object" => for @k, @v in @inputValue.data.items[0] when @v == null => `@k`
+  @inputValue.data.isDefined() &&
+    @typeof(@inputValue.data) == "array" &&
+    @inputValue.data.length > 0 &&
+    @typeof(@inputValue.data[0]) == "object" => for @k, @v in @inputValue.data[0] when @v == null => `@k`
+  @inputValue.items.isDefined() &&
+    @typeof(@inputValue.items) == "array" &&
+    @inputValue.items.length > 0 &&
+    @typeof(@inputValue.items[0]) == "object" => for @k, @v in @inputValue.items[0] when @v == null => `@k`
+  @typeof(@inputValue) == "array" &&
+    @inputValue.length > 0 &&
+    @typeof(@inputValue[0]) == "object" => for @k, @v in @inputValue[0] when @v == null => `@k`
+  @inputValue.data.isDefined() && @typeof(@inputValue.data) == "object" => for @k, @v in @inputValue.data when @v == null => `@k`
+  @typeof(@inputValue) == "object" => for @k, @v in @inputValue when @v == null => `@k`
+  * => []
+]
+
 exe @displayModeKeys(role) = [
   let @plainRole = when [
     @role == "role:planner" => "planner"
     @role == "role:worker" => "worker"
+    @role == "role:advice" => "advice"
     * => @role
   ]
   => [@role, @plainRole]
@@ -566,6 +595,21 @@ exe @workerStateSummary(agent, state) = [
     resolved: @projectResolvedSummary(@agent.records ?? {}, @state, "role:worker"),
     extracted: @projectNamedState(@agent.records ?? {}, @state.extracted, "role:worker"),
     derived: @projectNamedState(@agent.records ?? {}, @state.derived, "role:worker")
+  }
+]
+
+>> Advice-mode state summary. Projects through `role:advice` so records'
+>> data.untrusted fields (e.g. @hotel_review.review_blob) are dropped
+>> structurally before any worker LLM call sees the state. This is the
+>> primary structural defense against recommendation-hijack attacks per
+>> how-we-defend-advice.md — review prose can carry injection text;
+>> rating, price, and other fact-classified or trusted-data fields
+>> cannot be planted by an attacker.
+exe @adviceVisibleState(agent, state) = [
+  => {
+    resolved: @projectResolvedSummary(@agent.records ?? {}, @state, "role:advice"),
+    extracted: @projectNamedState(@agent.records ?? {}, @state.extracted, "role:advice"),
+    derived: @projectNamedState(@agent.records ?? {}, @state.derived, "role:advice")
   }
 ]
 
@@ -1203,6 +1247,7 @@ export {
   @normalizeResolvedValues,
   @extractToolResultValue,
   @previewFields,
+  @nullFields,
   @recordDisplayMode,
   @displayEntry,
   @maskPreview,
@@ -1214,6 +1259,7 @@ export {
   @projectNamedState,
   @plannerVisibleState,
   @workerStateSummary,
+  @adviceVisibleState,
   @rigState,
   @emptyState,
   @mergeResolvedEntries,

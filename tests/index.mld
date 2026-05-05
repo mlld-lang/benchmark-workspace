@@ -10,10 +10,17 @@ import { @runSuites } from "./runner.mld"
 
 >> Import suites below. Each suite file exports a @<name>Suite variable.
 import { @templateSuite } from "./suites/_template.mld"
->> import { @stateProjectionSuite } from "./suites/rig/state-projection.mld"
+import { @rigClassifySuite } from "./suites/rig/classify.mld"
+import { @adviceGateSuite } from "./suites/rig/advice-gate.mld"
+import { @travelClassifierLabelsSuite } from "./suites/bench/travel-classifier-labels.mld"
+import { @travelClassifierExemplarsSuite } from "./suites/bench/travel-classifier-exemplars.mld"
 
 var @suites = [
-  @templateSuite
+  @templateSuite,
+  @rigClassifySuite,
+  @adviceGateSuite,
+  @travelClassifierLabelsSuite,
+  @travelClassifierExemplarsSuite
 ]
 
 var @result = @runSuites(@suites)

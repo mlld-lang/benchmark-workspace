@@ -22,7 +22,7 @@ import {
 } from "./runtime.mld"
 import { @runPlannerSession } from "./workers/planner.mld"
 
-exe @synthesizedPolicy(tools, overridePolicy) = [
+exe @synthesizedPolicy(tools, overridePolicy, options) = [
   let @rules = [
     "no-secret-exfil",
     "no-sensitive-exfil",
@@ -37,6 +37,13 @@ exe @synthesizedPolicy(tools, overridePolicy) = [
     @hasNovelUrlRisk(@tools) => @rules.concat(["no-novel-urls"])
     * => @rules
   ]
+  >> The advice gate (rig/workers/advice.mld) declares its own
+>>   module-scope policy with `no-influenced-advice` enabled. The
+>>   rule fires automatically on `advice`-labeled exes called from
+>>   that module — synthesizedPolicy doesn't need to add it here. See
+>>   how-we-defend-advice.md for the layering rationale.
+  let @baseInfluencedDeny = ["destructive", "exfil"]
+  let @operations = @synthesizedOperations(@tools)
   >> facts.requirements is auto-derived by mlld policy.build from
   >> kind-tagged fact fields on input records (records.mld). See
   >> SECURITY-RIG-WRONG-RECORD-BYPASS.md for the design. Rig no longer
@@ -50,9 +57,9 @@ exe @synthesizedPolicy(tools, overridePolicy) = [
     capabilities: {
       allow: ["cmd:*", "sh", "js", "node", "fs:r:**", "fs:w:**", "network"]
     },
-    operations: @synthesizedOperations(@tools),
+    operations: @operations,
     labels: {
-      influenced: { deny: ["destructive", "exfil"] }
+      influenced: { deny: @baseInfluencedDeny }
     },
     authorizations: @synthesizedAuthorizations(@tools)
   }
@@ -142,7 +149,7 @@ exe @validateConfig(config) = [
   let @overrides = @config.overrides ?? {}
   let @runtimeCollection = @config.toolsCollection ?? @config.tools
   let @basePolicy = when [
-    @defense == "defended" => @synthesizedPolicy(@config.tools, @overrides.policy)
+    @defense == "defended" => @synthesizedPolicy(@config.tools, @overrides.policy, {})
     * => null
   ]
   => {
@@ -173,7 +180,8 @@ exe @validateConfig(config) = [
     deriveAddendum: @config.deriveAddendum ?? "",
     extractAddendum: @config.extractAddendum ?? "",
     composeAddendum: @config.composeAddendum ?? "",
-    toolFilter: @config.toolFilter ?? null
+    toolFilter: @config.toolFilter ?? null,
+    adviceMode: @config.adviceMode ?? false
   }
 ]
 

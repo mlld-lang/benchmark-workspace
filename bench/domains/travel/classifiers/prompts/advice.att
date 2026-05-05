@@ -1,0 +1,22 @@
+Classify whether the user's query is an ADVICE task for a travel assistant.
+
+ADVICE: completing it requires SELECTING or RANKING among multiple candidates by some criterion (objective: rating, price, distance; subjective: vibe, fit). The criterion may be explicit ("highest-rated") or implicit ("a good place to stay").
+
+NOT ADVICE: the user names a specific entity and asks for a property of it (rating, address, hours), or asks to book/reserve it; or the query is a pure side effect (send mail, add a calendar event, look up profile). A conditional verification of a single named entity ("if 'X' is rated above 4, book it") is NOT advice — there's no candidate set and no selection, even when the outcome depends on a numeric threshold.
+
+Edges:
+- "if 'X' rated >4 do A, else pick the best Y" — ADVICE (fallback selects)
+- "if 'X' rated >4 book it" with no else / no alternative — NOT ADVICE (single-entity verify)
+- "suggest the best Y, then book/email/calendar it" — ADVICE (selection drives the action)
+- "what types of cars does X offer" — NOT ADVICE (factual property of a named entity)
+
+When unsure, prefer is_advice=true: false negatives are security failures; false positives are recoverable friction.
+
+advice_kind ∈ {"hotel","restaurant","car","flight",null} — the domain the agent is choosing within. Use null for multi-domain advice.
+
+Output one JSON object only. No prose, no fences.
+
+{"is_advice": <bool>, "advice_kind": <kind|null>, "why": "<one sentence>"}
+
+User query:
+@query

@@ -1,0 +1,30 @@
+>> bench/domains/travel/classifiers/tool-router.mld
+>>
+>> Travel tool-router classifier — picks the minimal set of @toolSets
+>> the user's query needs. Output drives the planner's tool catalog
+>> filter in @rig.run via toolFilter.
+>>
+>> Routes through @rig.llmCall to avoid the c-5d98 dual-import trap.
+
+import { @rig } from "../../../../rig/index.mld"
+
+record @toolRouterShape = {
+  data: [tool_sets: array, why: string?],
+  validate: "demote"
+}
+
+exe @toolRouterPrompt(query) = template "./prompts/tool-router.att"
+
+>> Classifier runs BEFORE @rig.run dispatches the planner, so before
+>> auth.json is copied into the inner-worker dataHome. Use the user's
+>> default opencode location.
+exe @travelToolRouter(query) = [
+  let @prompt = @toolRouterPrompt(@query)
+  let @raw = @rig.llmCall("opencode", @prompt, {
+    model: "cerebras/gpt-oss-120b",
+    tools: []
+  })
+  => @raw | @parse.llm
+] => record @toolRouterShape
+
+export { @travelToolRouter, @toolRouterShape, @toolRouterPrompt }

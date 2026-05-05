@@ -1,0 +1,36 @@
+>> bench/domains/travel/classifiers/advice.mld
+>>
+>> Travel advice classifier — decides whether the user's query asks the
+>> agent to select/rank among candidates. Output drives the advice gate
+>> in rig: when is_advice=true, the synthesized policy adds the advice
+>> deny-flow on compose so influenced state cannot reach final advice
+>> output.
+>>
+>> Routes through @rig.llmCall to avoid the c-5d98 dual-import trap:
+>> bench-layer files must not import @mlld/opencode directly while
+>> rig also imports it.
+
+import { @rig } from "../../../../rig/index.mld"
+
+record @adviceClassifierShape = {
+  data: [is_advice: boolean, advice_kind: string?, why: string?],
+  validate: "demote"
+}
+
+exe @advicePrompt(query) = template "./prompts/advice.att"
+
+>> Classifier runs BEFORE @rig.run dispatches the planner, which means
+>> it runs before @prepareOpencodeInnerWorkerHome has copied auth.json
+>> into the inner-worker dataHome. Use the user's default opencode
+>> location (no dir overrides) so auth resolves correctly. Speed cost
+>> is small — one ~1s LLM call per task at entry.
+exe @travelAdviceClassifier(query) = [
+  let @prompt = @advicePrompt(@query)
+  let @raw = @rig.llmCall("opencode", @prompt, {
+    model: "cerebras/gpt-oss-120b",
+    tools: []
+  })
+  => @raw | @parse.llm
+] => record @adviceClassifierShape
+
+export { @travelAdviceClassifier, @adviceClassifierShape, @advicePrompt }
