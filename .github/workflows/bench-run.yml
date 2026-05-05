@@ -57,10 +57,6 @@ on:
         required: false
         type: boolean
         default: false
-      heap:
-        description: 'MLLD_HEAP override for the mlld Node process (e.g. "8g"). Empty = default.'
-        required: false
-        default: ''
       image_tag:
         description: 'Image tag (e.g., main, sha-abc1234)'
         required: false
@@ -222,7 +218,6 @@ jobs:
           ATTACK: ${{ inputs.attack }}
           RESUME: ${{ inputs.resume && '1' || '' }}
           MLLD_TRACE_VAL: ${{ inputs.trace && 'effects' || '' }}
-          MLLD_HEAP: ${{ inputs.heap }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
         run: |
@@ -236,7 +231,6 @@ jobs:
             -e RUN_ID -e SUITE -e TASKS -e PLANNER -e WORKER -e HARNESS \
             -e PARALLELISM -e STAGGER -e DEFENSE -e ATTACK -e RESUME \
             -e MLLD_TRACE="$MLLD_TRACE_VAL" \
-            -e MLLD_HEAP \
             -e CEREBRAS_API_KEY -e TOGETHER_API_KEY \
             "$IMAGE_REF"
 

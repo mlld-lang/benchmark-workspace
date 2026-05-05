@@ -216,12 +216,11 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 
 | Target | Shape | Parallelism | Tasks | Notes |
 |---|---|---|---|---|
-| `workspace` | 32x64 | -p 40 (caps at 36) | 36 active (UT13/19/25/31 oos) | Heaviest — needs 64 GB |
-| `travel` (with workspace) | 16x32 | -p 5 | 20 | Throttled: shared 64 vCPU cap + c-63fe |
-| `travel` (solo, no workspace) | 32x64 | -p 20 | 20 | Auto-bumped when workspace not in dispatch |
-| `banking` | 8x16 | -p 40 (caps at 15) | 15 active (UT0 oos) | Light |
-| `slack` | 8x16 | -p 40 (caps at 14) | 14 active (oos UT2/11/16-20) | Light |
-| (no args) | per-target | per-target | all 4 above | Peak 64 vCPU — exact Team-plan fit |
+| `workspace` | 32x64 | -p 20 | 40 | Heaviest — needs 64 GB |
+| `travel` | 32x64 | -p 20 | 20 | Full parallelism; no fan-out throttle |
+| `banking` | 16x32 | -p 16 | 16 | Light |
+| `slack` | 32x64 | -p 21 | 21 | Light |
+| (no args) | per-target | per-target | all 4 above | Dispatched concurrently |
 
 ### One-off / targeted runs
 
@@ -233,34 +232,11 @@ gh workflow run bench-run.yml -f suite=workspace -f tasks="user_task_8 user_task
 gh workflow run bench-run.yml -f suite=banking -f tasks=user_task_2 -f trace=true
 ```
 
-Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagger`, `defense`, `trace`, `image_tag`, `shape`, `heap`.
+Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagger`, `defense`, `trace`, `image_tag`, `shape`.
 
 ### Where to run travel
 
-c-63fe: travel's mlld Node process pushes ~5 GB heap, and without an explicit cap the default Node heap limit hits before the container OOMs — surfacing as MCP "Not connected" cascades. We mitigate via `MLLD_HEAP=8g`, which `scripts/bench.sh` already passes for travel dispatches. Two reasonable patterns:
-
-**Travel solo → run on Namespace (default, recommended).**
-
-```bash
-scripts/bench.sh travel
-# 32x64 + -p 20 + MLLD_HEAP=8g (set automatically). No competition with other suites for the vCPU cap.
-```
-
-**Full sweep including travel → split: travel local, others remote.**
-
-When you fan out the full bench surface, travel on the Namespace runner shares the 64 vCPU concurrency cap with workspace and gets throttled to `16x32 + -p 5`. Running travel locally instead gives it the whole machine plus an even bigger heap and avoids the c-63fe failure mode entirely:
-
-```bash
-# Terminal 1 — remote: the three other suites in parallel
-scripts/bench.sh workspace banking slack
-
-# Terminal 2 — local: travel at full parallelism, ample heap
-MLLD_HEAP=12g uv run --project bench python3 src/run.py -s travel -d defended -p 20
-```
-
-A 48 GB Mac handles `-p 20` with `MLLD_HEAP=12g` cleanly. Smaller machines: drop to `-p 10` and `MLLD_HEAP=8g`.
-
-If you don't need workspace in the run, prefer pure remote (`scripts/bench.sh travel banking slack`) — simpler, results all land in `runs/<id>/` via `fetch_run.py`.
+`scripts/bench.sh travel` dispatches travel at 32x64 + -p 20. The historic c-63fe fan-out throttle (-p 5) and `MLLD_HEAP=8g` overrides have been removed — the throttle inflated travel wall to ~1000s without buying anything, and the heap ceiling was a workaround for memory growth that should be fixed at the source. If MCP "Not connected" cascades reappear at full parallelism, file a fresh ticket rather than reinstating the throttle.
 
 ### Image freshness
 
@@ -316,7 +292,7 @@ done
 - **Never use `show` in exe functions during bench runs.** It writes to stdout and corrupts the host's JSON parsing. Use `log` (stderr) or `MLLD_TRACE` instead.
 - **Never rename record fields to match MCP parameter names.** The intent compiler maps arg keys to resolved values — the names don't need to match. Field renaming across the MCP boundary destroys StructuredValue metadata.
 - **Run worker tests before and after prompt changes.** `mlld rig/tests/workers/run.mld --no-checkpoint` catches regressions in ~50s. If tests pass too easily, the assertions are too weak.
-- **Workspace and travel remote runs need bigger shapes.** Workspace (36 parallel tasks) needs 32x64 (64 GB). Travel (20 parallel tasks) needs 16x32 (32 GB). Both OOM on 8x16 (exit 137). Banking and slack survive 8x16. `scripts/bench.sh` already sets the right shape per target; if you call `bench-run.yml` directly, pass `-f shape=nscloud-ubuntu-22.04-amd64-32x64` for workspace or `-f shape=nscloud-ubuntu-22.04-amd64-16x32` for travel.
+- **Workspace and travel remote runs need bigger shapes.** Workspace (40 parallel tasks) and travel (20 parallel tasks) both need 32x64 (64 GB) at full -p 20. Both OOM on 8x16 (exit 137). Banking and slack survive 16x32. `scripts/bench.sh` already sets the right shape per target; if you call `bench-run.yml` directly, pass `-f shape=nscloud-ubuntu-22.04-amd64-32x64` for workspace or travel.
 
 ## Ticket Conventions
 

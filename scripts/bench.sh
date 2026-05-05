@@ -31,16 +31,11 @@ WORKFLOW=bench-run.yml
 #   - slack     14 parallel on 8x16  → historically fine (run 24922900581);
 #     full 21-task cloud runs OOM after the agentdojo-mcp switch.
 #
-# Travel mode switching:
-#   - Fan-out (workspace in the dispatch set): 16x32 + -p 5. Throttled
-#     to keep travel's high-memory tasks from competing with the larger
-#     workspace/banking/slack runners.
-#   - Solo (workspace absent): 32x64 + -p 20 (full parallelism). 64 GB
-#     fits all 20 tasks; c-63fe MCP errors are still possible but the
-#     memory headroom mitigates the OOM-driven part of the failure mode.
+# Travel: 32x64 + -p 20 (full parallelism). The historic fan-out -p 5
+# throttle inflated travel wall to ~1000s without buying anything — the
+# OOMs at smaller shapes are a shape problem, not a parallelism problem.
 SHAPE_WORKSPACE=nscloud-ubuntu-22.04-amd64-32x64
-SHAPE_TRAVEL_FANOUT=nscloud-ubuntu-22.04-amd64-16x32
-SHAPE_TRAVEL_SOLO=nscloud-ubuntu-22.04-amd64-32x64
+SHAPE_TRAVEL=nscloud-ubuntu-22.04-amd64-32x64
 SHAPE_MEDIUM=nscloud-ubuntu-22.04-amd64-16x32
 SHAPE_LARGE=nscloud-ubuntu-22.04-amd64-32x64
 
@@ -61,23 +56,7 @@ run_target() {
     banking|b)   dispatch banking   -f suite=banking   -f shape="$SHAPE_MEDIUM" -f parallelism=16 ;;
     slack|s)     dispatch slack     -f suite=slack     -f shape="$SHAPE_LARGE" -f parallelism=21 ;;
     travel|t)
-      # c-63fe: MCP server destabilizes under travel's tool load. Fan-out
-      # mode throttles to -p 5 (16x32 shape) so travel's high-memory tasks
-      # don't compete with the other suites. Solo travel takes 32x64 with
-      # -p 20 — 64 GB has the memory headroom even if MCP errors are still
-      # expected on some tasks until c-63fe lands.
-      #
-      # MLLD_HEAP=8g: the local repro showed the mlld Node process
-      # spiking to ~5 GB heap during travel; without an explicit limit
-      # the default Node heap cap can OOM the process before the
-      # container itself OOMs. 8g gives headroom and avoids the
-      # spurious MCP-disconnect failure mode while we keep digging
-      # into the underlying travel memory growth.
-      if "$WORKSPACE_PLANNED"; then
-        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_FANOUT" -f parallelism=5  -f heap=8g
-      else
-        dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL_SOLO"   -f parallelism=20 -f heap=8g
-      fi
+      dispatch travel -f suite=travel -f shape="$SHAPE_TRAVEL" -f parallelism=20
       ;;
     *) echo "unknown target: $1" >&2
        echo "valid: workspace banking slack travel" >&2
@@ -88,14 +67,6 @@ run_target() {
 if [ $# -eq 0 ]; then
   set -- workspace banking slack travel
 fi
-
-# Detect whether workspace is in the planned dispatch set — if it is,
-# travel must defer to the conservative shape so the four jobs collectively
-# stay under the vCPU concurrency cap.
-WORKSPACE_PLANNED=false
-for t in "$@"; do
-  case "$t" in workspace|w) WORKSPACE_PLANNED=true ;; esac
-done
 
 for arg in "$@"; do
   run_target "$arg"
