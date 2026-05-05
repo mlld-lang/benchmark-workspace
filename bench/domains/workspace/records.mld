@@ -44,7 +44,7 @@
 >> writes to fail because the contact tools return them as plain strings
 >> with no handle-bearing projection — impossible to satisfy.
 record @contact = {
-  facts: [email: string],
+  facts: [email: { type: string, kind: "email" }],
   data: {
     trusted: [name: string?, phone: string?],
     untrusted: [notes: string?, job_title: string?, company: string?, address: string?]
@@ -66,7 +66,13 @@ record @contact = {
 >> its own fact label, so per-element control-arg checks (no-send-to-
 >> unknown) work correctly when these arrays are passed to send_email.
 record @email_msg = {
-  facts: [id_: handle, sender: string?, recipients: array?, cc: array?, bcc: array?],
+  facts: [
+    id_: { type: handle, kind: "email_id" },
+    sender: { type: string?, kind: "email" },
+    recipients: { type: array?, kind: "email" },
+    cc: { type: array?, kind: "email" },
+    bcc: { type: array?, kind: "email" }
+  ],
   data: {
     trusted: [timestamp: string?, read: boolean?],
     untrusted: [subject: string?, body: string?, attachments: array?]
@@ -92,7 +98,10 @@ record @email_msg = {
 >> and must be handle-grounded. Per-element fact labels on the array
 >> let no-send-to-unknown enforce per-element grounding.
 record @calendar_evt = {
-  facts: [id_: handle, participants: array?],
+  facts: [
+    id_: { type: handle, kind: "calendar_event_id" },
+    participants: { type: array?, kind: "email" }
+  ],
   data: {
     trusted: [start_time: string?, end_time: string?, all_day: boolean?, status: string?],
     untrusted: [title: string?, description: string?, location: string?]
@@ -122,7 +131,10 @@ record @calendar_evt = {
 >> compiler maps arg key → resolved value, so these names don't need
 >> to match.
 record @file_entry = {
-  facts: [id_: handle, shared_with: array?],
+  facts: [
+    id_: { type: handle, kind: "file_id" },
+    shared_with: { type: array?, kind: "email" }
+  ],
   data: {
     trusted: [filename: string?, owner: string?, size: number?, last_modified: string?],
     untrusted: [content: string?]
@@ -148,7 +160,11 @@ record @datetime_context = {
 >> fields are facts because they name notification destinations; the
 >> content fields stay payload.
 record @send_email_inputs = {
-  facts: [recipients: array, cc: array?, bcc: array?],
+  facts: [
+    recipients: { type: array, kind: "email" },
+    cc: { type: array?, kind: "email" },
+    bcc: { type: array?, kind: "email" }
+  ],
   data: {
     trusted: [subject: string, attachments: array?],
     untrusted: [body: string]
@@ -163,7 +179,7 @@ record @send_email_inputs = {
 >> destination set. Omitting it models the benign personal-event case;
 >> providing it requires per-element grounding.
 record @create_calendar_event_inputs = {
-  facts: [participants: array?],
+  facts: [participants: { type: array?, kind: "email" }],
   data: {
     trusted: [title: string, start_time: string, end_time: string, location: string?],
     untrusted: [description: string?]
@@ -173,19 +189,19 @@ record @create_calendar_event_inputs = {
 }
 
 record @delete_email_inputs = {
-  facts: [email_id: handle],
+  facts: [email_id: { type: handle, kind: "email_id" }],
   data: [],
   validate: "strict"
 }
 
 record @cancel_calendar_event_inputs = {
-  facts: [event_id: handle],
+  facts: [event_id: { type: handle, kind: "calendar_event_id" }],
   data: [],
   validate: "strict"
 }
 
 record @calendar_reschedule_inputs = {
-  facts: [event_id: handle],
+  facts: [event_id: { type: handle, kind: "calendar_event_id" }],
   data: {
     trusted: [new_start_time: string, new_end_time: string?]
   },
@@ -194,14 +210,17 @@ record @calendar_reschedule_inputs = {
 }
 
 record @add_calendar_event_participants_inputs = {
-  facts: [participants: array, event_id: handle],
+  facts: [
+    participants: { type: array, kind: "email" },
+    event_id: { type: handle, kind: "calendar_event_id" }
+  ],
   data: [],
   correlate: false,
   validate: "strict"
 }
 
 record @file_append_inputs = {
-  facts: [file_id: handle],
+  facts: [file_id: { type: handle, kind: "file_id" }],
   data: {
     untrusted: [content: string]
   },
@@ -221,13 +240,16 @@ record @file_create_inputs = {
 }
 
 record @delete_file_inputs = {
-  facts: [file_id: handle],
+  facts: [file_id: { type: handle, kind: "file_id" }],
   data: [],
   validate: "strict"
 }
 
 record @share_file_inputs = {
-  facts: [email: string, file_id: handle],
+  facts: [
+    email: { type: string, kind: "email" },
+    file_id: { type: handle, kind: "file_id" }
+  ],
   data: {
     trusted: [permission: string]
   },

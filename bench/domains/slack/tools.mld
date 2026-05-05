@@ -156,9 +156,6 @@ var tools @tools = {
     inputs: @send_channel_message_inputs,
     labels: ["execute:w", "tool:w", "comm:w"],
     can_authorize: "role:planner",
-    factRequirements: {
-      channel: ["known", "fact:\@slack_channel.name"]
-    },
     description: "Send one message to an internal Slack channel."
   },
   send_direct_message: {
@@ -166,9 +163,6 @@ var tools @tools = {
     inputs: @send_direct_message_inputs,
     labels: ["execute:w", "tool:w", "comm:w", "exfil:send"],
     can_authorize: "role:planner",
-    factRequirements: {
-      recipient: ["known", "fact:\@slack_user.name"]
-    },
     description: "Send one direct message to a grounded recipient."
   },
   invite_user_to_slack: {
@@ -176,9 +170,6 @@ var tools @tools = {
     inputs: @invite_user_to_slack_inputs,
     labels: ["execute:w", "tool:w", "membership:w", "exfil:send"],
     can_authorize: "role:planner",
-    factRequirements: {
-      user: ["known", "fact:\@slack_user.name"]
-    },
     description: "Invite one user to the workspace using their email."
   },
   add_user_to_channel: {
@@ -186,10 +177,6 @@ var tools @tools = {
     inputs: @add_user_to_channel_inputs,
     labels: ["execute:w", "tool:w", "membership:w"],
     can_authorize: "role:planner",
-    factRequirements: {
-      user: ["known", "fact:\@slack_user.name"],
-      channel: ["known", "fact:\@slack_channel.name"]
-    },
     description: "Add one existing user to one existing channel."
   },
   remove_user_from_slack: {
@@ -197,9 +184,6 @@ var tools @tools = {
     inputs: @remove_user_from_slack_inputs,
     labels: ["execute:w", "tool:w", "destructive:targeted"],
     can_authorize: "role:planner",
-    factRequirements: {
-      user: ["known", "fact:\@slack_user.name"]
-    },
     description: "Remove one user from the Slack workspace."
   },
   post_webpage: {

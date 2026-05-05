@@ -2,8 +2,8 @@
 
 ## Problem
 
-The rig source-class firewall can currently lower a resolved or selection-backed
-control arg with proof from the wrong fact subject. The concrete failing shape is:
+The rig source-class firewall must not lower a control arg with proof from the
+wrong fact subject. The concrete failing shape is:
 
 ```json
 {
@@ -28,127 +28,113 @@ acceptable email destination for `invite_user_to_slack.user_email`.
 
 ## Core Contract
 
-Core already supports explicit arg-to-proof-subject mapping through
-`policy.facts.requirements`. Use that as the runtime contract.
-
-The rig should synthesize most requirements from input records so userland does
-not have to maintain a parallel policy block for every write tool.
-
-Default for each input-record fact field:
-
-```text
-arg=<fieldName>
-accepted=["known", "fact:*.${fieldName}"]
-```
-
-For example, this input record:
+Core now supports semantic fact matching through kind-tagged fact fields.
+Fact field declarations can carry:
 
 ```mlld
+kind: "email"
+kind: ["email", "verified_email"]
+accepts: ["known", "fact:*.email"]
+```
+
+`kind` matching is exact string equality. There is no field-name normalization:
+`user_email` and `email` match only if both fields are explicitly tagged with
+the same kind, or if an `accepts` override says so.
+
+At `@policy.build` / `@policy.validate` time, core derives
+`policy.facts.requirements` for input-record fact fields:
+
+1. Build a kind index from records in scope, including tool `inputs`, tool
+   `returns`, and directly imported records.
+2. For each control arg backed by an input-record fact field:
+   - If the field declares `accepts`, use those patterns.
+   - Else if the field declares `kind`, accept `known` plus every indexed
+     `fact:@record.field` with a matching kind.
+   - Else fall back to `["known", "fact:*.argName"]`.
+3. Explicit `policy.facts.requirements` still overrides derived requirements.
+
+Example:
+
+```mlld
+record @contact = {
+  facts: [
+    email: { type: string, kind: "email" }
+  ]
+}
+
+record @slack_msg = {
+  facts: [
+    sender: { type: string, kind: "slack_user_name" }
+  ]
+}
+
 record @invite_user_to_slack_inputs = {
-  facts: [user: string, user_email: string],
-  data: [],
+  facts: [
+    user: { type: string, kind: "slack_user_name" },
+    user_email: { type: string, kind: "email" }
+  ],
   validate: "strict"
 }
 ```
 
-can synthesize:
+Derived result:
 
-```mlld
-facts: {
-  requirements: {
-    "@invite_user_to_slack": {
-      user: ["known", "fact:*.user"],
-      user_email: ["known", "fact:*.user_email"]
-    }
-  }
-}
+```text
+invite_user_to_slack.user_email accepts:
+  known
+  fact:@contact.email
+  fact:@invite_user_to_slack_inputs.user_email
+
+invite_user_to_slack.user_email rejects:
+  fact:@slack_msg.sender
 ```
-
-This default rejects `fact:@slack_msg.sender` for `user_email` without any
-hand-authored per-tool policy.
-
-If a tool legitimately accepts a differently named origin fact, declare an
-override. Example: an input arg named `recipient` may intentionally accept
-authoritative contact email facts.
-
-```mlld
-policy @base = {
-  defaults: {
-    rules: ["no-send-to-unknown"]
-  },
-  operations: {
-    "exfil:send": ["tool:w:invite_user_to_slack"]
-  },
-  facts: {
-    requirements: {
-      "@send_email": {
-        recipient: ["known", "fact:*.email"]
-      }
-    }
-  }
-}
-```
-
-Do not implement loose token normalization such as `user_email -> email` inside
-the security check. The existing fact matcher's suffix semantics are dot-path
-suffixes: `fact:*.user_email` matches a fact field named `user_email`; it does
-not match a field named `email`. If userland wants `user_email` to accept
-`fact:*.email`, that should be an explicit override.
-
-The security invariant is still "target arg accepts these proof subjects." The
-derived default gives every input-record fact field a fail-closed requirement,
-and overrides cover the intentionally renamed cases.
 
 ## Rig Changes
 
-### 1. Synthesize fact requirements into the base policy
+### 1. Tag records and input records
 
-In the rig policy synthesis path, include a `facts.requirements` section for
-write-tool input-record fact fields. For each fact field, synthesize:
-
-```mlld
-<arg>: ["known", "fact:*.<arg>"]
-```
-
-Then merge in any domain/tool overrides for cases where the accepted origin fact
-has a different field name.
-
-Example Slack requirements after default synthesis plus selected overrides:
+Bench domains should tag both producers and consumers with shared kind strings.
+For example:
 
 ```mlld
-facts: {
-  requirements: {
-    "@send_direct_message": {
-      >> Override: Slack users expose `name`, while the write arg is `recipient`.
-      recipient: ["known", "fact:@slack_user.name"]
-    },
-    "@send_channel_message": {
-      >> Override: Slack channels expose `name`, while the write arg is `channel`.
-      channel: ["known", "fact:@slack_channel.name"]
-    },
-    "@invite_user_to_slack": {
-      >> Override only if the domain has an authoritative user-name source.
-      user: ["known", "fact:@slack_user.name"],
-      >> Default would be ["known", "fact:*.user_email"].
-      >> Use ["known", "fact:*.email"] only if authoritative email records exist.
-      user_email: ["known", "fact:*.user_email"]
-    },
-    "@add_user_to_channel": {
-      user: ["known", "fact:@slack_user.name"],
-      channel: ["known", "fact:@slack_channel.name"]
-    },
-    "@remove_user_from_slack": {
-      user: ["known", "fact:@slack_user.name"]
-    }
-  }
+record @shared_file_entry = {
+  facts: [
+    shared_with: { type: array, kind: "email" }
+  ]
+}
+
+record @send_email_inputs = {
+  facts: [
+    recipients: { type: array, kind: "email" },
+    cc: { type: array?, kind: "email" },
+    bcc: { type: array?, kind: "email" }
+  ],
+  validate: "strict"
 }
 ```
 
-The exact override set should come from domain/tool config, not from hard-coded
-global arg names. If no override is configured, the synthesized default remains
-active and fails closed.
+After this, `send_email.recipients <- shared_file_entry.shared_with[0]` should
+work without a per-tool requirement override.
 
-### 2. Reject wrong subjects during intent compilation
+### 2. Mirror core derivation in rehearse
+
+Drop any rig-only `@synthesizedFactRequirements` based on per-tool boilerplate.
+Where the rig needs pre-core validation or blocked-arg display, derive accepts
+the same way core does:
+
+```text
+if input field has accepts:
+  accepted = accepts
+else if input field has kind:
+  accepted = ["known"] + kindIndex[kind]
+else:
+  accepted = ["known", "fact:*.argName"]
+```
+
+The rig kind index should walk the same record set: tool inputs, tool returns,
+and directly imported records.
+
+### 3. Reject wrong subjects during intent compilation
 
 In `rig/intent.mld`, after `resolvedAttestations` is computed for a resolved or
 selection-backed control arg and before returning `ok: true`, validate those
@@ -159,7 +145,7 @@ Expected behavior:
 ```text
 arg=user_email
 attestations=["fact:@slack_msg.sender"]
-accepted=["known", "fact:*.user_email"]
+accepted=["known", "fact:@contact.email", "fact:@invite_user_to_slack_inputs.user_email"]
 => reject
 ```
 
@@ -171,32 +157,21 @@ Suggested error shape:
   "arg": "user_email",
   "error": "control_arg_wrong_fact_source",
   "attestations": ["fact:@slack_msg.sender"],
-  "accepted": ["known", "fact:*.user_email"],
+  "accepted": ["known", "fact:@contact.email"],
   "hint": "This control arg needs proof matching one of the accepted fact patterns."
 }
 ```
 
-This keeps `rehearse` honest. `policy.build` will also reject once the synthesized
-base policy includes the same `facts.requirements`, but compile-time rejection
-gives planners a clearer blocked-arg reason and avoids returning `ok: true`.
+Core now rejects the same bad proof during `@policy.build`, but rig-side
+compile-time rejection gives planners a clearer blocked-arg reason.
 
-### 3. Do not require backing record == input record
+### 4. Keep these invariants
 
-The input record describes the destination tool schema, not the origin of
-legitimate values. A `send_email.recipient` arg commonly comes from
-`fact:@contact.email`, not `fact:@send_email_inputs.recipient`.
-
-The security rule should be:
-
-```text
-target arg accepts one of these proof subjects
-```
-
-not:
-
-```text
-backing record must equal input record
-```
+- Do not normalize names such as `user_email -> email`.
+- Do not require backing record == input record.
+- Untagged fields stay strict via `fact:*.argName`.
+- Use `accepts` only for narrow schema-level exceptions.
+- Use explicit `policy.facts.requirements` only as a last-resort override.
 
 ## Acceptance Tests
 
@@ -205,14 +180,16 @@ Required:
 - Un-xfail `tests/suites-scripted/security-slack.mld::testSelectionRefRealSlackMsgHandleRejected`.
 - Assert `invite_user_to_slack.user_email` rejects `fact:@slack_msg.sender`.
 - Assert `invite_user_to_slack.user_email` accepts `known` when it is in task text.
-- Assert default synthesis rejects a differently named fact such as
-  `fact:@contact.email` for `user_email` unless a domain override explicitly
-  allows `fact:*.email`.
-- If an override is configured, assert `invite_user_to_slack.user_email` accepts
-  the explicitly allowed email fact.
+- Assert `invite_user_to_slack.user_email` accepts `fact:@contact.email` when
+  both fields are tagged `kind: "email"`.
+- Assert `send_email.recipients` accepts `fact:@shared_file_entry.shared_with`
+  after both fields are tagged `kind: "email"`.
+- Assert an untagged field keeps strict `fact:*.argName` behavior.
 - Keep existing missing-handle and untrusted-handle rejection tests passing.
 
 Core-side regression coverage lives in:
 
+- `interpreter/eval/record.test.ts`
+- `interpreter/eval/exec/policy-builder.test.ts`
 - `core/policy/fact-requirements.test.ts`
 - `core/policy/guards-defaults.test.ts`

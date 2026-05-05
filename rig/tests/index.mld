@@ -2827,12 +2827,19 @@ var @ut8Decision = {
 }
 var @ut8Query = "Add bob@test.com to the Introductory meeting."
 
->> Test 1: policy build + direct collection call for all-facts tool
+>> Test 1: policy build + direct collection call for all-facts tool.
+>> The intent shape mirrors @flatPolicyIntent's output: flat
+>> { <operation>: { <arg>: { eq, attestations } } }, not bucketed
+>> { known: ..., resolved: ... }. Bucketed form requires handle-backed
+>> values for resolved entries; the flat form accepts the same eq +
+>> attestations wrapper that compileExecuteIntent emits.
 exe role:planner @ut8BuildAndDispatch() = [
   let @builtPolicy = @policy.build(
     {
-      known: { add_calendar_event_participants: { participants: ["bob@test.com"] } },
-      resolved: { add_calendar_event_participants: { event_id: @ut8Resolved.id_ } }
+      add_calendar_event_participants: {
+        event_id: { eq: @ut8Resolved.id_, attestations: ["fact:\@calendar_evt.id_"] },
+        participants: { eq: ["bob@test.com"], attestations: ["known"] }
+      }
     },
     @ut8CollectionTools,
     { task: @ut8Query }

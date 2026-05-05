@@ -4,7 +4,6 @@ import {
   @routeToolCatalog,
   @synthesizedOperations,
   @synthesizedAuthorizations,
-  @synthesizedFactRequirements,
   @hasNovelUrlRisk
 } from "./tooling.mld"
 import {
@@ -38,6 +37,11 @@ exe @synthesizedPolicy(tools, overridePolicy) = [
     @hasNovelUrlRisk(@tools) => @rules.concat(["no-novel-urls"])
     * => @rules
   ]
+  >> facts.requirements is auto-derived by mlld policy.build from
+  >> kind-tagged fact fields on input records (records.mld). See
+  >> SECURITY-RIG-WRONG-RECORD-BYPASS.md for the design. Rig no longer
+  >> synthesizes per-tool fact requirements — kinds + accepts on
+  >> record fact fields are the source of truth.
   let @basePolicy = {
     defaults: {
       rules: @policyRules,
@@ -50,10 +54,7 @@ exe @synthesizedPolicy(tools, overridePolicy) = [
     labels: {
       influenced: { deny: ["destructive", "exfil"] }
     },
-    authorizations: @synthesizedAuthorizations(@tools),
-    facts: {
-      requirements: @synthesizedFactRequirements(@tools)
-    }
+    authorizations: @synthesizedAuthorizations(@tools)
   }
   if !@overridePolicy.isDefined() [ => @basePolicy ]
   let @extraRules = for @rule in (@overridePolicy.defaults.rules ?? []) when !@basePolicy.defaults.rules.includes(@rule) => @rule

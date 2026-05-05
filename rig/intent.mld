@@ -4,8 +4,7 @@ import {
   @toolPayloadArgs,
   @toolExactArgs,
   @toolUpdateArgs,
-  @toolBind,
-  @validateControlArgFactRequirements
+  @toolBind
 } from "./tooling.mld"
 
 >> Intent compilation is the provenance firewall. Keep it mechanical:
@@ -349,9 +348,11 @@ exe @factAttestations(inputValue) = js {
 
     for (const source of facts) {
       if (typeof source?.ref === "string" && source.ref !== "") {
-        const suffix =
-          Number.isInteger(source?.position) ? `[${source.position}]` : "";
-        refs.push(`fact:${source.ref}${suffix}`);
+        const baseRef = `fact:${source.ref}`;
+        refs.push(baseRef);
+        if (Number.isInteger(source?.position)) {
+          refs.push(`${baseRef}[${source.position}]`);
+        }
       }
     }
 
@@ -758,15 +759,9 @@ exe @compileScalarRefWithMeta(state, tool, argMeta, ref, query) = [
       @refSource(@ref) == "selection" => { record: @ref.backing.record, handle: @ref.backing.handle }
       * => { record: @ref.record, handle: @ref.handle }
     ]
-    >> Wrong-record-fact firewall (SECURITY-RIG-WRONG-RECORD-BYPASS.md §2).
-    >> For control args, validate that at least one resolved attestation
-    >> matches the tool's accepted fact patterns. Without this, a selection
-    >> ref backing on slack_msg.sender silently satisfies user_email.
-    let @factCheck = when [
-      @role == "control" => @validateControlArgFactRequirements(@tool, @arg, @resolvedAttestations)
-      * => null
-    ]
-    if @factCheck != null [ => @factCheck ]
+    >> Wrong-record-fact firewall: enforced at @policy.build via kind-tagged
+    >> input-record fact fields. Core derives policy.facts.requirements
+    >> automatically from records in scope. See SECURITY-RIG-WRONG-RECORD-BYPASS.md.
     => when [
       @role == "control" => {
         ok: true,

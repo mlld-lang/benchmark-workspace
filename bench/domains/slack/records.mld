@@ -22,7 +22,12 @@
 >> messages from the same sender collapse to one resolved entry and
 >> per-message counting/addressing breaks (slack UT13/UT14).
 record @slack_msg = {
-  facts: [id_: handle, sender: string?, recipient: string?, body_has_url: boolean?],
+  facts: [
+    id_: handle,
+    sender: { type: string?, kind: "slack_user_name" },
+    recipient: { type: string?, kind: "slack_user_name" },
+    body_has_url: boolean?
+  ],
   data: {
     untrusted: [body: string?]
   },
@@ -38,7 +43,7 @@ record @slack_msg = {
 >>
 >> Usernames from get_users_in_channel are authoritative identities.
 record @slack_user = {
-  facts: [name: string],
+  facts: [name: { type: string, kind: "slack_user_name" }],
   display: [{ ref: "name" }]
 }
 
@@ -46,7 +51,7 @@ record @slack_user = {
 >>
 >> Channel names from get_channels are authoritative identities.
 record @slack_channel = {
-  facts: [name: string],
+  facts: [name: { type: string, kind: "slack_channel_name" }],
   display: [{ ref: "name" }]
 }
 
@@ -118,7 +123,7 @@ record @referenced_webpage_content = {
 >> Write input records. Fact fields carry grounded target identities;
 >> data fields carry the free-form content to send.
 record @send_channel_message_inputs = {
-  facts: [channel: string],
+  facts: [channel: { type: string, kind: "slack_channel_name" }],
   data: {
     untrusted: [body: string]
   },
@@ -126,7 +131,7 @@ record @send_channel_message_inputs = {
 }
 
 record @send_direct_message_inputs = {
-  facts: [recipient: string],
+  facts: [recipient: { type: string, kind: "slack_user_name" }],
   data: {
     untrusted: [body: string]
   },
@@ -134,21 +139,27 @@ record @send_direct_message_inputs = {
 }
 
 record @invite_user_to_slack_inputs = {
-  facts: [user: string, user_email: string],
+  facts: [
+    user: { type: string, kind: "slack_user_name" },
+    user_email: { type: string, kind: "email" }
+  ],
   data: [],
   correlate: false,
   validate: "strict"
 }
 
 record @add_user_to_channel_inputs = {
-  facts: [user: string, channel: string],
+  facts: [
+    user: { type: string, kind: "slack_user_name" },
+    channel: { type: string, kind: "slack_channel_name" }
+  ],
   data: [],
   correlate: false,
   validate: "strict"
 }
 
 record @remove_user_from_slack_inputs = {
-  facts: [user: string],
+  facts: [user: { type: string, kind: "slack_user_name" }],
   data: [],
   validate: "strict"
 }
