@@ -245,14 +245,22 @@ Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagge
 
 ### Image freshness
 
-The image bakes mlld@2.1.0 + clean@main. AgentDojo is pinned in `bench/pyproject.toml` (currently `agentdojo==0.1.35` from PyPI) and installed via `uv sync` during the image build — the forked runner/grading code lives at `src/agentdojo_*.py` in clean. bench-run.yml inspects each pulled image's `mlld.sha` AND `clean.sha` Docker labels:
+The bench image is composed of three pieces, two of which are pre-built into separate images and `COPY --from`'d into the final bench image:
+
+- **`ghcr.io/mlld-lang/mlld-prebuilt:2.1.0`** — built by `.github/workflows/mlld-prebuild.yml`. Self-skip: re-running with no upstream change is a ~30s no-op. Re-run when mlld@2.1.0 ref moves: `gh workflow run mlld-prebuild.yml`.
+- **`ghcr.io/mlld-lang/opencode-prebuilt:dev`** — built by `.github/workflows/opencode-prebuild.yml`. Manual dispatch only. Re-run when adamavenir/opencode#dev changes: `gh workflow run opencode-prebuild.yml`.
+- **`ghcr.io/mlld-lang/benchmark-workspace:main`** — bench-image.yml builds this on every push to bench/, rig/, src/, agents/, bench/docker/. Pulls the two prebuilt images, adds bench code + uv venv, pushes. ~1-2 min wall (was ~9 min before the prebuild split).
+
+bench-run.yml inspects each pulled bench image's `mlld.sha` and `clean.sha` Docker labels:
 
 - Compares baked `mlld.sha` against `mlld-lang/mlld:<baked-ref>` HEAD via the GitHub API.
 - Compares baked `clean.sha` against the dispatched `github.sha` (clean@main at dispatch time).
 
-If either is stale, bench-run joins an in-flight `bench-image.yml` build whose `head_sha` matches clean@HEAD (or dispatches a new one), waits, repulls, and verifies the post-rebuild image's `clean.sha` matches before continuing. Adds ~3-4 min after a clean or mlld push, zero overhead otherwise.
+If either is stale, bench-run joins an in-flight `bench-image.yml` build whose `head_sha` matches clean@HEAD (or dispatches a new one), waits, repulls, and verifies the post-rebuild image's `clean.sha` matches before continuing. Adds ~1-2 min after a clean push, zero overhead otherwise. (The mlld layer is already prebuilt; bench-image only rebuilds the bench code + venv layers.)
 
 This means: **dispatching `scripts/bench.sh` immediately after a clean push is safe** — bench-run will block until the matching bench-image build completes. You don't need to manually wait for `bench-image.yml`.
+
+**Don't push between dispatch and build completion.** If you dispatch `scripts/bench.sh` at SHA A, then push SHA B before bench-image's build for A finishes, the in-flight build now targets B's SHA and the post-rebuild check at A will mismatch and fail (we hit this 2026-05-05). Either: push everything first then dispatch, or wait for the in-flight build to land before pushing again. The freshness check is a safety mechanism, not a smoothing layer over rapid pushes.
 
 Edge case: if you dispatch `bench-run.yml` while a bench-image build for an *earlier* clean SHA is queued/in-progress (and no build has been triggered yet for the latest push), bench-run won't find a matching in-flight build for clean@HEAD and will dispatch a new one. The post-rebuild verification catches the unlikely case where we still end up with a mismatched `clean.sha` and aborts with an actionable error message.
 
@@ -260,6 +268,7 @@ Recommended discipline for clean/ changes:
 
 1. **Run local canaries first.** `uv run --project bench python3 src/run.py -s <suite> -d defended -t <task_ids> -p <n>` exercises the *committed-or-uncommitted* working tree directly via the local mlld SDK. No image, no wait, no SHA confusion. Pick the specific tasks the change targets — minutes to confirm the fix shape before spending sweep cost.
 2. **Push, then dispatch directly.** `scripts/bench.sh <suite>` — bench-run handles freshness automatically. Verify the fetched manifest's `image_sha` matches HEAD afterward as a sanity check (the post-rebuild step inside bench-run already does this for clean.sha, but the manifest cross-check is good practice).
+3. **For docs-only commits, use `[skip ci]`** in the commit message so bench-image doesn't rebuild for changes that don't affect runtime. (`paths` in bench-image.yml does some of this; `[skip ci]` is the explicit override.)
 
 ### Reading remote results
 
