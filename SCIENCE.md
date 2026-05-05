@@ -4,6 +4,39 @@ Experiment log and task classification. Tracks what works, what fails, why, and 
 
 Model: `togetherai/zai-org/GLM-5.1` via OpenCode. Budget: 25 iterations. Defense: defended.
 
+## Latest verified (2026-05-05, post-mlld-speedup + memory reduction)
+
+Recent mlld runtime work delivered both a speedup and a memory reduction.
+Effect on solo-suite walls (one suite per dispatch, no cross-suite contention):
+
+| Suite | Solo wall | Δ vs 2026-05-04 | Run id |
+|---|---|---|---|
+| workspace | **295s** (-p 20, full) / 337s (-p 34, --fast) | -70% | `25391840240` / `25391845558` |
+| travel | **282s** (-p 20) | -72% | `25387607198` |
+| banking | **304s** (-p 16, in 4-suite sweep) | -7% | `25394507491` |
+| slack | (not measured solo since speedup) | — | — |
+
+The wall reduction is driven by (a) mlld runtime + memory speedups and (b) "rehearse early/often" planner discipline letting SHOULD-FAILs hit `structurally_infeasible` in 100-300s instead of grinding to the 900s task ceiling.
+
+Per-task memory dropped to **~0.9 GB** (workspace at -p 34 measured 30.3 GB / 62.9 GB available, 48% utilization). Down from the prior ~1.5-2 GB extrapolation. `bench/docker/entrypoint.sh` now samples `/proc/meminfo` and writes `mem_peak_kb` / `mem_total_kb` to `manifest.json`.
+
+### 4-suite parallel sweep degradation (2026-05-05)
+
+Running all 4 suites in parallel (run ids: workspace `25394505797`, banking `25394507491`, slack `25394508881`, travel `25394510334`) **degrades both wall and pass rate** vs solo:
+
+| Suite | Solo wall | Parallel-sweep wall | Solo PASS | Parallel-sweep PASS |
+|---|---|---|---|---|
+| workspace | 295s | **983s** (3.3×) | 34/40 | 25/40 |
+| slack | (no recent solo) | 946s | — | 10/21 |
+| travel | 282s | **944s** (3.4×) | 19/20 | 10/20 |
+| banking | (matched) | 304s | 10/16 | 10/16 |
+
+Banking finishes in ~5 min before contention builds; the other three suffer. Strong signal of either Together AI rate-limit pressure (4 × ~20-40 concurrent planners × per-planner LLM calls) or Namespace Team-plan vCPU concurrency cap (4 runners at 32x64 = 128 vCPU vs 64 cap → ~50% effective per runner).
+
+**Implication for cadence:** the solo walls are the real new baseline. The 4-parallel-sweep walls are a contention artifact. Iteration cycles should dispatch suites sequentially or 2-at-a-time, OR use `--fast` to drop the long tail (where the per-suite wall is short enough that 4-parallel may not hit the rate-limit knee).
+
+Need a follow-up investigation to characterize the contention envelope. Until then, `scripts/bench.sh` (4-parallel default) does NOT realize the solo speedup. Use single-suite dispatch for accurate measurement.
+
 ## Latest verified (2026-05-04, post-perf-fix sweep)
 
 The c-2565 cascade regression is closed (commit `820f0d9` rig/lifecycle no-op guard). Cloud sweep run ids: banking `25324559458`, slack `25324561113`, workspace `25324557648`, travel `25324563037`. All four suites recovered to or above the April 27 fast-era baseline.
