@@ -1,0 +1,82 @@
+>> rig/test-harness/repro-mfff2.mld
+>>
+>> LLM-less + MCP-less reproduction of m-fff2.
+>>
+>> Triggers the same recursive JsonStringify → planner.mld:1265 stack
+>> overflow that happens in the bench SDK context, but using only:
+>>   - stub harness (no LLM)
+>>   - rig records (no MCP — empty tools catalog)
+>>   - a classifier-shaped exe whose output flows downstream into
+>>     the agent record passed to @rig.run
+>>
+>> Runs in plain mlld CLI:
+>>
+>>   mlld rig/test-harness/repro-mfff2.mld --no-checkpoint
+>>
+>> Expected (bug present): hang at 99% CPU, stack overflow surfaces
+>> after ~30-60s with "Maximum call stack size exceeded at line 1265,
+>> column 5 in rig/workers/planner.mld" — same as bench.
+>>
+>> Expected (bug fixed): completes in <5s with "REPRO COMPLETED" line
+>> and a stub planner result. No LLM calls happen.
+
+import { @rig } from "../index.mld"
+
+>> --- Stubbed classifier-shaped exe ---
+>>
+>> Mirrors the shape of bench/domains/travel/classifiers/advice.mld:
+>>   1. Calls @rig.llmCall (with harness="stub" so no real LLM)
+>>   2. Pipes the response through @parse.llm
+>>   3. Coerces through `=> record @schema`
+>>
+>> The stub harness returns whatever JSON is in `stubResponses[0]`,
+>> JSON-stringified by the runtime. No LLM is invoked.
+
+record @adviceShape = {
+  data: [is_advice: boolean, advice_kind: string?, why: string?],
+  validate: "demote"
+}
+
+exe @stubAdviceClassifier(query) = [
+  let @raw = @rig.llmCall("stub", `classify: @query`, {
+    stubPhase: "advice",
+    stubResponses: [{ is_advice: true, advice_kind: "hotel", why: "stubbed" }],
+    stubIndex: 0,
+    tools: []
+  })
+  => @raw | @parse.llm
+] => record @adviceShape
+
+>> --- The trigger ---
+>>
+>> Call classifier, reference the output, pass the boolean to @rig.run.
+>> @rig.run validates config + invokes the planner. Planner calls
+>> @plannerLlmCallStub (stub harness) at line 1265 of planner.mld.
+>>
+>> The hang manifests when mlld binds @agent (which carries the
+>> classifier-output-derived adviceMode) to the planner exe's parameter.
+
+show "REPRO START"
+
+var @cls = @stubAdviceClassifier("Recommend the highest-rated hotel in Paris")
+var @adviceMode = @cls.is_advice ?? false
+
+show `Classifier result: is_advice=@adviceMode`
+
+>> Build agent and invoke planner via @rig.run. Stub harness, stub
+>> planner response — no LLM. With m-fff2 active, this is where the
+>> hang occurs.
+var @result = @rig.run({
+  suite: "repro-mfff2",
+  defense: "defended",
+  records: {},
+  tools: {},
+  model: "stub",
+  harness: "stub",
+  adviceMode: @adviceMode,
+  maxIterations: 1,
+  overrides: { stub: { planner: [{ tool: "blocked", args: { reason: "repro complete" } }] } }
+}, "trigger query")
+
+show `Planner returned: terminal=@result.terminal text=@result.text`
+show "REPRO COMPLETED"
