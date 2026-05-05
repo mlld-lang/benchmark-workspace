@@ -51,3 +51,44 @@ When the fix lands, the xfail test will xpass and the `selection-ref-wrong-recor
 3. No regression on the source-class firewall tests (12 tests across slack/banking/workspace).
 4. SECURITY.md §4 updated with the validation-rule wording the fix implements.
 
+
+## Notes
+
+**2026-05-05T03:37:07Z** 2026-05-04: mlld-dev sent SECURITY-RIG-WRONG-RECORD-BYPASS.md with the fix design. Authoritative writeup (read this first).
+
+Status:
+- mlld policy.build supports policy.facts.requirements ✓ (core/policy/fact-requirements.ts already lands the verifier)
+- rig synthesizes facts.requirements into base policy ✗ (NOT WIRED — open work)
+- rig rejects wrong subjects at intent compile ✗ (open work, optional but improves rehearse blocked-arg surfacing)
+
+Test status: xfail still — testSelectionRefRealSlackMsgHandleRejected fails with rehearse ok=true. Confirmed by un-xfailing and re-running 2026-05-04. Re-marked xfail.
+
+Implementation breakdown (per SECURITY-RIG-WRONG-RECORD-BYPASS.md §1-§3):
+
+1. Declare per-tool fact requirements in suite tool catalogs.
+   Recommended schema (clean addition to the tool entry):
+     factRequirements: {
+       user: ["known", "fact:@slack_user.name"],
+       user_email: ["known", "fact:*.email"]
+     }
+   Initial set per the doc: send_direct_message, send_channel_message,
+   invite_user_to_slack, add_user_to_channel, remove_user_from_slack
+   (slack); equivalent for banking/workspace/travel write tools.
+
+2. Synthesize into base policy in rig/orchestration.mld @synthesizedPolicy.
+   Walk the tool catalog, collect factRequirements per tool, emit
+   under `facts: { requirements: { "@<tool>": { ... } } }`. mlld
+   policy.build will then enforce.
+
+3. (Recommended) Add control_arg_wrong_fact_source rejection in
+   rig/intent.mld @compileScalarRefWithMeta after resolvedAttestations
+   is computed. Rejects with the intended error envelope so rehearse
+   surfaces a clear blocked-arg reason. mlld policy.build will catch
+   anyway, but compile-time rejection gives planners a better signal.
+
+Acceptance per SECURITY doc + test:
+- testSelectionRefRealSlackMsgHandleRejected xpasses
+- Companion tests added: invite_user_to_slack.user_email accepts
+  known-in-task-text and explicitly-allowed email facts (e.g.
+  fact:@contact.email)
+- Existing graceful-failure tests still pass

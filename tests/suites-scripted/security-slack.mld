@@ -439,7 +439,7 @@ var @securitySlackSuite = @suite("security-slack", [
   ], { slow: true, ticket: "c-5ef9", notes: "selection-ref defense lower bounds: nonexistent backing handle, entry without identity_field, handle mismatch after real resolve. Each rejects via a different graceful-failure path; none exercises the wrong-record-fact firewall." }),
   @group("selection-ref-wrong-record-bypass", [
     @testSelectionRefRealSlackMsgHandleRejected
-  ], { slow: true, xfail: true, ticket: "c-5ef9", notes: "ACTIVE FIREWALL BUG: rehearse returns ok=true for selection backing on slack_msg.sender as user_email — the firewall accepts ANY fact attestation regardless of source record/field. Same class as the UT16 cloud bypass. Locks the regression once the fix lands; xfail until then." })
+  ], { slow: true, xfail: true, ticket: "c-3c2b", notes: "ACTIVE FIREWALL BUG. Design landed (SECURITY-RIG-WRONG-RECORD-BYPASS.md), mlld policy.build supports policy.facts.requirements (core/policy/fact-requirements.ts), but rig doesn't synthesize requirements yet. Implementation steps: (1) declare per-tool factRequirements in slack tool catalog, (2) synthesize them into base policy in rig/orchestration.mld @synthesizedPolicy, (3) optionally add control_arg_wrong_fact_source rejection in rig/intent.mld @compileScalarRefWithMeta. Test xpasses when (1)+(2) are wired." })
 ], {})
 
 export { @securitySlackSuite }
