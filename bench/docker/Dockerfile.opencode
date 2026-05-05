@@ -1,0 +1,40 @@
+# Pre-builds the adamavenir/opencode (mlld fork) binary into a tiny scratch
+# image whose sole purpose is to be referenced via `COPY --from=` from the
+# main bench Dockerfile.
+#
+# Why this exists: the bench-image build was pushing the opencode binary
+# layer on every rebuild even when opencode itself hadn't changed — image
+# push is the dominant cost (~5+ min per build). Pinning opencode into its
+# own rarely-rebuilt image means the layer is cached in GHCR and bench-image
+# only pulls it once.
+#
+# Built by .github/workflows/opencode-prebuild.yml on manual dispatch only.
+# Re-run that workflow when adamavenir/opencode#dev changes.
+#
+# Build context: a checkout of adamavenir/opencode (the mlld fork's dev
+# branch by default). The workflow checks out opencode/ into the build
+# context root, so `COPY .` reads the opencode source tree.
+
+FROM ubuntu:24.04 AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl unzip \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://bun.sh/install | bash \
+ && ln -sf /root/.bun/bin/bun /usr/local/bin/bun
+
+COPY . /opt/opencode-src
+WORKDIR /opt/opencode-src
+
+RUN bun install --frozen-lockfile \
+ && cd packages/opencode \
+ && bun run build \
+ && mv dist/opencode-linux-x64 /opt/opencode-bin
+
+# Final stage: scratch image with just the binary tree. Negligible size,
+# and `COPY --from=ghcr.io/.../opencode-prebuilt:dev /opt/opencode-bin ...`
+# pulls only this layer.
+FROM scratch
+COPY --from=builder /opt/opencode-bin /opt/opencode-bin
