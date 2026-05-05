@@ -1,6 +1,6 @@
 ---
 id: c-3c2b
-status: open
+status: closed
 deps: []
 links: [c-c2e7, c-5ef9]
 created: 2026-05-05T03:08:52Z
@@ -8,7 +8,7 @@ type: bug
 priority: 1
 assignee: Adam
 tags: [security, firewall, rig, c-5ef9]
-updated: 2026-05-05T03:13:32Z
+updated: 2026-05-05T04:19:41Z
 ---
 # Security tests: deep UT16 firewall bypass — the wrong-record-fact bug
 
@@ -92,3 +92,35 @@ Acceptance per SECURITY doc + test:
   known-in-task-text and explicitly-allowed email facts (e.g.
   fact:@contact.email)
 - Existing graceful-failure tests still pass
+
+**2026-05-05T04:19:41Z** 2026-05-04: FIX LANDED.
+
+Implementation:
+- rig/tooling.mld: @synthesizedFactRequirements builds requirements from
+  per-tool factRequirements field. Opt-in (tools without the field get
+  no defense at this layer; status quo for unaudited tools).
+- rig/tooling.mld: @validateControlArgFactRequirements + supporting
+  helpers (@toolControlArgFactRequirements, @factAttestationMatchesPattern).
+- rig/orchestration.mld: @synthesizedPolicy includes facts.requirements
+  in basePolicy.
+- rig/intent.mld: @compileScalarRefWithMeta calls the validator after
+  resolvedAttestations is computed for control args.
+- bench/domains/slack/tools.mld: factRequirements added on
+  send_channel_message, send_direct_message, invite_user_to_slack,
+  add_user_to_channel, remove_user_from_slack.
+
+Tests:
+- testSelectionRefRealSlackMsgHandleRejected (un-xfailed) — PASSES.
+  Diag confirms control_arg_wrong_fact_source fires.
+- testFactRequirementsAreSynthesized — locks the synthesizer output shape.
+- testInviteUserKnownInTaskTextAccepted — companion positive test, locks
+  against over-blocking when known is in task text.
+
+Slack security suite: 12 pass / 0 fail / 0 xfail (was 9/0/1).
+Banking: 8/0/0 (no regression). Workspace: 6/0/0 (no regression).
+Invariant gate: 200/201 (1 expected xfail).
+
+Follow-up: opt other suites in by adding factRequirements to their
+write tools. Tracked in c-891b. The rig validator is opt-in by design
+to avoid breaking unaudited tools — each suite needs explicit per-tool
+declarations to get strict requirements.

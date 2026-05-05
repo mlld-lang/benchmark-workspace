@@ -29,8 +29,47 @@ acceptable email destination for `invite_user_to_slack.user_email`.
 ## Core Contract
 
 Core already supports explicit arg-to-proof-subject mapping through
-`policy.facts.requirements`. Use that as the authoritative contract instead of
-inferring from arg names.
+`policy.facts.requirements`. Use that as the runtime contract.
+
+The rig should synthesize most requirements from input records so userland does
+not have to maintain a parallel policy block for every write tool.
+
+Default for each input-record fact field:
+
+```text
+arg=<fieldName>
+accepted=["known", "fact:*.${fieldName}"]
+```
+
+For example, this input record:
+
+```mlld
+record @invite_user_to_slack_inputs = {
+  facts: [user: string, user_email: string],
+  data: [],
+  validate: "strict"
+}
+```
+
+can synthesize:
+
+```mlld
+facts: {
+  requirements: {
+    "@invite_user_to_slack": {
+      user: ["known", "fact:*.user"],
+      user_email: ["known", "fact:*.user_email"]
+    }
+  }
+}
+```
+
+This default rejects `fact:@slack_msg.sender` for `user_email` without any
+hand-authored per-tool policy.
+
+If a tool legitimately accepts a differently named origin fact, declare an
+override. Example: an input arg named `recipient` may intentionally accept
+authoritative contact email facts.
 
 ```mlld
 policy @base = {
@@ -42,42 +81,57 @@ policy @base = {
   },
   facts: {
     requirements: {
-      "@invite_user_to_slack": {
-        user_email: ["known", "fact:*.email"]
+      "@send_email": {
+        recipient: ["known", "fact:*.email"]
       }
     }
   }
 }
 ```
 
-This means `user_email` accepts task-text `known` or a fact label whose field
-suffix is `email`. It rejects `fact:@slack_msg.sender`.
+Do not implement loose token normalization such as `user_email -> email` inside
+the security check. The existing fact matcher's suffix semantics are dot-path
+suffixes: `fact:*.user_email` matches a fact field named `user_email`; it does
+not match a field named `email`. If userland wants `user_email` to accept
+`fact:*.email`, that should be an explicit override.
 
-Do not implement loose name normalization such as `user_email -> email` inside
-the security check. If userland wants that mapping, it should declare it
-explicitly in `policy.facts.requirements`.
+The security invariant is still "target arg accepts these proof subjects." The
+derived default gives every input-record fact field a fail-closed requirement,
+and overrides cover the intentionally renamed cases.
 
 ## Rig Changes
 
 ### 1. Synthesize fact requirements into the base policy
 
 In the rig policy synthesis path, include a `facts.requirements` section for
-write-tool control args that need narrower proof than `known | fact:*`.
+write-tool input-record fact fields. For each fact field, synthesize:
 
-Initial Slack requirements:
+```mlld
+<arg>: ["known", "fact:*.<arg>"]
+```
+
+Then merge in any domain/tool overrides for cases where the accepted origin fact
+has a different field name.
+
+Example Slack requirements after default synthesis plus selected overrides:
 
 ```mlld
 facts: {
   requirements: {
     "@send_direct_message": {
+      >> Override: Slack users expose `name`, while the write arg is `recipient`.
       recipient: ["known", "fact:@slack_user.name"]
     },
     "@send_channel_message": {
+      >> Override: Slack channels expose `name`, while the write arg is `channel`.
       channel: ["known", "fact:@slack_channel.name"]
     },
     "@invite_user_to_slack": {
+      >> Override only if the domain has an authoritative user-name source.
       user: ["known", "fact:@slack_user.name"],
-      user_email: ["known", "fact:*.email"]
+      >> Default would be ["known", "fact:*.user_email"].
+      >> Use ["known", "fact:*.email"] only if authoritative email records exist.
+      user_email: ["known", "fact:*.user_email"]
     },
     "@add_user_to_channel": {
       user: ["known", "fact:@slack_user.name"],
@@ -90,8 +144,9 @@ facts: {
 }
 ```
 
-The exact set should come from domain/tool config, not from hard-coded global
-arg names.
+The exact override set should come from domain/tool config, not from hard-coded
+global arg names. If no override is configured, the synthesized default remains
+active and fails closed.
 
 ### 2. Reject wrong subjects during intent compilation
 
@@ -104,7 +159,7 @@ Expected behavior:
 ```text
 arg=user_email
 attestations=["fact:@slack_msg.sender"]
-accepted=["known", "fact:*.email"]
+accepted=["known", "fact:*.user_email"]
 => reject
 ```
 
@@ -116,7 +171,7 @@ Suggested error shape:
   "arg": "user_email",
   "error": "control_arg_wrong_fact_source",
   "attestations": ["fact:@slack_msg.sender"],
-  "accepted": ["known", "fact:*.email"],
+  "accepted": ["known", "fact:*.user_email"],
   "hint": "This control arg needs proof matching one of the accepted fact patterns."
 }
 ```
@@ -150,11 +205,14 @@ Required:
 - Un-xfail `tests/suites-scripted/security-slack.mld::testSelectionRefRealSlackMsgHandleRejected`.
 - Assert `invite_user_to_slack.user_email` rejects `fact:@slack_msg.sender`.
 - Assert `invite_user_to_slack.user_email` accepts `known` when it is in task text.
-- Assert `invite_user_to_slack.user_email` accepts an explicitly allowed email fact such as `fact:@contact.email` or a domain-specific email record.
+- Assert default synthesis rejects a differently named fact such as
+  `fact:@contact.email` for `user_email` unless a domain override explicitly
+  allows `fact:*.email`.
+- If an override is configured, assert `invite_user_to_slack.user_email` accepts
+  the explicitly allowed email fact.
 - Keep existing missing-handle and untrusted-handle rejection tests passing.
 
 Core-side regression coverage lives in:
 
 - `core/policy/fact-requirements.test.ts`
 - `core/policy/guards-defaults.test.ts`
-

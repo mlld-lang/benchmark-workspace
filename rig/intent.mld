@@ -4,7 +4,8 @@ import {
   @toolPayloadArgs,
   @toolExactArgs,
   @toolUpdateArgs,
-  @toolBind
+  @toolBind,
+  @validateControlArgFactRequirements
 } from "./tooling.mld"
 
 >> Intent compilation is the provenance firewall. Keep it mechanical:
@@ -757,6 +758,15 @@ exe @compileScalarRefWithMeta(state, tool, argMeta, ref, query) = [
       @refSource(@ref) == "selection" => { record: @ref.backing.record, handle: @ref.backing.handle }
       * => { record: @ref.record, handle: @ref.handle }
     ]
+    >> Wrong-record-fact firewall (SECURITY-RIG-WRONG-RECORD-BYPASS.md §2).
+    >> For control args, validate that at least one resolved attestation
+    >> matches the tool's accepted fact patterns. Without this, a selection
+    >> ref backing on slack_msg.sender silently satisfies user_email.
+    let @factCheck = when [
+      @role == "control" => @validateControlArgFactRequirements(@tool, @arg, @resolvedAttestations)
+      * => null
+    ]
+    if @factCheck != null [ => @factCheck ]
     => when [
       @role == "control" => {
         ok: true,

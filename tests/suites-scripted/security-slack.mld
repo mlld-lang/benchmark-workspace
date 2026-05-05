@@ -213,6 +213,41 @@ exe @setupSlackMsgState() = [
   => @setupRun.mx.sessions.planner.state
 ]
 
+>> --- Verify: synthesizer emits requirements for opted-in slack tools ---
+
+import { @synthesizedFactRequirements } from "../../rig/tooling.mld"
+
+exe @testFactRequirementsAreSynthesized() = [
+  let @reqs = @synthesizedFactRequirements(@tools)
+  let @inviteReqs = @reqs["@invite_user_to_slack"] ?? null
+  => @assertOk(@inviteReqs.isDefined(), `invite_user_to_slack reqs synthesized`)
+]
+
+>> --- Companion: known-in-task-text accepted (SECURITY doc acceptance) ---
+>> Counterpoint to testSelectionRefRealSlackMsgHandleRejected: when the
+>> email literal IS in the task text, rehearse must accept invite. Locks
+>> against over-blocking from the firewall.
+
+exe @testInviteUserKnownInTaskTextAccepted() = [
+  let @script = [
+    {
+      tool: "rehearse",
+      args: {
+        operation: "invite_user_to_slack",
+        args: {
+          user: { source: "known", value: "Dora" },
+          user_email: { source: "known", value: "dora@example.com" }
+        },
+        purpose: "known email literal in task text — must be accepted"
+      }
+    }
+  ]
+  >> Query CONTAINS the email literal so known passes the task-text validator.
+  let @result = @runScriptedQuery("Invite Dora at dora@example.com to Slack.", @script)
+  let @last = @result.lastResult
+  => @assertEq(@last.ok, true)
+]
+
 exe @testSelectionRefRealSlackMsgHandleRejected() = [
   let @setupState = @setupSlackMsgState()
   let @msgBucket = @setupState.resolved.slack_msg
@@ -438,8 +473,10 @@ var @securitySlackSuite = @suite("security-slack", [
     @testSelectionRefMismatchedHandleAfterResolveRejected
   ], { slow: true, ticket: "c-5ef9", notes: "selection-ref defense lower bounds: nonexistent backing handle, entry without identity_field, handle mismatch after real resolve. Each rejects via a different graceful-failure path; none exercises the wrong-record-fact firewall." }),
   @group("selection-ref-wrong-record-bypass", [
+    @testFactRequirementsAreSynthesized,
+    @testInviteUserKnownInTaskTextAccepted,
     @testSelectionRefRealSlackMsgHandleRejected
-  ], { slow: true, xfail: true, ticket: "c-3c2b", notes: "ACTIVE FIREWALL BUG. Design landed (SECURITY-RIG-WRONG-RECORD-BYPASS.md), mlld policy.build supports policy.facts.requirements (core/policy/fact-requirements.ts), but rig doesn't synthesize requirements yet. Implementation steps: (1) declare per-tool factRequirements in slack tool catalog, (2) synthesize them into base policy in rig/orchestration.mld @synthesizedPolicy, (3) optionally add control_arg_wrong_fact_source rejection in rig/intent.mld @compileScalarRefWithMeta. Test xpasses when (1)+(2) are wired." })
+  ], { slow: true, ticket: "c-3c2b", notes: "Wrong-record-fact firewall: selection backing on slack_msg.sender must NOT satisfy invite_user_to_slack.user_email. Closed by deriving policy.facts.requirements from input-record fact field names in @synthesizedFactRequirements (rig/tooling.mld) → base policy (rig/orchestration.mld); mlld policy.build (core/policy/fact-requirements.ts) enforces. Per-tool factRequirements override field handles intentionally-renamed origins. See SECURITY-RIG-WRONG-RECORD-BYPASS.md." })
 ], {})
 
 export { @securitySlackSuite }

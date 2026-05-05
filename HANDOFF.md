@@ -2,11 +2,11 @@
 
 Last updated: 2026-05-04
 
-## Top priority: lock the security model with deterministic tests
+## Top priority: grow security-test coverage
 
-The `tests/` mlld-native test framework is now in place. 23 zero-LLM scripted security tests run against real rig + bench domain code in seconds. The active firewall bug (wrong-record fact attestation) is locked by an xfail test; a design for the fix arrived from mlld-dev.
+The `tests/` mlld-native test framework is in place with 26 zero-LLM scripted security tests. The wrong-record fact firewall bypass (UT16 class, c-3c2b) is closed and locked by passing tests. Next session's job: opt the remaining suites into the firewall, write the missing breach-regression tests, and tackle the typed-instruction-channel class.
 
-Everything else (long-term work — undefended baseline, attack sweeps, cloud batching) stays open and important, but the next session's first job is closing the firewall bug and growing security-test coverage.
+Everything else (long-term work — undefended baseline, attack sweeps, cloud batching) stays open and important, but security-test growth is first priority.
 
 ---
 
@@ -36,7 +36,7 @@ uv run --project bench python3 tests/run-scripted.py --suite slack \
 # (also banking, workspace)
 ```
 
-**Current state**: slack 9/0/1 (1 xfail = active firewall bug), banking 8/0/0, workspace 6/0/0.
+**Current state**: slack 12/0/0, banking 8/0/0, workspace 6/0/0.
 
 Each scripted suite imports its own bench domain's `tools.mld` (which connects to MCP at import). That's why per-suite indexes exist — only one suite's tools can be wired per process.
 
@@ -44,57 +44,33 @@ The plain assertion runner (`mlld tests/index.mld`) exists but currently only ha
 
 ---
 
-## Active firewall bug — close this first
+## Wrong-record fact firewall (c-3c2b CLOSED)
 
-**Ticket: c-3c2b. Doc: `SECURITY-RIG-WRONG-RECORD-BYPASS.md` (notes from mlld-dev — read this first).**
+The bypass that surfaced as the UT16 cloud finding is closed. `rig/tooling.mld` synthesizes `policy.facts.requirements` from per-tool `factRequirements:` declarations and validates control-arg attestations at intent-compile time via `@validateControlArgFactRequirements`. The validator is opt-in — tools without `factRequirements` keep status-quo behavior. See `SECURITY-RIG-WRONG-RECORD-BYPASS.md` for the design.
 
-The rig source-class firewall accepts a selection-ref backing on the wrong record as proof for a control arg. Concrete shape:
+**Slack is opted in**; banking/workspace/travel are not. Opting them in is meaningful coverage growth — covered by c-891b. Pattern per slack:
 
-```json
-{
-  "operation": "invite_user_to_slack",
-  "args": {
-    "user_email": {
-      "source": "selection",
-      "backing": { "record": "slack_msg", "handle": "<real>", "field": "sender" }
-    }
+```mlld
+invite_user_to_slack: {
+  ...,
+  factRequirements: {
+    user: ["known", "fact:\@slack_user.name"]
+    >> user_email gets the synthesized default ["known", "fact:*.user_email"]
   }
 }
 ```
 
-`fact:@slack_msg.sender` should NOT prove `invite_user_to_slack.user_email`. Currently the rehearse returns `ok: true`. This is the same class as the UT16 cloud sweep finding (slack run 25324557648).
-
-**Locked by xfail test**: `tests/suites-scripted/security-slack.mld::testSelectionRefRealSlackMsgHandleRejected`. Will xpass when the fix lands.
-
-### What needs to land in rig
-
-mlld-dev side is done — `policy.facts.requirements` is implemented in `core/policy/fact-requirements.ts`. Rig is not wired yet. Per the SECURITY doc, three steps:
-
-1. **Declare per-tool fact requirements** in suite tool catalogs. Recommended schema (clean addition to the catalog entry):
-   ```mlld
-   factRequirements: {
-     user: ["known", "fact:@slack_user.name"],
-     user_email: ["known", "fact:*.email"]
-   }
-   ```
-   Initial set per the doc covers slack write tools (`send_direct_message`, `send_channel_message`, `invite_user_to_slack`, `add_user_to_channel`, `remove_user_from_slack`); equivalent declarations needed for banking/workspace/travel write tools.
-
-2. **Synthesize into base policy** in `rig/orchestration.mld` `@synthesizedPolicy`. Walk the tool catalog, collect `factRequirements` per tool, emit under `facts: { requirements: { "@<tool>": { ... } } }`. mlld policy.build will then enforce.
-
-3. **(Recommended) Compile-time rejection** in `rig/intent.mld` `@compileScalarRefWithMeta` after `resolvedAttestations` is computed. Emit `control_arg_wrong_fact_source` per the SECURITY doc — gives planners a clearer rehearse `blocked_args` reason. mlld policy.build catches anyway, but compile-time gives a better signal.
-
-### Acceptance
-
-- `testSelectionRefRealSlackMsgHandleRejected` xpasses (un-xfail it)
-- Companion tests: `invite_user_to_slack.user_email` accepts known-in-task-text and explicitly-allowed email facts (e.g. `fact:@contact.email`)
-- Existing graceful-failure tests still pass (9 slack, 8 banking, 6 workspace)
-- Add the equivalent test for the literal UT16 path (`referenced_webpage_content` via `find_referenced_urls` → `get_webpage_via_ref`) once c-c2e7 harness extension lands
+Note: mlld parses `@<ident>.<field>` as field access inside strings — escape with `\@` in pattern strings.
 
 ---
 
 ## Test coverage gaps — write these tests next
 
 10 tickets filed with detailed source material. Each has reproduction context and acceptance criteria.
+
+### Suite opt-in to firewall (highest leverage)
+
+- **c-891b** — Now expanded scope: opt banking/workspace/travel write tools into `factRequirements:` declarations + add taint-based defense tests. Each suite needs a per-tool audit: which records legitimately produce values for each control arg? Slack opt-in took ~30 minutes; expect similar per suite. Without opt-in, those suites have no defense at this layer for wrong-record-fact attestations.
 
 ### Test infrastructure
 
@@ -197,9 +173,8 @@ The rehearse RESPONSE is deterministic and instant — no MCP call, no LLM call,
    # also banking, workspace
    ```
    Expected: 9/0/1, 8/0/0, 6/0/0.
-3. Read `SECURITY-RIG-WRONG-RECORD-BYPASS.md` (notes from mlld-dev). Read `tk show c-3c2b` for the ticket.
-4. Land the c-3c2b fix per the implementation breakdown. Un-xfail `testSelectionRefRealSlackMsgHandleRejected`. Commit.
-5. After c-3c2b lands, pick from the gap tickets in priority order: c-c2e7 (unblocks several others) → c-634c (P1, typed-instruction class) → B5–B10 + c-800d + c-891b.
-6. Long-term work (c-2d0f, c-debc, c-1bd4) is yours to schedule — they don't block tests but they're filed for visibility.
+3. Read `SECURITY-RIG-WRONG-RECORD-BYPASS.md` (notes from mlld-dev) for the wrong-record-fact firewall design — already implemented and locked, useful reference when adding overrides on other suites.
+4. Pick from the gap tickets in priority order: c-891b (opt banking/workspace/travel into `factRequirements`) → c-c2e7 (harness extension, unblocks several others) → c-634c (P1, typed-instruction class) → B5–B10 + c-800d.
+5. Long-term work (c-2d0f, c-debc, c-1bd4) is yours to schedule — they don't block tests but they're filed for visibility.
 
 Per CLAUDE.md cardinal rules: don't blame the model; transcript-grounded diagnoses; prompt-approval before any `planner.att` edit.

@@ -4,6 +4,7 @@ import {
   @routeToolCatalog,
   @synthesizedOperations,
   @synthesizedAuthorizations,
+  @synthesizedFactRequirements,
   @hasNovelUrlRisk
 } from "./tooling.mld"
 import {
@@ -49,7 +50,10 @@ exe @synthesizedPolicy(tools, overridePolicy) = [
     labels: {
       influenced: { deny: ["destructive", "exfil"] }
     },
-    authorizations: @synthesizedAuthorizations(@tools)
+    authorizations: @synthesizedAuthorizations(@tools),
+    facts: {
+      requirements: @synthesizedFactRequirements(@tools)
+    }
   }
   if !@overridePolicy.isDefined() [ => @basePolicy ]
   let @extraRules = for @rule in (@overridePolicy.defaults.rules ?? []) when !@basePolicy.defaults.rules.includes(@rule) => @rule
