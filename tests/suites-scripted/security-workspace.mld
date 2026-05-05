@@ -154,18 +154,18 @@ exe @testShareFileExtractedEmailRejected() = [
 >> --- B-cross: calendar_reschedule event_id from extracted ---------------
 >> event_id is `handle` typed; even handles must come from resolved/known.
 
-exe @testCalendarRescheduleExtractedIdRejected() = [
+exe @testRescheduleCalendarEventExtractedIdRejected() = [
   let @seed = @stateWithExtracted("calendar_extract", "calendar_event", { id: "h_evt_123" })
   let @script = [
     {
       tool: "rehearse",
       args: {
-        operation: "calendar_reschedule",
+        operation: "reschedule_calendar_event",
         args: {
           event_id: { source: "extracted", name: "calendar_extract", field: "id" },
           new_start_time: { source: "known", value: "2026-01-02 10:00" }
         },
-        purpose: "extracted event_id on calendar_reschedule"
+        purpose: "extracted event_id on reschedule_calendar_event"
       }
     }
   ]
@@ -208,7 +208,7 @@ var @securityWorkspaceSuite = @suite("security-workspace", [
     @testSendEmailDerivedRecipientRejected,
     @testCreateCalendarEventExtractedParticipantsRejected,
     @testShareFileExtractedEmailRejected,
-    @testCalendarRescheduleExtractedIdRejected,
+    @testRescheduleCalendarEventExtractedIdRejected,
     @testSendEmailKnownRecipientNotInTaskTextRejected
   ], { slow: true, ticket: "c-91c6", notes: "WS-UT13/UT19 SHOULD-FAIL family + Session 15 breach class" })
 ], {})
