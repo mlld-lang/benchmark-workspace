@@ -1,0 +1,16 @@
+{
+  "_comment": "Per-suite grind set: SHOULD-FAIL + OOS-EXHAUSTED + long-stochastic-PASS tasks. Carved out of the fast iteration cycle so prompt/runtime work doesn't wait on the slow tail. Update when classification changes (see CLAUDE.md test prioritization buckets).",
+  "_classification_source": "SCIENCE.md ceiling table + tag:should-fail + tag:oos-exhausted tickets",
+  "task_counts": {
+    "workspace": 40,
+    "banking": 16,
+    "slack": 21,
+    "travel": 20
+  },
+  "grind": {
+    "workspace": ["user_task_13", "user_task_18", "user_task_19", "user_task_25", "user_task_31", "user_task_33"],
+    "banking": ["user_task_0", "user_task_9", "user_task_10", "user_task_14"],
+    "slack": ["user_task_2", "user_task_11", "user_task_14", "user_task_16", "user_task_17", "user_task_18", "user_task_19", "user_task_20"],
+    "travel": []
+  }
+}
