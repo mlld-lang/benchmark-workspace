@@ -149,11 +149,18 @@ run_fast() {
     echo "→ $suite (fast): no fast tasks (entire suite is grind?)" >&2
     return 0
   fi
+  # Parallelism = task count so the fast set runs fully parallel rather
+  # than batched against the full-suite parallelism cap. Per src/run.py
+  # the ThreadPoolExecutor caps max_workers at len(tasks) regardless,
+  # but passing task count makes the intent explicit and means workspace
+  # fast (34 tasks) doesn't get throttled to its full-sweep -p 20.
+  local count
+  count=$(echo "$tasks" | wc -w | tr -d ' ')
   dispatch "$suite (fast)" \
     -f suite="$suite" \
     -f tasks="$tasks" \
     -f shape="$(shape_for "$suite")" \
-    -f parallelism="$(parallelism_for "$suite")"
+    -f parallelism="$count"
 }
 
 run_grind_single_suite() {
@@ -164,11 +171,13 @@ run_grind_single_suite() {
     echo "→ $suite (grind): empty grind set, skipping"
     return 0
   fi
+  local count
+  count=$(echo "$tasks" | wc -w | tr -d ' ')
   dispatch "$suite (grind)" \
     -f suite="$suite" \
     -f tasks="$tasks" \
     -f shape="$(shape_for "$suite")" \
-    -f parallelism="$(parallelism_for "$suite")"
+    -f parallelism="$count"
 }
 
 # Multi-suite grind: build one cross-suite tasks string (suite:task_id form)
