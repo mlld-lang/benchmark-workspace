@@ -1,0 +1,169 @@
+>> clean/tests/framework.runner.tests.mld
+>>
+>> Self-tests for @runSuites aggregation, suite-level opts propagation,
+>> slow-group handling, and timing.
+>>
+>> Test exes here must NOT call @runSuites — mlld's static circular-reference
+>> detector flags the cycle. We call @runSuites at module level instead.
+>>
+>> Run: mlld clean/tests/framework.runner.tests.mld --no-checkpoint
+
+import { @assertEq, @assertContains, @assertOk } from "./assert.mld"
+import { @suite, @group, @xfailGroup, @resolveOpts, @runSuites } from "./runner.mld"
+
+>> ---------------------------------------------------------------------------
+>> Helper exes (raw assertion records)
+>> ---------------------------------------------------------------------------
+
+exe @helperPass() = [ => { ok: true, detail: "pass" } ]
+exe @helperFail() = [ => { ok: false, detail: "fail" } ]
+
+>> ---------------------------------------------------------------------------
+>> Basic counting
+>> ---------------------------------------------------------------------------
+
+var @s1 = @suite("pass-count", [@group("g", [@helperPass, @helperPass], {})], {})
+var @r1 = @runSuites([@s1])
+var @testPassCount = @assertEq(@r1.passes.length, 2)
+
+var @s2 = @suite("fail-count", [@group("g", [@helperFail, @helperPass], {})], {})
+var @r2 = @runSuites([@s2])
+var @testFailCount = @assertEq(@r2.fails.length, 1)
+
+var @s3 = @suite("xfail-count", [@xfailGroup("g", [@helperFail], {})], {})
+var @r3 = @runSuites([@s3])
+var @testXfailCount = @assertEq(@r3.xfails.length, 1)
+
+var @s4 = @suite("xpass-count", [@xfailGroup("g", [@helperPass], {})], {})
+var @r4 = @runSuites([@s4])
+var @testXpassCount = @assertEq(@r4.xpasses.length, 1)
+
+>> fails excludes xfail
+var @s5 = @suite("fail-excl-xfail", [
+  @xfailGroup("xf", [@helperFail], {}),
+  @group("rf", [@helperFail], {})
+], {})
+var @r5 = @runSuites([@s5])
+var @testFailsExcludesXfail = @assertEq(@r5.fails.length, 1)
+
+>> ---------------------------------------------------------------------------
+>> Id structure + report format
+>> ---------------------------------------------------------------------------
+
+var @s6 = @suite("id-test", [@group("mygroup", [@helperPass], {})], {})
+var @r6 = @runSuites([@s6])
+var @testIdStructure = @assertContains(@r6.results[0].id, "id-test/mygroup/")
+
+var @s7 = @suite("fmt-test", [@group("g", [@helperPass], {})], {})
+var @r7 = @runSuites([@s7])
+var @testReportFormat = @assertContains(@r7.report, "[PASS]")
+
+>> ---------------------------------------------------------------------------
+>> Multiple suites + groups
+>> ---------------------------------------------------------------------------
+
+var @s8a = @suite("suite-a", [@group("g", [@helperPass], {})], {})
+var @s8b = @suite("suite-b", [@group("g", [@helperPass], {})], {})
+var @r8 = @runSuites([@s8a, @s8b])
+var @testMultipleSuites = @assertEq(@r8.results.length, 2)
+
+var @s9 = @suite("multi-group", [
+  @group("g1", [@helperPass], {}),
+  @group("g2", [@helperFail], {})
+], {})
+var @r9 = @runSuites([@s9])
+var @testMultipleGroups = @assertEq(@r9.passes.length, 1)
+
+>> ---------------------------------------------------------------------------
+>> Group opts
+>> ---------------------------------------------------------------------------
+
+var @s10 = @suite("opts-test", [@group("g", [@helperPass], { ticket: "c-1234", notes: "see ticket" })], {})
+var @r10 = @runSuites([@s10])
+var @testGroupTicket = @assertEq(@r10.results[0].ticket, "c-1234")
+var @testGroupNotes = @assertEq(@r10.results[0].notes, "see ticket")
+
+>> ---------------------------------------------------------------------------
+>> Suite-level opts propagation
+>> ---------------------------------------------------------------------------
+
+>> suite ticket propagates to group without ticket
+var @s11a = @suite("suite-opts-fallback", [@group("g", [@helperPass], {})], { ticket: "c-5678" })
+var @r11a = @runSuites([@s11a])
+var @testSuiteTicketFallback = @assertEq(@r11a.results[0].ticket, "c-5678")
+
+>> suite xfail propagates to group
+var @s11b = @suite("suite-xfail", [@group("g", [@helperFail], {})], { xfail: true })
+var @r11b = @runSuites([@s11b])
+var @testSuiteXfailPropagates = @assertEq(@r11b.xfails.length, 1)
+
+>> group ticket overrides suite ticket
+var @s11c = @suite("suite-override", [@group("g", [@helperPass], { ticket: "c-override" })], { ticket: "c-suite" })
+var @r11c = @runSuites([@s11c])
+var @testGroupOverridesSuiteTicket = @assertEq(@r11c.results[0].ticket, "c-override")
+
+>> ---------------------------------------------------------------------------
+>> resolveOpts direct test
+>> ---------------------------------------------------------------------------
+
+var @resolved = @resolveOpts({ ticket: "c-suite", xfail: true, notes: "suite notes" }, { ticket: "c-group" })
+var @testResolveOptsTicketOverride = @assertEq(@resolved.ticket, "c-group")
+var @testResolveOptsXfailPropagates = @assertEq(@resolved.xfail, true)
+var @testResolveOptsNotesFallback = @assertEq(@resolved.notes, "suite notes")
+
+>> ---------------------------------------------------------------------------
+>> Slow group handling
+>> ---------------------------------------------------------------------------
+
+>> slow group runs normally (no SKIP_SLOW)
+var @s13 = @suite("slow-test", [@group("g", [@helperPass], { slow: true })], {})
+var @r13 = @runSuites([@s13])
+var @testSlowGroupRunsNormally = @assertEq(@r13.passes.length, 1)
+
+>> timingLines populated for slow groups
+var @testSlowGroupTiming = @assertContains(@r13.timingLines[0], "slow-test/g:")
+
+>> ---------------------------------------------------------------------------
+>> Aggregate and report
+>> ---------------------------------------------------------------------------
+
+var @allResults = [
+  @testPassCount,
+  @testFailCount,
+  @testXfailCount,
+  @testXpassCount,
+  @testFailsExcludesXfail,
+  @testIdStructure,
+  @testReportFormat,
+  @testMultipleSuites,
+  @testMultipleGroups,
+  @testGroupTicket,
+  @testGroupNotes,
+  @testSuiteTicketFallback,
+  @testSuiteXfailPropagates,
+  @testGroupOverridesSuiteTicket,
+  @testResolveOptsTicketOverride,
+  @testResolveOptsXfailPropagates,
+  @testResolveOptsNotesFallback,
+  @testSlowGroupRunsNormally,
+  @testSlowGroupTiming
+]
+
+var @passes = []
+var @fails = []
+for @r in @allResults [
+  if @r.ok [ let @passes += [@r] ] else [ let @fails += [@r] ]
+]
+
+show "framework runner self-tests"
+show ""
+for @r in @allResults [
+  let @status = when [@r.ok => "PASS"; * => "FAIL"]
+  show `  [@status] @r.detail`
+]
+show ""
+show `summary: @passes.length pass / @fails.length fail`
+
+if @fails.length > 0 [
+  bail "framework runner self-tests failed"
+]

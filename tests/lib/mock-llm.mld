@@ -1,0 +1,54 @@
+>> clean/tests/lib/mock-llm.mld
+>>
+>> Framework-blessed entry point for scripted-LLM testing. Re-exports
+>> the mock harness from rig/test-harness/mock-opencode.mld.
+>>
+>> Suite authors import from this file, not from rig/test-harness/.
+>> The harness file stays where it is for back-compat with existing
+>> reproducer scripts; this lib re-export is the going-forward API.
+>>
+>> What this gives you:
+>>   - @mockPlannerRun: build an agent, seed a planner session, drive it
+>>     from a JSON tool-call script without any LLM calls
+>>   - @mockOpencode: same session-binding semantics as the real @opencode,
+>>     but reads from config.toolScript instead of calling an LLM
+>>   - @runScript: iterate a script against the current planner session
+>>   - @dispatchScriptStep: dispatch a single tool call
+>>
+>> When to use:
+>>   - Asserting on multi-turn agent behavior, state accumulation, or
+>>     sequencing -> scripted-LLM test (this module)
+>>   - Asserting on a primitive's behavior given an input -> plain
+>>     assertion test (assert.mld)
+>>   - Asserting on what an LLM *does* with a real prompt -> worker test
+>>     (rig/tests/workers/, separate harness)
+>>   - Asserting on end-to-end utility -> bench task
+
+import {
+  @mockPlannerRun,
+  @mockOpencode,
+  @runScript,
+  @dispatchScriptStep
+} from "../../rig/test-harness/mock-opencode.mld"
+
+>> Re-export the planner-session schema + state factories. The
+>> `with { session: @planner }` clause is resolved at the call site,
+>> not through @mockPlannerRun's closure — so suites that build their
+>> own `with` block need these in scope. (This is also why suites that
+>> use the convenience @mockPlannerRun helper still work without these:
+>> @mockPlannerRun's body sees them via mock-opencode.mld's imports.)
+import {
+  @planner,
+  @emptyState,
+  @emptyPlannerRuntime
+} from "../../rig/session.mld"
+
+export {
+  @mockPlannerRun,
+  @mockOpencode,
+  @runScript,
+  @dispatchScriptStep,
+  @planner,
+  @emptyState,
+  @emptyPlannerRuntime
+}

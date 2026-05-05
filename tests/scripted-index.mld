@@ -1,0 +1,40 @@
+>> clean/tests/scripted-index.mld
+>>
+>> Scripted-LLM test runner. Imported only when an MCP-aware wrapper
+>> (tests/run-scripted.py) is launching mlld — domain `tools.mld` files
+>> need a reachable MCP server at import time, which the wrapper provides
+>> via the SDK's `mcp_servers` map.
+>>
+>> Plain `mlld tests/index.mld` from the shell does NOT load this file.
+>> Use:
+>>   uv run --project bench python3 tests/run-scripted.py
+>>
+>> Add a scripted suite by importing it below.
+
+import { @runSuites } from "./runner.mld"
+import { @scriptedTemplateSuite } from "./suites-scripted/_template.mld"
+
+var @suites = [
+  @scriptedTemplateSuite
+]
+
+var @result = @runSuites(@suites)
+
+show "clean/tests (scripted)"
+show ""
+show @result.report
+show ""
+
+if @result.timingLines.length > 0 [
+  for @tl in @result.timingLines => show `  @tl`
+  show ""
+]
+
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+
+>> Marker line the wrapper greps to determine exit code without parsing
+>> the report. `show` keeps it inside the effects stream; we don't `=>`
+>> a return value because that would print twice in the wrapper output.
+show `__SCRIPTED_STATUS__: passes=@result.passes.length fails=@result.fails.length xfails=@result.xfails.length xpasses=@result.xpasses.length`

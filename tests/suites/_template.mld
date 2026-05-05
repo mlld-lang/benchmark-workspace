@@ -1,0 +1,151 @@
+>> clean/tests/suites/_template.mld
+>>
+>> Template for a new test suite. Copy this file, rename it, and fill in:
+>>   1. Update the import paths for framework + module-under-test
+>>   2. Write your test exes (each returns an assertion record)
+>>   3. Build your suite with @group and @suite
+>>   4. Export the suite variable
+>>   5. Add one import line to clean/tests/index.mld
+>>
+>> Naming: file name becomes the suite name. One topic per file.
+>> "Topic" = "if this breaks, the same module is broken."
+
+>> --- 1. Imports ------------------------------------------------------------
+>> Import assertion helpers from assert.mld, suite/group/runSuites from runner.mld.
+>> (Don't import from framework.mld — it's a re-export footgun for the
+>> cycle detector. Two-file imports are fine.)
+
+import { @assertOk, @assertEq, @assertEqLabeled, @assertNeq, @assertContains, @assertHas } from "../assert.mld"
+import { @suite, @group, @xfailGroup, @runSuites } from "../runner.mld"
+
+>> Import your module under test here:
+>> import { @myFunction } from "../../rig/runtime.mld"
+>>
+>> For scripted-LLM tests (multi-turn agent behavior):
+>> import { @mockPlannerRun } from "../lib/mock-llm.mld"
+>> import { @rig } from "../../rig/index.mld"
+>> import { @records } from "../../bench/domains/<suite>/records.mld"
+>> import { @tools } from "../../bench/domains/<suite>/tools.mld"
+>>
+>> NOTE: bench domain tools.mld currently imports MCP-bridge tools that
+>> require an external MCP server at import time (the AgentDojo Python
+>> env + bridge npm package). That infrastructure is not part of the
+>> default `mlld tests/index.mld` loop. Scripted-LLM tests today must
+>> be run via a wrapper that wires up that environment (see
+>> rig/test-harness/ for the existing pattern). Mark scripted groups
+>> as { slow: true } so the standard runner can SKIP_SLOW past them.
+
+>> --- 2. Test exes ---------------------------------------------------------
+>> Each test exe returns an assertion record: { ok: bool, detail: string }
+>> Use @assertEq for value comparisons, @assertOk for booleans,
+>> @assertContains for substring/element checks, @assertHas for key presence,
+>> @assertNeq for inequality, @assertEqLabeled for labeled detail.
+
+exe @testExampleEquality() = [
+  => @assertEq(1 + 1, 2)
+]
+
+exe @testExampleOk() = [
+  let @result = true
+  => @assertOk(@result, "example boolean check")
+]
+
+exe @testExampleContains() = [
+  let @data = ["alpha", "beta", "gamma"]
+  => @assertContains(@data, "beta")
+]
+
+exe @testExampleHas() = [
+  let @obj = { name: "test", value: 42 }
+  => @assertHas(@obj, "name")
+]
+
+exe @testExampleNeq() = [
+  => @assertNeq("actual", "expected")
+]
+
+exe @testExampleLabeled() = [
+  let @result = 42
+  => @assertEqLabeled(@result, 42, "computed value")
+]
+
+>> A test marked as known-broken (in @xfailGroup below). The xfail
+>> failure is expected and won't fail the gate. When the underlying
+>> bug is fixed, this test starts passing — it then shows up as XPASS,
+>> which is a signal to remove it from xfailGroup and (probably)
+>> close the tracking ticket.
+exe @testIntentionallyFails() = [
+  => @assertOk(false, "placeholder for a tracked bug — remove from xfailGroup when fixed")
+]
+
+>> Guard/policy denial test pattern (recipe — the denied operation is
+>> application-specific, so this is a commented template, not a runnable
+>> example).
+>>
+>> mlld's `denied` handler only catches denials in the SAME exe scope.
+>> Wrapping the operation in @assertOk(...) or pushing it into a helper
+>> exe shifts the scope and the denial leaks past your test. Write the
+>> test as a top-level `when [denied => ...]` with the guarded operation
+>> directly in the `*` arm. The test passes when denial is caught;
+>> it fails when the operation runs without being denied.
+>>
+>> exe @testMyDenial() = when [
+>>   denied => { ok: true, detail: "denied as expected" }
+>>   * => [
+>>     let @_ = @yourGuardedOperation(...)
+>>     => { ok: false, detail: "expected denial but operation succeeded" }
+>>   ]
+>> ]
+>>
+>> Don't forget to add the test to a @group below if you write one.
+
+>> --- 3. Suite construction -------------------------------------------------
+>> Group tests by subtopic. Use @group("name", [exe, ...], opts).
+>> opts: { ticket?, xfail?, notes?, slow? } — pass {} for no opts.
+>> Use @xfailGroup for groups of tests known to fail.
+>>
+>> For guard/policy denial tests, write the when [denied] pattern directly:
+>>   exe @testDenial() = when [
+>>     denied => { ok: true, detail: "denied as expected" }
+>>     * => <operation that should be denied>
+>>   ]
+
+var @templateSuite = @suite("template", [
+  @group("examples", [
+    @testExampleEquality,
+    @testExampleOk,
+    @testExampleContains,
+    @testExampleHas,
+    @testExampleNeq,
+    @testExampleLabeled
+  ], {}),
+  @group("ticketed", [
+    @testExampleEquality
+  ], { ticket: "c-1234", notes: "example ticket + notes" }),
+  @xfailGroup("known-broken", [
+    @testIntentionallyFails
+  ], { ticket: "c-9999" })
+], {})
+
+>> --- 4. Export ------------------------------------------------------------
+export { @templateSuite }
+
+>> --- 5. Standalone runner -------------------------------------------------
+>> Runnable when this file is the entrypoint:
+>>   mlld clean/tests/suites/_template.mld --no-checkpoint
+>>
+>> Safe to keep when the suite is imported by tests/index.mld — mlld's
+>> import semantics don't re-execute non-export top-level statements,
+>> so this block runs only when the file is the entrypoint.
+
+var @result = @runSuites([@templateSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+if @result.skippedLine != "" [ show @result.skippedLine ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

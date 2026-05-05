@@ -1,0 +1,119 @@
+>> clean/tests/assert.mld
+>>
+>> Assertion helpers for the test framework. Split from framework.mld to
+>> avoid mlld's static circular-reference detection when @runSuites calls
+>> test exes that also import assertion helpers.
+>>
+>> Separating these allows test files to import assertions without
+>> triggering the cycle detector, while @runSuites lives in runner.mld.
+
+>> Deep equality (JS) — mlld's native == is reference-eq for objects
+exe @deepEq(a, b) = js {
+  function deepEqual(x, y) {
+    if (x === y) return true;
+    if (x == null || y == null) return false;
+    if (typeof x !== typeof y) return false;
+    if (typeof x !== 'object') return false;
+    if (Array.isArray(x) !== Array.isArray(y)) return false;
+    if (Array.isArray(x)) {
+      if (x.length !== y.length) return false;
+      for (let i = 0; i < x.length; i++) {
+        if (!deepEqual(x[i], y[i])) return false;
+      }
+      return true;
+    }
+    const keysX = Object.keys(x);
+    const keysY = Object.keys(y);
+    if (keysX.length !== keysY.length) return false;
+    for (const key of keysX) {
+      if (!deepEqual(x[key], y[key])) return false;
+    }
+    return true;
+  }
+  return deepEqual(a, b);
+}
+
+>> Stable JSON stringify for detail messages
+exe @stableJson(val) = js {
+  try {
+    return JSON.stringify(val);
+  } catch (e) {
+    return String(val);
+  }
+}
+
+>> @assertOk — escape hatch for boolean conditions
+exe @assertOk(cond, detail) = [
+  => { ok: !!@cond, detail: @detail }
+]
+
+>> @assertEq — structural equality with auto-formatted detail
+exe @assertEq(actual, expected) = [
+  let @passed = @deepEq(@actual, @expected)
+  let @actualStr = @stableJson(@actual)
+  let @expectedStr = @stableJson(@expected)
+  let @detail = when [
+    @passed => `value=@actualStr`
+    * => `expected=@expectedStr got=@actualStr`
+  ]
+  => { ok: @passed, detail: @detail }
+]
+
+>> @assertEqLabeled — same as @assertEq but with a caller-supplied label prefix
+exe @assertEqLabeled(actual, expected, label) = [
+  let @passed = @deepEq(@actual, @expected)
+  let @actualStr = @stableJson(@actual)
+  let @expectedStr = @stableJson(@expected)
+  let @detail = when [
+    @passed => `@label: value=@actualStr`
+    * => `@label: expected=@expectedStr got=@actualStr`
+  ]
+  => { ok: @passed, detail: @detail }
+]
+
+>> @assertNeq — structural inequality
+exe @assertNeq(actual, notExpected) = [
+  let @passed = !@deepEq(@actual, @notExpected)
+  let @actualStr = @stableJson(@actual)
+  let @notExpectedStr = @stableJson(@notExpected)
+  let @detail = when [
+    @passed => `value=@actualStr (not equal to @notExpectedStr)`
+    * => `values unexpectedly equal: @actualStr`
+  ]
+  => { ok: @passed, detail: @detail }
+]
+
+>> @assertContains — substring or element-of. Works on both strings (substring)
+>> and arrays (element membership) because .includes() has the same signature.
+exe @assertContains(haystack, needle) = [
+  let @found = @haystack.includes(@needle)
+  let @needleStr = @stableJson(@needle)
+  let @detail = when [
+    @found => `found @needleStr`
+    * => `not found: @needleStr`
+  ]
+  => { ok: @found, detail: @detail }
+]
+
+>> @assertHas — key-presence test on a record. Null-tolerant: a field set to
+>> null still counts as present. If you need non-null, use @assertNeq on the value.
+exe @assertHas(record, key) = [
+  let @keys = @record.mx.keys
+  let @hasIt = @keys.includes(@key)
+  let @detail = when [
+    @hasIt => `field "@key" present`
+    * => `field "@key" absent`
+  ]
+  => { ok: @hasIt, detail: @detail }
+]
+
+export {
+  @deepEq,
+  @stableJson,
+  @assertOk,
+  @assertEq,
+  @assertEqLabeled,
+  @assertNeq,
+  @assertContains,
+  @assertHas
+}

@@ -1,0 +1,307 @@
+>> clean/tests/framework.tests.mld
+>>
+>> Self-tests for the test framework assertion helpers, suite/group shape,
+>> and deepEq. Runner aggregation tests live in framework.runner.tests.mld
+>> to avoid mlld's static circular-reference detection.
+>>
+>> Run: mlld clean/tests/framework.tests.mld --no-checkpoint
+
+import {
+  @assertOk,
+  @assertEq,
+  @assertEqLabeled,
+  @assertNeq,
+  @assertContains,
+  @assertHas,
+  @deepEq
+} from "./assert.mld"
+
+import {
+  @suite,
+  @group,
+  @xfailGroup
+} from "./runner.mld"
+
+>> ---------------------------------------------------------------------------
+>> assertOk tests
+>> ---------------------------------------------------------------------------
+
+exe @testAssertOkPass() = [
+  let @r = @assertOk(true, "pass case")
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertOkFail() = [
+  let @r = @assertOk(false, "fail case")
+  => @assertEq(@r.ok, false)
+]
+
+exe @testAssertOkDetailPreserved() = [
+  let @r = @assertOk(true, "my detail text")
+  => @assertEq(@r.detail, "my detail text")
+]
+
+>> ---------------------------------------------------------------------------
+>> assertEq tests
+>> ---------------------------------------------------------------------------
+
+exe @testAssertEqEqualPrimitives() = [
+  let @r = @assertEq(42, 42)
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertEqUnequalPrimitives() = [
+  let @r = @assertEq(42, 99)
+  => @assertEq(@r.ok, false)
+]
+
+exe @testAssertEqPassDetail() = [
+  let @r = @assertEq(42, 42)
+  => @assertContains(@r.detail, "value=")
+]
+
+exe @testAssertEqFailDetail() = [
+  let @r = @assertEq(42, 99)
+  => @assertContains(@r.detail, "expected=")
+]
+
+exe @testAssertEqEqualStrings() = [
+  let @r = @assertEq("hello", "hello")
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertEqEqualArrays() = [
+  let @r = @assertEq([1, 2, 3], [1, 2, 3])
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertEqEqualObjects() = [
+  let @r = @assertEq({ a: 1, b: 2 }, { a: 1, b: 2 })
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertEqNestedObject() = [
+  let @r = @assertEq({ x: [1, { y: 2 }] }, { x: [1, { y: 2 }] })
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertEqDifferentObjects() = [
+  let @r = @assertEq({ a: 1 }, { a: 2 })
+  => @assertEq(@r.ok, false)
+]
+
+>> ---------------------------------------------------------------------------
+>> assertEqLabeled tests
+>> ---------------------------------------------------------------------------
+
+exe @testAssertEqLabeledFailDetail() = [
+  let @r = @assertEqLabeled(1, 2, "count")
+  => @assertContains(@r.detail, "count:")
+]
+
+exe @testAssertEqLabeledPassDetail() = [
+  let @r = @assertEqLabeled(42, 42, "count")
+  => @assertContains(@r.detail, "count:")
+]
+
+>> ---------------------------------------------------------------------------
+>> assertNeq tests
+>> ---------------------------------------------------------------------------
+
+exe @testAssertNeqDifferentValues() = [
+  let @r = @assertNeq(1, 2)
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertNeqSameValues() = [
+  let @r = @assertNeq(1, 1)
+  => @assertEq(@r.ok, false)
+]
+
+exe @testAssertNeqFailDetail() = [
+  let @r = @assertNeq(1, 1)
+  => @assertContains(@r.detail, "unexpectedly equal")
+]
+
+>> ---------------------------------------------------------------------------
+>> assertContains tests
+>> ---------------------------------------------------------------------------
+
+exe @testAssertContainsStringPresent() = [
+  let @r = @assertContains("hello world", "world")
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertContainsStringAbsent() = [
+  let @r = @assertContains("hello world", "xyz")
+  => @assertEq(@r.ok, false)
+]
+
+exe @testAssertContainsArrayElementPresent() = [
+  let @r = @assertContains([1, 2, 3], 2)
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertContainsArrayElementAbsent() = [
+  let @r = @assertContains([1, 2, 3], 99)
+  => @assertEq(@r.ok, false)
+]
+
+>> ---------------------------------------------------------------------------
+>> assertHas tests (key-presence, null-tolerant)
+>> ---------------------------------------------------------------------------
+
+exe @testAssertHasPresentKey() = [
+  let @r = @assertHas({ foo: 1, bar: 2 }, "foo")
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertHasNullValueStillPresent() = [
+  let @r = @assertHas({ foo: null }, "foo")
+  => @assertEq(@r.ok, true)
+]
+
+exe @testAssertHasAbsentKey() = [
+  let @r = @assertHas({ foo: 1, bar: 2 }, "baz")
+  => @assertEq(@r.ok, false)
+]
+
+>> ---------------------------------------------------------------------------
+>> suite/group shape tests
+>> ---------------------------------------------------------------------------
+
+exe @testSuiteShape() = [
+  let @s = @suite("test-suite", [], {})
+  => @assertEq(@s.kind, "suite")
+]
+
+exe @testSuiteNamePreserved() = [
+  let @s = @suite("test-suite", [], {})
+  => @assertEq(@s.name, "test-suite")
+]
+
+exe @testGroupShape() = [
+  let @g = @group("test-group", [], {})
+  => @assertEq(@g.kind, "group")
+]
+
+exe @testGroupNamePreserved() = [
+  let @g = @group("test-group", [], {})
+  => @assertEq(@g.name, "test-group")
+]
+
+exe @testXfailGroupSetsXfail() = [
+  let @g = @xfailGroup("xfail-group", [], {})
+  => @assertEq(@g.opts.xfail, true)
+]
+
+exe @testGroupOptsPreserved() = [
+  let @g = @group("g", [], { ticket: "c-1234" })
+  => @assertEq(@g.opts.ticket, "c-1234")
+]
+
+>> ---------------------------------------------------------------------------
+>> deepEq direct tests
+>> ---------------------------------------------------------------------------
+
+exe @testDeepEqPrimitives() = [
+  let @eq = @deepEq(1, 1)
+  let @neq = !@deepEq(1, 2)
+  => @assertOk(@eq && @neq, "deep eq primitives")
+]
+
+exe @testDeepEqObjects() = [
+  let @r = @deepEq({ a: 1 }, { a: 1 })
+  => @assertOk(@r, "deep eq objects")
+]
+
+exe @testDeepEqNested() = [
+  let @r = @deepEq({ x: [1, { y: 2 }] }, { x: [1, { y: 2 }] })
+  => @assertOk(@r, "deep eq nested")
+]
+
+exe @testDeepEqNulls() = [
+  let @r = @deepEq(null, null)
+  => @assertOk(@r, "deep eq nulls")
+]
+
+>> ---------------------------------------------------------------------------
+>> Manual test runner (can't use @runSuites from this file due to
+>> mlld's static circular-reference detection)
+>> ---------------------------------------------------------------------------
+
+var @assertOk1 = @testAssertOkPass()
+var @assertOk2 = @testAssertOkFail()
+var @assertOk3 = @testAssertOkDetailPreserved()
+
+var @assertEq1 = @testAssertEqEqualPrimitives()
+var @assertEq2 = @testAssertEqUnequalPrimitives()
+var @assertEq3 = @testAssertEqPassDetail()
+var @assertEq4 = @testAssertEqFailDetail()
+var @assertEq5 = @testAssertEqEqualStrings()
+var @assertEq6 = @testAssertEqEqualArrays()
+var @assertEq7 = @testAssertEqEqualObjects()
+var @assertEq8 = @testAssertEqNestedObject()
+var @assertEq9 = @testAssertEqDifferentObjects()
+
+var @assertEqL1 = @testAssertEqLabeledFailDetail()
+var @assertEqL2 = @testAssertEqLabeledPassDetail()
+
+var @assertNeq1 = @testAssertNeqDifferentValues()
+var @assertNeq2 = @testAssertNeqSameValues()
+var @assertNeq3 = @testAssertNeqFailDetail()
+
+var @assertContains1 = @testAssertContainsStringPresent()
+var @assertContains2 = @testAssertContainsStringAbsent()
+var @assertContains3 = @testAssertContainsArrayElementPresent()
+var @assertContains4 = @testAssertContainsArrayElementAbsent()
+
+var @assertHas1 = @testAssertHasPresentKey()
+var @assertHas2 = @testAssertHasNullValueStillPresent()
+var @assertHas3 = @testAssertHasAbsentKey()
+
+var @suite1 = @testSuiteShape()
+var @suite2 = @testSuiteNamePreserved()
+var @suite3 = @testGroupShape()
+var @suite4 = @testGroupNamePreserved()
+var @suite5 = @testXfailGroupSetsXfail()
+var @suite6 = @testGroupOptsPreserved()
+
+var @deepEq1 = @testDeepEqPrimitives()
+var @deepEq2 = @testDeepEqObjects()
+var @deepEq3 = @testDeepEqNested()
+var @deepEq4 = @testDeepEqNulls()
+
+var @allResults = [
+  @assertOk1, @assertOk2, @assertOk3,
+  @assertEq1, @assertEq2, @assertEq3, @assertEq4, @assertEq5, @assertEq6, @assertEq7, @assertEq8, @assertEq9,
+  @assertEqL1, @assertEqL2,
+  @assertNeq1, @assertNeq2, @assertNeq3,
+  @assertContains1, @assertContains2, @assertContains3, @assertContains4,
+  @assertHas1, @assertHas2, @assertHas3,
+  @suite1, @suite2, @suite3, @suite4, @suite5, @suite6,
+  @deepEq1, @deepEq2, @deepEq3, @deepEq4
+]
+
+var @passes = []
+var @fails = []
+
+for @r in @allResults [
+  if @r.ok [ let @passes += [@r] ] else [ let @fails += [@r] ]
+]
+
+var @passCount = @passes.length
+var @failCount = @fails.length
+
+show "framework self-tests"
+show ""
+for @r in @allResults [
+  let @status = when [@r.ok => "PASS"; * => "FAIL"]
+  show `  [@status] @r.detail`
+]
+show ""
+show `summary: @passCount pass / @failCount fail`
+
+if @failCount > 0 [
+  bail "framework self-tests failed"
+]

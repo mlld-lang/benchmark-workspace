@@ -1,0 +1,11 @@
+>> DEPRECATED — do not import from this file.
+>>
+>> This file used to re-export assert.mld + runner.mld as a convenience.
+>> It was removed because importing from here is a footgun: when your test
+>> exes call @assertOk AND you pass them to @runSuites, the static
+>> circular-reference detector flags a false-positive cycle through the
+>> re-export chain.
+>>
+>> Import directly instead:
+>>   import { @assertOk, @assertEq } from "./assert.mld"
+>>   import { @suite, @group, @runSuites } from "./runner.mld"

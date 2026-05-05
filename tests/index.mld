@@ -1,0 +1,38 @@
+>> clean/tests/index.mld
+>>
+>> Top-level test runner. Imports all suites and runs them.
+>> Add your suite import here when you write a new one.
+>>
+>> Run: mlld clean/tests/index.mld --no-checkpoint
+>> Skip slow suites: SKIP_SLOW=1 mlld clean/tests/index.mld --no-checkpoint
+
+import { @runSuites } from "./runner.mld"
+
+>> Import suites below. Each suite file exports a @<name>Suite variable.
+import { @templateSuite } from "./suites/_template.mld"
+>> import { @stateProjectionSuite } from "./suites/rig/state-projection.mld"
+
+var @suites = [
+  @templateSuite
+]
+
+var @result = @runSuites(@suites)
+
+show "clean/tests"
+show ""
+show @result.report
+show ""
+
+if @result.timingLines.length > 0 [
+  for @tl in @result.timingLines => show `  @tl`
+  show ""
+]
+
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+if @result.skippedLine != "" [ show @result.skippedLine ]
+
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+
+if @result.fails.length > 0 [
+  bail "tests failed: @result.fails.length failures"
+]

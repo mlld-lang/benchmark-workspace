@@ -1,0 +1,145 @@
+>> clean/tests/suites-scripted/_template.mld
+>>
+>> Template for scripted-LLM tests — multi-turn agent behavior verified
+>> against a deterministic tool-call script, no LLM calls.
+>>
+>> What's different from suites/_template.mld:
+>>   - This file imports a bench domain's tools.mld, which connects to an
+>>     MCP server at import time. That requires the AgentDojo Python env
+>>     wired up by tests/run-scripted.py — running this file via plain
+>>     `mlld ...` from the shell will fail at the @tools import.
+>>   - Tests use @mockPlannerRun(agent, query, script) from lib/mock-llm.mld
+>>     to drive a real rig agent through a JSON tool-call script.
+>>   - Mark groups { slow: true } so the framework knows to time them
+>>     (and so SKIP_SLOW=1 can bypass the entire scripted-LLM path
+>>     when running the plain index).
+>>
+>> Run:
+>>   uv run --project bench python3 tests/run-scripted.py
+>>   uv run --project bench python3 tests/run-scripted.py --suite travel
+
+import { @assertEq, @assertOk, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import {
+  @mockOpencode,
+  @planner,
+  @emptyState,
+  @emptyPlannerRuntime
+} from "../lib/mock-llm.mld"
+import { @rig } from "../../rig/index.mld"
+import { @records } from "../../bench/domains/workspace/records.mld"
+import { @tools } from "../../bench/domains/workspace/tools.mld"
+
+>> --- Module-level fixtures -----------------------------------------------
+>> Build the agent once at module load. @mockPlannerRun seeds a fresh
+>> planner-session state per call, so tests can share the agent without
+>> sharing state.
+
+var @agent = @rig.build({
+  suite: "workspace",
+  defense: "defended",
+  records: @records,
+  tools: @tools,
+  model: "stub",
+  maxIterations: 10
+})
+
+>> --- Test exes -----------------------------------------------------------
+>> Each test exe invokes @mockPlannerRun with a tiny inline tool-call
+>> script and asserts on the resulting state. Pure-resolve scripts (no
+>> extract/derive/compose) avoid all LLM calls — the simplest and fastest
+>> shape for scripted tests.
+
+>> A reusable helper that builds the `with { session: @planner }` block
+>> at the call site (the session schema must be statically visible to
+>> the `with` clause — closure resolution through @mockPlannerRun is
+>> not enough). Authors writing scripted tests will copy this pattern.
+exe @runScriptedQuery(query, script) =
+  @mockOpencode(@query, { toolScript: @script }) with {
+    display: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+
+>> Asserts that a one-step list_files resolve through the rig produces a
+>> file_entry result handle with records attached. Mirrors the
+>> workspace-list-files-tool-script.json fixture from rig/test-harness.
+exe @testListFilesResolves() = [
+  let @script = [
+    {
+      tool: "resolve",
+      args: {
+        tool: "list_files",
+        args: {},
+        purpose: "List all cloud files"
+      }
+    }
+  ]
+  let @result = @runScriptedQuery("What files are in the cloud drive?", @script)
+  => @assertEq(@result.lastResult.status, "resolved")
+]
+
+>> Asserts the resolve produced the expected record_type.
+exe @testListFilesRecordType() = [
+  let @script = [
+    {
+      tool: "resolve",
+      args: {
+        tool: "list_files",
+        args: {},
+        purpose: "List all cloud files"
+      }
+    }
+  ]
+  let @result = @runScriptedQuery("What files are in the cloud drive?", @script)
+  => @assertEq(@result.lastResult.record_type, "file_entry")
+]
+
+>> Expected-denial recipe (commented — fill in with the attack-shaped
+>> script for the security test you're writing). The pattern: build a
+>> script whose final step would violate a firewall rule; assert that
+>> the planner-tool wrapper returned an error envelope rather than a
+>> successful result.
+>>
+>> Error envelopes from the framework typically carry { error: true,
+>> reason: "<rule-name>", ... }. Read tests/runtime.mld:@toolCallError
+>> and the worker dispatch files (rig/workers/<phase>.mld) for the
+>> exact shapes; assert on the fields that matter for your test.
+>>
+>> exe @testDerivedControlArgRejected() = [
+>>   let @script = [
+>>     { tool: "resolve_batch", args: { ...seed-state-here... } },
+>>     { tool: "extract", args: { ...untrusted-source... } },
+>>     { tool: "execute", args: {
+>>         tool: "send_email",
+>>         args: { recipient: "<derived/extracted ref>" }   >> control-arg from untrusted source
+>>     }}
+>>   ]
+>>   let @result = @runScriptedQuery("query", @script)
+>>   let @last = @result.lastResult
+>>   => @assertEq(@last.error, true)
+>>   >> For finer-grained assertions on which firewall rule fired:
+>>   >> => @assertContains(@last.reason, "derived_control_arg")
+>> ]
+>>
+>> Multi-step attack with mid-script halt:
+>>
+>> exe @testFirewallStopsChain() = [
+>>   let @script = [...]   >> 5-step script; expected to halt after step 2
+>>   let @result = @runScriptedQuery("query", @script)
+>>   => @assertEq(@result.results.length, 2)
+>> ]
+
+>> --- Suite construction --------------------------------------------------
+>> Mark the group { slow: true }: scripted runs spawn a real rig agent
+>> and exercise the full state-merge/projection chain. ~1-3s per test
+>> on a healthy machine.
+
+var @scriptedTemplateSuite = @suite("scripted-template", [
+  @group("workspace-list-files", [
+    @testListFilesResolves,
+    @testListFilesRecordType
+  ], { slow: true, ticket: "c-2565", notes: "demo: pure resolve, no LLM" })
+], {})
+
+export { @scriptedTemplateSuite }
