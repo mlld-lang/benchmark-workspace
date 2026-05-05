@@ -861,15 +861,25 @@ exe @argSourceClasses(decision) = js {
 >>
 >> Walks rehearse_history (and the current attempt), collects the set of
 >> source classes the planner has tried for THIS (operation, arg) where
->> each attempt failed with that arg in blocked_args. If the set covers
->> the legal control-arg classes (resolved, known, selection), the arg
->> is structurally infeasible — no remaining shape can satisfy the
->> firewall.
+>> each attempt failed with that arg in blocked_args. Fires when the
+>> planner has tried at least 3 distinct source classes AND both legal
+>> direct-handle classes (resolved, known) are among them.
 >>
->> "extracted" and "derived" attempts ARE included in the tried-set
->> (they count as evidence of exploration) but the legal-classes set
->> is just resolved/known/selection. Once the planner has tried at
->> least one of each of those AND failed, infeasibility is confirmed.
+>> Why this rule: the planner's three legal control-arg sources are
+>> resolved, known, selection. Selection refs require a resolved-set or
+>> a derive ranking to point at — the planner can only reach a `selection`
+>> source class when there's an actual candidate set. Tasks with no
+>> candidate set (e.g. control-arg-from-untrusted, c-5ef9) never try
+>> selection because there's nothing to select among. A strict 3-of-3
+>> {resolved, known, selection} rule never fires there and the task
+>> grinds to budget.
+>>
+>> Counting any 3 distinct attempts (including derived/extracted) plus
+>> the two direct-handle classes is the equivalent signal: the planner
+>> has explored beyond direct grounding into laundering paths and they
+>> all failed. This is the same evidence selection-via-derive would
+>> require, captured without depending on the planner trying selection
+>> when no candidate exists.
 exe @exhaustedControlArgClasses(history, operation, arg) = js {
   const list = Array.isArray(history) ? history : [];
   const tried = new Set();
@@ -887,10 +897,9 @@ exe @exhaustedControlArgClasses(history, operation, arg) = js {
     const src = cls[arg];
     if (src) tried.add(src);
   }
-  const legal = ["resolved", "known", "selection"];
-  for (let i = 0; i < legal.length; i++) {
-    if (!tried.has(legal[i])) return false;
-  }
+  if (!tried.has("resolved")) return false;
+  if (!tried.has("known")) return false;
+  if (tried.size < 3) return false;
   return true;
 }
 
@@ -1261,4 +1270,4 @@ exe @runPlannerSession(agent, query) = [
   }
 ]
 
-export { @planner, @plannerPrompt, @plannerTools, @runPlannerSession, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress }
+export { @planner, @plannerPrompt, @plannerTools, @runPlannerSession, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress, @exhaustedControlArgClasses }

@@ -57,7 +57,7 @@ import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation, @dispatchExtract, @validateExtractSchema } from "../workers/extract.mld"
 import { @coerceDeriveAttestation } from "../workers/derive.mld"
-import { @planner, @plannerTools, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress } from "../workers/planner.mld"
+import { @planner, @plannerTools, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress, @exhaustedControlArgClasses } from "../workers/planner.mld"
 import { @applyRegexParser, @parserId } from "../transforms/parse_value.mld"
 import {
   @applyUrlRefs,
@@ -3574,6 +3574,132 @@ var @prRoundtripOk =
 var @prRoundtripPretty = `tool_calls=@prRuntime.tool_calls fp='@prRuntime.progress_fingerprint' csp=@prRuntime.calls_since_progress`
 
 >> ============================================================================
+>> c-5ef9: structurally_infeasible tracker — exhaustion semantics
+>> ============================================================================
+>> When the planner has tried multiple source classes for a control arg
+>> and all failed, the tracker should fire `structurally_infeasible: true`
+>> so the planner exits via blocked() instead of grinding to budget.
+>>
+>> The original rule (require all of {resolved, known, selection}) never
+>> fired on tasks where selection was N/A — the canonical SHOULD-FAIL
+>> shape (control-arg-from-untrusted, slack UT16). The new rule fires on
+>> any 3+ distinct attempts including both legal-handle classes.
+>>
+>> History fixtures here mirror real transcript shapes from run 25324561113.
+
+>> Helper: build a synthetic rehearse_history entry.
+exe @rehearseEntry(operation, arg, sourceClass) = js {
+  return {
+    operation,
+    shape_hash: "h_" + sourceClass,
+    ok: false,
+    blocked_args: [arg],
+    arg_source_classes: { [arg]: sourceClass }
+  };
+}
+
+>> EX-1: UT16 shape — known + derived + extracted + resolved (no selection).
+>>       Selection N/A because the email is in untrusted webpage content;
+>>       there is no resolved-set with multiple instances to select among.
+>>       Expected: TRUE (the planner has explored 4 classes, both
+>>       resolved+known among them — exhaustion fires).
+var @ex1History = [
+  @rehearseEntry("invite_user_to_slack", "user_email", "known"),
+  @rehearseEntry("invite_user_to_slack", "user_email", "derived"),
+  @rehearseEntry("invite_user_to_slack", "user_email", "extracted"),
+  @rehearseEntry("invite_user_to_slack", "user_email", "resolved")
+]
+var @ex1 = @exhaustedControlArgClasses(@ex1History, "invite_user_to_slack", "user_email")
+var @ex1Ok = @ex1 == true
+var @ex1Pretty = `tried 4 classes (no selection), exhausted=@ex1`
+
+>> EX-2: minimal UT16-style — resolved + known + derived (3 classes,
+>>       both legal-handle present, one alternate). Should fire.
+var @ex2History = [
+  @rehearseEntry("send_email", "recipient", "resolved"),
+  @rehearseEntry("send_email", "recipient", "known"),
+  @rehearseEntry("send_email", "recipient", "derived")
+]
+var @ex2 = @exhaustedControlArgClasses(@ex2History, "send_email", "recipient")
+var @ex2Ok = @ex2 == true
+var @ex2Pretty = `tried resolved+known+derived, exhausted=@ex2`
+
+>> EX-3: underexplored — only resolved + known tried, no third class.
+>>       Planner should keep exploring (selection, derive, extract).
+>>       Expected: FALSE.
+var @ex3History = [
+  @rehearseEntry("send_email", "recipient", "resolved"),
+  @rehearseEntry("send_email", "recipient", "known")
+]
+var @ex3 = @exhaustedControlArgClasses(@ex3History, "send_email", "recipient")
+var @ex3Ok = @ex3 == false
+var @ex3Pretty = `tried only resolved+known, exhausted=@ex3 (must be false — keep exploring)`
+
+>> EX-4: single attempt early in session.
+>>       Expected: FALSE.
+var @ex4History = [
+  @rehearseEntry("send_email", "recipient", "known")
+]
+var @ex4 = @exhaustedControlArgClasses(@ex4History, "send_email", "recipient")
+var @ex4Ok = @ex4 == false
+var @ex4Pretty = `tried only known, exhausted=@ex4 (must be false)`
+
+>> EX-5: canonical full coverage — resolved + known + selection.
+>>       Real flow: selection succeeds and rehearse returns ok=true,
+>>       exhaustion never gets queried. But the logic must still report
+>>       TRUE if asked, to avoid breaking pre-existing semantics.
+var @ex5History = [
+  @rehearseEntry("send_email", "recipient", "resolved"),
+  @rehearseEntry("send_email", "recipient", "known"),
+  @rehearseEntry("send_email", "recipient", "selection")
+]
+var @ex5 = @exhaustedControlArgClasses(@ex5History, "send_email", "recipient")
+var @ex5Ok = @ex5 == true
+var @ex5Pretty = `tried resolved+known+selection, exhausted=@ex5`
+
+>> EX-6: selection without resolved — should NOT fire.
+>>       Real selection refs always trace back to a resolved instance,
+>>       but if somehow the planner only tried selection+known without
+>>       trying resolved directly, the tracker should keep nudging.
+var @ex6History = [
+  @rehearseEntry("send_email", "recipient", "selection"),
+  @rehearseEntry("send_email", "recipient", "known")
+]
+var @ex6 = @exhaustedControlArgClasses(@ex6History, "send_email", "recipient")
+var @ex6Ok = @ex6 == false
+var @ex6Pretty = `tried selection+known (no resolved), exhausted=@ex6 (must be false)`
+
+>> EX-7: history scoped to operation — entries on a different operation
+>>       should not contribute to exhaustion of this op+arg.
+var @ex7History = [
+  @rehearseEntry("send_email", "recipient", "resolved"),
+  @rehearseEntry("send_email", "recipient", "known"),
+  @rehearseEntry("invite_user_to_slack", "user_email", "derived"),
+  @rehearseEntry("invite_user_to_slack", "user_email", "extracted")
+]
+var @ex7a = @exhaustedControlArgClasses(@ex7History, "send_email", "recipient")
+var @ex7aOk = @ex7a == false
+var @ex7aPretty = `send_email scope: tried resolved+known only, exhausted=@ex7a (must be false; cross-op derive/extract don't count)`
+
+>> EX-8: ok=true entries don't contribute to exhaustion (success doesn't
+>>       count as a failed attempt).
+var @ex8OkEntry = {
+  operation: "send_email",
+  shape_hash: "h_resolved_ok",
+  ok: true,
+  blocked_args: [],
+  arg_source_classes: { recipient: "resolved" }
+}
+var @ex8History = [
+  @ex8OkEntry,
+  @rehearseEntry("send_email", "recipient", "known"),
+  @rehearseEntry("send_email", "recipient", "derived")
+]
+var @ex8 = @exhaustedControlArgClasses(@ex8History, "send_email", "recipient")
+var @ex8Ok = @ex8 == false
+var @ex8Pretty = `ok-entries excluded: known+derived only counted, exhausted=@ex8 (must be false; size<3)`
+
+>> ============================================================================
 >> Unicode hyphen normalization (c-bd28) — EXPECTED TO FAIL until c-bd28 ships.
 >> Captures the regression that bit TR-UT15 (and TR-UT13's compose-output
 >> variant): worker LLMs autocorrect ASCII hyphen (U+002D) to non-breaking
@@ -4563,6 +4689,14 @@ exe @allChecks() = [
   @check("c-3438/FP-7-derive-items-only-preview-is-not-progress", @fpDeriveItemsOk, @fpDeriveItemsPretty),
   @check("c-3438/FP-8-extract-with-payload-counts-as-progress", @fpExtractWithDataOk, @fpExtractWithDataPretty),
   @check("c-3438/PR-1-runtime-schema-roundtrip-preserves-progress-fields", @prRoundtripOk, @prRoundtripPretty),
+  @check("c-5ef9/EX-1-ut16-shape-no-selection-fires", @ex1Ok, @ex1Pretty),
+  @check("c-5ef9/EX-2-resolved-known-derived-fires", @ex2Ok, @ex2Pretty),
+  @check("c-5ef9/EX-3-underexplored-does-not-fire", @ex3Ok, @ex3Pretty),
+  @check("c-5ef9/EX-4-single-attempt-does-not-fire", @ex4Ok, @ex4Pretty),
+  @check("c-5ef9/EX-5-canonical-full-coverage-fires", @ex5Ok, @ex5Pretty),
+  @check("c-5ef9/EX-6-no-resolved-does-not-fire", @ex6Ok, @ex6Pretty),
+  @check("c-5ef9/EX-7-cross-op-entries-isolated", @ex7aOk, @ex7aPretty),
+  @check("c-5ef9/EX-8-ok-entries-excluded-from-tally", @ex8Ok, @ex8Pretty),
   @check("xfail/c-bd28/UH-1-selection-ref-tolerates-unicode-dash-variant", @uhOk, @uhPretty)
   ]
 ]
