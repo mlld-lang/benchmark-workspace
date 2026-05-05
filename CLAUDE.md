@@ -7,6 +7,8 @@ Rig v2 framework + AgentDojo benchmark implementation for mlld.
 ```bash
 mlld clean/rig/tests/index.mld --no-checkpoint   # invariant gate (must pass 100%)
 mlld rig/tests/workers/run.mld --no-checkpoint   # worker LLM tests (must pass 100%)
+mlld clean/tests/index.mld --no-checkpoint       # new test framework
+SKIP_SLOW=1 mlld clean/tests/index.mld --no-checkpoint  # skip slow suites
 tk ready                                          # active work items
 ```
 
@@ -26,6 +28,11 @@ clean/
     prompts/planner.att     THE MAIN ITERATION TARGET for utility work
     tests/index.mld         Zero-LLM invariant gate (must pass 100%)
     tests/workers/          Live LLM worker tests (17 tests, ~50s)
+  tests/                  mlld-native test framework (see tests/README.md)
+    assert.mld             Assertion helpers (@assertOk, @assertEq, etc.)
+    runner.mld             Suite/group construction + @runSuites
+    lib/mock-llm.mld       Scripted-LLM test harness (re-exports rig/test-harness)
+    suites/                Test suites (one topic per file)
   bench/                  Benchmark (consumes rig, suite-specific)
     ARCHITECTURE.md         How bench consumes rig
     agents/<suite>.mld      Agent entrypoints (~20 lines each)
