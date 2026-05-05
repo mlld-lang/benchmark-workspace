@@ -9,6 +9,7 @@ import {
   @toolRuntimeMessage,
   @extractToolResultValue,
   @previewFields,
+  @nullFields,
   @updateNamedState,
   @updateExtractSources,
   @plainObjectKeys
@@ -200,10 +201,12 @@ exe @dispatchExtract(agent, state, decision, query) = [
     let @recordType = @recordTypeName(@recordDef)
     let @typed = @extractToolResultValue(@recordType, @recordDef, @raw)
     let @summary = `fetched @decision.tool into @decision.name`
+    let @toolNullFields = @nullFields(@typed)
     let @nextState = @updateNamedState(@state, "extracted", @decision.name, {
       provenance: "extracted",
       schema_name: @recordType,
       preview_fields: @previewFields(@typed),
+      null_fields: @toolNullFields,
       value: @typed
     })
     => {
@@ -214,6 +217,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
         name: @decision.name,
         provenance: "extracted",
         preview_fields: @previewFields(@typed),
+        null_fields: @toolNullFields,
         summary: @summary
       },
       session_id: null
@@ -276,10 +280,12 @@ exe @dispatchExtract(agent, state, decision, query) = [
     * => "inline-schema"
   ]
   let @extractedPreviewFields = @previewFields(@typed)
+  let @extractedNullFields = @nullFields(@typed)
   let @dataState = @updateNamedState(@state, "extracted", @decision.name, {
     provenance: "extracted",
     schema_name: @schemaName,
     preview_fields: @extractedPreviewFields,
+    null_fields: @extractedNullFields,
     value: @typed
   })
   let @nextState = when [
@@ -302,6 +308,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
       name: @decision.name,
       provenance: "extracted",
       preview_fields: @previewFields(@typed),
+      null_fields: @extractedNullFields,
       summary: @summary
     },
     session_id: @sessionId,

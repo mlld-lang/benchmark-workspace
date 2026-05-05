@@ -5,6 +5,7 @@ import {
   @arrayItems,
   @bucketItems,
   @previewFields,
+  @nullFields,
   @updateNamedState
 } from "../runtime.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
@@ -189,10 +190,12 @@ exe @dispatchDerive(agent, state, decision, query) = [
   ]
   let @summary = @attestation.summary ?? `derived @decision.name`
   let @schemaName = @attestation.schema_name ?? "inline-schema"
+  let @derivedNullFields = @nullFields(@attestation.payload)
   let @nextState = @updateNamedState(@state, "derived", @decision.name, {
     provenance: "derived",
     schema_name: @schemaName,
     preview_fields: @previewFields(@attestation.payload),
+    null_fields: @derivedNullFields,
     value: @attestation.payload,
     selection_refs: @selectionCheck.refs
   })
@@ -210,6 +213,7 @@ exe @dispatchDerive(agent, state, decision, query) = [
       name: @decision.name,
       provenance: "derived",
       preview_fields: @previewFields(@attestation.payload),
+      null_fields: @derivedNullFields,
       selection_refs: @selectionCheck.refs,
       summary: @summary
     },

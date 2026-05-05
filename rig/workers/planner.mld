@@ -108,6 +108,7 @@ record @planner_tool_result = {
     schema_name: string?,
     provenance: string?,
     preview_fields: array?,
+    null_fields: array?,
     selection_refs: array?,
     result_handles: array?,
     results: array?,
@@ -115,6 +116,7 @@ record @planner_tool_result = {
     issues: array?,
     ok: boolean?,
     blocked_args: array?,
+    blocked_extract_fields: array?,
     structurally_infeasible: boolean?
   ],
   validate: "demote"
@@ -830,6 +832,31 @@ exe @blockedArgsFromIssues(issues) = [
   => @args
 ]
 
+>> Surface a structured hint when a rehearse blocks because the planner
+>> sourced a payload arg from an extract/derive entry whose value is null
+>> for the requested field. The block itself is correct (you can't dispatch
+>> a null MCP arg), but the planner cannot otherwise tell the difference
+>> between "this source class is wrong" and "your extract didn't fill this
+>> field." Each hint carries the arg name, the source bucket, the named
+>> entry, and the missing field so the planner can pivot — re-extract with
+>> a richer schema, fetch a different source, or drop the arg.
+exe @blockedFieldHints(issues) = [
+  let @list = @issues ?? []
+  let @extractedHints = for @i in @list when @i.error == "extracted_field_missing" => {
+    arg: @i.arg,
+    source: "extracted",
+    name: @i.name,
+    field: @i.field
+  }
+  let @derivedHints = for @i in @list when @i.error == "derived_field_missing" => {
+    arg: @i.arg,
+    source: "derived",
+    name: @i.name,
+    field: @i.field
+  }
+  => @extractedHints.concat(@derivedHints)
+]
+
 >> Build per-arg source-class map from a decision's args. Each value's
 >> source field (or null for malformed) keys the entry. Arrays of refs
 >> are folded — array source-class set unioned across elements.
@@ -937,6 +964,10 @@ exe @plannerRehearse(input) = [
     @rehearseOk => []
     * => @blockedArgsFromIssues(@prep.failure.issues ?? [])
   ]
+  let @blockedFields = when [
+    @rehearseOk => []
+    * => @blockedFieldHints(@prep.failure.issues ?? [])
+  ]
   >> Append history entry FIRST so structural-infeasibility check sees
   >> the current attempt's source-class info alongside prior failures.
   let @priorHistory = @planner.rehearse_history ?? []
@@ -961,6 +992,7 @@ exe @plannerRehearse(input) = [
     status: "rehearsed",
     ok: @rehearseOk,
     blocked_args: @blockedArgs,
+    blocked_extract_fields: @blockedFields,
     structurally_infeasible: @structurallyInfeasible,
     summary: @summary
   }
@@ -1270,4 +1302,4 @@ exe @runPlannerSession(agent, query) = [
   }
 ]
 
-export { @planner, @plannerPrompt, @plannerTools, @runPlannerSession, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress, @exhaustedControlArgClasses }
+export { @planner, @plannerPrompt, @plannerTools, @runPlannerSession, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress, @exhaustedControlArgClasses, @blockedFieldHints }

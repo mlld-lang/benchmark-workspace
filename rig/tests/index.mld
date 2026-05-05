@@ -51,13 +51,13 @@ import {
   @correlatedControlArgsCheck
 } from "../orchestration.mld"
 import { @compileExecuteIntent, @compileToolArgs, @compileRecordArgs, @lowerSelectionRef, @resolveControlRefValue, @resolveRefValue, @roleForArg, @lookupResolvedEntry } from "../intent.mld"
-import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket, @batchSpecMergeState, @plainObjectKeys } from "../runtime.mld"
+import { @callTool, @toolCallError, @emptyState, @recordTypeName, @llmCallEntry, @mergeResolvedEntries, @updateResolvedState, @projectResolvedSummary, @bucketItems, @bucketLength, @isResolvedIndexBucket, @batchSpecMergeState, @plainObjectKeys, @nullFields } from "../runtime.mld"
 import { @emptyPlannerRuntime } from "../session.mld"
 import { @dispatchResolve } from "../workers/resolve.mld"
 import { @dispatchExecute } from "../workers/execute.mld"
 import { @coerceExtractAttestation, @dispatchExtract, @validateExtractSchema } from "../workers/extract.mld"
 import { @coerceDeriveAttestation } from "../workers/derive.mld"
-import { @planner, @plannerTools, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress, @exhaustedControlArgClasses } from "../workers/planner.mld"
+import { @planner, @plannerTools, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress, @exhaustedControlArgClasses, @blockedFieldHints } from "../workers/planner.mld"
 import { @applyRegexParser, @parserId } from "../transforms/parse_value.mld"
 import {
   @applyUrlRefs,
@@ -3707,6 +3707,84 @@ var @ex8Ok = @ex8 == false
 var @ex8Pretty = `ok-entries excluded: known+derived only counted, exhausted=@ex8 (must be false; size<3)`
 
 >> ============================================================================
+>> Null-field signal (probe-banking-date-extracted) — extract/derive workers
+>> annotate their result with `null_fields` listing schema-declared fields the
+>> worker did not fill. plannerRehearse mirrors the same shape on its result
+>> as `blocked_extract_fields` when an arg references a null-valued extract
+>> or derive entry. Together (D + A) these surface what's otherwise an
+>> ambiguous "blocked_args: [arg]" signal so the planner can pivot — the
+>> witty-comet UT2 transcript bounced for 2 iterations on this ambiguity.
+>> ============================================================================
+
+var @nfFull = @nullFields({ a: 1, b: "x", c: true })
+var @nfFullOk = @nfFull.length == 0
+var @nfFullPretty = `nullFields(all-defined)=@nfFull (must be [])`
+
+var @nfSparse = @nullFields({ a: 1, b: null, c: "x", d: null })
+var @nfSparseOk = @nfSparse.length == 2 && @nfSparse.includes("b") && @nfSparse.includes("d")
+var @nfSparsePretty = `nullFields({a,b:null,c,d:null})=@nfSparse (must include b,d)`
+
+var @nfEmpty = @nullFields({})
+var @nfEmptyOk = @nfEmpty.length == 0
+var @nfEmptyPretty = `nullFields({})=@nfEmpty (must be [])`
+
+var @nfScalar = @nullFields("hello")
+var @nfScalarOk = @nfScalar.length == 0
+var @nfScalarPretty = `nullFields("hello")=@nfScalar (must be [])`
+
+var @nfNullInput = @nullFields(null)
+var @nfNullInputOk = @nfNullInput.length == 0
+var @nfNullInputPretty = `nullFields(null)=@nfNullInput (must be [])`
+
+>> blockedFieldHints — filters compileExecuteIntent issues that flag a
+>> missing extract/derive field, projects them into planner-actionable
+>> hints. Issues with other errors (payload_only_source_in_control_arg,
+>> known_value_not_in_task_text, etc.) are not surfaced as field hints.
+
+var @bfhIssuesExtracted = [
+  { ok: false, error: "extracted_field_missing", name: "landlord_notice", field: "effective_date", arg: "date" }
+]
+var @bfhExtracted = @blockedFieldHints(@bfhIssuesExtracted)
+var @bfhExtractedOk = @bfhExtracted.length == 1 &&
+  @bfhExtracted[0].arg == "date" &&
+  @bfhExtracted[0].source == "extracted" &&
+  @bfhExtracted[0].name == "landlord_notice" &&
+  @bfhExtracted[0].field == "effective_date"
+var @bfhExtractedPretty = `blockedFieldHints(extracted_field_missing) → @bfhExtracted`
+
+var @bfhIssuesDerived = [
+  { ok: false, error: "derived_field_missing", name: "rent_calc", field: "new_amount", arg: "amount" }
+]
+var @bfhDerived = @blockedFieldHints(@bfhIssuesDerived)
+var @bfhDerivedOk = @bfhDerived.length == 1 &&
+  @bfhDerived[0].arg == "amount" &&
+  @bfhDerived[0].source == "derived"
+var @bfhDerivedPretty = `blockedFieldHints(derived_field_missing) → @bfhDerived`
+
+var @bfhIssuesMixed = [
+  { ok: false, error: "extracted_field_missing", name: "n1", field: "f1", arg: "a1" },
+  { ok: false, error: "payload_only_source_in_control_arg", source_class: "extracted", arg: "a2" },
+  { ok: false, error: "derived_field_missing", name: "n3", field: "f3", arg: "a3" },
+  { ok: false, error: "known_value_not_in_task_text", arg: "a4" }
+]
+var @bfhMixed = @blockedFieldHints(@bfhIssuesMixed)
+var @bfhMixedOk = @bfhMixed.length == 2 &&
+  @bfhMixed[0].arg == "a1" &&
+  @bfhMixed[1].arg == "a3"
+var @bfhMixedPretty = `blockedFieldHints(mixed) returns only field-missing issues: @bfhMixed`
+
+var @bfhIssuesEmpty = @blockedFieldHints([])
+var @bfhEmptyOk = @bfhIssuesEmpty.length == 0
+var @bfhEmptyPretty = `blockedFieldHints([])=@bfhIssuesEmpty (must be [])`
+
+var @bfhIssuesNoFieldMissing = [
+  { ok: false, error: "payload_only_source_in_control_arg", source_class: "derived", arg: "x" }
+]
+var @bfhNoMissing = @blockedFieldHints(@bfhIssuesNoFieldMissing)
+var @bfhNoMissingOk = @bfhNoMissing.length == 0
+var @bfhNoMissingPretty = `blockedFieldHints(no field-missing issues)=@bfhNoMissing (must be [])`
+
+>> ============================================================================
 >> Unicode hyphen normalization (c-bd28) — EXPECTED TO FAIL until c-bd28 ships.
 >> Captures the regression that bit TR-UT15 (and TR-UT13's compose-output
 >> variant): worker LLMs autocorrect ASCII hyphen (U+002D) to non-breaking
@@ -4704,7 +4782,17 @@ exe @allChecks() = [
   @check("c-5ef9/EX-6-no-resolved-does-not-fire", @ex6Ok, @ex6Pretty),
   @check("c-5ef9/EX-7-cross-op-entries-isolated", @ex7aOk, @ex7aPretty),
   @check("c-5ef9/EX-8-ok-entries-excluded-from-tally", @ex8Ok, @ex8Pretty),
-  @check("xfail/c-bd28/UH-1-selection-ref-tolerates-unicode-dash-variant", @uhOk, @uhPretty)
+  @check("xfail/c-bd28/UH-1-selection-ref-tolerates-unicode-dash-variant", @uhOk, @uhPretty),
+  @check("null-fields/NF-1-all-defined-returns-empty", @nfFullOk, @nfFullPretty),
+  @check("null-fields/NF-2-sparse-returns-null-keys", @nfSparseOk, @nfSparsePretty),
+  @check("null-fields/NF-3-empty-object-returns-empty", @nfEmptyOk, @nfEmptyPretty),
+  @check("null-fields/NF-4-scalar-input-returns-empty", @nfScalarOk, @nfScalarPretty),
+  @check("null-fields/NF-5-null-input-returns-empty", @nfNullInputOk, @nfNullInputPretty),
+  @check("blocked-field-hints/BFH-1-extracted-field-missing-projected", @bfhExtractedOk, @bfhExtractedPretty),
+  @check("blocked-field-hints/BFH-2-derived-field-missing-projected", @bfhDerivedOk, @bfhDerivedPretty),
+  @check("blocked-field-hints/BFH-3-mixed-issues-only-field-missing-surfaced", @bfhMixedOk, @bfhMixedPretty),
+  @check("blocked-field-hints/BFH-4-empty-issues-returns-empty", @bfhEmptyOk, @bfhEmptyPretty),
+  @check("blocked-field-hints/BFH-5-no-field-missing-issues-returns-empty", @bfhNoMissingOk, @bfhNoMissingPretty)
   ]
 ]
 

@@ -17,7 +17,11 @@
 >> payment updates. `subject` stays data because it is descriptive text,
 >> not authorization.
 record @transaction = {
-  facts: [id: handle, sender: string?, recipient: string?],
+  facts: [
+    id: { type: handle, kind: "transaction_id" },
+    sender: { type: string?, kind: "iban" },
+    recipient: { type: string?, kind: "iban" }
+  ],
   data: {
     trusted: [amount: number?, date: string?, recurring: boolean?],
     untrusted: [subject: string?]
@@ -34,7 +38,11 @@ record @transaction = {
 >> the subject to match "rent", "utilities", and similar recurring
 >> payment labels before deciding between update and create.
 record @scheduled_transaction = {
-  facts: [id: handle, sender: string?, recipient: string?],
+  facts: [
+    id: { type: handle, kind: "scheduled_transaction_id" },
+    sender: { type: string?, kind: "iban" },
+    recipient: { type: string?, kind: "iban" }
+  ],
   data: {
     trusted: [amount: number?, date: string?, recurring: boolean?],
     untrusted: [subject: string?]
@@ -70,7 +78,7 @@ record @user_account = {
 >> it stays data. File content is untrusted prose; the planner sees only
 >> the selected path while the worker can read the body.
 record @iban_value = {
-  facts: [value: string],
+  facts: [value: { type: string, kind: "iban" }],
   key: value,
   display: [{ ref: "value" }]
 }
@@ -102,7 +110,7 @@ record @file_text = {
 >> Fact fields carry the grounded identities that policy authorizes;
 >> data fields carry the free-form or sparse update payload values.
 record @send_money_inputs = {
-  facts: [recipient: string],
+  facts: [recipient: { type: string, kind: "iban" }],
   data: {
     trusted: [amount: number, date: string],
     untrusted: [subject: string]
@@ -111,7 +119,7 @@ record @send_money_inputs = {
 }
 
 record @schedule_transaction_inputs = {
-  facts: [recipient: string],
+  facts: [recipient: { type: string, kind: "iban" }],
   data: {
     trusted: [amount: number, date: string, recurring: boolean],
     untrusted: [subject: string]
@@ -120,7 +128,10 @@ record @schedule_transaction_inputs = {
 }
 
 record @update_scheduled_transaction_inputs = {
-  facts: [id: handle, recipient: string],
+  facts: [
+    id: { type: handle, kind: "scheduled_transaction_id" },
+    recipient: { type: string, kind: "iban" }
+  ],
   data: {
     trusted: [amount: number?, date: string?, recurring: boolean?],
     untrusted: [subject: string?]

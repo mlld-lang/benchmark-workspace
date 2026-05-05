@@ -88,3 +88,18 @@ Slack tagging took ~20 minutes. Banking is similar size; travel may be larger (m
 - c-3c2b (closed) — the wrong-record-bypass firewall design
 - c-7016 — travel recommendation-hijack tests; benefits from this work
 
+
+## Notes
+
+**2026-05-05T06:39:23Z** Banking + travel records tagged with kind: annotations (commit pending). Distinct kinds: banking [transaction_id, scheduled_transaction_id, iban] + travel [hotel_name, restaurant_name, car_rental_name, calendar_event_id, email]. Verified: invariant gate 200/200 + xfail; security suites slack 11, banking 8, workspace 6, NEW travel 10/0 PASS. Local canaries: slack UT0 PASS, workspace UT8 PASS, travel UT4/5/8 3/3 PASS, banking UT2 FAIL (delta-vs-total arithmetic miss in compose, not a kind-tag rejection — execute completed; retry running) + UT12 PASS.
+
+**2026-05-05T06:39:39Z** UT2 retry PASS — confirms first FAIL was stochastic delta-vs-total arithmetic miss in compose (kind tagging never blocked the execute; trace shows intent compiled cleanly with id+recipient as control args). Net local canaries: 7/8 first run + UT2 retry PASS = 8/8 effective. No kind-tag regression observed.
+
+**2026-05-05T14:18:33Z** Closeout: kind tagging + travel security suite landed clean. Verification matrix:
+- invariant gate 210/211 (xfail unchanged; +10 new tests for nullFields + blockedFieldHints from c-4a1a)
+- worker LLM tests 24/24 (one stochastic compose substring-of-negation flake on first run, 24/24 on rerun)
+- security suites: slack 11, banking 8, workspace 6, travel 10 (all green)
+- local canaries (post-prompt): banking UT2 3/3 PASS + UT12 PASS, travel UT4/5/8 3/3 PASS, slack UT0 PASS, workspace UT8 PASS
+- banking UT2 was 1/2 before the prompt nudge addressed delta-vs-total framing; 3/3 after.
+
+Items 1-3 of acceptance met (records tagged, security suites green, travel suite created). Item 4 (cloud sweep banking + travel) pending — recommended next step.

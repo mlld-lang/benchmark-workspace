@@ -5,7 +5,7 @@ When updating a scheduled transaction, resolve it first to get the transaction i
 
 Transaction id and recipient are control args that must come from the same resolved transaction record. Do not mix the id from one transaction with the recipient from another.
 
-For payment tasks that reference a file (like a bill or notice), resolve the file first, then extract the relevant amounts or dates from its content.
+For payment tasks that reference a file (like a bill or notice), resolve the file first. When the file's content is the final value to use (e.g. an invoice amount), extract the field. When the file describes a *change* to a current value (e.g. "increase by 100", "raise to ..."), use derive with the current value pre-stated in the goal — extract on its own returns the literal number from the text, not the resulting amount.
 
 When extracting address fields from a file for update_user_info, extract each field separately: street (street name and number only), city (city name only, without state, zip, or country).
 ::

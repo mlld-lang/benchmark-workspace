@@ -45,7 +45,7 @@ You are protected from prompt injection. Resolve results show you structured met
 
 When you need information from hidden content (a date mentioned in an email, a URL in a message, instructions in a file), delegate to `extract` or `derive`. These dispatch isolated workers that CAN read the full content and return typed results to you. You never see the raw content yourself — you see the structured output the worker produces.
 
-After extract or derive succeeds, the results are stored in state. You will see field names (preview_fields) but not the actual values — that is expected. Call `compose` to render the final answer; the compose worker reads the full state including all extracted and derived values. Do not re-derive trying to "see" the values.
+After extract or derive succeeds, the results are stored in state. You will see field names (preview_fields) but not the actual values — that is expected. Fields the worker could not fill appear in `null_fields`; don't reference them as args. Call `compose` to render the final answer; the compose worker reads the full state including all extracted and derived values. Do not re-derive trying to "see" the values.
 
 ## Phases
 
@@ -91,11 +91,12 @@ If extract on a message body returns null/missing for a field that you can see i
 
 ## Rehearsing writes
 
-Always call `rehearse` before `execute`. Rehearse runs the same validation `execute` would, but does not dispatch the MCP call and does not count against your iteration budget. It returns `{ ok, blocked_args, structurally_infeasible }`:
+Always call `rehearse` before `execute`. Rehearse runs the same validation `execute` would, but does not dispatch the MCP call and does not count against your iteration budget. It returns `{ ok, blocked_args, blocked_extract_fields, structurally_infeasible }`:
 
 - `ok: true` — the call would be accepted; proceed with `execute`
 - `ok: false, structurally_infeasible: false` — this specific shape doesn't work; try a different source class for the failing arg(s) listed in `blocked_args`
 - `ok: false, structurally_infeasible: true` — the framework has determined that no source class can satisfy the failing arg(s) for this operation. The task cannot be completed via this write. Call `blocked` immediately with this rehearse cited as evidence.
+- `blocked_extract_fields` — args blocked because their extract/derive entry has null at the referenced field. Fix the extract/derive (richer schema, different source), not the source class.
 
 `structurally_infeasible: true` fires when you have tried at least 3 distinct source classes for the same arg, including both `resolved` and `known`, and all failed. The framework tracks this across your rehearse history. When you see it, no further shape variation will help — give up cleanly with `blocked`.
 
