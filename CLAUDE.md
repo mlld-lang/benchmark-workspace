@@ -281,6 +281,26 @@ gh workflow run bench-run.yml \
 
 `scripts/bench-attacks.sh` is the source of truth for the shape/parallelism map; if you change defaults, change them there and update the table above.
 
+### Planner provider selection
+
+Together AI is the default planner provider (`togetherai/zai-org/GLM-5.1`) and is the fastest when working, but has periodic outages and per-model RPM caps. OpenRouter and Fireworks are wired in as alternatives for the same GLM-5.1 model — set the `planner` workflow input (or `PLANNER` env var on local runs) to override.
+
+| Provider | Model string for `-f planner=` / `PLANNER=` | Notes |
+|---|---|---|
+| Together AI | `togetherai/zai-org/GLM-5.1` | Default. Fastest when up; ~95 RPM per-model cap is the binding limit on full-fanout dispatch |
+| OpenRouter | `openrouter/@preset/<your-preset-slug>` | Use a preset configured in your OpenRouter dashboard; lets you select fastest underlying provider per model. Required: `OPENROUTER_API_KEY` GitHub secret |
+| Fireworks | `fireworks-ai/<glm-5.1-slug>` | TBD — confirm slug against Fireworks model registry. Required: `FIREWORKS_API_KEY` GitHub secret |
+
+**Verify a new provider before dispatching a real attack run:**
+
+```bash
+PLANNER=openrouter/@preset/glm-5-1 mlld tests/live/workers/run.mld --no-checkpoint
+```
+
+Worker tests round-trip in ~50s. If they pass, the provider's GLM-5.1 is responding correctly via opencode and a real attack dispatch is safe.
+
+**Rate-limit advice independent of provider:** dispatch no more than **2 sub-suites simultaneously** regardless of which provider you're targeting. The 2-at-a-time cap exists because of per-runner concurrency on Namespace's Team plan + per-suite memory; it's not a Together-specific constraint. Multi-provider isn't a fan-out unlocker — it's an outage-resilience knob.
+
 ### Where to run travel
 
 `scripts/bench.sh travel` dispatches travel at 16x32 + -p 20. The historic c-63fe fan-out throttle (-p 5) and `MLLD_HEAP=8g` overrides have been removed — the throttle inflated travel wall to ~1000s without buying anything, and the heap ceiling was a workaround for memory growth that should be fixed at the source. If MCP "Not connected" cascades reappear at full parallelism, file a fresh ticket rather than reinstating the throttle.
