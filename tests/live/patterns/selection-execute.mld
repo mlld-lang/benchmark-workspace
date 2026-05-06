@@ -7,7 +7,7 @@
 >> planner. The planner must extract ratings, derive a selection,
 >> and execute with the selection ref.
 
-import { @rigBuild, @rigRun } from "../../index.mld"
+import { @rigBuild, @rigRun } from "../../../rig/index.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 record @product = {

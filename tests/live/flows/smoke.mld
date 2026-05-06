@@ -1,6 +1,6 @@
 >> Step 1 smoke: planner -> compose with no tools, plus lifecycle files.
 
-import { @rigBuild, @rigRun } from "../../index.mld"
+import { @rigBuild, @rigRun } from "../../../rig/index.mld"
 import { @check, @field, @mktempPath, @readFile, @removeFile } from "../helpers.mld"
 
 var @phaseLogFile = @mktempPath("rig-phase-log", ".jsonl")

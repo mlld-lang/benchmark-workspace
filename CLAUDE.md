@@ -5,12 +5,12 @@ Rig v2 framework + AgentDojo benchmark implementation for mlld.
 ## First Actions
 
 ```bash
-mlld tests/index.mld --no-checkpoint              # zero-LLM invariant gate (must pass; ~10s)
-mlld rig/tests/workers/run.mld --no-checkpoint    # live-LLM worker tests (~50s, ~$0.05)
-tk ready                                           # active work items
+mlld tests/index.mld --no-checkpoint                # zero-LLM invariant gate (must pass; ~10s)
+mlld tests/live/workers/run.mld --no-checkpoint     # live-LLM worker tests (~50s, ~$0.05)
+tk ready                                             # active work items
 ```
 
-For the test architecture, see `TESTS.md`. Three tiers live alongside each other: zero-LLM (`tests/index.mld`), scripted-LLM (`tests/run-scripted.py`), live-LLM (`rig/tests/workers/run.mld` for now; consolidation tracked in c-ed77).
+For the test architecture, see `TESTS.md`. Three tiers under `tests/`: zero-LLM (`tests/index.mld`), scripted-LLM (`tests/run-scripted.py`), live-LLM (`tests/live/workers/run.mld`).
 
 ## Structure
 
@@ -135,10 +135,10 @@ Per-tool usage guidance in the tool catalog entry. Arg format constraints, scala
 
 ```bash
 # Invariant gate (must pass 100%)
-mlld clean/rig/tests/index.mld --no-checkpoint
+mlld tests/index.mld --no-checkpoint
 
 # Worker LLM tests (must pass 100%, ~50s)
-mlld rig/tests/workers/run.mld --no-checkpoint
+mlld tests/live/workers/run.mld --no-checkpoint
 
 # Single task (local)
 uv run --project bench python3 src/run.py -s workspace -d defended -t user_task_11
@@ -306,7 +306,7 @@ done
 
 - **Never use `show` in exe functions during bench runs.** It writes to stdout and corrupts the host's JSON parsing. Use `log` (stderr) or `MLLD_TRACE` instead.
 - **Never rename record fields to match MCP parameter names.** The intent compiler maps arg keys to resolved values — the names don't need to match. Field renaming across the MCP boundary destroys StructuredValue metadata.
-- **Run worker tests before and after prompt changes.** `mlld rig/tests/workers/run.mld --no-checkpoint` catches regressions in ~50s. If tests pass too easily, the assertions are too weak.
+- **Run worker tests before and after prompt changes.** `mlld tests/live/workers/run.mld --no-checkpoint` catches regressions in ~50s. If tests pass too easily, the assertions are too weak.
 - **Per-task memory ≈ 0.9 GB on workspace at full parallelism (measured 2026-05-05).** Workspace at -p 34 on 32x64 hit 30.3 GB peak / 62.9 GB available (48% utilization, plenty of headroom). Earlier "1.5-2 GB per task" estimates predated the recent mlld memory reduction. Workspace and travel still want 32x64 for headroom; banking and slack are fine on 16x32. `scripts/bench.sh` sets the shape per suite. Memory peaks land in `manifest.json` (`mem_peak_kb` / `mem_total_kb`) per `bench/docker/entrypoint.sh`'s sampler.
 
 ## Status, Categories, and Ticket Conventions

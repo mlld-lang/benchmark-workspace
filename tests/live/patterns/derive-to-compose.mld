@@ -5,8 +5,8 @@
 >> compose reads the state and proceed — not re-derive trying to
 >> "see" the values.
 
-import { @rigBuild, @rigRun } from "../../index.mld"
-import { @number_row, @get_numbers } from "../../../tests/fixtures.mld"
+import { @rigBuild, @rigRun } from "../../../rig/index.mld"
+import { @number_row, @get_numbers } from "../../fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 var @records = {

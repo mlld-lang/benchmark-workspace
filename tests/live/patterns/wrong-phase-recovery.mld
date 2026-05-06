@@ -5,7 +5,7 @@
 >> resolve after seeing the error. Passes if the model either gets
 >> it right immediately or corrects within 1 error.
 
-import { @rigBuild, @rigRun } from "../../index.mld"
+import { @rigBuild, @rigRun } from "../../../rig/index.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 >> Use a tool name that sounds like an extract operation to increase

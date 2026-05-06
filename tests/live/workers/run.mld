@@ -4,7 +4,7 @@ import { @allCases as @extractCases, @runOneExtract } from "./extract.mld"
 import { @allCases as @deriveCases, @runOneDerive } from "./derive.mld"
 import { @allCases as @composeCases, @runOneCompose } from "./compose.mld"
 import { @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
-import { @defaultHarness } from "../../runtime.mld"
+import { @defaultHarness } from "../../../rig/runtime.mld"
 
 var @model = @payload.model ?? "openrouter/z-ai/glm-5.1"
 var @harness = @payload.harness ?? @defaultHarness(@model)

@@ -1,6 +1,6 @@
 # Run artifacts / outputs
 bench/results/
-rig/tests/workers/scoreboard.jsonl
+tests/live/workers/scoreboard.jsonl
 audit.jsonl
 
 # Caches / state

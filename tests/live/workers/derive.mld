@@ -1,7 +1,7 @@
 >> Derive worker test cases and runner.
 
-import { @derivePrompt, @coerceDeriveAttestation } from "../../workers/derive.mld"
-import { @llmCall, @llmSessionId } from "../../runtime.mld"
+import { @derivePrompt, @coerceDeriveAttestation } from "../../../rig/workers/derive.mld"
+import { @llmCall, @llmSessionId } from "../../../rig/runtime.mld"
 import { @runAssertions, @isEmptyResponse, @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
 
 >> D1: derive_simple_max

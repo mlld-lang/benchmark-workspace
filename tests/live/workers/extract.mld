@@ -1,7 +1,7 @@
 >> Extract worker test cases and runner.
 
-import { @extractPrompt, @coerceExtractAttestation } from "../../workers/extract.mld"
-import { @llmCall, @llmSessionId } from "../../runtime.mld"
+import { @extractPrompt, @coerceExtractAttestation } from "../../../rig/workers/extract.mld"
+import { @llmCall, @llmSessionId } from "../../../rig/runtime.mld"
 import { @runAssertions, @isEmptyResponse, @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
 
 >> E1: extract_datetime_simple

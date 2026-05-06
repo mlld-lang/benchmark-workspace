@@ -1,7 +1,7 @@
 >> Step 4 derive flow, including a validated selection ref.
 
-import { @rigBuild, @rigRun } from "../../index.mld"
-import { @records, @tools } from "../../../tests/fixtures.mld"
+import { @rigBuild, @rigRun } from "../../../rig/index.mld"
+import { @records, @tools } from "../../fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 var tools @deriveTools = {

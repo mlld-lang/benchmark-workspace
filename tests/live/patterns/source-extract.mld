@@ -4,11 +4,11 @@
 >> is in untrusted data, so the planner cannot see it directly. It
 >> must extract structured information through the worker.
 
-import { @rigBuild, @rigRun } from "../../index.mld"
+import { @rigBuild, @rigRun } from "../../../rig/index.mld"
 import {
   @message_entry,
   @get_message
-} from "../../../tests/fixtures.mld"
+} from "../../fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 var @records = {

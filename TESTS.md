@@ -19,7 +19,7 @@ uv run --project bench python3 tests/run-scripted.py --suite workspace
 uv run --project bench python3 tests/run-scripted.py --suite travel
 
 # Live-LLM worker tests (real LLM calls, ~50s, costs ~$0.05) — separate tier
-mlld rig/tests/workers/run.mld --no-checkpoint
+mlld tests/live/workers/run.mld --no-checkpoint
 
 # Framework self-tests
 mlld tests/framework.tests.mld --no-checkpoint
@@ -32,9 +32,9 @@ mlld tests/framework.runner.tests.mld --no-checkpoint
 |---|---|---|---|---|---|
 | **Zero-LLM invariant** | deterministic | none | $0 | `tests/index.mld` (the new framework) | `tests/rig/`, `tests/bench/` |
 | **Scripted-LLM** | deterministic | mocked | $0 (uses MCP infra) | `tests/run-scripted.py` → `tests/scripted-index.mld` | `tests/scripted/` |
-| **Live-LLM** | stochastic | real | ~$0.05 | `rig/tests/workers/run.mld` (separate harness) | `rig/tests/workers/` |
+| **Live-LLM** | stochastic | real | ~$0.05 | `tests/live/workers/run.mld` (separate harness) | `tests/live/workers/` |
 
-Live-LLM tests have a different contract (scoreboard, model comparison, parallel cost) and remain in `rig/tests/`. They predate this framework and may be folded in later under their own runner. For now, treat them as a separate tier.
+Live-LLM tests have a different contract (scoreboard, model comparison, parallel cost) and remain in `tests/live/`. They predate this framework and may be folded in later under their own runner. For now, treat them as a separate tier.
 
 ## Which test shape do I want?
 
@@ -44,7 +44,7 @@ Live-LLM tests have a different contract (scoreboard, model comparison, parallel
 | Assert that a guarded operation gets denied by the policy/firewall | Plain assertion test with the `when [denied]` recipe |
 | Assert on multi-turn agent behavior, state accumulation, sequencing | Scripted-LLM test (`lib/mock-llm.mld`) |
 | Assert that a multi-turn attack is blocked by the rig firewall | Scripted-LLM test that asserts on a denied/error step |
-| Assert on what an LLM *does* with a real prompt | Worker test (`rig/tests/workers/`, separate harness) |
+| Assert on what an LLM *does* with a real prompt | Worker test (`tests/live/workers/`, separate harness) |
 | Assert on end-to-end utility | Bench task |
 
 ## File layout
@@ -72,6 +72,12 @@ tests/
   scripted/                   Scripted-LLM suites (run via run-scripted.py + MCP)
     _template.mld             Template for scripted-LLM suites
     security-<suite>.mld      Security tests against bench domains
+  live/                       Live-LLM tier — real LLM calls, separate runner
+    workers/run.mld           Worker LLM tests with scoreboard.jsonl (~50s, ~$0.05)
+    flows/                    Flow integration tests
+    patterns/                 Pattern integration tests
+    helpers.mld               Test helpers used by flows/ and patterns/
+    llm/lib/opencode/         Opencode harness utility
 ```
 
 ### Where does my test go?
@@ -79,7 +85,7 @@ tests/
 - Testing rig framework primitives (intent, runtime, workers, orchestration, transforms, validators, tooling) → `tests/rig/`
 - Testing bench-specific logic (classifiers, exemplars, records) without LLM calls → `tests/bench/`
 - Testing multi-turn agent behavior or attack scripts (uses bench domain tools) → `tests/scripted/`
-- Testing what an LLM *does* with a real prompt → `rig/tests/workers/` (separate live-LLM tier, not folded in yet)
+- Testing what an LLM *does* with a real prompt → `tests/live/workers/` (separate live-LLM tier, not folded in yet)
 
 ### Why assert.mld and runner.mld are separate
 
@@ -142,7 +148,7 @@ exe @testCorrectGuardFires() = when [
 
 For working examples, see `tests/rig/execute-worker-policy.mld` (`testInputRecordAllowlistReject` and siblings).
 
-**Dual-path denial pattern (c-a873 robustness).** When other suites have already imported `rig/tests/fixtures.mld`, `with { policy: ... }` calls can return an *error envelope* instead of throwing a `denied` event. Both surfaces carry the same `code` and `phase` fields. Tests that need to be robust across import order should accept either:
+**Dual-path denial pattern (c-a873 robustness).** When other suites have already imported `tests/fixtures.mld`, `with { policy: ... }` calls can return an *error envelope* instead of throwing a `denied` event. Both surfaces carry the same `code` and `phase` fields. Tests that need to be robust across import order should accept either:
 
 ```mlld
 exe @testInputRecordAllowlistReject() = when [
@@ -160,7 +166,7 @@ exe @testInputRecordAllowlistReject() = when [
 ]
 ```
 
-This is needed because `rig/tests/fixtures.mld` activates global state on import that flips the denial surface. Until the underlying mlld bug (c-a873) is fixed, security tests that run alongside other suites should use the dual-path pattern.
+This is needed because `tests/fixtures.mld` activates global state on import that flips the denial surface. Until the underlying mlld bug (c-a873) is fixed, security tests that run alongside other suites should use the dual-path pattern.
 
 ### Suite construction (from `runner.mld`)
 
@@ -345,25 +351,6 @@ Each scripted run targets one bench suite (workspace/travel/banking/slack) becau
    And add `@<your>Suite` to the `@suites` array.
 5. Run: `mlld tests/index.mld --no-checkpoint` (or scripted runner for tests/scripted/)
 
-## How to port an existing suite from `rig/tests/index.mld`
-
-1. Find the topic cluster (marked by `>>` comment headers)
-2. Create a new file: `tests/rig/<topic>.mld`
-3. For each `@check(id, ok, detail)` in the cluster:
-   - Create an `exe @test<Description>() = [...]` that returns an assertion record
-   - Setup variables go inside the exe as `let` (block-scoped, not leaked)
-   - Use `@assertEq` instead of manually constructing detail strings
-4. Group tests by subtopic with `@group`
-5. Build `@suite`, export it
-6. Import in `index.mld`
-
-Key differences from the old pattern:
-- Setup, assertion, and identity are in ONE place (the exe), not 4000 lines apart
-- No manual `detail` string construction — `@assertEq` auto-formats
-- No module-level pollution — everything is scoped to the exe
-- xfail is a group/suite-level opt, not a string-prefix hack on the id
-- Tickets are an opt field, not embedded in the id
-
 ## Things we explicitly don't do
 
 - **No autodiscovery.** New suite = one import line in index.mld.
@@ -408,6 +395,6 @@ The current gate has 3 xfails. Treat the first as a permanent demo; the other tw
 |---|---|---|---|
 | `template/known-broken/intentionallyFails` | c-9999 (placeholder) | demo | Permanent example in the template. Not a bug. |
 | `xfail-and-null-blocked/.../uh1...UnicodeDashVariant` | c-bd28 | mlld bug | Selection-ref handle matching doesn't tolerate U+2011 non-breaking-hyphen variants of ASCII handles. |
-| `named-state-and-collection/.../rescheduleDispatchSucceeds` | c-a873 | mlld bug | `policy.build`'s fact-mapping resolution drops when `rig/tests/fixtures.mld` is imported first. Module-import side-effect on global policy-engine state. Affects denial surface (event ↔ envelope) too — handled in security tests via the dual-path pattern. |
+| `named-state-and-collection/.../rescheduleDispatchSucceeds` | c-a873 | mlld bug | `policy.build`'s fact-mapping resolution drops when `tests/fixtures.mld` is imported first. Module-import side-effect on global policy-engine state. Affects denial surface (event ↔ envelope) too — handled in security tests via the dual-path pattern. |
 
 When c-a873 is fixed at the mlld layer, the rescheduleDispatchSucceeds xfail can be flipped back to a regular test, and security tests using the dual-path pattern can be simplified to single-path (denied event only).

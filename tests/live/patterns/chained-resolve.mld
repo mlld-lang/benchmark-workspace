@@ -4,7 +4,7 @@
 >> channel name only exists in resolve results, not in the task text,
 >> so the planner cannot use { source: "known" }.
 
-import { @rigBuild, @rigRun } from "../../index.mld"
+import { @rigBuild, @rigRun } from "../../../rig/index.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 record @channel = {

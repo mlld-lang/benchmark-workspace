@@ -1,7 +1,7 @@
 >> Compose worker test cases and runner.
 
-import { @composePrompt, @coerceComposeAttestation } from "../../workers/compose.mld"
-import { @llmCall, @llmSessionId } from "../../runtime.mld"
+import { @composePrompt, @coerceComposeAttestation } from "../../../rig/workers/compose.mld"
+import { @llmCall, @llmSessionId } from "../../../rig/runtime.mld"
 import { @runAssertions, @isEmptyResponse, @timestamp, @isoTimestamp, @recordResult } from "./lib.mld"
 
 >> C1: compose_simple_lookup

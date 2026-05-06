@@ -4,13 +4,13 @@
 >> for send_email recipients. Models default to { source: "known" }
 >> which gets rejected because the email isn't in the task text.
 
-import { @rigBuild, @rigRun } from "../../index.mld"
+import { @rigBuild, @rigRun } from "../../../rig/index.mld"
 import {
   @contact,
   @send_email_inputs,
   @get_contacts,
   @send_email
-} from "../../../tests/fixtures.mld"
+} from "../../fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 var @records = {
