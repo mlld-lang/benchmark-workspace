@@ -32,6 +32,7 @@ mlld tests/framework.runner.tests.mld --no-checkpoint
 |---|---|---|---|---|---|
 | **Zero-LLM invariant** | deterministic | none | $0 | `tests/index.mld` (the new framework) | `tests/rig/`, `tests/bench/` |
 | **Scripted-LLM** | deterministic | mocked | $0 (uses MCP infra) | `tests/run-scripted.py` → `tests/scripted-index.mld` | `tests/scripted/` |
+| **Mutation coverage** | deterministic | none | $0 | `tests/run-mutation-coverage.py` | mutation registry inline in the script |
 | **Live-LLM** | stochastic | real | ~$0.05 | `tests/live/workers/run.mld` (separate harness) | `tests/live/workers/` |
 
 Live-LLM tests have a different contract (scoreboard, model comparison, parallel cost) and remain in `tests/live/`. They predate this framework and may be folded in later under their own runner. For now, treat them as a separate tier.
@@ -44,6 +45,7 @@ Live-LLM tests have a different contract (scoreboard, model comparison, parallel
 | Assert that a guarded operation gets denied by the policy/firewall | Plain assertion test with the `when [denied]` recipe |
 | Assert on multi-turn agent behavior, state accumulation, sequencing | Scripted-LLM test (`lib/mock-llm.mld`) |
 | Assert that a multi-turn attack is blocked by the rig firewall | Scripted-LLM test that asserts on a denied/error step |
+| Prove that a security test actually catches its claimed defense | Add a mutation entry in `tests/run-mutation-coverage.py` |
 | Assert on what an LLM *does* with a real prompt | Worker test (`tests/live/workers/`, separate harness) |
 | Assert on end-to-end utility | Bench task |
 
@@ -333,6 +335,36 @@ Crib the script structure from these when writing attack-shaped scripts. The fix
 ### Bench-suite scoping
 
 Each scripted run targets one bench suite (workspace/travel/banking/slack) because the MCP env is per-suite. `run-scripted.py --suite <name>` picks which env to wire up. `--task-id <id>` overrides the default seed task (defaults are in `run-scripted.py:DEFAULT_TASK_ID`); use it when a test needs a specific AgentDojo env state (e.g., a task whose initial inbox contains an attack message). If you need multiple suites in one CI cycle, run the wrapper once per suite. Scripted suites that don't match the active env will fail at import — keep one bench domain's tools per `tests/scripted/` file.
+
+## Mutation coverage for security tests
+
+Scripted security tests assert that an attack-shaped tool sequence rejects (`@assertEq(@last.ok, false)`). That's necessary but not sufficient — `ok=false` only means *some* code path rejected. It doesn't prove the *specific defense the test docstring claims* actually fired. Tests can pass for the wrong reason: a malformed seed shape, a different rule catching the attack, or a compile short-circuit.
+
+`tests/run-mutation-coverage.py` is the meta-test. For each registered defense:
+
+1. Confirm the canonical baseline is green.
+2. Apply a one-line mutation that disables the defense (e.g. `if @role == "control"` → `if false`).
+3. Re-run the affected suites.
+4. Compare the actual `[FAIL]` set to the `expected_fails` list.
+5. Restore the file (always — `try/finally`).
+
+A test that `expected_fails` lists but doesn't fail under the mutation is **fake coverage** — the test passes for some reason other than the defense it claims to verify. Either the seed is wrong, or another defense catches the attack first; investigate before the test ships.
+
+Run the harness:
+
+```bash
+uv run --project bench python3 tests/run-mutation-coverage.py
+uv run --project bench python3 tests/run-mutation-coverage.py --only source-class-firewall
+```
+
+Add a mutation when you add a security test:
+
+1. Identify the line(s) in `rig/` that implement the defense your test exercises.
+2. Add a `MUTATIONS` entry: `id`, `description`, `file`, `search`, `replace` (must match exactly once), `suites`, `expected_fails`.
+3. Run the harness. The mutation is real if and only if the registry's `expected_fails` matches the actual fail set under mutation.
+4. If your test isn't in the actual fail set, your test is passing for the wrong reason — fix the seed or strengthen the assertion before merging.
+
+The registry is the canonical record of which security tests are mutation-verified. Tests not represented in any mutation's `expected_fails` are unverified and should be treated with the same skepticism as untested code.
 
 ## How to add a new suite
 

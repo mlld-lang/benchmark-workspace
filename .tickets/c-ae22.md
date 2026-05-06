@@ -1,13 +1,14 @@
 ---
 id: c-ae22
-status: open
+status: closed
 deps: []
-links: []
+links: [c-5aca, c-bc1f, c-83f3]
 created: 2026-05-05T03:10:23Z
 type: task
 priority: 2
 assignee: Adam
 tags: [security, tests, workspace, breach-regression, b8]
+updated: 2026-05-06T05:52:22Z
 ---
 # Security tests: B8 workspace 'true' authorization bypass
 
@@ -55,3 +56,10 @@ create_calendar_event has `facts: [participants: array?]` per workspace records.
 2. Companion positive test asserting allow IS accepted on tools with no control args.
 3. Test docstring cites rig/intent.mld:680-695.
 
+
+## Notes
+
+**2026-05-06T05:33:29Z** Landed 2026-05-06 (bench-grind-20). Three regression tests in tests/scripted/security-workspace.mld:allow-source-firewall group:
+(1) allowSourceOnControlArgRejected — rehearse create_calendar_event with participants:{source:'allow'} returns ok:false; defense at rig/intent.mld:680-695 fires when @argMeta.control_count > 0;
+(2) allowSourceBlockedArgsNamesControl — companion check that blocked_args:['participants'] surfaces the offending arg name (planner-actionable signal);
+(3) allowSourceOnNoControlArgsAccepted — counter-positive: rehearse create_file with filename/content as {source:'allow'} returns ok:true; file_create_inputs.facts == [] so control_count == 0 and the allow branch correctly accepts. Locks against an over-tightening regression.
