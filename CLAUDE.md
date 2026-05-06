@@ -243,7 +243,43 @@ gh workflow run bench-run.yml -f suite=workspace -f tasks="user_task_8 user_task
 gh workflow run bench-run.yml -f suite=banking -f tasks=user_task_2 -f trace=true
 ```
 
-Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagger`, `defense`, `trace`, `image_tag`, `shape`.
+Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagger`, `defense`, `attack`, `trace`, `image_tag`, `shape`.
+
+### Attack dispatches
+
+Attack runs (any `-f attack=<variant>`) need different shape/parallelism than benign sweeps. The benign "What runs where" table above (16x32 everywhere) is for benign sweeps only — slack/workspace/travel attacks at 16x32 OOM (verified bench-grind-21: both slack × {direct, important_instructions} dispatched without shape/parallelism overrides hit exit 137 SIGKILL on workflow defaults of -p 40).
+
+Use `scripts/bench-attacks.sh` for attack dispatches:
+
+```bash
+scripts/bench-attacks.sh single direct                # one attack × all 5 sub-suites
+scripts/bench-attacks.sh                              # full matrix (6 attacks × 5 sub-suites = 30 jobs)
+scripts/bench-attacks.sh cycle1                       # direct + ignore_previous (10 jobs)
+scripts/bench-attacks.sh cycle2                       # important_instructions + injecagent (10 jobs)
+scripts/bench-attacks.sh cycle3                       # system_message + tool_knowledge (10 jobs)
+```
+
+It reads `shape_for()` and `parallelism_for()` from itself — currently:
+
+| Sub-suite | Shape | Parallelism |
+|---|---|---|
+| workspace-a/b | 32x64 | 20 |
+| banking | 16x32 | 16 |
+| slack | 32x64 | 21 |
+| travel | 32x64 | 20 |
+
+Note attacks have a larger per-pair memory footprint than benign — injection-processing extends planner iteration counts. Don't lower the attack shapes based on benign-sweep peak measurements.
+
+If you must dispatch a single suite × attack directly (e.g. for a regression check on one combination), copy the parameters from the table above:
+
+```bash
+# Slack regression check post-fix
+gh workflow run bench-run.yml \
+  -f suite=slack -f attack=direct -f defense=defended \
+  -f shape=nscloud-ubuntu-22.04-amd64-32x64 -f parallelism=21
+```
+
+`scripts/bench-attacks.sh` is the source of truth for the shape/parallelism map; if you change defaults, change them there and update the table above.
 
 ### Where to run travel
 

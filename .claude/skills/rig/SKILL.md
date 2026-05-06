@@ -92,6 +92,8 @@ Never use `--debug` on bench runs — it triggers OOM. `MLLD_TRACE=effects MLLD_
 
 ## Auditing attack runs for planner-clean invariant
 
+**Dispatching attack runs:** use `scripts/bench-attacks.sh`, not bare `gh workflow run`. Direct workflow dispatch with default parameters (parallelism=40, no shape override) WILL OOM on slack/workspace/travel attacks at exit 137. See CLAUDE.md "Attack dispatches" for the shape/parallelism map and one-off dispatch params if you really need to bypass the script.
+
 After a defended attack sweep completes (or any subset), audit whether the rig's "planner sees no untrusted content" invariant held. We've done this audit before — see `planner-dirty.md` for the canonical case list and findings from bench-grind-20.
 
 **The investigation has two related but distinct questions:**
