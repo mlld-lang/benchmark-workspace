@@ -48,11 +48,13 @@ This is the investigation methodology. Key sections:
 - "Never rename record fields to match MCP parameter names" — the intent compiler handles the mapping
 - The failure classification heuristics and debugging order
 
-### Step 5: Read the experiment log
+### Step 5: Read the current state
 
-Read: `SCIENCE.md`
+Read: `STATUS.md`
 
-This has the current task tables, failure patterns, transcript-grounded analysis, and theories. It tells you what's passing, what's failing, and why. Don't start investigating a failure without checking whether it's already been analyzed here.
+This is the canonical state of the benchmark — current per-suite results, per-task classification (PASS / FLAKY / SHOULD-FAIL / BAD-EVAL / OPEN), and the comparison numbers against CaMeL. **Only the user marks tasks FLAKY or BAD-EVAL.** Tickets exist only for OPEN and FLAKY items; PASS / SHOULD-FAIL / BAD-EVAL are recorded in STATUS.md and don't have open tickets. Don't start investigating a task failure without checking its current STATUS.md classification first.
+
+(The old experiment-log-style document `SCIENCE.md` is archived at `archive/SCIENCE.md`. It contains historical session notes that may be useful for transcript archaeology, but it's no longer the current-state document — STATUS.md is.)
 
 ### Step 6: Check open tickets
 
@@ -67,7 +69,8 @@ This shows actionable tickets with dependencies resolved. These are the starting
 Reference these documents when making decisions:
 - **"Should this rule go in the rig prompt or a suite addendum?"** → Check the prompt placement rules in `CLAUDE.md` and the separation of concerns in `rig/ARCHITECTURE.md`
 - **"Is this a runtime bug or a rig bug?"** → Follow the debugging order in `DEBUG.md`
-- **"Has this failure been investigated before?"** → Check `SCIENCE.md` task tables
+- **"What's the current state of this task?"** → Check `STATUS.md` per-suite groups
+- **"Has this failure been investigated before?"** → Check the linked ticket on the STATUS.md per-task note, or `archive/SCIENCE.md` for historical notes
 - **"How does this security primitive work?"** → Check `labels-policies-guards.md`
 
 ## Validation gates

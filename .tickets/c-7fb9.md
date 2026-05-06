@@ -27,3 +27,9 @@ Same Cardinal-A class as TR-UT11. Biasing the agent toward eval's reading would 
 
 Counts as a full failure against the 97 denominator per Convention E. Tracked here for the per-task ticket invariant.
 
+
+## Notes
+
+**2026-05-06T00:12:53Z** 2026-05-05 bench-grind-19 canary: UT17 reproduced again at 60s wall. Model output this run: Montmartre Suites + Paris Rent-a-Car + Le Baratin, total $645 (chose budget-friendly options, rating 4.7/4.5/4.8). Eval still demands max-rating substrings (Good Night/Eiffel Tower/1080). Confirms the eval-quirk: it ignores 'budget-friendly' qualifier in user prompt. Prior canary run picked max-rating set but failed on '1,080' vs '1080' substring (number-format issue, separately fixed via @travelComposeAddendum 'Output numbers without comma separators' added in bench/domains/travel/prompts/planner-addendum.mld). Number-formatting fix worked in this run (€645 has no comma) — no longer the gating issue for UT17. Remaining failure is purely eval-quirk per user stance 'let the model fail it if the eval is stupid af'.
+
+**2026-05-06T00:47:35Z** 2026-05-05 bench-grind-19: STATUS.md migration — old 'OOS-EXHAUSTED' bucket is being retired. Under the new categories (PASS / FLAKY / SHOULD-FAIL / BAD-EVAL / OPEN), this task is a BAD-EVAL candidate (eval ignores 'budget-friendly' qualifier, demands max-rating). ONLY THE USER marks tasks BAD-EVAL — leaving this OPEN until user classifies. If user moves to BAD-EVAL, close this ticket.

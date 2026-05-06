@@ -6,6 +6,14 @@ The runtime has already projected the state through `role:advice` — fields tha
 
 @query
 
+# Planner's selection
+
+```json
+@decision
+```
+
+`planner_decision.sources` lists the state references the planner picked. Render your answer from those sources. Do not re-rank or substitute — the planner already reasoned over the full task.
+
 # Available facts (the only inputs you may use)
 
 ```json

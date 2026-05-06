@@ -922,9 +922,17 @@ The buckets are categories of *reasoning* (provenance) rather than categories of
 
 The entire bucketed intent must come from uninfluenced sources (the clean planner). Influenced workers (context worker, write worker) produce data for reasoning, not authorization intent. A context worker that processed untrusted content cannot populate any bucket. If the same tool+arg appears in both `resolved` and `known`, `resolved` wins.
 
-### Declarative fact requirements
+### Derived and declarative fact requirements
 
-Policy can declare additional fact requirements per operation:
+For record-backed tool inputs, `@policy.build(...)` derives fact requirements from the input record's fact fields. The derivation order is:
+
+1. `accepts: [...]` — exact pattern list, takes precedence over kind derivation
+2. `kind: "email"` — accepts `known` plus every in-scope `fact:@record.field` tagged with the same exact kind
+3. Untagged fact fields — strict fallback to `known` or `fact:*.<argName>`
+
+There is no field-name normalization. `user_email` does not match `email` unless both fields share a `kind` tag, or an `accepts` override says so.
+
+Policy can also declare fact requirements per operation and argument:
 
 ```json
 {
@@ -937,6 +945,8 @@ Policy can declare additional fact requirements per operation:
   }
 }
 ```
+
+Explicit policy entries override record-kind derivation for the same operation argument and still compose conjunctively with built-in rules.
 
 ### Input records: validating tool inputs
 
@@ -968,6 +978,56 @@ var tools @writeTools = {
 - `handle` is a legal field type (`recipient: handle`) — requires a handle-bearing reference, rejects bare strings.
 
 Input records are **validation schemas** — they never mint labels. Coercing into one via `=> record @sendEmail_inputs` is rejected. A record with `display:` is output-directed; a record with input-only sections (`correlate:`, `key:` with input shape) is input-directed; a record with neither may be used in both directions.
+
+### Fact kinds and accepted proof
+
+Fact fields can carry `kind` and `accepts` metadata using the config form `field: { type: ..., kind: ..., accepts: [...] }`. This metadata drives which proof patterns `@policy.build(...)` accepts for control args.
+
+```mlld
+record @contact = {
+  facts: [
+    email: { type: string, kind: "email" }
+  ]
+}
+
+record @slack_msg = {
+  facts: [
+    sender: { type: string, kind: "slack_user_name" }
+  ],
+  data: [body: string]
+}
+
+record @invite_user_to_slack_inputs = {
+  facts: [
+    user: { type: string, kind: "slack_user_name" },
+    user_email: { type: string, kind: "email" }
+  ],
+  validate: "strict"
+}
+```
+
+`kind` matching is exact string equality on the producer and consumer fact fields. When the planner pins `invite_user_to_slack.user_email` to `fact:@contact.email`, the builder accepts it because both fields are `kind: "email"`. A pin to `fact:@slack_msg.sender` is rejected because `slack_user_name` is a different kind.
+
+This is the canonical defense against the field-name-normalization bypass — `user_email` does **not** match `email` by string similarity. Authority is by declared kind, not by guessing.
+
+Use `accepts` for narrow exceptions where one input field should accept an explicit pattern list instead of deriving from `kind`:
+
+```mlld
+record @send_email_inputs = {
+  facts: [
+    recipient: {
+      type: string,
+      kind: "email",
+      accepts: ["known", "fact:*.email", "fact:@directory.list_email"]
+    }
+  ],
+  validate: "strict"
+}
+```
+
+`accepts` replaces the derived list for that field. Include `known` explicitly when known-attested values should still be allowed — it is not added implicitly. `accepts` is rejected on `data:` fields; `kind` and `accepts` are fact-field-only metadata.
+
+`kind` tags do not change the labels minted on output values. A value from `record @contact = { facts: [email: { type: string, kind: "email" }] }` still carries `fact:@contact.email`. The kind tag is consumed downstream by the input-record's derivation rules.
 
 ### Correlating multi-fact tools
 
@@ -1276,7 +1336,125 @@ Shelf I/O preserves the full structured proof carrier through round-trips: a val
 
 ---
 
-## 8. Composability
+## 8. Per-Call Session Containers
+
+Where shelf slots accumulate state across an entire script execution, **session containers accumulate state for the lifetime of a single LLM call**. Every tool callback dispatched by that call sees the same instance; the instance dies when the call exits. This is the right primitive for budgets, counters, terminal-tool latches, execution logs, and any per-conversation accumulator that must not leak across concurrent or nested calls.
+
+### Declaration
+
+```mlld
+record @plannerRuntime = {
+  data: [tool_calls: number, invalid_calls: number, terminal: string?, last_decision: string?]
+}
+
+var session @planner = {
+  agent: object,
+  query: string,
+  state: object,
+  runtime: @plannerRuntime
+}
+```
+
+The declaration is a labeled var — peer with `var tools`. The RHS is a JSON-shaped object whose values are types: primitives (`string`, `number`, `boolean`, `object`, `array`), record references (`@recordName`), typed arrays (`@recordName[]`), and the optional suffix (`?`). The var binds to the schema; live instances are materialized per call.
+
+Records used as session slot types must be input-style — no `display:` or `when:` sections. Sessions are accumulators, not proof sources.
+
+### Attachment and seed
+
+Attach to an LLM-calling exe via `with`:
+
+```mlld
+exe llm @runPlanner(agent, query, prompt) = @claude(@prompt, { ... }) with {
+  session: @planner,
+  seed: { agent: @agent, query: @query }
+}
+```
+
+`seed:` writes initial values into the freshly materialized instance — through the normal type-validated write path — before the first tool callback runs. Required slots without a seed entry raise `MlldSessionRequiredSlotError` on first read.
+
+**Wrapper-owned default.** When both a wrapper and a caller specify `session:`, the wrapper wins. Caller override requires explicit opt-in: `with { session: @alt, override: "session" }`. Without the override flag, the conflict raises at the `with` merge layer. This protects framework invariants from accidental caller-side replacement.
+
+### Access API
+
+Inside any tool callback dispatched by a frame that attached `@planner`, the declared name resolves to the live instance:
+
+```mlld
+@planner.set(runtime: @newRuntime, state: @newState)
+@planner.write("runtime.terminal", "submit_final")
+@planner.increment("runtime.tool_calls", 1)
+@planner.append("log", { tool: @mx.op.name, at: @now() })
+
+exe @bumpCalls(runtime) = { ...@runtime, tool_calls: @runtime.tool_calls + 1 }
+@planner.update("runtime", @bumpCalls)
+
+@planner.clear("runtime")
+```
+
+Reads use dotted accessors: `var @count = @planner.runtime.tool_calls`. Writes go through methods only — no bare property assignment. `.update(path, @fn)` accepts only pure exes (`js`, `node`, `mlld-exe-block`, `mlld-when`); `llm` exes and tool-dispatching exes are rejected at call time so commit semantics stay simple.
+
+**Bare-name access is a snapshot.** `var @sess = @planner` (used as a value, not a method head) captures an immutable snapshot of the session's current state. Subsequent reads through `@sess.runtime` see the snapshot, not further mutations. Vars never hold live mutable references.
+
+### Strict nesting (security-relevant)
+
+Session resolution inspects only the **nearest enclosing bridge frame**. If the nearest frame did not attach `@planner`, the access raises `MlldSessionNotAttachedError` even if an outer frame attached one with the same name. This is load-bearing for isolation: an inner `@claude()` worker cannot read or mutate an outer planner's session by knowing its declaration name. The only paths for state to cross frames are explicit prompt parameters and shelf slots.
+
+Concurrent calls each get their own session instance — the global-shelf aliasing class of bug is impossible by construction.
+
+Resume runs in a fresh frame and gets a fresh session instance. Writes do not survive resume.
+
+### Guard write-commit semantics
+
+Session writes made inside a guard's execution frame go through a per-guard buffer. The buffer commits atomically on guard allow-exit and discards on deny-exit. This means:
+
+- A `before` guard that writes and then returns `deny` does **not** commit those writes — counters never over-count denied attempts
+- An `after` guard never fires on a denied dispatch (structural invariant in the guard path)
+- Within a single guard body, reads observe the guard's own pending writes (read-your-writes overlay); between guards, only committed state is visible
+
+Trace events for buffered writes are committed or discarded with the writes — denied guards never leak `session.write` events to trace output, SDK streams, or the post-call snapshot.
+
+This makes guard + session = middleware. Budget caps, counters, terminal-tool latches, and execution logs collapse to short idioms:
+
+```mlld
+guard @budget before tool:w = when [
+  @planner.runtime.tool_calls >= 20 => deny "budget exhausted"
+  * => allow
+]
+
+guard @count after tool:w = when [
+  * => [
+    @planner.increment("runtime.tool_calls", 1)
+    @planner.write("runtime.last_decision", @mx.op.name)
+    => allow
+  ]
+]
+```
+
+### Trace redaction
+
+Session writes emit `session:write` trace events at `--trace effects` and `--trace verbose`. At `effects`, values carrying sensitivity labels (`secret`, `pii`, `sensitive`) or taint labels (`untrusted`, `influenced`, `fact:*`) render as `<labels=[...] size=N>` placeholders — content is hidden, slot path and label set remain visible. Full content shows only at `--trace verbose`.
+
+Redaction respects `defaults.unlabeled: "untrusted"`: under that setting, unlabeled values are auto-tagged `untrusted` at variable-creation time and therefore redact at `effects` automatically. No explicit policy consultation at emission.
+
+### Post-call inspection
+
+After an LLM call returns, its session final state is reachable on the result value:
+
+```mlld
+var @result = @runPlanner(@agent, @query, @prompt)
+var @plannerFinal = @result.mx.sessions.planner
+```
+
+`@result.mx.sessions.<name>` is an immutable snapshot of the session attached to that call's frame at exit time — keyed by the declaration's canonical exported name, not any caller-side alias. Absent when the call did not attach that session.
+
+The SDK surface mirrors this: `result.sessions` on `ExecuteResult` is an array of `{ name, originPath, finalState, frameId }` aggregating across all calls in the execution. `session_write` events stream during execution. See `sdk/SPEC.md`.
+
+### Trust model
+
+Sessions are runtime-owned mutable state accessed through an explicit method API; no user var is mutated by session writes, so var-immutability and label propagation are unaffected. Sessions store labeled value envelopes — labels survive write/read round-trips. Sessions do **not** mint facts; a session-derived value carries `fact:*` only if the original write already did. Authority remains in records and `=> record` coercion.
+
+---
+
+## 9. Composability
 
 Security in mlld is designed as a **separate concern** that composes cleanly with application logic.
 
@@ -1329,7 +1507,7 @@ This means you can change the security posture without touching the application.
 
 ---
 
-## 9. Debugging with Runtime Tracing
+## 10. Debugging with Runtime Tracing
 
 When something goes wrong in a defended agent, the symptom appears far from the cause. A shelf write that silently fails shows up as empty state three turns later. A guard resume that doesn't fire manifests as a collapsed planner loop. A handle that loses proof during JS interop surfaces as an authorization denial on a different phase.
 
@@ -1377,7 +1555,7 @@ Tracing complements audit logging: audit logs record *that* something happened f
 
 ---
 
-## 10. JS/Python Interop and Proof Preservation
+## 11. JS/Python Interop and Proof Preservation
 
 The `js {}` and `py {}` boundaries are the weakest link in the proof chain. Values cross from mlld (where they carry labels, handles, and facts) into JS/Python (where they're plain objects). If you serialize and parse inside a JS block, mlld metadata is erased and cannot be reconstructed.
 
@@ -1423,7 +1601,7 @@ Concrete examples of patterns to avoid:
 
 ---
 
-## 11. Key Points
+## 12. Key Points
 
 - **Labels are immutable facts.** Once applied, they propagate through all transformations. You can't strip them by accident.
 - **`untrusted` is sticky.** You can't wash it off by adding `trusted`. Only privileged guards can remove it.

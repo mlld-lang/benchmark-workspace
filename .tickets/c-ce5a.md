@@ -1,6 +1,6 @@
 ---
 id: c-ce5a
-status: open
+status: closed
 deps: []
 links: [c-3c2b, c-7016, c-891b]
 created: 2026-05-05T06:13:36Z
@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: Adam
 tags: [security, kind-tags, banking, travel, bench-records]
-updated: 2026-05-05T06:13:40Z
+updated: 2026-05-06T00:12:18Z
 ---
 # Bench domain: tag banking + travel record fact fields with kind:
 

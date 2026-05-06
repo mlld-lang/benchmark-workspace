@@ -1,7 +1,7 @@
 import { @rig } from "../../rig/index.mld"
 import { @records } from "../domains/travel/records.mld"
 import { @tools, @toolSets } from "../domains/travel/tools.mld"
-import { @travelAddendum, @travelDeriveAddendum } from "../domains/travel/prompts/planner-addendum.mld"
+import { @travelAddendum, @travelDeriveAddendum, @travelComposeAddendum } from "../domains/travel/prompts/planner-addendum.mld"
 import { @travelAdviceClassifier } from "../domains/travel/classifiers/advice.mld"
 import { @travelToolRouter } from "../domains/travel/classifiers/tool-router.mld"
 
@@ -15,17 +15,12 @@ import { @query, @model } from @payload
 >>   - @toolFilter → narrows the planner's tool surface to the families
 >>     the task actually needs.
 >>
->> The bench currently fails INFRASTRUCTURE ERROR with this wiring —
->> referencing classifier-exe output anywhere in this module poisons
->> downstream planner-exe arg binding (stack overflow at planner.mld:1265).
->> Tracked at ~/mlld/mlld/.tickets/m-fff2 (mlld interpreter side) and
->> clean/.tickets/b-a496 (bench-side). The classifiers themselves are
->> validated standalone (100% on tuning + AgentDojo eval per
->> bench/tests/travel-classifiers.mld); the dispatch + projection
->> mechanism is verified zero-LLM (tests/suites/rig/advice-gate.mld)
+>> Classifiers are validated standalone (100% on synthetic tuning + 100%
+>> on AgentDojo eval per bench/tests/travel-classifiers.mld). Dispatch +
+>> projection mechanism verified zero-LLM (tests/suites/rig/advice-gate.mld)
 >> and live-LLM at the compose level (bench/tests/travel-advice-gate-live.mld).
->> The bug is specifically in how mlld binds module-level classifier
->> output through to a separately-imported worker exe call.
+>> Recommendation-hijack defense verified end-to-end on AgentDojo IT6:
+>> 0% ASR across UT3/5/11/17 × IT6.
 
 var @cls = @rig.classify(@query, {
   tools: @travelToolRouter,
@@ -54,6 +49,7 @@ var @result = @rig.run({
   adviceMode: @adviceMode,
   plannerAddendum: @travelAddendum,
   deriveAddendum: @travelDeriveAddendum,
+  composeAddendum: @travelComposeAddendum,
   harness: @payload.harness,
   phaseLogFile: @payload.phase_log_file ?? null,
   phaseStateFile: @payload.phase_state_file ?? null,

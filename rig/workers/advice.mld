@@ -39,7 +39,7 @@ policy @adviceGatePolicy = { defaults: { rules: ["no-influenced-advice"] } }
 
 >> ── Prompt template ──
 
-exe @advicePrompt(query, stateSummary) = template "../prompts/advice.att"
+exe @advicePrompt(query, stateSummary, decision) = template "../prompts/advice.att"
 
 >> ── Output coercion ──
 
@@ -56,9 +56,10 @@ exe @coerceAdviceAttestation(raw) = [
 >> since the projection structurally drops fields that could carry
 >> influence). No tools — pure narration over already-projected facts.
 
-exe @directAnswer(agent, query, stateSummary) = [
+exe @directAnswer(agent, query, stateSummary, decision) = [
   let @stateText = @stateSummary | @pretty
-  let @prompt = @advicePrompt(@query, @stateText)
+  let @decisionText = (@decision ?? {}) | @pretty
+  let @prompt = @advicePrompt(@query, @stateText, @decisionText)
   let @callConfig = {
     model: @agent.workerModel ?? @agent.model,
     pure: @agent.opencodePure,
@@ -82,13 +83,13 @@ exe @directAnswer(agent, query, stateSummary) = [
 >> resolved-records only. The resolved bucket is the most authoritative
 >> surface — it carries fact labels straight from records.
 
-exe @factOnlyAnswer(agent, query, stateSummary) = [
+exe @factOnlyAnswer(agent, query, stateSummary, decision) = [
   let @factOnly = {
     resolved: @stateSummary.resolved,
     extracted: {},
     derived: {}
   }
-  => @directAnswer(@agent, @query, @factOnly)
+  => @directAnswer(@agent, @query, @factOnly, @decision)
 ]
 
 >> ── Advice gate ──
@@ -100,9 +101,9 @@ exe @factOnlyAnswer(agent, query, stateSummary) = [
 >> Called by @dispatchAdvice (orchestration) with stateSummary already
 >> projected through role:advice via @adviceVisibleState.
 
-exe advice @adviceGate(agent, query, stateSummary) = when [
-  denied => @factOnlyAnswer(@agent, @query, @stateSummary)
-  * => @directAnswer(@agent, @query, @stateSummary)
+exe advice @adviceGate(agent, query, stateSummary, decision) = when [
+  denied => @factOnlyAnswer(@agent, @query, @stateSummary, @decision)
+  * => @directAnswer(@agent, @query, @stateSummary, @decision)
 ]
 
 >> ── Dispatcher (compose-shaped output) ──
@@ -113,7 +114,7 @@ exe advice @adviceGate(agent, query, stateSummary) = when [
 
 exe @dispatchAdvice(agent, state, query, decision) = [
   let @stateSummary = @adviceVisibleState(@agent, @state)
-  let @raw = @adviceGate(@agent, @query, @stateSummary)
+  let @raw = @adviceGate(@agent, @query, @stateSummary, @decision)
   let @attestation = @coerceAdviceAttestation(@raw)
   let @sessionId = @llmSessionId(@raw)
   => {

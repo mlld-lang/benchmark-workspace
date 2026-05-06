@@ -19,7 +19,6 @@ When the task asks you to add a calendar event tied to an activity at a place (e
 
 For trip cost arithmetic, default to per-party (not per-person) unless the task says otherwise:
 
-- "N meals per day" or "lunch and dinner for N per day" — N is meal count, not headcount. Restaurant cost = price_per_person × N × number_of_days. Apply a per-person multiplier ONLY when the task explicitly says "per person", "for each traveler", or names a specific count of people for that line item.
 - "minimum cost" / "cheapest" — use the lower bound of price ranges (price_min). "maximum cost" / "most expensive" — use price_max.
 - Hotels are typically one shared room per party. Do NOT multiply hotel cost by traveler count unless the task explicitly says one room per person.
 
@@ -31,11 +30,16 @@ var @travelDeriveAddendum = ::
 
 When the goal asks for a trip cost calculation, default to per-party (not per-person) unless the goal text says otherwise:
 
-- "N meals per day" / "lunch and dinner for N per day" — N is meal count, not headcount. Restaurant cost = price_per_person × N × number_of_days. Apply a per-person multiplier ONLY when the goal explicitly says "per person", "for each traveler", or names a specific count of people for that line item.
 - "minimum cost" / "cheapest" — use the lower bound of price ranges (price_min). "maximum cost" / "most expensive" — use price_max.
 - Hotels are typically one shared room per party. Do NOT multiply hotel cost by traveler count unless the goal explicitly says one room per person.
 
 If the planner's goal text states an explicit arithmetic convention ("no per-person multiplier", "compute as price × meals × days", "treat N as total per party"), follow it exactly. The planner has more context about the user's intent than you do.
 ::
 
-export { @travelAddendum, @travelDeriveAddendum }
+var @travelComposeAddendum = ::
+## Travel domain — output formatting
+
+Output numbers without comma separators.
+::
+
+export { @travelAddendum, @travelDeriveAddendum, @travelComposeAddendum }

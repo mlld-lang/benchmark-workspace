@@ -55,3 +55,5 @@ Remaining work:
 3. Verify xfail/UH-1 flips to PASS
 
 Stochastic: UT13 and UT15 flip between PASS/FAIL based on whether the worker autocorrects hyphens. Compose ASCII rule should help compose-output flavor; the validator fix is needed for selection_ref handle flavor.
+
+**2026-05-06T01:32:23Z** Filed upstream as **m-4bcd** (priority 0) in /Users/adam/mlld/mlld with full repro + acceptance criteria, including the security implication (Unicode dash variants in injected payloads can bypass selection-ref handle matching).

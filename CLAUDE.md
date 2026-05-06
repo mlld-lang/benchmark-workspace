@@ -37,7 +37,8 @@ clean/
     ARCHITECTURE.md         How bench consumes rig
     agents/<suite>.mld      Agent entrypoints (~20 lines each)
     domains/<suite>/        Records, tools, bridge per suite
-  SCIENCE.md              Working experiment log — task tables, patterns, theories
+  STATUS.md               Current bench results + per-task classification (canonical state)
+  archive/SCIENCE.md      Old experiment log (archived; do not write to)
   DEBUG.md                Investigation methodology
   archive/*.taskdata.txt  Per-suite tool/model/task reference (from AgentDojo, archived)
   *.threatmodel.txt       Per-suite attack trees and defense specs
@@ -59,7 +60,7 @@ clean/
 
 ## Current Focus
 
-See SCIENCE.md for current results and HANDOFF.md for session context. Use `/rig` at the start of each session to load all required context docs.
+See STATUS.md for current results and per-task classification, and HANDOFF.md for session context. Use `/rig` at the start of each session to load all required context docs.
 
 ## Model Comparison (worker tests, 17 assertions, 2026-04-24)
 
@@ -298,7 +299,7 @@ done
 
 - **Spike before sweep, target before full.** A $0 probe answers runtime/contract questions; a single-suite or single-task sweep verifies a fix. Full sweeps are for closeouts, not iteration. (DEBUG.md "Spike First. Sweep Last.")
 - **Push to main, then sweep.** Artifacts under `runs/<id>/` are the canonical record of "this commit produced these numbers."
-- **Cite run IDs in SCIENCE.md.** `runs/<id>/` becomes the artifact for re-fetching transcripts later.
+- **Cite run IDs in STATUS.md "Sweep history".** `runs/<id>/` becomes the artifact for re-fetching transcripts later.
 - **Run multiples in parallel when you do go full.** Concurrent Namespace runners cost the same wall-clock as one — fan out for "did this change affect other suites?" closeouts.
 
 ## Rules learned the hard way
@@ -308,54 +309,41 @@ done
 - **Run worker tests before and after prompt changes.** `mlld rig/tests/workers/run.mld --no-checkpoint` catches regressions in ~50s. If tests pass too easily, the assertions are too weak.
 - **Per-task memory ≈ 0.9 GB on workspace at full parallelism (measured 2026-05-05).** Workspace at -p 34 on 32x64 hit 30.3 GB peak / 62.9 GB available (48% utilization, plenty of headroom). Earlier "1.5-2 GB per task" estimates predated the recent mlld memory reduction. Workspace and travel still want 32x64 for headroom; banking and slack are fine on 16x32. `scripts/bench.sh` sets the shape per suite. Memory peaks land in `manifest.json` (`mem_peak_kb` / `mem_total_kb`) per `bench/docker/entrypoint.sh`'s sampler.
 
-## Ticket Conventions
+## Status, Categories, and Ticket Conventions
 
-Three rules for benchmark-failure tickets:
+`STATUS.md` is the canonical record of current bench results and per-task classification. Read it before reasoning about what's failing, why, and what's worth working on.
 
-**A. Every failing in-scope test has an open ticket carrying the current theory.** No silent failures. If a task is failing on the latest sweep and isn't out-of-scope, there's a `[SUITE-UT<N>]`-titled ticket for it whose body is the current best theory of why it's failing (transcript-grounded per rule D). If the root cause isn't known yet, the theory is "needs investigation" — file the ticket anyway, don't wait. Multiple tasks failing for the same root cause may share a cluster ticket so long as each task id appears in the title.
+### Five categories (per STATUS.md)
 
-**A.1. Actionable fixes get their own tickets, linked to the failure tickets they would close.** A failure ticket is "this test is failing and here's why we think so." A fix ticket is "do X to address it." When the theory points at a concrete change — a prompt addendum, a rig primitive, a runtime fix, an OOS classification — file a separate fix ticket with the action in the title (e.g. `Add compose-precision rule for decimal renderings`) and `tk link` it to the failing-test ticket(s) it would resolve. This keeps the work surface (`tk ready`) populated with do-able tasks while preserving the per-task failure record. When a fix lands, the fix ticket closes; the failure ticket only closes when the test verifies green.
+| Category | Definition | Has ticket? |
+|---|---|---|
+| **PASS** | Passes >80% of the time across recent sweeps | No |
+| **FLAKY** | Passes <80% of the time. **Only the user marks tasks FLAKY.** | Yes — current theory + work-toward-stabilization |
+| **SHOULD-FAIL** | Deterministic security model correctly rejects; 0% pass is the right outcome | No |
+| **BAD-EVAL** | Failing because the eval is wrong (asks for one valid reading and demands the other; ignores qualifiers; substring-mismatches semantically correct output). **Only the user marks tasks BAD-EVAL.** | No |
+| **OPEN** | Not yet decidedly in any of the above. Anything actively being investigated, anything stochastic that hasn't been promoted, anything the user hasn't reviewed | Yes — current theory + investigation path |
+
+We do NOT keep tickets open for PASS, SHOULD-FAIL, or BAD-EVAL items. STATUS.md is the record. Tickets exist only for OPEN and FLAKY items where there's still investigation or fix work pending.
+
+Promotion in/out of FLAKY and BAD-EVAL is a user-only decision. The agent can move tasks into OPEN with a transcript-grounded theory, can move tasks into PASS when sweep evidence supports >80%, and can move tasks into SHOULD-FAIL when the security-model rejection is documented. The agent does NOT classify into FLAKY or BAD-EVAL on its own — surface the evidence and propose the promotion in conversation.
+
+All 97 AgentDojo tasks count toward the denominator regardless of category. The categories describe what's failing and why; they don't reduce what's measured.
+
+### Ticket conventions for OPEN and FLAKY items
+
+**A. Every OPEN or FLAKY task has an open ticket carrying the current theory.** No silent failures. If a task is failing on the latest sweep and isn't classified PASS / SHOULD-FAIL / BAD-EVAL, there's a `[SUITE-UT<N>]`-titled ticket whose body is the current best theory (transcript-grounded per rule D). If the root cause isn't known yet, the theory is "needs investigation" — file the ticket anyway, don't wait. Multiple tasks failing for the same root cause may share a cluster ticket so long as each task id appears in the title.
+
+**A.1. Actionable fixes get their own tickets, linked to the failure tickets they would close.** A failure ticket is "this test is failing and here's why we think so." A fix ticket is "do X to address it." When the theory points at a concrete change — a prompt addendum, a rig primitive, a runtime fix — file a separate fix ticket with the action in the title and `tk link` it to the failing-test ticket(s) it would resolve. This keeps the work surface (`tk ready`) populated with do-able tasks while preserving the per-task failure record. When a fix lands, the fix ticket closes; the failure ticket only closes when the test verifies green or moves to PASS / SHOULD-FAIL / BAD-EVAL in STATUS.md.
 
 **B. UT-tied tickets carry the task id in the title.** Format: `[SUITE-UT<N>...] short description`. Example: `[BK-UT10] send_money recipient resolved to id field` or `[WS-UT32, WS-UT37] create_file → share_file chaining returns no result handles`. Cluster tickets list all affected ids in the title. Makes `tk ls` greppable by suite/task and makes cross-references visible.
 
-**C. Tickets get updated with transcript analysis on every new sweep.** When a sweep completes and a tracked task either changes status or produces new failure-mode info, add a timestamped note (`tk add-note <id> "..."`) with the run id and the relevant transcript-grounded findings. Don't let tickets drift away from the current behavior. If a fix lands and verifies, note the verifying run id and close. If it lands and doesn't verify, note what changed in the failure shape.
+**C. Tickets get updated with transcript analysis on every new sweep.** When a sweep completes and a tracked task either changes status or produces new failure-mode info, add a timestamped note (`tk add-note <id> "..."`) with the run id and the relevant transcript-grounded findings. Don't let tickets drift away from the current behavior. If a fix lands and verifies, note the verifying run id and close. If it lands and doesn't verify, note what changed in the failure shape. If a task moves into PASS / SHOULD-FAIL / BAD-EVAL, close the ticket and reflect the move in STATUS.md.
 
 **D. Diagnoses must be transcript-grounded, not call-sequence guesses.** A failure ticket's "root cause" claim must be backed by reading the planner's actual reasoning — `sqlite3 runs/<id>/opencode/opencode.db "SELECT ... FROM part WHERE session_id=..."` showing the model's stated decisions between tool calls. MCP call sequences + final outputs are insufficient: they show *what* the agent did, not *why* it did it. Single transcript reads have changed diagnoses ~half the time in this project — a planner who looks like it "took the wrong workflow" from MCP calls often shows in the transcript that it tried the right thing first and the framework rejected it. If you don't have a transcript citation in the ticket, the diagnosis is a hypothesis, not a finding. Mark unverified hypotheses explicitly ("UNVERIFIED — call-sequence guess pending transcript pull").
 
-**E. Always report utility against full benchmark denominators.** The canonical numbers are pass-count over the *full* AgentDojo task count (workspace=40, banking=16, slack=21, travel=20 = 97 total). The OOS skip list is a workflow convenience for not re-adjudicating items during local iteration; it does NOT reduce the denominator for any number that gets compared with prior runs, other architectures, or progress baselines. Reporting "12/12 in-scope" when the actual measurement is 12/16 is goalpost movement — it makes session-over-session comparison meaningless and obscures the structural ceiling that OOS tasks impose. Always cite both: `12/16 (75%) — 3 OOS skipped, see tag:oos tickets`. The ceiling discussion belongs in a separate "what's structurally cappable" framing, not in the running utility number.
+**E. Always report utility against full benchmark denominators.** The canonical numbers are pass-count over the *full* AgentDojo task count (workspace=40, banking=16, slack=21, travel=20 = 97 total). Categories are descriptive (what's failing and why), not prescriptive (what to skip). Don't goalpost-shift to "in-scope" denominators — the comparison number against CaMeL or our own prior sweeps is always against 97.
 
-These rules together mean: every utility=false row in any sweep traces to a specific failure ticket, every actionable fix has its own ticket linked to the failures it closes, every ticket is current, ticket history is the audit log of what we know about each task, no ticket carries a guess as if it were a finding, and progress numbers stay honest against the full benchmark.
-
-## Test prioritization buckets
-
-**No benchmark task is "out of scope".** All 97 AgentDojo tasks are in-scope for the benchmark. The "OOS-*" prefixes below are *internal prioritization buckets* — they describe how we're choosing to spend our attention right now, not what the benchmark is measuring. Every entry counts as a failure against the 97-task denominator regardless of bucket. We use these buckets to keep the work surface focused without losing track of what we're walking past.
-
-Each per-task ticket carries one of these prefixes in its title:
-
-**OPEN: {SUITE}-{ID} - {reason it's open}** — actively investigating; clear path to a fix; not blocked. Lives in `tk ready`. Failing-test tickets stay OPEN until the test verifies green.
-
-**REVIEW: {SUITE}-{ID} - {what needs review}** — needs human decision before next move. Different from CANDIDATE in that REVIEW means "we haven't decided which bucket this belongs in yet." Used sparingly.
-
-**OOS-DEFERRED: {SUITE}-{ID}** — we know how to fix; an architectural primitive is on the roadmap; we're saving the work until other things are complete. Current examples: `summarize_url` primitive (c-1d65 — bounded-worker URL summarization with mechanical source attribution; depends on `no-untrusted-or-unknown-urls-in-output` rule from mlld-dev tracked at c-2923; closes IT1-class ASR on slack UT1/3/4/6/15 and workspace summarize-and-send tasks without utility regression); typed-instruction-channel (c-6479 — only WS-UT25 remains in scope after UT13/UT19 reclassified SHOULD-FAIL; reframed as "typed-grounding-extract" per the simplified deterministic-only design). The fix path is named, the work is sequenced; just not now.
-
-**OOS-EXHAUSTED: {SUITE}-{ID}** — we've tried; further attempts would be benchmark-shaping or overfitting. Examples: eval requires literal `'{k}-th'` substitution where models naturally produce `'1st/2nd/3rd/4th'` (SL-UT14); eval requires `pre_env == post_env` while task wording asks to update (BK-UT9/UT10); linguistic ambiguity where eval picks one valid reading and three sweeps converge on the other (TR-UT11). EXHAUSTED is a documented loss, not a recategorization — it acknowledges that prioritizing a fix would violate Cardinal Rule A.
-
-**OOS-CANDIDATE: {SUITE}-{ID}** — we believe it should be EXHAUSTED but want explicit evidence first. Often stochastic tasks (sweep FAIL, retest PASS) where one more sweep cycle would settle whether the failure mode is structural or noise.
-
-**SHOULD-FAIL: {SUITE}-{ID}** — the deterministic-security model **correctly rejects** this task. The task delegates action choice (or other security-critical decisions) to untrusted content in a way that no structural invariant can safely permit. Solving it would require **probabilistic / audit-based security** (action-type allowlists, payload schemas, profile authorization, content sanitizers) that we explicitly exclude from the benchmark agent. SHOULD-FAIL is a positive statement about the security model: 0% utility on these tasks is the correct outcome. Future production deployments can opt into probabilistic-security extensions to pass them; the benchmark cannot. See `futr-action-type-allowlist.md` for the canonical example. SHOULD-FAIL counts as a full failure against the 97 denominator like every other bucket.
-
-**CLOSED: {SUITE}-{ID}** — currently passing.
-
-### Discipline
-
-- Every failing in-scope test belongs in exactly one bucket. EXHAUSTED is reserved for cases where you can show evidence of the eval design or LLM behavior making any fix overfitting.
-- Promotion from CANDIDATE → EXHAUSTED requires a transcript-grounded note saying *what* was tried and *why* further attempts would be overfitting.
-- Demotion from OPEN → CANDIDATE requires a note saying *what's been tried*.
-- Demotion from CANDIDATE → DEFERRED requires identifying the specific architectural primitive that would fix the family, and the named ticket where that primitive is tracked.
-- DEFERRED tickets reference the architectural primitive on which they depend. When the primitive lands, the DEFERRED tickets get reopened for verification.
-- All 97 tasks run on every sweep. Bucket classifications are descriptive (what's failing and why), not prescriptive (which tasks to skip). Per Convention E, sweeps measure against the full 97-task denominator unconditionally.
-
-These buckets do not change reporting (Convention E still holds — always cite full denominators). They only change what we work on next.
+These conventions mean: every failing task that isn't decisively PASS / SHOULD-FAIL / BAD-EVAL traces to a specific OPEN or FLAKY ticket; every actionable fix has its own ticket linked to the failures it closes; every ticket is current; ticket history is the audit log of what we know about each task; no ticket carries a guess as if it were a finding; and progress numbers stay honest against the full benchmark.
 
 ## Deferred: Logging Refactor (ticket c-3edc)
 
@@ -371,5 +359,5 @@ Use `/rig` at session start to load these with instructions to read them all. Se
 2. `rig/ARCHITECTURE.md` — framework architecture and separation of concerns
 3. `bench/ARCHITECTURE.md` — how bench consumes rig
 4. `DEBUG.md` — investigation methodology
-5. `SCIENCE.md` — experiment log, task tables, failure analysis
+5. `STATUS.md` — current bench results, per-task classification (canonical state)
 6. `HANDOFF.md` — session-to-session context and next steps
