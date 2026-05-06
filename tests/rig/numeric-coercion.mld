@@ -1,0 +1,242 @@
+>> tests/suites/rig/numeric-coercion.mld
+>>
+>> Plain-assertion tests for numeric-id string preservation through the
+>> dispatch pipeline. The contract under test:
+>>   - numeric-looking string ids (e.g. "33", "26") MUST stay strings end
+>>     to end through @callTool / @rigBuild dispatch
+>>   - record `as record @schema` coercion MUST NOT cast numeric-looking
+>>     id_ values to numbers (UT7, file_entry coercion guards)
+>>   - @compileExecuteIntent's known-value gate MUST require token-boundary
+>>     match for numeric literals (c-0a6b — substring inside a date is
+>>     rejected; standalone token is accepted)
+
+import { @assertEq, @assertOk } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+
+import { @callTool } from "../../rig/runtime.mld"
+import { @compileExecuteIntent } from "../../rig/intent.mld"
+import { @rigBuild } from "../../rig/index.mld"
+
+import { @records, @note_entry } from "../fixtures.mld"
+import {
+  @calendar_evt,
+  @file_entry as @ws_file_entry,
+  @add_calendar_event_participants_inputs
+} from "../../bench/domains/workspace/records.mld"
+
+>> --- Module-level fixtures ------------------------------------------------
+
+>> Single-arg numeric-string id dispatch fixture. Mirrors index.mld:312.
+record @string_id_holder = {
+  facts: [id_: string]
+}
+
+exe resolve:r, tool:r @get_numeric_note(note_id: string) = [
+  => { id_: @note_id, title: "Todo", content: "Existing note body" }
+] => record @note_entry with { controlArgs: ["note_id"] }
+
+var tools @numericDispatchToolCollection = {
+  get_numeric_note: {
+    mlld: @get_numeric_note,
+    returns: @note_entry,
+    labels: ["resolve:r"],
+    description: "Load one note by a numeric-looking string id."
+  }
+}
+
+var @numericStringIdRecord = { id_: "33" } as record @string_id_holder
+var @numericStringIdValue = @numericStringIdRecord.id_
+
+var @wrappedToolNameRecord = { id_: "get_numeric_note" } as record @string_id_holder
+var @wrappedToolNameValue = @wrappedToolNameRecord.id_
+
+>> Direct dispatch via @callTool — single-arg path.
+var @numericDispatchResult = @callTool(
+  {
+    mlld: @get_numeric_note,
+    returns: @note_entry,
+    labels: ["resolve:r"],
+    description: "Load one note by a numeric-looking string id."
+  },
+  @numericDispatchToolCollection,
+  "get_numeric_note",
+  { note_id: @numericStringIdValue }
+)
+
+>> Built-agent dispatch (rig builds the catalog under the hood).
+var @builtNumericDispatchAgent = @rigBuild({
+  suite: "numeric-dispatch-build",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @numericDispatchToolCollection
+})
+
+var @builtNumericDispatchResult = @callTool(
+  @builtNumericDispatchAgent.tools.get_numeric_note,
+  @builtNumericDispatchAgent.toolsCollection,
+  "get_numeric_note",
+  { note_id: @numericStringIdValue }
+)
+
+>> Wrapped tool name (id resolved through `as record` coercion).
+var @wrappedToolNameDispatchResult = @callTool(
+  @builtNumericDispatchAgent.tools.get_numeric_note,
+  @builtNumericDispatchAgent.toolsCollection,
+  @wrappedToolNameValue,
+  { note_id: @numericStringIdValue }
+)
+
+>> --- UT7 / file_entry coercion fixtures ----------------------------------
+
+>> id_ trailing underscore survives `=> record` coercion.
+record @ut7_evt = {
+  facts: [id_: handle],
+  data: { trusted: [title: string?] },
+  key: id_,
+  display: [{ ref: "id_" }, title]
+}
+
+exe @ut7FakeSearch() = [
+  => [{ id_: "5", title: "Dentist" }, { id_: "23", title: "Moved" }]
+] => record @ut7_evt
+var @ut7Coerced = @ut7FakeSearch()
+
+>> file_entry id_ coercion guard — workspace file_entry uses id_ as key.
+var @fakeFileRaw = [
+  { id_: "26", filename: "report.pdf", content: "...", owner: "alice", size: 1024, last_modified: "2026-04-23", shared_with: [] },
+  { id_: "27", filename: "notes.txt", content: "...", owner: "bob", size: 512, last_modified: "2026-04-22", shared_with: ["carol"] }
+]
+var @fakeFileCoerced = @fakeFileRaw as record @ws_file_entry
+
+>> --- c-0a6b: known-value task-text token match fixtures ------------------
+
+exe tool:w @ut8AddParticipants(participants: array, event_id) = `added:@event_id:@participants.length`
+
+var tools @ut8CollectionTools = {
+  search_calendar_events: {
+    mlld: @ut7FakeSearch,
+    returns: @calendar_evt,
+    labels: ["resolve:r"],
+    description: "Search events."
+  },
+  add_calendar_event_participants: {
+    mlld: @ut8AddParticipants,
+    inputs: @add_calendar_event_participants_inputs,
+    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Add participants to an existing calendar event."
+  }
+}
+
+var @ut8Resolved = { id_: "24", title: "Introductory meeting", participants: [], start_time: "2026-04-25 09:00", end_time: "2026-04-25 10:00" } as record @calendar_evt
+var @ut8State = {
+  resolved: { calendar_evt: [{ handle: "r_calendar_evt_24", key: "24", value: @ut8Resolved, identity_field: "id_", identity_value: @ut8Resolved.id_, field_values: { id_: @ut8Resolved.id_ } }] },
+  extracted: {},
+  derived: {},
+  extract_sources: {}
+}
+
+>> Substring-only match should be rejected (24 inside 2026-04-24).
+var @c0a6bSubstringCompile = @compileExecuteIntent(
+  @ut8State,
+  @ut8CollectionTools,
+  {
+    phase: "execute",
+    operation: "add_calendar_event_participants",
+    args: {
+      event_id: { source: "known", value: "24" },
+      participants: [{ source: "known", value: "bob@test.com" }]
+    }
+  },
+  "Please add bob@test.com to the 'Introductory meeting' event on 2026-04-24."
+)
+var @c0a6bSubstringIssue = for @issue in (@c0a6bSubstringCompile.issues ?? []) when @issue.error == "known_value_not_in_task_text" && @issue.value == "24" => @issue
+
+>> Standalone token match should pass.
+var @c0a6bTokenCompile = @compileExecuteIntent(
+  @ut8State,
+  @ut8CollectionTools,
+  {
+    phase: "execute",
+    operation: "add_calendar_event_participants",
+    args: {
+      event_id: { source: "known", value: "24" },
+      participants: [{ source: "known", value: "bob@test.com" }]
+    }
+  },
+  "Add bob@test.com to event 24 please."
+)
+
+>> --- Test exes -----------------------------------------------------------
+
+exe @testSingleArgDirectDispatchKeepsStringIds() = [
+  => @assertEq(@numericDispatchResult.id_, "33")
+]
+
+exe @testSingleArgBuiltAgentDispatchKeepsStringIds() = [
+  => @assertEq(@builtNumericDispatchResult.id_, "33")
+]
+
+exe @testWrappedToolNameBuiltAgentDispatchKeepsStringIds() = [
+  => @assertEq(@wrappedToolNameDispatchResult.id_, "33")
+]
+
+exe @testKnownNumericLiteralRequiresTokenMatch() = [
+  let @ok = @c0a6bSubstringCompile.ok == false && @c0a6bSubstringIssue.length == 1
+  => @assertOk(@ok, `ok=@c0a6bSubstringCompile.ok issues=@c0a6bSubstringCompile.issues.length rejected_count=@c0a6bSubstringIssue.length`)
+]
+
+exe @testKnownNumericLiteralAcceptsStandaloneToken() = [
+  => @assertEq(@c0a6bTokenCompile.ok, true)
+]
+
+exe @testIdUnderscoreSurvivesCoercion() = [
+  let @actual = {
+    length: @ut7Coerced.length,
+    id0: @ut7Coerced[0].id_,
+    id1: @ut7Coerced[1].id_
+  }
+  => @assertEq(@actual, { length: 2, id0: "5", id1: "23" })
+]
+
+exe @testFileEntryIdSurvivesCoercion() = [
+  let @actual = {
+    id0: @fakeFileCoerced[0].id_,
+    id1: @fakeFileCoerced[1].id_
+  }
+  => @assertEq(@actual, { id0: "26", id1: "27" })
+]
+
+>> --- Suite construction --------------------------------------------------
+
+var @numericCoercionSuite = @suite("numeric-coercion", [
+  @group("single-arg-dispatch", [
+    @testSingleArgDirectDispatchKeepsStringIds,
+    @testSingleArgBuiltAgentDispatchKeepsStringIds,
+    @testWrappedToolNameBuiltAgentDispatchKeepsStringIds
+  ], {}),
+  @group("known-numeric-literal", [
+    @testKnownNumericLiteralRequiresTokenMatch,
+    @testKnownNumericLiteralAcceptsStandaloneToken
+  ], { ticket: "c-0a6b" }),
+  @group("coercion-survives", [
+    @testIdUnderscoreSurvivesCoercion,
+    @testFileEntryIdSurvivesCoercion
+  ], {})
+], {})
+
+export { @numericCoercionSuite }
+
+>> --- Standalone runner ---------------------------------------------------
+
+var @result = @runSuites([@numericCoercionSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

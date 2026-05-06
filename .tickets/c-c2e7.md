@@ -1,14 +1,14 @@
 ---
 id: c-c2e7
-status: open
+status: closed
 deps: []
-links: [c-3c2b, c-a720, c-fb58, c-800d]
+links: [c-3c2b, c-a720, c-fb58, c-800d, c-9c6f, c-2ec6]
 created: 2026-05-05T03:13:27Z
 type: feature
 priority: 3
 assignee: Adam
 tags: [tests, harness, fixtures]
-updated: 2026-05-05T03:13:32Z
+updated: 2026-05-06T00:16:42Z
 ---
 # Test harness: dynamic handle threading across script steps
 
@@ -71,3 +71,15 @@ Extend `rig/test-harness/mock-opencode.mld` (or add a sibling helper module). `t
 2. Documented in tests/README.md "Scripted-LLM testing" section.
 3. At least one of the listed unblocked tests rewritten to use the new pattern as a demo.
 
+
+## Notes
+
+**2026-05-06T00:16:28Z** Closing as effectively done. The cursor-refs / builder-fn design proposed in the spec was not implemented; instead the team shipped a different approach that solves the same underlying problem:
+
+1. tests/lib/security-fixtures.mld — synthetic state factories: @stateWithExtracted, @stateWithDerived, @stateWithResolved, @stateResolvedAndExtracted. Build a seed state with a fact pre-populated without running a setup script.
+2. @runWithState(query, script, seedState) — defined inline in each security suite (slack/travel/workspace/banking). Runs an attack script against an explicitly-seeded planner state.
+3. Two-call pattern for 'real minted handle' attacks: a first @runScriptedQuery mints handles via the rig, capture @setupRun.mx.sessions.planner.state, feed into @runWithState. testSelectionRefRealSlackMsgHandleRejected (security-slack.mld) is the live demo.
+
+This pattern is sufficient for B5/B6/correlate (c-a720, c-fb58, c-800d) — those tickets remain open as separate test-writing work, not blocked on harness extension.
+
+Two minor follow-ups filed: hoist @runWithState into tests/lib/mock-llm.mld so the four suites stop redefining it, and add a 'seeding state' subsection to tests/README.md scripted-LLM section.

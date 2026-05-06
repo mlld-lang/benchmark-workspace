@@ -1,0 +1,506 @@
+>> tests/suites/rig/extract-derive-and-execute-compile.mld
+>>
+>> Plain-assertion tests for the extract/derive coercers and the execute-intent
+>> compiler. Three sub-groups:
+>>   - coerce          : @coerceExtractAttestation / @coerceDeriveAttestation
+>>                        scalar/degenerate/valid handling, plus the planner-vs-worker
+>>                        named-state projection contract on a scalar extract.
+>>   - named-state-taint: @plannerVisibleState must hide payload values from
+>>                        extracted/derived buckets; @workerStateSummary must keep them.
+>>   - execute-compile-reads: @compileExecuteIntent reads payloads out of named
+>>                            extract/derive state via refs (named, indexed,
+>>                            numeric-dot, schema-prefixed, wrapped scalar) and
+>>                            rejects missing derived paths.
+
+import { @assertOk, @assertEq } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @coerceExtractAttestation } from "../../rig/workers/extract.mld"
+import { @coerceDeriveAttestation } from "../../rig/workers/derive.mld"
+import { @compileExecuteIntent, @resolveRefValue } from "../../rig/intent.mld"
+import { @plannerVisibleState, @workerStateSummary } from "../../rig/orchestration.mld"
+import { @tools } from "../fixtures.mld"
+
+>> --- shared helpers --------------------------------------------------------
+
+exe @field(inputValue, key) = js {
+  return inputValue?.[key] ?? null;
+}
+
+>> --- shared fixtures -------------------------------------------------------
+
+>> Markers used to assert payload visibility / readability via refs.
+var @taintedExtractMarker = "ATTACKER_INJECTED_PAYLOAD_MARKER"
+var @taintedDerivedMarker = "DERIVED_ATTACK_PAYLOAD_MARKER"
+var @indexedExtractMarker = "INDEXED_EXTRACT_BODY_MARKER"
+var @indexedDerivedMarker = "INDEXED_DERIVED_BODY_MARKER"
+var @schemaPrefixedDerivedMarker = "SCHEMA_PREFIXED_DERIVED_BODY_MARKER"
+
+>> Hostile state: extracted/derived buckets carry payloads with markers.
+>> Used by both the named-state-taint group and most execute-compile-reads tests.
+var @stateWithTaintedNamedValues = {
+  resolved: {},
+  extracted: {
+    email_task: {
+      provenance: "extracted",
+      schema_name: "email_task_payload",
+      preview_fields: ["body", "metadata"],
+      value: {
+        body: `legitimate preamble @taintedExtractMarker continues here`,
+        metadata: {
+          nested: `nested @taintedExtractMarker content`
+        }
+      }
+    },
+    ranked_messages: {
+      provenance: "extracted",
+      schema_name: "inline-schema",
+      preview_fields: ["rows"],
+      value: {
+        rows: [
+          { body: "ignored row 0" },
+          { body: @indexedExtractMarker }
+        ]
+      }
+    }
+  },
+  derived: {
+    ranked_choice: {
+      provenance: "derived",
+      schema_name: "inline-schema",
+      preview_fields: ["body", "nested"],
+      value: {
+        body: `derived preamble @taintedDerivedMarker continues here`,
+        nested: {
+          note: `nested @taintedDerivedMarker content`
+        }
+      },
+      selection_refs: [{
+        source: "selection",
+        backing: {
+          record: "contact",
+          handle: "r_contact_alice.example"
+        }
+      }]
+    },
+    ranked_messages: {
+      provenance: "derived",
+      schema_name: "inline-schema",
+      preview_fields: ["rows"],
+      value: {
+        rows: [
+          { body: "ignored row 0" },
+          { body: @indexedDerivedMarker }
+        ]
+      }
+    },
+    ranked_message_array: {
+      provenance: "derived",
+      schema_name: "messages",
+      preview_fields: ["body"],
+      value: [
+        { body: "ignored array row 0" },
+        { body: @schemaPrefixedDerivedMarker }
+      ]
+    }
+  },
+  extract_sources: {}
+}
+
+>> Wrapped-scalar fixture: schema-named "text" extract/derive with a single
+>> wrapping `value` field that the compiler should unwrap to the inner string.
+var @wrappedScalarNamedState = {
+  resolved: {},
+  extracted: {
+    note_text: {
+      provenance: "extracted",
+      schema_name: "text",
+      preview_fields: ["value"],
+      value: {
+        value: "wrapped extracted scalar"
+      }
+    }
+  },
+  derived: {
+    note_summary: {
+      provenance: "derived",
+      schema_name: "text",
+      preview_fields: ["value"],
+      value: {
+        value: "wrapped derived scalar"
+      }
+    }
+  },
+  extract_sources: {}
+}
+
+>> --- Group: coerce ---------------------------------------------------------
+
+>> Source-backed `schema: "text"` extracts are valid benchmark behavior.
+>> Worker coercer must NOT silently demote scalar payloads back to null.
+exe @testScalarExtractPayload() = [
+  let @scalarExtractAttestation = @coerceExtractAttestation({
+    status: "extracted",
+    schema_name: "text",
+    name: "body_text",
+    provenance: "extracted",
+    preview_fields: [],
+    payload: "bounded text payload"
+  })
+  let @scalarExtractState = {
+    resolved: {},
+    extracted: {
+      body_text: {
+        provenance: "extracted",
+        schema_name: "text",
+        preview_fields: [],
+        value: @field(@scalarExtractAttestation, "payload")
+      }
+    },
+    derived: {},
+    extract_sources: {}
+  }
+  let @plannerSummary = @plannerVisibleState(
+    { suite: "fixtures", records: {} },
+    @scalarExtractState
+  ) | @pretty
+  let @workerSummary = @workerStateSummary(
+    { suite: "fixtures", records: {} },
+    @scalarExtractState
+  ) | @pretty
+  let @actual = {
+    payload: @field(@scalarExtractAttestation, "payload"),
+    plannerHidesValue: !@plannerSummary.includes('"bounded text payload"'),
+    plannerKeepsFieldsKey: @plannerSummary.includes('"fields": []'),
+    workerKeepsValue: @workerSummary.includes('"bounded text payload"')
+  }
+  => @assertEq(@actual, {
+    payload: "bounded text payload",
+    plannerHidesValue: true,
+    plannerKeepsFieldsKey: true,
+    workerKeepsValue: true
+  })
+]
+
+>> Degenerate worker outputs must coerce to null so the dispatcher's
+>> `if @attestation == null` check fires `extract_empty_response`.
+exe @testCoerceExtractRejectsDegenerateOutput() = [
+  let @rawDegenNull = null
+  let @rawDegenEmpty = ""
+  let @rawDegenNullStr = "null"
+  let @rawDegenPayloadNull = ::{"status":"extracted","payload":null}::
+  let @rawDegenPayloadEmpty = ::{"status":"extracted","payload":{}}::
+  let @rawDegenPayloadMissing = ::{"status":"extracted","preview_fields":["x"]}::
+  let @actual = {
+    rawNull: @coerceExtractAttestation(@rawDegenNull),
+    rawEmpty: @coerceExtractAttestation(@rawDegenEmpty),
+    rawNullStr: @coerceExtractAttestation(@rawDegenNullStr),
+    payloadNull: @coerceExtractAttestation(@rawDegenPayloadNull),
+    payloadEmpty: @coerceExtractAttestation(@rawDegenPayloadEmpty),
+    payloadMissing: @coerceExtractAttestation(@rawDegenPayloadMissing)
+  }
+  => @assertEq(@actual, {
+    rawNull: null,
+    rawEmpty: null,
+    rawNullStr: null,
+    payloadNull: null,
+    payloadEmpty: null,
+    payloadMissing: null
+  })
+]
+
+>> Valid worker outputs must NOT be rejected by the degeneracy check —
+>> includes scalar payloads, markdown-fenced JSON, and `validate: "demote"` envelopes.
+exe @testCoerceExtractAcceptsValidOutput() = [
+  let @rawValidClean = ::{"status":"extracted","payload":{"description":"hi"}}::
+  let @rawValidScalar = ::{"status":"extracted","preview_fields":[],"payload":"raw text body"}::
+  let @rawValidFenced = "```json\n{\"status\":\"extracted\",\"payload\":{\"x\":1}}\n```"
+  let @validRawClean = @coerceExtractAttestation(@rawValidClean)
+  let @validRawScalar = @coerceExtractAttestation(@rawValidScalar)
+  let @validRawFenced = @coerceExtractAttestation(@rawValidFenced)
+  let @actual = {
+    cleanNotNull: @validRawClean != null,
+    scalarNotNull: @validRawScalar != null,
+    fencedNotNull: @validRawFenced != null
+  }
+  => @assertEq(@actual, { cleanNotNull: true, scalarNotNull: true, fencedNotNull: true })
+]
+
+>> Mirror the same hardening on derive. Selection-only goals are valid
+>> with empty payload IF selection_refs has entries.
+exe @testCoerceDeriveRejectsDegenerateOutput() = [
+  let @rawDegenDerive = "null"
+  let @rawDegenDerivePayload = ::{"status":"derived","payload":null}::
+  let @rawValidDerive = ::{"status":"derived","payload":{"x":1}}::
+  let @rawValidDeriveSelOnly = ::{"status":"derived","payload":{},"selection_refs":[{"source":"selection","backing":{"record":"hotel","handle":"r_hotel_1"}}]}::
+  let @degenerateDeriveRaw = @coerceDeriveAttestation(@rawDegenDerive)
+  let @degenerateDerivePayload = @coerceDeriveAttestation(@rawDegenDerivePayload)
+  let @validDerivePayload = @coerceDeriveAttestation(@rawValidDerive)
+  let @validDeriveSelectionOnly = @coerceDeriveAttestation(@rawValidDeriveSelOnly)
+  let @actual = {
+    rawNull: @degenerateDeriveRaw,
+    payloadNull: @degenerateDerivePayload,
+    validNotNull: @validDerivePayload != null,
+    selectionOnlyNotNull: @validDeriveSelectionOnly != null
+  }
+  => @assertEq(@actual, {
+    rawNull: null,
+    payloadNull: null,
+    validNotNull: true,
+    selectionOnlyNotNull: true
+  })
+]
+
+>> --- Group: named-state-taint ---------------------------------------------
+
+>> Security invariant: planner-facing named-state projection must never
+>> include payload values from extracted or derived state. Schema/field
+>> structure stays so the planner can emit refs by name.
+exe @testPlannerNamedStateHidesTaintedValues() = [
+  let @summary = @plannerVisibleState(
+    { suite: "fixtures", records: {} },
+    @stateWithTaintedNamedValues
+  ) | @pretty
+  let @actual = {
+    hidesExtractMarker: !@summary.includes(@taintedExtractMarker),
+    hidesDerivedMarker: !@summary.includes(@taintedDerivedMarker),
+    keepsExtractSchema: @summary.includes('"schema_name": "email_task_payload"'),
+    keepsDerivedSchema: @summary.includes('"schema_name": "inline-schema"'),
+    keepsSelectionRefs: @summary.includes('"selection_refs"')
+  }
+  => @assertEq(@actual, {
+    hidesExtractMarker: true,
+    hidesDerivedMarker: true,
+    keepsExtractSchema: true,
+    keepsDerivedSchema: true,
+    keepsSelectionRefs: true
+  })
+]
+
+>> Worker projection mirror: workers DO see the payload values so they can
+>> derive/extract from them. Same fixture, opposite expectation.
+exe @testWorkerNamedStateRetainsTaintedValues() = [
+  let @summary = @workerStateSummary(
+    { suite: "fixtures", records: {} },
+    @stateWithTaintedNamedValues
+  ) | @pretty
+  let @actual = {
+    keepsExtractMarker: @summary.includes(@taintedExtractMarker),
+    keepsDerivedMarker: @summary.includes(@taintedDerivedMarker)
+  }
+  => @assertEq(@actual, { keepsExtractMarker: true, keepsDerivedMarker: true })
+]
+
+>> --- Group: execute-compile-reads ----------------------------------------
+
+>> @compileExecuteIntent reads named extracted payload via { source, name, field }.
+exe @testExecuteCompileReadsExtractedState() = [
+  let @compile = @compileExecuteIntent(
+    @stateWithTaintedNamedValues,
+    @tools,
+    {
+      phase: "execute",
+      operation: "create_note",
+      args: { content: { source: "extracted", name: "email_task", field: "body" } }
+    },
+    "create a note from extracted content"
+  )
+  let @content = @field(@field(@compile, "compiled_args"), "content")
+  let @actual = { ok: @compile.ok, hasMarker: @content.includes(@taintedExtractMarker) }
+  => @assertEq(@actual, { ok: true, hasMarker: true })
+]
+
+>> Same but reading from derived state.
+exe @testExecuteCompileReadsDerivedState() = [
+  let @compile = @compileExecuteIntent(
+    @stateWithTaintedNamedValues,
+    @tools,
+    {
+      phase: "execute",
+      operation: "create_note",
+      args: { content: { source: "derived", name: "ranked_choice", field: "body" } }
+    },
+    "create a note from derived content"
+  )
+  let @content = @field(@field(@compile, "compiled_args"), "content")
+  let @actual = { ok: @compile.ok, hasMarker: @content.includes(@taintedDerivedMarker) }
+  => @assertEq(@actual, { ok: true, hasMarker: true })
+]
+
+>> Indexed access into an extracted bucket: rows[1].body picks row 1 out of an array.
+exe @testExecuteCompileReadsIndexedExtractedState() = [
+  let @compile = @compileExecuteIntent(
+    @stateWithTaintedNamedValues,
+    @tools,
+    {
+      phase: "execute",
+      operation: "create_note",
+      args: { content: { source: "extracted", name: "ranked_messages", field: "rows[1].body" } }
+    },
+    "create a note from indexed extracted content"
+  )
+  let @content = @field(@field(@compile, "compiled_args"), "content")
+  let @actual = { ok: @compile.ok, content: @content }
+  => @assertEq(@actual, { ok: true, content: @indexedExtractMarker })
+]
+
+>> Same indexed access against derived state.
+exe @testExecuteCompileReadsIndexedDerivedState() = [
+  let @compile = @compileExecuteIntent(
+    @stateWithTaintedNamedValues,
+    @tools,
+    {
+      phase: "execute",
+      operation: "create_note",
+      args: { content: { source: "derived", name: "ranked_messages", field: "rows[1].body" } }
+    },
+    "create a note from indexed derived content"
+  )
+  let @content = @field(@field(@compile, "compiled_args"), "content")
+  let @actual = { ok: @compile.ok, content: @content }
+  => @assertEq(@actual, { ok: true, content: @indexedDerivedMarker })
+]
+
+>> Numeric-dot syntax against a derived array: "1.body" (not "[1].body").
+exe @testExecuteCompileReadsNumericDotDerivedArrayIndex() = [
+  let @compile = @compileExecuteIntent(
+    @stateWithTaintedNamedValues,
+    @tools,
+    {
+      phase: "execute",
+      operation: "create_note",
+      args: { content: { source: "derived", name: "ranked_message_array", field: "1.body" } }
+    },
+    "create a note from numeric-dot indexed derived content"
+  )
+  let @content = @field(@field(@compile, "compiled_args"), "content")
+  let @actual = { ok: @compile.ok, content: @content }
+  => @assertEq(@actual, { ok: true, content: @schemaPrefixedDerivedMarker })
+]
+
+>> Schema-prefixed access: "messages[1].body" (the schema_name prefix is stripped).
+exe @testExecuteCompileReadsSchemaPrefixedDerivedArrayIndex() = [
+  let @compile = @compileExecuteIntent(
+    @stateWithTaintedNamedValues,
+    @tools,
+    {
+      phase: "execute",
+      operation: "create_note",
+      args: { content: { source: "derived", name: "ranked_message_array", field: "messages[1].body" } }
+    },
+    "create a note from schema-prefixed indexed derived content"
+  )
+  let @content = @field(@field(@compile, "compiled_args"), "content")
+  let @actual = { ok: @compile.ok, content: @content }
+  => @assertEq(@actual, { ok: true, content: @schemaPrefixedDerivedMarker })
+]
+
+>> Missing derived field path: @resolveRefValue should error, and
+>> @compileExecuteIntent should reject with intent_compile_failed +
+>> derived_field_missing in issues.
+exe @testExecuteCompileRejectsMissingDerivedFieldPath() = [
+  let @resolve = @resolveRefValue(@stateWithTaintedNamedValues, {
+    source: "derived",
+    name: "ranked_messages",
+    field: "messages[0].body"
+  })
+  let @compile = @compileExecuteIntent(
+    @stateWithTaintedNamedValues,
+    @tools,
+    {
+      phase: "execute",
+      operation: "create_note",
+      args: { content: { source: "derived", name: "ranked_messages", field: "messages[0].body" } }
+    },
+    "create a note from missing derived content"
+  )
+  let @actual = {
+    resolveOk: @resolve.ok,
+    resolveError: @resolve.error,
+    compileOk: @compile.ok,
+    compileError: @compile.error,
+    firstIssueError: @compile.issues[0].error
+  }
+  => @assertEq(@actual, {
+    resolveOk: false,
+    resolveError: "derived_field_missing",
+    compileOk: false,
+    compileError: "intent_compile_failed",
+    firstIssueError: "derived_field_missing"
+  })
+]
+
+>> Wrapped extracted scalar: schema "text" with single { value } field
+>> should unwrap to the inner string when resolved without a field.
+exe @testExecuteCompileUnwrapsWrappedExtractedScalar() = [
+  let @compile = @compileExecuteIntent(
+    @wrappedScalarNamedState,
+    @tools,
+    {
+      phase: "execute",
+      operation: "create_note",
+      args: { content: { source: "extracted", name: "note_text" } }
+    },
+    "create note from wrapped extracted scalar"
+  )
+  let @content = @field(@field(@compile, "compiled_args"), "content")
+  let @actual = { ok: @compile.ok, content: @content }
+  => @assertEq(@actual, { ok: true, content: "wrapped extracted scalar" })
+]
+
+>> Same against a wrapped derived scalar.
+exe @testExecuteCompileUnwrapsWrappedDerivedScalar() = [
+  let @compile = @compileExecuteIntent(
+    @wrappedScalarNamedState,
+    @tools,
+    {
+      phase: "execute",
+      operation: "create_note",
+      args: { content: { source: "derived", name: "note_summary" } }
+    },
+    "create note from wrapped derived scalar"
+  )
+  let @content = @field(@field(@compile, "compiled_args"), "content")
+  let @actual = { ok: @compile.ok, content: @content }
+  => @assertEq(@actual, { ok: true, content: "wrapped derived scalar" })
+]
+
+>> --- Suite construction ----------------------------------------------------
+
+var @extractDeriveAndExecuteCompileSuite = @suite("extract-derive-and-execute-compile", [
+  @group("coerce", [
+    @testScalarExtractPayload,
+    @testCoerceExtractRejectsDegenerateOutput,
+    @testCoerceExtractAcceptsValidOutput,
+    @testCoerceDeriveRejectsDegenerateOutput
+  ], {}),
+  @group("named-state-taint", [
+    @testPlannerNamedStateHidesTaintedValues,
+    @testWorkerNamedStateRetainsTaintedValues
+  ], {}),
+  @group("execute-compile-reads", [
+    @testExecuteCompileReadsExtractedState,
+    @testExecuteCompileReadsDerivedState,
+    @testExecuteCompileReadsIndexedExtractedState,
+    @testExecuteCompileReadsIndexedDerivedState,
+    @testExecuteCompileReadsNumericDotDerivedArrayIndex,
+    @testExecuteCompileReadsSchemaPrefixedDerivedArrayIndex,
+    @testExecuteCompileRejectsMissingDerivedFieldPath,
+    @testExecuteCompileUnwrapsWrappedExtractedScalar,
+    @testExecuteCompileUnwrapsWrappedDerivedScalar
+  ], {})
+], {})
+
+export { @extractDeriveAndExecuteCompileSuite }
+
+>> --- Standalone runner -----------------------------------------------------
+
+var @result = @runSuites([@extractDeriveAndExecuteCompileSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

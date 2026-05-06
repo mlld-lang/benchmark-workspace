@@ -1,0 +1,204 @@
+>> clean/tests/suites/rig/output-validators.mld
+>>
+>> Output validators that fire on compose output:
+>>   - brief-confirmation (must_contain_cited_content)
+>>   - field-divergence (must_preserve_field_values)
+>>   - combinator (runOutputValidators)
+>>   - composeOutputText JSON extraction
+>>
+>> Ported from rig/tests/index.mld OV-1..OV-9 (validators/OV-N).
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import {
+  @must_contain_cited_content,
+  @must_preserve_field_values,
+  @runOutputValidators,
+  @composeOutputText,
+  @defaultComposeValidators
+} from "../../rig/validators/output_checks.mld"
+
+>> --- Shared fixtures ------------------------------------------------------
+
+var @ovStateSummary = {
+  resolved: {},
+  extracted: {
+    informations_page: {
+      provenance: "extracted",
+      schema_name: "webpage_content",
+      preview_fields: ["url", "content"],
+      value: {
+        url: "www.informations.com",
+        content: "The latest job report brought a mix of relief and concern as unemployment edged down to 7.2%. Analysts cited improving labor market dynamics, with new hires concentrated in manufacturing and tech."
+      },
+      selection_refs: []
+    },
+    user_balance: {
+      provenance: "extracted",
+      schema_name: "balance",
+      preview_fields: ["amount"],
+      value: { amount: "1234.56" },
+      selection_refs: []
+    }
+  },
+  derived: {
+    recommended_hotel: {
+      provenance: "derived",
+      schema_name: "hotel",
+      preview_fields: ["name", "rating", "address"],
+      value: {
+        name: "Good Night",
+        rating: "5.0",
+        address: "15 Rue Cler, 75007 Paris, France"
+      },
+      selection_refs: []
+    }
+  }
+}
+
+>> Decision/context for content-task scenarios (OV-1, OV-3, OV-6)
+var @ovContentDecision = {
+  purpose: "Report the content of the webpage at www.informations.com",
+  sources: ["extracted.informations_page"]
+}
+var @ovContentCtx = {
+  decision: @ovContentDecision,
+  stateSummary: @ovStateSummary,
+  query: "Read www.informations.com"
+}
+var @ovBriefOutput = "The content of www.informations.com has been fetched and reported."
+
+>> Decision/context for non-content (balance) scenario (OV-2)
+var @ovBalanceDecision = {
+  purpose: "What is the user's current balance?",
+  sources: ["extracted.user_balance"]
+}
+var @ovBalanceCtx = {
+  decision: @ovBalanceDecision,
+  stateSummary: @ovStateSummary,
+  query: "What's my balance?"
+}
+
+>> Decision/context for hotel field-divergence scenarios (OV-4, OV-5, OV-7)
+var @ovHotelDecision = {
+  purpose: "Report hotel Good Night with rating 5.0 at address 75007 Paris",
+  sources: ["derived.recommended_hotel"]
+}
+var @ovHotelCtx = {
+  decision: @ovHotelDecision,
+  stateSummary: @ovStateSummary,
+  query: "Recommend a hotel"
+}
+var @ovHotelOutputDropsCountry = "Hotel: Good Night, Rating: 5.0, Address: 15 Rue Cler, 75007 Paris."
+var @ovHotelOutputVerbatim = "Hotel: Good Night, Rating: 5.0, Address: 15 Rue Cler, 75007 Paris, France."
+
+>> Combinator validator list (used by OV-6 and OV-7)
+var @ovCombinatorValidators = [@must_contain_cited_content, @must_preserve_field_values]
+
+>> --- Tests ----------------------------------------------------------------
+
+>> OV-1: brief-confirmation fires when purpose asks for content + cited
+>> source has long content + output is short.
+exe @testOv1BriefConfirmationFiresOnContentTask() = [
+  let @r = @must_contain_cited_content(@ovBriefOutput, @ovContentCtx)
+  let @hintHasBlock = @r.hint.includes("content_to_include")
+  => @assertOk(
+    @r.ok == false && @r.kind == "brief_confirmation" && @hintHasBlock,
+    `ok=@r.ok kind=@r.kind hint_has_block=@hintHasBlock`
+  )
+]
+
+>> OV-2: brief-confirmation does NOT fire on non-content tasks
+exe @testOv2BriefConfirmationSkipsNonContentTask() = [
+  let @r = @must_contain_cited_content("$1,234.56", @ovBalanceCtx)
+  => @assertEq(@r.ok, true)
+]
+
+>> OV-3: brief-confirmation does NOT fire when output is already long enough
+exe @testOv3BriefConfirmationSkipsLongOutput() = [
+  let @longOutput = ::The latest job report brought a mix of relief and concern as unemployment edged down to 7.2%. Analysts cited improving labor market dynamics, with new hires concentrated in manufacturing and tech. Substantial content rendered here.::
+  let @r = @must_contain_cited_content(@longOutput, @ovContentCtx)
+  => @assertEq(@r.ok, true)
+]
+
+>> OV-4: must_preserve_field_values fires when state field is missing from output
+exe @testOv4FieldDivergenceFiresOnParaphrase() = [
+  let @r = @must_preserve_field_values(@ovHotelOutputDropsCountry, @ovHotelCtx)
+  => @assertOk(
+    @r.ok == false && @r.kind == "field_divergence",
+    `ok=@r.ok kind=@r.kind (output drops ', France' from address)`
+  )
+]
+
+>> OV-5: must_preserve_field_values does NOT fire when output preserves verbatim value
+exe @testOv5FieldDivergenceSkipsVerbatim() = [
+  let @r = @must_preserve_field_values(@ovHotelOutputVerbatim, @ovHotelCtx)
+  => @assertEq(@r.ok, true)
+]
+
+>> OV-6: combinator short-circuits on first failure
+exe @testOv6CombinatorShortCircuits() = [
+  let @r = @runOutputValidators(@ovCombinatorValidators, @ovBriefOutput, @ovContentCtx)
+  => @assertOk(
+    @r.ok == false && @r.failed == "brief_confirmation",
+    `ok=@r.ok failed=@r.failed (first validator wins)`
+  )
+]
+
+>> OV-7: combinator returns ok=true when all validators pass
+exe @testOv7CombinatorAllPass() = [
+  let @r = @runOutputValidators(@ovCombinatorValidators, @ovHotelOutputVerbatim, @ovHotelCtx)
+  => @assertOk(
+    @r.ok == true && @r.failed == null,
+    `ok=@r.ok failed=@r.failed`
+  )
+]
+
+>> OV-8: combinator handles empty validator list
+exe @testOv8CombinatorEmptyList() = [
+  let @r = @runOutputValidators([], "anything", {})
+  => @assertEq(@r.ok, true)
+]
+
+>> OV-9: composeOutputText extracts text from JSON-shaped raw output
+exe @testOv9ComposeOutputTextExtractsFromJson() = [
+  let @raw = `{"text": "Hello world"}`
+  let @extracted = @composeOutputText(@raw)
+  => @assertEq(@extracted, "Hello world")
+]
+
+>> --- Suite ---------------------------------------------------------------
+
+var @outputValidatorsSuite = @suite("output-validators", [
+  @group("brief-confirmation", [
+    @testOv1BriefConfirmationFiresOnContentTask,
+    @testOv2BriefConfirmationSkipsNonContentTask,
+    @testOv3BriefConfirmationSkipsLongOutput
+  ], { notes: "validators originally tagged validators/OV-1..OV-3" }),
+  @group("field-divergence", [
+    @testOv4FieldDivergenceFiresOnParaphrase,
+    @testOv5FieldDivergenceSkipsVerbatim
+  ], { notes: "validators originally tagged validators/OV-4..OV-5" }),
+  @group("combinator", [
+    @testOv6CombinatorShortCircuits,
+    @testOv7CombinatorAllPass,
+    @testOv8CombinatorEmptyList,
+    @testOv9ComposeOutputTextExtractsFromJson
+  ], { notes: "validators originally tagged validators/OV-6..OV-9" })
+], {})
+
+export { @outputValidatorsSuite }
+
+>> --- Standalone runner ---------------------------------------------------
+
+var @result = @runSuites([@outputValidatorsSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+if @result.skippedLine != "" [ show @result.skippedLine ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

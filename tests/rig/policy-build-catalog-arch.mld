@@ -1,0 +1,597 @@
+>> tests/suites/rig/policy-build-catalog-arch.mld
+>>
+>> Plain-assertion port of the policy.build / catalog / planner-architecture
+>> invariant cluster from rig/tests/index.mld.
+>>
+>> Covers:
+>>   - policy-build-runtime
+>>   - CAT-1, CAT-2 (catalog transparency on input records + metadata)
+>>   - AUTH-1, AUTH-2, AUTH-3 (authorization surfaces, legacy-key scan)
+>>   - BENCH-CAT-1..4 (per-suite agent/tools.mld shape invariants)
+>>   - PLANNER-ARCH-1..4 (single-planner architecture, opencode tool surface,
+>>                       uninitialized planner-tool error envelope)
+>>   - POL-ROUNDTRIP-1..2, collection-roundtrip, synthesized-policy-shape,
+>>     policy-sections, input-record-allow-omits-optional-fact
+
+import { @assertOk, @assertEq } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+
+import {
+  @records,
+  @tools,
+  @get_contacts,
+  @send_email,
+  @create_note,
+  @create_note_inputs,
+  @send_email_inputs
+} from "../fixtures.mld"
+
+import { @opencodeToolAgentName, @opencodePermissionRules } from "../../llm/lib/opencode/index.mld"
+
+import {
+  @mxEntry,
+  @renderToolDocs,
+  @toolControlArgs,
+  @toolPayloadArgs,
+  @toolUpdateArgs,
+  @toolExactArgs,
+  @toolCanAuthorizeRoles,
+  @toolInputRecord,
+  @toolDescription
+} from "../../rig/tooling.mld"
+
+import { @synthesizedPolicy } from "../../rig/orchestration.mld"
+import { @emptyState } from "../../rig/runtime.mld"
+import { @emptyPlannerRuntime } from "../../rig/session.mld"
+import { @planner, @plannerTools } from "../../rig/workers/planner.mld"
+
+>> --- Helpers ---------------------------------------------------------------
+
+exe @field(inputValue, key) = js {
+  return inputValue?.[key] ?? null;
+}
+
+exe @isBlank(value) = when [
+  !@value.isDefined() => true
+  @value == null => true
+  @value == "" => true
+  * => false
+]
+
+exe @policySummary(result) = [
+  let @issues = @field(@result, "issues") ?? []
+  let @first = @issues[0] ?? null
+  => `valid=@field(@result, "valid") reason=@field(@first, "reason") arg=@field(@first, "arg") phase=@field(@first, "phase")`
+]
+
+>> --- Wrapper exes for the policy-section tool collection -------------------
+
+exe @runtime_allowlisted_send_email(recipient, subject) = [
+  => { recipient: @recipient, subject: @subject }
+]
+exe @runtime_blocked_subject_send(subject) = [
+  => { subject: @subject }
+]
+exe @runtime_update_profile(city, street) = [
+  => { city: @city, street: @street }
+]
+exe @runtime_change_password(password) = [
+  => { password: @password }
+]
+
+var @approvedRecipients = ["ada@example.com"]
+var @blockedSubjects = ["blocked subject"]
+
+record @allowlisted_send_email_inputs = {
+  facts: [recipient: string],
+  data: [subject: string],
+  allowlist: { recipient: @approvedRecipients },
+  validate: "strict"
+}
+record @blocked_subject_send_inputs = {
+  facts: [],
+  data: [subject: string],
+  blocklist: { subject: @blockedSubjects },
+  validate: "strict"
+}
+record @profile_update_inputs = {
+  facts: [],
+  data: [city: string?, street: string?],
+  update: [city, street],
+  validate: "strict"
+}
+record @password_change_inputs = {
+  facts: [],
+  data: [password: string],
+  exact: [password],
+  validate: "strict"
+}
+
+var tools @policySectionTools = {
+  allowlisted_send_email: {
+    mlld: @runtime_allowlisted_send_email,
+    inputs: @allowlisted_send_email_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send an email only to approved recipients."
+  },
+  blocked_subject_send: {
+    mlld: @runtime_blocked_subject_send,
+    inputs: @blocked_subject_send_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send an email unless the subject is blocked."
+  },
+  update_profile: {
+    mlld: @runtime_update_profile,
+    inputs: @profile_update_inputs,
+    labels: ["execute:w", "tool:w", "update:w"],
+    can_authorize: "role:planner",
+    description: "Update profile fields."
+  },
+  change_password: {
+    mlld: @runtime_change_password,
+    inputs: @password_change_inputs,
+    labels: ["execute:w", "tool:w", "privileged:account"],
+    can_authorize: "role:planner",
+    description: "Change the password to an exact task literal."
+  }
+}
+
+var tools @policySectionPlannerTools = {
+  allowlisted_send_email: {
+    mlld: @runtime_allowlisted_send_email,
+    inputs: @allowlisted_send_email_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send an email only to approved recipients."
+  },
+  blocked_subject_send: {
+    mlld: @runtime_blocked_subject_send,
+    inputs: @blocked_subject_send_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send an email unless the subject is blocked."
+  },
+  update_profile: {
+    mlld: @runtime_update_profile,
+    inputs: @profile_update_inputs,
+    labels: ["execute:w", "tool:w", "update:w"],
+    can_authorize: "role:planner",
+    description: "Update profile fields."
+  },
+  change_password: {
+    mlld: @runtime_change_password,
+    inputs: @password_change_inputs,
+    labels: ["execute:w", "tool:w", "privileged:account"],
+    can_authorize: "role:planner",
+    description: "Change the password to an exact task literal."
+  }
+}
+
+var @policySectionBasePolicy = {
+  defaults: { rules: [] },
+  operations: {
+    "exfil:send": ["allowlisted_send_email", "blocked_subject_send"],
+    "update:w": ["update_profile"],
+    "privileged:account": ["change_password"]
+  },
+  labels: { influenced: { deny: [] } },
+  authorizations: {
+    deny: [],
+    can_authorize: {
+      "role:planner": [
+        "allowlisted_send_email",
+        "blocked_subject_send",
+        "update_profile",
+        "change_password"
+      ]
+    }
+  }
+}
+
+>> --- Runtime baseline policy collection ------------------------------------
+
+var @manualBasePolicy = {
+  defaults: { rules: ["no-send-to-unknown"] },
+  operations: { "exfil:send": ["send_email"] },
+  labels: { influenced: { deny: ["exfil"] } },
+  authorizations: {
+    deny: [],
+    can_authorize: { "role:planner": ["create_note", "send_email"] }
+  }
+}
+
+var tools @policyBuildToolCollection = {
+  send_email: {
+    mlld: @send_email,
+    inputs: @send_email_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner"
+  },
+  create_note: {
+    mlld: @create_note,
+    inputs: @create_note_inputs,
+    labels: ["execute:w", "tool:w"],
+    can_authorize: "role:planner"
+  }
+}
+
+>> --- role:planner wrappers for policy.build --------------------------------
+
+exe role:planner @policyBuildAsPlanner(toolCatalog, basePolicy) = [
+  let @built = @policy.build(
+    { allow: { create_note: true } },
+    @toolCatalog,
+    { task: "create a note", basePolicy: @basePolicy }
+  )
+  => @built
+]
+
+exe role:planner @buildAllowedToolPolicy(toolName, toolCatalog, basePolicy, task) = [
+  let @built = @policy.build(
+    { allow: { [@toolName]: true } },
+    @toolCatalog,
+    { task: @task, basePolicy: @basePolicy }
+  )
+  => @built
+]
+
+exe @collectionRoundtrip(toolCatalog, basePolicy) = [
+  let @built = @policyBuildAsPlanner(@toolCatalog, @basePolicy)
+  => @built.valid
+]
+
+>> --- Optional-meeting fixture ----------------------------------------------
+
+var @meetingBasePolicy = {
+  defaults: { rules: ["no-send-to-unknown"] },
+  operations: { "exfil:send": ["schedule_meeting"] },
+  labels: { influenced: { deny: ["exfil"] } },
+  authorizations: {
+    deny: [],
+    can_authorize: { "role:planner": ["schedule_meeting"] }
+  }
+}
+
+var tools @localMeetingTools = {
+  schedule_meeting: @tools.schedule_meeting
+}
+
+exe role:planner @buildOptionalMeetingPolicy() = [
+  => @policy.build(
+    { allow: { schedule_meeting: true } },
+    @localMeetingTools,
+    { task: "Schedule a solo focus block.", basePolicy: @meetingBasePolicy }
+  )
+]
+
+>> --- Shared module-level computed fixtures ---------------------------------
+
+>> @policyBuildAsPlanner runs @policy.build at module load time, which
+>> leaves engine state that breaks subsequent suites' policy.build calls
+>> (proofless_control_arg even with valid factsource refs). Moved into
+>> the test exe. See c-a873.
+
+var @syntheticPolicy = @synthesizedPolicy(@tools, null)
+var @plannerAuth = @syntheticPolicy.authorizations.can_authorize["role:planner"] ?? []
+var @denyList = @syntheticPolicy.authorizations.deny ?? []
+var @defaultRules = @syntheticPolicy.defaults.rules ?? []
+
+var @catalogSendEmailEntry = @mxEntry(@tools.mx.entries, "send_email")
+var @catalogAllowlistedEntry = @mxEntry(@policySectionTools.mx.entries, "allowlisted_send_email")
+var @catalogSendEmailInput = @toolInputRecord(@catalogSendEmailEntry)
+var @catalogAllowlistedInput = @toolInputRecord(@catalogAllowlistedEntry)
+
+var @legacyAuthorizableScan = run sh {
+  if rg -n 'kind:\s*\"(read|write)\"|semantics:|authorizable:|expose:|optional:\s*\[|risk:\s*\[' /Users/adam/mlld/clean/bench/domains /Users/adam/mlld/clean/tests/fixtures.mld /Users/adam/mlld/clean/rig/EXAMPLE.mld -g '*.mld' >/dev/null; then
+    echo found
+  else
+    echo ok
+  fi
+}
+
+var @workspaceToolsText = run sh { cat /Users/adam/mlld/clean/bench/domains/workspace/tools.mld }
+var @workspaceAgentText = run sh { cat /Users/adam/mlld/clean/bench/agents/workspace.mld }
+var @bankingToolsText = run sh { cat /Users/adam/mlld/clean/bench/domains/banking/tools.mld }
+var @bankingAgentText = run sh { cat /Users/adam/mlld/clean/bench/agents/banking.mld }
+var @slackToolsText = run sh { cat /Users/adam/mlld/clean/bench/domains/slack/tools.mld }
+var @slackAgentText = run sh { cat /Users/adam/mlld/clean/bench/agents/slack.mld }
+var @travelToolsText = run sh { cat /Users/adam/mlld/clean/bench/domains/travel/tools.mld }
+var @travelAgentText = run sh { cat /Users/adam/mlld/clean/bench/agents/travel.mld }
+var @plannerWorkerText = run sh { cat /Users/adam/mlld/clean/rig/workers/planner.mld }
+var @orchestrationText = run sh { cat /Users/adam/mlld/clean/rig/orchestration.mld }
+var @plannerPromptText = run sh { cat /Users/adam/mlld/clean/rig/prompts/planner.att }
+
+var @opencodePlannerAllowedCsv = "mlld_tools_resolve,mlld_tools_extract,mlld_tools_derive,mlld_tools_execute,mlld_tools_compose,mlld_tools_blocked"
+var @opencodePlannerPermissionRules = @opencodePermissionRules(@opencodePlannerAllowedCsv, ["mlld_tools"])
+
+>> Probe an uninitialized planner-tool call so we can assert the error envelope.
+>> The `with { session: @planner }` activation is moved into the test exe
+>> below to avoid contaminating the global planner-session machinery at
+>> import time — when this ran at module level, it caused subsequent
+>> suites' policy.build calls to drop fact-mapping resolution, surfacing
+>> as proofless_control_arg / changed denial surface (event vs envelope).
+>> See c-a873.
+exe llm @testPlannerUninitialized(prompt, config) = [
+  => @plannerTools.resolve.mlld({ tool: "noop", purpose: "test" })
+]
+
+>> Render-doc fixtures for policy-sections.
+var @renderedDocs = @renderToolDocs(@tools)
+var @passwordDocs = for @entry in @renderedDocs when @field(@entry, "name") == "update_password" => @entry
+var @passwordDoc = @passwordDocs[0]
+var @passwordUpdateArgs = @toolUpdateArgs(@tools.update_password)
+var @passwordExactArgs = @toolExactArgs(@tools.update_password)
+
+var @policySectionRoundtrip = @buildAllowedToolPolicy(
+  "allowlisted_send_email",
+  @policySectionPlannerTools,
+  @policySectionBasePolicy,
+  "Send hello to ada@example.com."
+)
+
+var @optionalMeetingPolicy = @buildOptionalMeetingPolicy()
+
+>> --- Tests -----------------------------------------------------------------
+
+exe @testPolicyBuildRuntime() = [
+  let @policyRuntime = @policyBuildAsPlanner(@policyBuildToolCollection, @manualBasePolicy)
+  => @assertEq(@policyRuntime.valid, true)
+]
+
+exe @testCat1TransparentInputRecord() = [
+  let @ok =
+    @catalogSendEmailInput.mx.entries.isDefined() &&
+    @catalogAllowlistedInput.mx.entries.isDefined() &&
+    @toolControlArgs(@catalogSendEmailEntry).includes("recipients") &&
+    @toolPayloadArgs(@catalogSendEmailEntry).includes("subject") &&
+    @toolControlArgs(@catalogAllowlistedEntry).includes("recipient") &&
+    @toolPayloadArgs(@catalogAllowlistedEntry).includes("subject")
+  let @detail = `send_email control=@toolControlArgs(@catalogSendEmailEntry) payload=@toolPayloadArgs(@catalogSendEmailEntry) allowlisted_send_email control=@toolControlArgs(@catalogAllowlistedEntry) payload=@toolPayloadArgs(@catalogAllowlistedEntry)`
+  => @assertOk(@ok, @detail)
+]
+
+exe @testCat2TransparentMetadata() = [
+  let @ok =
+    @field(@catalogSendEmailEntry, "can_authorize") == "role:planner" &&
+    @field(@catalogAllowlistedEntry, "can_authorize") == "role:planner" &&
+    @toolCanAuthorizeRoles(@catalogSendEmailEntry).includes("role:planner") &&
+    @toolCanAuthorizeRoles(@catalogAllowlistedEntry).includes("role:planner") &&
+    @toolDescription(@catalogSendEmailEntry).includes("email body") &&
+    @toolDescription(@catalogAllowlistedEntry).includes("approved recipients")
+  let @detail = `send_email roles=@toolCanAuthorizeRoles(@catalogSendEmailEntry) desc=@toolDescription(@catalogSendEmailEntry) allowlisted_send_email roles=@toolCanAuthorizeRoles(@catalogAllowlistedEntry) desc=@toolDescription(@catalogAllowlistedEntry)`
+  => @assertOk(@ok, @detail)
+]
+
+exe @testAuth1CanAuthorizeSurface() = [
+  let @ok =
+    @plannerAuth.includes("send_email") &&
+    @plannerAuth.includes("schedule_meeting") &&
+    !@plannerAuth.includes("update_password")
+  => @assertOk(@ok, `planner=@plannerAuth`)
+]
+
+exe @testAuth2HardDeniedSurface() = [
+  let @ok =
+    @denyList.includes("update_password") &&
+    !@plannerAuth.includes("update_password")
+  => @assertOk(@ok, `deny=@denyList planner=@plannerAuth`)
+]
+
+exe @testAuth3LegacyAuthorizableKey() = [
+  => @assertEq(@legacyAuthorizableScan, "ok")
+]
+
+exe @testBenchCat1Workspace() = [
+  let @ok =
+    !@workspaceToolsText.includes('var tools @toolsCollection = {') &&
+    @workspaceToolsText.includes('var tools @tools = {') &&
+    @workspaceToolsText.includes('mlld: @search_emails') &&
+    @workspaceAgentText.includes('@rig.run({') &&
+    @workspaceAgentText.includes('tools: @tools') &&
+    !@workspaceAgentText.includes("routedTools: ") &&
+    !@workspaceAgentText.includes('@routeToolCatalog') &&
+    !@workspaceAgentText.includes('runtimeTools:') &&
+    !@workspaceAgentText.includes('@mergePlannerCatalog') &&
+    !@workspaceAgentText.includes('@synthesizedPolicy') &&
+    !@workspaceAgentText.includes('@runPhaseLoop')
+  => @assertOk(@ok, "workspace bench-catalog invariants")
+]
+
+exe @testBenchCat2Banking() = [
+  let @ok =
+    !@bankingToolsText.includes('var tools @toolsCollection = {') &&
+    @bankingToolsText.includes('var tools @tools = {') &&
+    @bankingToolsText.includes('mlld: @get_balance') &&
+    @bankingAgentText.includes('@rig.run({') &&
+    @bankingAgentText.includes('tools: @tools') &&
+    !@bankingAgentText.includes("routedTools: ") &&
+    !@bankingAgentText.includes('@routeToolCatalog') &&
+    !@bankingAgentText.includes('runtimeTools:') &&
+    !@bankingAgentText.includes('@mergePlannerCatalog') &&
+    !@bankingAgentText.includes('@synthesizedPolicy') &&
+    !@bankingAgentText.includes('@runPhaseLoop')
+  => @assertOk(@ok, "banking bench-catalog invariants")
+]
+
+exe @testBenchCat3Slack() = [
+  let @ok =
+    !@slackToolsText.includes('var tools @toolsCollection = {') &&
+    @slackToolsText.includes('var tools @tools = {') &&
+    @slackToolsText.includes('mlld: @get_channels') &&
+    @slackAgentText.includes('@rig.run({') &&
+    @slackAgentText.includes('tools: @tools') &&
+    !@slackAgentText.includes("routedTools: ") &&
+    !@slackAgentText.includes('@routeToolCatalog') &&
+    !@slackAgentText.includes('runtimeTools:') &&
+    !@slackAgentText.includes('@mergePlannerCatalog') &&
+    !@slackAgentText.includes('@synthesizedPolicy') &&
+    !@slackAgentText.includes('@runPhaseLoop')
+  => @assertOk(@ok, "slack bench-catalog invariants")
+]
+
+exe @testBenchCat4Travel() = [
+  let @ok =
+    !@travelToolsText.includes('var tools @toolsCollection = {') &&
+    @travelToolsText.includes('var tools @tools = {') &&
+    @travelToolsText.includes('mlld: @get_user_information') &&
+    @travelAgentText.includes('@rig.run({') &&
+    @travelAgentText.includes('tools: @tools') &&
+    !@travelAgentText.includes("routedTools: ") &&
+    !@travelAgentText.includes('@routeToolCatalog') &&
+    !@travelAgentText.includes('runtimeTools:') &&
+    !@travelAgentText.includes('@mergePlannerCatalog') &&
+    !@travelAgentText.includes('@synthesizedPolicy') &&
+    !@travelAgentText.includes('@runPhaseLoop')
+  => @assertOk(@ok, "travel bench-catalog invariants")
+]
+
+exe @testPlannerArch1SinglePlannerArchitecture() = [
+  let @ok =
+    @plannerWorkerText.includes('var tools @plannerTools = {') &&
+    @plannerWorkerText.includes('var tools @terminalTools = {') &&
+    @plannerWorkerText.includes('tools: @plannerTools') &&
+    @plannerWorkerText.includes('tools: @terminalTools') &&
+    @plannerWorkerText.includes('session: @planner') &&
+    @plannerWorkerText.includes('exe @plannerLlmCallOpencode(') &&
+    @plannerWorkerText.includes('guard after @composeRetryOpencode for op:named:plannerLlmCallOpencode') &&
+    (@plannerWorkerText.includes('@opencode(@prompt, @config) with {') || @plannerWorkerText.includes('@claude(@prompt, @config) with {')) &&
+    !@plannerWorkerText.includes('@llmCall(@agent.harness, @prompt, {') &&
+    !@plannerWorkerText.includes('@dispatchPlanner') &&
+    !@plannerPromptText.includes('<state_summary>') &&
+    !@plannerPromptText.includes('<execution_log>')
+  => @assertOk(@ok, "single-planner architecture invariants")
+]
+
+exe @testPlannerArch2SinglePlannerRunner() = [
+  let @ok =
+    @orchestrationText.includes('@runPlannerSession(@agent, @query)') &&
+    !@orchestrationText.includes('loop(@loopLimit)') &&
+    !@orchestrationText.includes('@runPhaseLoop') &&
+    !@orchestrationText.includes('@dispatchPlanner')
+  => @assertOk(@ok, "single-planner runner invariants")
+]
+
+exe @testPlannerArch3OpencodePlannerToolSurface() = [
+  let @ok =
+    @opencodeToolAgentName(null) == "mlld" &&
+    @field(@opencodePlannerPermissionRules, "*") == "deny" &&
+    @field(@opencodePlannerPermissionRules, "mcp__mlld_tools__*") == "allow" &&
+    @field(@opencodePlannerPermissionRules, "mlld_tools_resolve") == "allow" &&
+    @field(@opencodePlannerPermissionRules, "mlld_tools_extract") == "allow" &&
+    @field(@opencodePlannerPermissionRules, "mlld_tools_derive") == "allow" &&
+    @field(@opencodePlannerPermissionRules, "mlld_tools_execute") == "allow" &&
+    @field(@opencodePlannerPermissionRules, "mlld_tools_compose") == "allow" &&
+    @field(@opencodePlannerPermissionRules, "mlld_tools_blocked") == "allow" &&
+    @isBlank(@field(@opencodePlannerPermissionRules, "read")) &&
+    @isBlank(@field(@opencodePlannerPermissionRules, "glob")) &&
+    @isBlank(@field(@opencodePlannerPermissionRules, "bash")) &&
+    @isBlank(@field(@opencodePlannerPermissionRules, "edit")) &&
+    @isBlank(@field(@opencodePlannerPermissionRules, "write"))
+  => @assertOk(@ok, `rules=@opencodePlannerPermissionRules`)
+]
+
+exe @testPlannerArch4PlannerToolUninitialized() = [
+  let @plannerToolUninitializedResult = @testPlannerUninitialized("test", {}) with {
+    session: @planner,
+    seed: { agent: null, query: null, state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @ok =
+    @field(@plannerToolUninitializedResult, "status") == "error" &&
+    @field(@plannerToolUninitializedResult, "error") == "planner_session_uninitialized" &&
+    @field(@plannerToolUninitializedResult, "summary") == "planner_session_uninitialized"
+  => @assertOk(@ok, `status=@field(@plannerToolUninitializedResult, "status") error=@field(@plannerToolUninitializedResult, "error") summary=@field(@plannerToolUninitializedResult, "summary")`)
+]
+
+exe @testPolRoundtrip1CollectionRoundtrip() = [
+  let @ok = @collectionRoundtrip(@policyBuildToolCollection, @manualBasePolicy) == true
+  => @assertOk(@ok, "policy.build succeeded inside a wrapper exe")
+]
+
+exe @testPolRoundtrip2PolicySectionRoundtrip() = [
+  => @assertEq(@policySectionRoundtrip.valid, true)
+]
+
+exe @testCollectionRoundtrip() = [
+  let @ok = @collectionRoundtrip(@policyBuildToolCollection, @manualBasePolicy) == true
+  => @assertOk(@ok, "policy.build succeeded inside a wrapper exe")
+]
+
+exe @testSynthesizedPolicyShape() = [
+  let @ok =
+    @defaultRules.includes("no-send-to-unknown") &&
+    @defaultRules.includes("untrusted-llms-get-influenced") &&
+    @defaultRules.includes("no-novel-urls") &&
+    @plannerAuth.includes("send_email") &&
+    @plannerAuth.includes("schedule_meeting") &&
+    @denyList.includes("update_password")
+  => @assertOk(@ok, `rules=@defaultRules deny=@denyList planner=@plannerAuth`)
+]
+
+exe @testPolicySections() = [
+  let @ok =
+    @passwordUpdateArgs.includes("password") &&
+    @passwordExactArgs.includes("password") &&
+    @field(@passwordDoc, "update").includes("password") &&
+    @field(@passwordDoc, "exactArgs").includes("password")
+  => @assertOk(@ok, `update=@passwordUpdateArgs exact=@passwordExactArgs doc=@passwordDoc`)
+]
+
+exe @testInputRecordAllowOmitsOptionalFact() = [
+  => @assertEq(@optionalMeetingPolicy.valid, true)
+]
+
+>> --- Suite -----------------------------------------------------------------
+
+var @policyBuildCatalogArchSuite = @suite("policy-build-catalog-arch", [
+  @group("policy-build", [
+    @testPolicyBuildRuntime
+  ], {}),
+  @group("catalog-transparency", [
+    @testCat1TransparentInputRecord,
+    @testCat2TransparentMetadata
+  ], {}),
+  @group("authorization", [
+    @testAuth1CanAuthorizeSurface,
+    @testAuth2HardDeniedSurface,
+    @testAuth3LegacyAuthorizableKey
+  ], {}),
+  @group("bench-catalogs", [
+    @testBenchCat1Workspace,
+    @testBenchCat2Banking,
+    @testBenchCat3Slack,
+    @testBenchCat4Travel
+  ], {}),
+  @group("planner-architecture", [
+    @testPlannerArch1SinglePlannerArchitecture,
+    @testPlannerArch2SinglePlannerRunner,
+    @testPlannerArch3OpencodePlannerToolSurface,
+    @testPlannerArch4PlannerToolUninitialized
+  ], {}),
+  @group("policy-roundtrip", [
+    @testPolRoundtrip1CollectionRoundtrip,
+    @testPolRoundtrip2PolicySectionRoundtrip,
+    @testCollectionRoundtrip,
+    @testSynthesizedPolicyShape,
+    @testPolicySections
+  ], {}),
+  @group("optional-fact-omission", [
+    @testInputRecordAllowOmitsOptionalFact
+  ], {})
+], {})
+
+export { @policyBuildCatalogArchSuite }
+
+>> --- Standalone runner -----------------------------------------------------
+
+var @result = @runSuites([@policyBuildCatalogArchSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

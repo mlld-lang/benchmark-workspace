@@ -15,14 +15,14 @@
 >> (Don't import from framework.mld — it's a re-export footgun for the
 >> cycle detector. Two-file imports are fine.)
 
-import { @assertOk, @assertEq, @assertEqLabeled, @assertNeq, @assertContains, @assertHas } from "../assert.mld"
-import { @suite, @group, @xfailGroup, @runSuites } from "../runner.mld"
+import { @assertOk, @assertEq, @assertEqLabeled, @assertNeq, @assertContains, @assertHas } from "./assert.mld"
+import { @suite, @group, @xfailGroup, @runSuites } from "./runner.mld"
 
 >> Import your module under test here:
 >> import { @myFunction } from "../../rig/runtime.mld"
 >>
 >> For scripted-LLM tests (multi-turn agent behavior):
->> import { @mockPlannerRun } from "../lib/mock-llm.mld"
+>> import { @mockPlannerRun } from "./lib/mock-llm.mld"
 >> import { @rig } from "../../rig/index.mld"
 >> import { @records } from "../../bench/domains/<suite>/records.mld"
 >> import { @tools } from "../../bench/domains/<suite>/tools.mld"

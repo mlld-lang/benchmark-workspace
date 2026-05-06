@@ -10,7 +10,7 @@ import {
   @send_email_inputs,
   @get_contacts,
   @send_email
-} from "../fixtures.mld"
+} from "../../../tests/fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 var @records = {

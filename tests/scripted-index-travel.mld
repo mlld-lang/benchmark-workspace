@@ -10,7 +10,7 @@
 >> "Bench-suite scoping".
 
 import { @runSuites } from "./runner.mld"
-import { @securityTravelSuite } from "./suites-scripted/security-travel.mld"
+import { @securityTravelSuite } from "./scripted/security-travel.mld"
 
 var @suites = [
   @securityTravelSuite

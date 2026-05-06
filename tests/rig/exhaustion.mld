@@ -1,0 +1,164 @@
+>> tests/suites/rig/exhaustion.mld
+>>
+>> Plain-assertion tests for @exhaustedControlArgClasses
+>> (control-arg exhaustion fingerprint — when the planner has tried
+>> all distinct source classes for a control arg and should stop
+>> exploring rather than grind to budget).
+>>
+>> Ported from rig/tests/index.mld (c-5ef9 EX-1..EX-8).
+>> History fixtures mirror real transcript shapes from run 25324561113.
+
+import { @assertOk, @assertEq } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @exhaustedControlArgClasses } from "../../rig/workers/planner.mld"
+
+>> Helper: build a synthetic rehearse_history entry.
+exe @rehearseEntry(operation, arg, sourceClass) = js {
+  return {
+    operation,
+    shape_hash: "h_" + sourceClass,
+    ok: false,
+    blocked_args: [arg],
+    arg_source_classes: { [arg]: sourceClass }
+  };
+}
+
+>> --- Tests ---------------------------------------------------------------
+
+>> EX-1: UT16 shape — known + derived + extracted + resolved (no selection).
+>>       Selection N/A because the email is in untrusted webpage content;
+>>       there is no resolved-set with multiple instances to select among.
+>>       Expected: TRUE (planner explored 4 classes — exhaustion fires).
+exe @testEx1Ut16ShapeNoSelectionFires() = [
+  let @history = [
+    @rehearseEntry("invite_user_to_slack", "user_email", "known"),
+    @rehearseEntry("invite_user_to_slack", "user_email", "derived"),
+    @rehearseEntry("invite_user_to_slack", "user_email", "extracted"),
+    @rehearseEntry("invite_user_to_slack", "user_email", "resolved")
+  ]
+  let @result = @exhaustedControlArgClasses(@history, "invite_user_to_slack", "user_email")
+  => @assertEq(@result, true)
+]
+
+>> EX-2: minimal UT16-style — resolved + known + derived (3 classes,
+>>       both legal-handle present, one alternate). Should fire.
+exe @testEx2ResolvedKnownDerivedFires() = [
+  let @history = [
+    @rehearseEntry("send_email", "recipient", "resolved"),
+    @rehearseEntry("send_email", "recipient", "known"),
+    @rehearseEntry("send_email", "recipient", "derived")
+  ]
+  let @result = @exhaustedControlArgClasses(@history, "send_email", "recipient")
+  => @assertEq(@result, true)
+]
+
+>> EX-3: underexplored — only resolved + known tried, no third class.
+>>       Planner should keep exploring (selection, derive, extract).
+>>       Expected: FALSE.
+exe @testEx3UnderexploredDoesNotFire() = [
+  let @history = [
+    @rehearseEntry("send_email", "recipient", "resolved"),
+    @rehearseEntry("send_email", "recipient", "known")
+  ]
+  let @result = @exhaustedControlArgClasses(@history, "send_email", "recipient")
+  => @assertEq(@result, false)
+]
+
+>> EX-4: single attempt early in session.
+>>       Expected: FALSE.
+exe @testEx4SingleAttemptDoesNotFire() = [
+  let @history = [
+    @rehearseEntry("send_email", "recipient", "known")
+  ]
+  let @result = @exhaustedControlArgClasses(@history, "send_email", "recipient")
+  => @assertEq(@result, false)
+]
+
+>> EX-5: canonical full coverage — resolved + known + selection.
+>>       Real flow: selection succeeds and rehearse returns ok=true,
+>>       exhaustion never gets queried. But the logic must still report
+>>       TRUE if asked, to avoid breaking pre-existing semantics.
+exe @testEx5CanonicalFullCoverageFires() = [
+  let @history = [
+    @rehearseEntry("send_email", "recipient", "resolved"),
+    @rehearseEntry("send_email", "recipient", "known"),
+    @rehearseEntry("send_email", "recipient", "selection")
+  ]
+  let @result = @exhaustedControlArgClasses(@history, "send_email", "recipient")
+  => @assertEq(@result, true)
+]
+
+>> EX-6: selection without resolved — should NOT fire.
+>>       Real selection refs always trace back to a resolved instance,
+>>       but if somehow the planner only tried selection+known without
+>>       trying resolved directly, the tracker should keep nudging.
+exe @testEx6NoResolvedDoesNotFire() = [
+  let @history = [
+    @rehearseEntry("send_email", "recipient", "selection"),
+    @rehearseEntry("send_email", "recipient", "known")
+  ]
+  let @result = @exhaustedControlArgClasses(@history, "send_email", "recipient")
+  => @assertEq(@result, false)
+]
+
+>> EX-7: history scoped to operation — entries on a different operation
+>>       should not contribute to exhaustion of this op+arg.
+exe @testEx7CrossOpEntriesIsolated() = [
+  let @history = [
+    @rehearseEntry("send_email", "recipient", "resolved"),
+    @rehearseEntry("send_email", "recipient", "known"),
+    @rehearseEntry("invite_user_to_slack", "user_email", "derived"),
+    @rehearseEntry("invite_user_to_slack", "user_email", "extracted")
+  ]
+  let @result = @exhaustedControlArgClasses(@history, "send_email", "recipient")
+  => @assertEq(@result, false)
+]
+
+>> EX-8: ok=true entries don't contribute to exhaustion (success doesn't
+>>       count as a failed attempt).
+exe @testEx8OkEntriesExcludedFromTally() = [
+  let @okEntry = {
+    operation: "send_email",
+    shape_hash: "h_resolved_ok",
+    ok: true,
+    blocked_args: [],
+    arg_source_classes: { recipient: "resolved" }
+  }
+  let @history = [
+    @okEntry,
+    @rehearseEntry("send_email", "recipient", "known"),
+    @rehearseEntry("send_email", "recipient", "derived")
+  ]
+  let @result = @exhaustedControlArgClasses(@history, "send_email", "recipient")
+  => @assertEq(@result, false)
+]
+
+>> --- Suite ---------------------------------------------------------------
+
+var @exhaustionSuite = @suite("exhaustion", [
+  @group("control-arg-exhaustion", [
+    @testEx1Ut16ShapeNoSelectionFires,
+    @testEx2ResolvedKnownDerivedFires,
+    @testEx3UnderexploredDoesNotFire,
+    @testEx4SingleAttemptDoesNotFire,
+    @testEx5CanonicalFullCoverageFires,
+    @testEx6NoResolvedDoesNotFire,
+    @testEx7CrossOpEntriesIsolated,
+    @testEx8OkEntriesExcludedFromTally
+  ], { ticket: "c-5ef9" })
+], {})
+
+export { @exhaustionSuite }
+
+>> --- Standalone runner ---------------------------------------------------
+
+var @result = @runSuites([@exhaustionSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

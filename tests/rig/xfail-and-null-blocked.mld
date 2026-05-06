@@ -1,0 +1,165 @@
+>> tests/suites/rig/xfail-and-null-blocked.mld
+>>
+>> Plain-assertion tests for three loosely related rig primitives:
+>>
+>>   - UH-1 (xfail, c-bd28): selection_ref lookup must tolerate Unicode-dash
+>>     variants in handles when the stored bucket key uses ASCII hyphen.
+>>     Captures the regression that bit TR-UT15 / TR-UT13. Marked xfail
+>>     until c-bd28 ships dash canonicalization in the comparison path.
+>>
+>>   - NF-1..5: @nullFields helper — given a value, return the schema
+>>     field keys whose values are null. Empty for non-records and for
+>>     records with no null fields.
+>>
+>>   - BFH-1..5: @blockedFieldHints helper — filters compileExecuteIntent
+>>     issues array down to the ones flagging missing extract/derive fields,
+>>     projecting them into planner-actionable hints. Other issue kinds
+>>     (payload_only_source_in_control_arg, known_value_not_in_task_text)
+>>     are NOT surfaced.
+>>
+>> Ported from rig/tests/index.mld lines 3719-3806 (and check rows at 4785-4795).
+
+import { @assertOk, @assertEq } from "../assert.mld"
+import { @suite, @group, @xfailGroup, @runSuites } from "../runner.mld"
+import { @nullFields, @emptyState, @updateResolvedState } from "../../rig/runtime.mld"
+import { @lowerSelectionRef } from "../../rig/intent.mld"
+import { @blockedFieldHints } from "../../rig/workers/planner.mld"
+import { @records } from "../fixtures.mld"
+
+>> --- UH-1 -----------------------------------------------------------------
+
+>> UH-1: lowerSelectionRef must canonicalize dash variants when comparing
+>> a worker-emitted handle (Unicode hyphen U+2011) against a stored bucket
+>> handle (ASCII hyphen U+002D). Currently FAILS — c-bd28 tracks the fix.
+exe @testUh1SelectionRefToleratesUnicodeDashVariant() = [
+  let @uhState = @updateResolvedState(@emptyState(), "car_company_review", [
+    {
+      handle: "r_car_company_review_SunSet Rent-A-Car",
+      key: "SunSet Rent-A-Car",
+      field_values: { name: "SunSet Rent-A-Car", rating: 4.5 },
+      value: { name: "SunSet Rent-A-Car", rating: 4.5 }
+    }
+  ], @records.contact)
+  let @ref = {
+    source: "selection",
+    backing: { record: "car_company_review", handle: "r_car_company_review_SunSet Rent‑A‑Car" }
+  }
+  let @result = @lowerSelectionRef(@uhState, @ref)
+  => @assertEq(@result.ok, true)
+]
+
+>> --- NF-1..5 --------------------------------------------------------------
+
+exe @testNf1AllDefinedReturnsEmpty() = [
+  let @result = @nullFields({ a: 1, b: "x", c: true })
+  => @assertEq(@result, [])
+]
+
+exe @testNf2SparseReturnsNullKeys() = [
+  let @result = @nullFields({ a: 1, b: null, c: "x", d: null })
+  let @ok = @result.length == 2 && @result.includes("b") && @result.includes("d")
+  => @assertOk(@ok, `nullFields({a,b:null,c,d:null})=@result (must include b,d)`)
+]
+
+exe @testNf3EmptyObjectReturnsEmpty() = [
+  let @result = @nullFields({})
+  => @assertEq(@result, [])
+]
+
+exe @testNf4ScalarInputReturnsEmpty() = [
+  let @result = @nullFields("hello")
+  => @assertEq(@result, [])
+]
+
+exe @testNf5NullInputReturnsEmpty() = [
+  let @result = @nullFields(null)
+  => @assertEq(@result, [])
+]
+
+>> --- BFH-1..5 -------------------------------------------------------------
+
+exe @testBfh1ExtractedFieldMissingProjected() = [
+  let @issues = [
+    { ok: false, error: "extracted_field_missing", name: "landlord_notice", field: "effective_date", arg: "date" }
+  ]
+  let @result = @blockedFieldHints(@issues)
+  let @ok = @result.length == 1 &&
+    @result[0].arg == "date" &&
+    @result[0].source == "extracted" &&
+    @result[0].name == "landlord_notice" &&
+    @result[0].field == "effective_date"
+  => @assertOk(@ok, `blockedFieldHints(extracted_field_missing) → @result`)
+]
+
+exe @testBfh2DerivedFieldMissingProjected() = [
+  let @issues = [
+    { ok: false, error: "derived_field_missing", name: "rent_calc", field: "new_amount", arg: "amount" }
+  ]
+  let @result = @blockedFieldHints(@issues)
+  let @ok = @result.length == 1 &&
+    @result[0].arg == "amount" &&
+    @result[0].source == "derived"
+  => @assertOk(@ok, `blockedFieldHints(derived_field_missing) → @result`)
+]
+
+exe @testBfh3MixedIssuesOnlyFieldMissingSurfaced() = [
+  let @issues = [
+    { ok: false, error: "extracted_field_missing", name: "n1", field: "f1", arg: "a1" },
+    { ok: false, error: "payload_only_source_in_control_arg", source_class: "extracted", arg: "a2" },
+    { ok: false, error: "derived_field_missing", name: "n3", field: "f3", arg: "a3" },
+    { ok: false, error: "known_value_not_in_task_text", arg: "a4" }
+  ]
+  let @result = @blockedFieldHints(@issues)
+  let @ok = @result.length == 2 && @result[0].arg == "a1" && @result[1].arg == "a3"
+  => @assertOk(@ok, `blockedFieldHints(mixed) returns only field-missing issues: @result`)
+]
+
+exe @testBfh4EmptyIssuesReturnsEmpty() = [
+  let @result = @blockedFieldHints([])
+  => @assertEq(@result, [])
+]
+
+exe @testBfh5NoFieldMissingIssuesReturnsEmpty() = [
+  let @issues = [
+    { ok: false, error: "payload_only_source_in_control_arg", source_class: "derived", arg: "x" }
+  ]
+  let @result = @blockedFieldHints(@issues)
+  => @assertEq(@result, [])
+]
+
+>> --- Suite ----------------------------------------------------------------
+
+var @xfailAndNullBlockedSuite = @suite("xfail-and-null-blocked", [
+  @xfailGroup("unicode-dash-tolerance", [
+    @testUh1SelectionRefToleratesUnicodeDashVariant
+  ], { ticket: "c-bd28" }),
+  @group("null-fields", [
+    @testNf1AllDefinedReturnsEmpty,
+    @testNf2SparseReturnsNullKeys,
+    @testNf3EmptyObjectReturnsEmpty,
+    @testNf4ScalarInputReturnsEmpty,
+    @testNf5NullInputReturnsEmpty
+  ], {}),
+  @group("blocked-field-hints", [
+    @testBfh1ExtractedFieldMissingProjected,
+    @testBfh2DerivedFieldMissingProjected,
+    @testBfh3MixedIssuesOnlyFieldMissingSurfaced,
+    @testBfh4EmptyIssuesReturnsEmpty,
+    @testBfh5NoFieldMissingIssuesReturnsEmpty
+  ], {})
+], {})
+
+export { @xfailAndNullBlockedSuite }
+
+>> --- Standalone runner ----------------------------------------------------
+
+var @result = @runSuites([@xfailAndNullBlockedSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

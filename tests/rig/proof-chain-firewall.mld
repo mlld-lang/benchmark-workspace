@@ -1,0 +1,539 @@
+>> tests/suites/rig/proof-chain-firewall.mld
+>>
+>> Plain-assertion port of the proof-chain-firewall cluster from
+>> rig/tests/index.mld (12 tests). Verifies the security firewall:
+>> derived/extracted values can't be used as control args, selection
+>> refs lower correctly, resolved fact attestations propagate through
+>> the execute compiler, and dispatch-time correlate-control-args
+>> rejects mixed resolved records.
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+
+import {
+  @records,
+  @tools,
+  @sampleState
+} from "../fixtures.mld"
+
+import {
+  @compileExecuteIntent,
+  @compileToolArgs,
+  @lowerSelectionRef,
+  @resolveControlRefValue,
+  @resolveRefValue
+} from "../../rig/intent.mld"
+
+import {
+  @nonComposeDecisionArgIssues,
+  @correlatedControlArgsCheck
+} from "../../rig/orchestration.mld"
+
+>> --- Helpers ---------------------------------------------------------------
+
+exe @field(inputValue, key) = js {
+  return inputValue?.[key] ?? null;
+}
+
+exe @firstIssue(result) = [
+  let @issues = @field(@result, "issues") ?? []
+  => @issues[0] ?? null
+]
+
+exe @nestedFirstIssue(result) = [
+  let @first = @firstIssue(@result)
+  let @issues = @field(@first, "issues") ?? []
+  => @issues[0] ?? null
+]
+
+>> --- Module-level fixtures (intent compiler / source-class coverage) ------
+
+var @selectionLowered = @lowerSelectionRef(@sampleState, {
+  source: "selection",
+  backing: { record: "contact", handle: "r_contact_alice.example" }
+})
+
+var @firewallAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [{ source: "derived", name: "top_contact", field: "body" }],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  },
+  "send hello"
+)
+
+var @resolveControlFirewallAttempt = @compileToolArgs(
+  @sampleState,
+  @tools.get_note,
+  {
+    note_id: { source: "derived", name: "top_contact", field: "body" }
+  },
+  "load note_1"
+)
+
+var @allowAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: { source: "allow" },
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  },
+  "send hello"
+)
+
+var @wrongSourceAttempt = @resolveRefValue(@sampleState, {
+  source: "resolved",
+  record: "summary",
+  handle: "summary_1",
+  field: "summary"
+})
+
+var @perElementAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [
+        { source: "resolved", record: "contact", handle: "r_contact_alice.example", field: "email" },
+        { source: "resolved", record: "contact", handle: "missing", field: "email" }
+      ],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  },
+  "send hello"
+)
+
+var @selectionKeyedAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "append_note",
+    args: {
+      note_id: {
+        source: "selection",
+        backing: {
+          record: "note_entry",
+          handle: "r_note_entry_note_1"
+        }
+      },
+      content: { source: "known", value: "append a status line" }
+    }
+  },
+  "append a status line"
+)
+
+>> --- planner-arg-shape fixtures -------------------------------------------
+
+var @rawScalarDecisionIssues = @nonComposeDecisionArgIssues({
+  phase: "extract",
+  tool: "get_message_body",
+  args: {
+    message_id: "msg_1"
+  }
+})
+var @structuredDecisionIssues = @nonComposeDecisionArgIssues({
+  phase: "extract",
+  tool: "get_message_body",
+  args: {
+    message_id: { source: "known", value: "msg_1" }
+  }
+})
+var @wrappedDataDecisionIssues = @nonComposeDecisionArgIssues({
+  phase: "extract",
+  tool: "get_message_body",
+  args: {
+    message_id: { data: { source: "known", value: "msg_1" } }
+  }
+})
+var @wrappedMxDecisionIssues = @nonComposeDecisionArgIssues({
+  phase: "extract",
+  tool: "get_message_body",
+  args: {
+    message_id: { mx: { data: { source: "known", value: "msg_1" } } }
+  }
+})
+
+>> --- Proof-chain fixtures (resolved -> execute attestation propagation) ---
+
+var @proofChainRef = {
+  source: "resolved",
+  record: "note_entry",
+  handle: "r_note_entry_note_1",
+  field: "id_"
+}
+var @proofResolvedControl = @resolveControlRefValue(@sampleState, @proofChainRef)
+var @proofResolvedAttestations = @field(@proofResolvedControl, "policy_attestations") ?? []
+var @weakenedState = {
+  resolved: {
+    note_entry: [{
+      handle: "r_note_entry_note_1",
+      key: "note_1",
+      value: { id_: "note_1", title: "Todo", content: "Existing note body" },
+      field_values: { id_: "note_1", title: "Todo", content: "Existing note body" }
+    }]
+  },
+  extracted: {},
+  derived: {},
+  extract_sources: {}
+}
+var @proofWeakenedControl = @resolveControlRefValue(@weakenedState, @proofChainRef)
+var @proofWeakenedAttestations = @field(@proofWeakenedControl, "policy_attestations") ?? []
+var @proofChainAttempt = @compileExecuteIntent(
+  @sampleState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "append_note",
+    args: {
+      note_id: @proofChainRef,
+      content: { source: "known", value: "append a status line" }
+    }
+  },
+  "append a status line"
+)
+var @proofChainEntries = @field(@proofChainAttempt, "compiled_entries") ?? []
+var @proofChainMatches = for @entry in @proofChainEntries when @field(@entry, "arg") == "note_id" => @entry
+var @proofChainEntry = @proofChainMatches[0]
+var @proofChainAttestations = @field(@proofChainEntry, "flat_attestations") ?? []
+var @proofChainFactRef = "fact:@@note_entry.id_[0]"
+
+>> --- correlate-control-args fixtures --------------------------------------
+
+exe execute:w, comm:w, tool:w @share_note_with_contact(note_id, recipient) = [
+  => {
+    note_id: @note_id,
+    recipient: @recipient
+  }
+]
+
+record @share_note_with_contact_inputs = {
+  facts: [note_id: string, recipient: string],
+  data: [],
+  correlate: true,
+  validate: "strict"
+}
+
+var tools @correlateTools = {
+  share_note_with_contact: {
+    mlld: @share_note_with_contact,
+    inputs: @share_note_with_contact_inputs,
+    labels: ["execute:w", "tool:w", "comm:w"],
+    can_authorize: "role:planner",
+    description: "Share one note with one recipient."
+  }
+}
+
+var @correlateIntent = @compileExecuteIntent(
+  @sampleState,
+  @correlateTools,
+  {
+    phase: "execute",
+    operation: "share_note_with_contact",
+    args: {
+      note_id: {
+        source: "resolved",
+        record: "note_entry",
+        handle: "r_note_entry_note_1",
+        field: "id_"
+      },
+      recipient: {
+        source: "resolved",
+        record: "contact",
+        handle: "r_contact_alice.example",
+        field: "email"
+      }
+    }
+  },
+  "Share note_1 with alice.example."
+)
+var @correlateEntries = @field(@correlateIntent, "compiled_entries") ?? []
+var @correlateControlArgs = ["note_id", "recipient"]
+var @correlateCheck = @correlatedControlArgsCheck(@correlateEntries, @correlateControlArgs)
+
+>> --- indexed-array-selection fixtures -------------------------------------
+
+record @shared_file_entry = {
+  facts: [id_: string],
+  data: [filename: string, shared_with: array],
+  key: id_,
+  display: {
+    role:planner: [{ ref: "id_" }, filename],
+    role:worker: [{ ref: "id_" }, filename, shared_with]
+  }
+}
+
+var @sharedFileRecord = {
+  id_: "24",
+  filename: "team-meeting-minutes.docx",
+  shared_with: [
+    "emma.johnson@bluesparrowtech.com",
+    "linda.jameson@bluesparrowtech.com"
+  ]
+} as record @shared_file_entry
+var @sharedFileId = @sharedFileRecord.id_
+var @sharedFileName = @sharedFileRecord.filename
+var @sharedFileSharedWith = @sharedFileRecord.shared_with
+var @sharedFileArrayState = {
+  resolved: {
+    shared_file_entry: [{
+      handle: "r_shared_file_entry_24",
+      key: "24",
+      value: @sharedFileRecord,
+      identity_field: "id_",
+      identity_value: @sharedFileId,
+      field_values: {
+        id_: @sharedFileId,
+        filename: @sharedFileName,
+        shared_with: @sharedFileSharedWith
+      }
+    }]
+  },
+  extracted: {},
+  derived: {},
+  extract_sources: {}
+}
+var @indexedArraySelectionAttempt = @compileExecuteIntent(
+  @sharedFileArrayState,
+  @tools,
+  {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [{
+        source: "selection",
+        backing: {
+          record: "shared_file_entry",
+          handle: "r_shared_file_entry_24"
+        },
+        field: "shared_with[0]"
+      }],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  },
+  "send hello"
+)
+var @indexedArraySelectionEntries = @field(@indexedArraySelectionAttempt, "compiled_entries") ?? []
+var @indexedArraySelectionEntry = @indexedArraySelectionEntries[0] ?? null
+var @indexedArraySelectionFlatEq = @field(@indexedArraySelectionEntry, "flat_eq") ?? []
+var @indexedArraySelectionAttestations = @field(@indexedArraySelectionEntry, "flat_attestations") ?? []
+
+>> --- Test exes ------------------------------------------------------------
+
+exe @testExecuteProofChain() = [
+  let @actual = {
+    resolvedOk: @proofResolvedControl.ok,
+    resolvedHasFact: @proofResolvedAttestations.includes(@proofChainFactRef),
+    weakenedOk: @proofWeakenedControl.ok,
+    weakenedAttestations: @proofWeakenedAttestations.length,
+    intentOk: @proofChainAttempt.ok,
+    flatHasFact: @proofChainAttestations.includes(@proofChainFactRef)
+  }
+  => @assertEq(@actual, {
+    resolvedOk: true,
+    resolvedHasFact: true,
+    weakenedOk: true,
+    weakenedAttestations: 0,
+    intentOk: true,
+    flatHasFact: true
+  })
+]
+
+exe @testCorrelateControlArgs() = [
+  let @actual = {
+    intentOk: @correlateIntent.ok,
+    checkOk: @field(@correlateCheck, "ok"),
+    error: @field(@correlateCheck, "error")
+  }
+  => @assertEq(@actual, {
+    intentOk: true,
+    checkOk: false,
+    error: "correlate_control_args_cross_record_mixture"
+  })
+]
+
+exe @testLoweringSelectionRef() = [
+  let @ref = @field(@selectionLowered, "ref")
+  let @actual = {
+    ok: @selectionLowered.ok,
+    source: @field(@ref, "source"),
+    handle: @field(@ref, "handle")
+  }
+  => @assertEq(@actual, {
+    ok: true,
+    source: "resolved",
+    handle: "r_contact_alice.example"
+  })
+]
+
+>> Shared body for derived-control-arg-rejected and firewall-derived-to-control:
+>> the original tests share @firewallOk under two different ids.
+exe @firewallSharedAssertion() = [
+  let @first = @firstIssue(@firewallAttempt)
+  let @nested = @nestedFirstIssue(@firewallAttempt)
+  let @actual = {
+    ok: @firewallAttempt.ok,
+    error: @field(@firewallAttempt, "error"),
+    firstError: @field(@first, "error"),
+    nestedError: @field(@nested, "error")
+  }
+  => @assertEq(@actual, {
+    ok: false,
+    error: "intent_compile_failed",
+    firstError: "array_arg_element_invalid",
+    nestedError: "payload_only_source_in_control_arg"
+  })
+]
+
+exe @testDerivedControlArgRejected() = [
+  => @firewallSharedAssertion()
+]
+
+exe @testFirewallDerivedToControl() = [
+  => @firewallSharedAssertion()
+]
+
+exe @testDerivedResolveControlArgRejected() = [
+  let @first = @firstIssue(@resolveControlFirewallAttempt)
+  let @actual = {
+    ok: @resolveControlFirewallAttempt.ok,
+    error: @field(@resolveControlFirewallAttempt, "error"),
+    firstError: @field(@first, "error")
+  }
+  => @assertEq(@actual, {
+    ok: false,
+    error: "intent_compile_failed",
+    firstError: "payload_only_source_in_control_arg"
+  })
+]
+
+exe @testAllowWithControlArgs() = [
+  let @first = @firstIssue(@allowAttempt)
+  let @actual = {
+    ok: @allowAttempt.ok,
+    error: @field(@allowAttempt, "error"),
+    firstError: @field(@first, "error")
+  }
+  => @assertEq(@actual, {
+    ok: false,
+    error: "intent_compile_failed",
+    firstError: "allow_requires_no_control_args"
+  })
+]
+
+exe @testSourceClassMismatch() = [
+  let @actual = {
+    ok: @wrongSourceAttempt.ok,
+    error: @field(@wrongSourceAttempt, "error")
+  }
+  => @assertEq(@actual, {
+    ok: false,
+    error: "resolved_handle_not_found"
+  })
+]
+
+exe @testArrayControlProof() = [
+  let @first = @firstIssue(@perElementAttempt)
+  let @nested = @nestedFirstIssue(@perElementAttempt)
+  let @actual = {
+    ok: @perElementAttempt.ok,
+    error: @field(@perElementAttempt, "error"),
+    firstError: @field(@first, "error"),
+    nestedError: @field(@nested, "error")
+  }
+  => @assertEq(@actual, {
+    ok: false,
+    error: "intent_compile_failed",
+    firstError: "array_arg_element_invalid",
+    nestedError: "control_ref_backing_missing"
+  })
+]
+
+exe @testIndexedArraySelectionProof() = [
+  let @actual = {
+    ok: @indexedArraySelectionAttempt.ok,
+    firstFlat: @indexedArraySelectionFlatEq[0],
+    hasAttestation: @indexedArraySelectionAttestations.includes("fact:@@shared_file_entry.shared_with[0]")
+  }
+  => @assertEq(@actual, {
+    ok: true,
+    firstFlat: "emma.johnson@bluesparrowtech.com",
+    hasAttestation: true
+  })
+]
+
+exe @testSelectionKeyedControl() = [
+  => @assertEq(@selectionKeyedAttempt.ok, true)
+]
+
+exe @testPlannerArgShape() = [
+  let @actual = {
+    rawCount: @rawScalarDecisionIssues.length,
+    rawField: @field(@rawScalarDecisionIssues[0], "field"),
+    structuredCount: @structuredDecisionIssues.length,
+    wrappedDataCount: @wrappedDataDecisionIssues.length,
+    wrappedMxCount: @wrappedMxDecisionIssues.length
+  }
+  => @assertEq(@actual, {
+    rawCount: 1,
+    rawField: "message_id",
+    structuredCount: 0,
+    wrappedDataCount: 0,
+    wrappedMxCount: 0
+  })
+]
+
+>> --- Suite construction ----------------------------------------------------
+
+var @proofChainFirewallSuite = @suite("proof-chain-firewall", [
+  @group("proof-and-correlate", [
+    @testExecuteProofChain,
+    @testCorrelateControlArgs
+  ], {}),
+  @group("source-class-firewall", [
+    @testDerivedControlArgRejected,
+    @testDerivedResolveControlArgRejected,
+    @testFirewallDerivedToControl,
+    @testSourceClassMismatch,
+    @testAllowWithControlArgs
+  ], {}),
+  @group("selection-and-lowering", [
+    @testLoweringSelectionRef,
+    @testArrayControlProof,
+    @testIndexedArraySelectionProof,
+    @testSelectionKeyedControl
+  ], {}),
+  @group("planner-arg-shape", [
+    @testPlannerArgShape
+  ], {})
+], {})
+
+export { @proofChainFirewallSuite }
+
+>> --- Standalone runner -----------------------------------------------------
+
+var @result = @runSuites([@proofChainFirewallSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

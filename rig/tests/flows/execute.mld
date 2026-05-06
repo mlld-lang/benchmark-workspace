@@ -1,7 +1,7 @@
 >> Step 5 execute flow, plus the control-arg firewall and selection-ref path.
 
 import { @rigBuild, @rigRun } from "../../index.mld"
-import { @records, @tools, @get_note, @append_note, @get_contacts, @send_email, @append_note_inputs, @send_email_inputs } from "../fixtures.mld"
+import { @records, @tools, @get_note, @append_note, @get_contacts, @send_email, @append_note_inputs, @send_email_inputs } from "../../../tests/fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 exe @runtime_append_note(note_id, content) = [

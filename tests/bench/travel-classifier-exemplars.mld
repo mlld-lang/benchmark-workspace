@@ -8,9 +8,9 @@
 >> They do NOT verify classifier accuracy — that's the worker test surface
 >> against a live LLM.
 
-import { @assertOk, @assertEq, @assertContains } from "../../assert.mld"
-import { @suite, @group, @runSuites } from "../../runner.mld"
-import { @adviceExemplars, @toolRouterExemplars } from "../../../bench/domains/travel/classifiers/exemplars.mld"
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @adviceExemplars, @toolRouterExemplars } from "../../bench/domains/travel/classifiers/exemplars.mld"
 
 var @advice = @adviceExemplars()
 var @router = @toolRouterExemplars()

@@ -1,7 +1,7 @@
 >> Regression flow for state retention across a later resolve step.
 
 import { @rigBuild, @rigRun } from "../../index.mld"
-import { @records, @tools } from "../fixtures.mld"
+import { @records, @tools } from "../../../tests/fixtures.mld"
 import { @check, @field, @mktempPath, @readFile, @removeFile } from "../helpers.mld"
 
 var tools @extractTools = {

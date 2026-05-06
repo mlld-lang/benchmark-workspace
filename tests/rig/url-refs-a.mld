@@ -1,0 +1,218 @@
+>> tests/suites/rig/url-refs-a.mld
+>>
+>> Plain-assertion tests for the URL-ref deterministic parser and
+>> capability/record builders (c-be06, Group A — UR-1..UR-12).
+>> Pins parser behavior (extraction, source order, safety gate) plus
+>> the public-record / private-capability split that prevents URL leak
+>> through the public url_ref record value.
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import {
+  @applyUrlRefs,
+  @urlRefId,
+  @buildUrlRefRecordValue,
+  @buildUrlRefCapabilityEntry,
+  @mergeUrlRefCapabilities,
+  @lookupUrlCapability
+} from "../../rig/transforms/url_refs.mld"
+
+>> --- Helpers --------------------------------------------------------------
+
+exe @urJsonStringify(value) = js {
+  return JSON.stringify(value);
+}
+
+>> Mirrors @buildUrlRefCapabilityEntry's blocking guards in a single JS
+>> scope so the null-roundtrip behavior at the JS-exe boundary doesn't
+>> hide a positive result. Returns true iff a blocked ref correctly
+>> mints no capability.
+exe @urBlockedYieldsNoCapability(refMeta) = js {
+  if (!refMeta || typeof refMeta !== "object") return true;
+  if (refMeta.safety_status !== "ok") return true;
+  return false;
+}
+
+>> --- Parser tests (UR-1..UR-10) ------------------------------------------
+
+exe @testUr1SingleHttpsUrlOk() = [
+  let @r = @applyUrlRefs("Check out https://example.com/article for context")
+  let @actual = {
+    count: @r.refs.length,
+    safety_status: @r.refs[0].safety_status,
+    url: @r.refs[0].url
+  }
+  => @assertEq(@actual, { count: 1, safety_status: "ok", url: "https://example.com/article" })
+]
+
+exe @testUr2ZeroUrlsEmptyRefs() = [
+  let @r = @applyUrlRefs("just some text without any links here")
+  => @assertEq(@r.refs.length, 0)
+]
+
+exe @testUr3SourceOrderOrdinals() = [
+  let @body = "first https://aaa.example.com then https://bbb.example.com last www.ccc.example.com"
+  let @r = @applyUrlRefs(@body)
+  let @actual = {
+    count: @r.refs.length,
+    ordinals: [@r.refs[0].ordinal_in_message, @r.refs[1].ordinal_in_message, @r.refs[2].ordinal_in_message],
+    urls: [@r.refs[0].url, @r.refs[1].url, @r.refs[2].url]
+  }
+  => @assertEq(@actual, {
+    count: 3,
+    ordinals: [0, 1, 2],
+    urls: ["https://aaa.example.com", "https://bbb.example.com", "https://www.ccc.example.com"]
+  })
+]
+
+exe @testUr4TrailingPunctuationStripped() = [
+  let @body = "see https://example.com/a, then https://example.com/b. or https://example.com/c) and https://example.com/d]"
+  let @r = @applyUrlRefs(@body)
+  let @urls = for @ref in @r.refs => @ref.url
+  => @assertEq(@urls, [
+    "https://example.com/a",
+    "https://example.com/b",
+    "https://example.com/c",
+    "https://example.com/d"
+  ])
+]
+
+exe @testUr5BareHostRejected() = [
+  let @r = @applyUrlRefs("visit example.com or news.bbc.co.uk for details")
+  => @assertEq(@r.refs.length, 0)
+]
+
+exe @testUr6QueryStringBlockedNoUrlLeak() = [
+  let @r = @applyUrlRefs("beacon https://internal.example.com/check?key=secret123")
+  let @ref = @r.refs[0]
+  let @actual = {
+    count: @r.refs.length,
+    safety_status: @ref.safety_status,
+    has_query: @ref.has_query,
+    url: @ref.url
+  }
+  => @assertEq(@actual, { count: 1, safety_status: "blocked", has_query: true, url: null })
+]
+
+exe @testUr7FragmentBlockedNoUrlLeak() = [
+  let @r = @applyUrlRefs("anchor https://example.com/page#section")
+  let @ref = @r.refs[0]
+  let @actual = {
+    count: @r.refs.length,
+    safety_status: @ref.safety_status,
+    has_fragment: @ref.has_fragment,
+    url: @ref.url
+  }
+  => @assertEq(@actual, { count: 1, safety_status: "blocked", has_fragment: true, url: null })
+]
+
+exe @testUr8TemplateSyntaxBlockedCurly() = [
+  let @r = @applyUrlRefs("template https://internal.example.com/check/{SECRET}")
+  let @ref = @r.refs[0]
+  => @assertEq(
+    { safety_status: @ref.safety_status, reason: @ref.reason, url: @ref.url },
+    { safety_status: "blocked", reason: "template_syntax", url: null }
+  )
+]
+
+exe @testUr8TemplateSyntaxBlockedDollar() = [
+  let @r = @applyUrlRefs("template https://internal.example.com/${TOKEN}/check")
+  let @ref = @r.refs[0]
+  => @assertEq(
+    { safety_status: @ref.safety_status, reason: @ref.reason, url: @ref.url },
+    { safety_status: "blocked", reason: "template_syntax", url: null }
+  )
+]
+
+exe @testUr9DuplicateCanonicalSharedHashDistinctIds() = [
+  let @r = @applyUrlRefs("twice https://example.com/a and again https://example.com/a")
+  let @id0 = @urlRefId("r_msg_001", 0)
+  let @id1 = @urlRefId("r_msg_001", 1)
+  let @actual = {
+    count: @r.refs.length,
+    same_hash: @r.refs[0].canonical_url_hash == @r.refs[1].canonical_url_hash,
+    distinct_ids: @id0 != @id1
+  }
+  => @assertEq(@actual, { count: 2, same_hash: true, distinct_ids: true })
+]
+
+exe @testUr10DeterministicCanonicalHash() = [
+  let @a = @applyUrlRefs("see https://example.com/article and www.foo.com/x")
+  let @b = @applyUrlRefs("see https://example.com/article and www.foo.com/x")
+  let @actual = {
+    count: @a.refs.length,
+    hash0_match: @a.refs[0].canonical_url_hash == @b.refs[0].canonical_url_hash,
+    hash1_match: @a.refs[1].canonical_url_hash == @b.refs[1].canonical_url_hash
+  }
+  => @assertEq(@actual, { count: 2, hash0_match: true, hash1_match: true })
+]
+
+>> --- Record / capability tests (UR-11..UR-12) -----------------------------
+
+>> Shared fixture: parse a body with one ok URL and one blocked (query) URL.
+>> Reused across UR-11 and UR-12.
+var @urBFixture = @applyUrlRefs("see https://example.com/article and beacon https://internal.example.com/check?key=secret")
+var @urBOkRef = @urBFixture.refs[0]
+var @urBOkRefId = @urlRefId("r_msg_main", 0)
+
+exe @testUr11RecordValueHasNoUrlField() = [
+  let @rec = @buildUrlRefRecordValue(@urBOkRef, "r_msg_main", @urBOkRefId)
+  let @keys = @rec.mx.keys
+  let @serialized = @urJsonStringify(@rec)
+  let @actual = {
+    no_url_key: !@keys.includes("url"),
+    no_url_in_serialized: !@serialized.includes("https://example.com/article") && !@serialized.includes("example.com/article")
+  }
+  => @assertEq(@actual, { no_url_key: true, no_url_in_serialized: true })
+]
+
+exe @testUr12OkRefMintsCapabilityWithUrl() = [
+  let @entry = @buildUrlRefCapabilityEntry(@urBOkRef, "r_msg_main")
+  let @actual = {
+    url: @entry.url,
+    source_msg_handle: @entry.source_msg_handle,
+    safety_status: @entry.safety_status
+  }
+  => @assertEq(@actual, {
+    url: "https://example.com/article",
+    source_msg_handle: "r_msg_main",
+    safety_status: "ok"
+  })
+]
+
+>> --- Suite construction ---------------------------------------------------
+
+var @urlRefsASuite = @suite("url-refs-a", [
+  @group("parser", [
+    @testUr1SingleHttpsUrlOk,
+    @testUr2ZeroUrlsEmptyRefs,
+    @testUr3SourceOrderOrdinals,
+    @testUr4TrailingPunctuationStripped,
+    @testUr5BareHostRejected,
+    @testUr6QueryStringBlockedNoUrlLeak,
+    @testUr7FragmentBlockedNoUrlLeak,
+    @testUr8TemplateSyntaxBlockedCurly,
+    @testUr8TemplateSyntaxBlockedDollar,
+    @testUr9DuplicateCanonicalSharedHashDistinctIds,
+    @testUr10DeterministicCanonicalHash
+  ], { ticket: "c-be06" }),
+  @group("record-and-capability", [
+    @testUr11RecordValueHasNoUrlField,
+    @testUr12OkRefMintsCapabilityWithUrl
+  ], { ticket: "c-be06" })
+], {})
+
+export { @urlRefsASuite }
+
+>> --- Standalone runner ----------------------------------------------------
+
+var @result = @runSuites([@urlRefsASuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

@@ -9,18 +9,58 @@
 import { @runSuites } from "./runner.mld"
 
 >> Import suites below. Each suite file exports a @<name>Suite variable.
-import { @templateSuite } from "./suites/_template.mld"
-import { @rigClassifySuite } from "./suites/rig/classify.mld"
-import { @adviceGateSuite } from "./suites/rig/advice-gate.mld"
-import { @travelClassifierLabelsSuite } from "./suites/bench/travel-classifier-labels.mld"
-import { @travelClassifierExemplarsSuite } from "./suites/bench/travel-classifier-exemplars.mld"
+import { @templateSuite } from "./_template.mld"
+import { @rigClassifySuite } from "./rig/classify.mld"
+import { @adviceGateSuite } from "./rig/advice-gate.mld"
+import { @travelClassifierLabelsSuite } from "./bench/travel-classifier-labels.mld"
+import { @travelClassifierExemplarsSuite } from "./bench/travel-classifier-exemplars.mld"
+
+>> Ported from rig/tests/index.mld (the legacy 4724-line invariant gate).
+import { @schemaValidationSuite } from "./rig/schema-validation.mld"
+import { @parseValueSuite } from "./rig/parse-value.mld"
+import { @urlRefsASuite } from "./rig/url-refs-a.mld"
+import { @urlRefsBSuite } from "./rig/url-refs-b.mld"
+import { @outputValidatorsSuite } from "./rig/output-validators.mld"
+import { @stateProjectionASuite } from "./rig/state-projection-a.mld"
+import { @stateProjectionBSuite } from "./rig/state-projection-b.mld"
+import { @progressFingerprintSuite } from "./rig/progress-fingerprint.mld"
+import { @exhaustionSuite } from "./rig/exhaustion.mld"
+import { @xfailAndNullBlockedSuite } from "./rig/xfail-and-null-blocked.mld"
+import { @policyBuildCatalogArchSuite } from "./rig/policy-build-catalog-arch.mld"
+import { @toolMetadataSuite } from "./rig/tool-metadata.mld"
+import { @workerDispatchSuite } from "./rig/worker-dispatch.mld"
+import { @executeWorkerPolicySuite } from "./rig/execute-worker-policy.mld"
+import { @numericCoercionSuite } from "./rig/numeric-coercion.mld"
+import { @thinArrowAndDisplaySuite } from "./rig/thin-arrow-and-display.mld"
+import { @proofChainFirewallSuite } from "./rig/proof-chain-firewall.mld"
+import { @extractDeriveAndExecuteCompileSuite } from "./rig/extract-derive-and-execute-compile.mld"
+import { @namedStateAndCollectionSuite } from "./rig/named-state-and-collection.mld"
 
 var @suites = [
   @templateSuite,
   @rigClassifySuite,
   @adviceGateSuite,
   @travelClassifierLabelsSuite,
-  @travelClassifierExemplarsSuite
+  @travelClassifierExemplarsSuite,
+  @schemaValidationSuite,
+  @parseValueSuite,
+  @urlRefsASuite,
+  @urlRefsBSuite,
+  @outputValidatorsSuite,
+  @stateProjectionASuite,
+  @stateProjectionBSuite,
+  @progressFingerprintSuite,
+  @exhaustionSuite,
+  @xfailAndNullBlockedSuite,
+  @policyBuildCatalogArchSuite,
+  @toolMetadataSuite,
+  @workerDispatchSuite,
+  @executeWorkerPolicySuite,
+  @numericCoercionSuite,
+  @thinArrowAndDisplaySuite,
+  @proofChainFirewallSuite,
+  @extractDeriveAndExecuteCompileSuite,
+  @namedStateAndCollectionSuite
 ]
 
 var @result = @runSuites(@suites)

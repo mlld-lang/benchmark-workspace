@@ -5,12 +5,12 @@ Rig v2 framework + AgentDojo benchmark implementation for mlld.
 ## First Actions
 
 ```bash
-mlld clean/rig/tests/index.mld --no-checkpoint   # invariant gate (must pass 100%)
-mlld rig/tests/workers/run.mld --no-checkpoint   # worker LLM tests (must pass 100%)
-mlld clean/tests/index.mld --no-checkpoint       # new test framework
-SKIP_SLOW=1 mlld clean/tests/index.mld --no-checkpoint  # skip slow suites
-tk ready                                          # active work items
+mlld tests/index.mld --no-checkpoint              # zero-LLM invariant gate (must pass; ~10s)
+mlld rig/tests/workers/run.mld --no-checkpoint    # live-LLM worker tests (~50s, ~$0.05)
+tk ready                                           # active work items
 ```
+
+For the test architecture, see `TESTS.md`. Three tiers live alongside each other: zero-LLM (`tests/index.mld`), scripted-LLM (`tests/run-scripted.py`), live-LLM (`rig/tests/workers/run.mld` for now; consolidation tracked in c-ed77).
 
 ## Structure
 

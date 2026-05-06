@@ -5,9 +5,9 @@
 >> name-keyed merging, query pass-through, schema-coerced output, empty
 >> map handling, and parallel ordering independence.
 
-import { @assertOk, @assertEq, @assertHas, @assertNeq } from "../../assert.mld"
-import { @suite, @group, @runSuites } from "../../runner.mld"
-import { @classifyParallel } from "../../../rig/classify.mld"
+import { @assertOk, @assertEq, @assertHas, @assertNeq } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @classifyParallel } from "../../rig/classify.mld"
 
 >> --- Stub classifiers (no LLM) -------------------------------------------
 

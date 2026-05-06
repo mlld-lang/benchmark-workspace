@@ -8,7 +8,7 @@ import { @rigBuild, @rigRun } from "../../index.mld"
 import {
   @message_entry,
   @get_message
-} from "../fixtures.mld"
+} from "../../../tests/fixtures.mld"
 import { @check, @field, @firstByPhase } from "../helpers.mld"
 
 var @records = {

@@ -1,0 +1,279 @@
+>> tests/suites/rig/thin-arrow-and-display.mld
+>>
+>> Plain-assertion tests for the thin-arrow regression and the display
+>> projection contracts (planner-vs-worker visibility, flat-array display
+>> shorthand, plain-mode display keys, and checkpoint-restore identity).
+>>
+>> Source: legacy rig/tests/index.mld, ids strict-thin-arrow,
+>> tool-error-envelope-only-fails-on-true, display-projection,
+>> display-shorthand-array, display-plain-mode-keys,
+>> display-checkpoint-identity, resolve-checkpoint-identity.
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @toolCallError, @projectResolvedSummary } from "../../rig/runtime.mld"
+import { @plannerVisibleState, @workerStateSummary } from "../../rig/orchestration.mld"
+import { @resolveRefValue } from "../../rig/intent.mld"
+import { @sampleState, @sampleAgent } from "../fixtures.mld"
+
+>> --- Module-level fixtures -------------------------------------------------
+
+>> Tool return shape for the thin-arrow probe. `validate: "demote"` keeps
+>> the planner from auto-rejecting the leaked sentinel field; the contract
+>> we're asserting is that the rig serialization simply doesn't see it.
+record @thin_arrow_output = {
+  data: [leaked: string?, input: string?],
+  validate: "demote"
+}
+
+>> Workspace contact records use unnamed display arrays such as
+>> `[name, { ref: "email" }]`. Keep one fixture inline so this suite
+>> exercises the exact shorthand the live benchmark depends on.
+record @flat_display_contact = {
+  facts: [email: string],
+  data: [name: string, notes: string?],
+  display: [name, { ref: "email" }]
+}
+
+>> Benchmark suites use plain mode keys (`planner`, `worker`, `default`)
+>> rather than the test fixtures' `role:*` form. Keep one record with
+>> that spelling so the planner summary cannot silently fall back to
+>> `default` and expose hidden content.
+record @plain_mode_message = {
+  facts: [id_: string, sender: string?],
+  data: [subject: string?, body: string?],
+  key: id_,
+  display: {
+    default: [{ ref: "id_" }, subject, body],
+    worker: [{ ref: "id_" }, subject, body],
+    planner: [{ ref: "id_" }, subject]
+  }
+}
+
+>> Thin-arrow regression probe. If strict mode leaks the tool-slot value
+>> back into mlld, the serialized output contains the sentinel string.
+exe @thinArrowProbe(x) = [
+  -> { leaked: "tool-slot-value", input: @x }
+] => record @thin_arrow_output
+
+>> --- Group: thin-arrow + tool error envelope -------------------------------
+
+exe @testStrictThinArrow() = [
+  let @serialized = @thinArrowProbe("probe") | @pretty
+  => @assertOk(
+    !@serialized.includes("tool-slot-value"),
+    `serialized=@serialized`
+  )
+]
+
+>> MCP and adapter bridges often include `error: false` in successful
+>> envelopes. The runtime must only short-circuit on `error: true`;
+>> otherwise valid tool payloads disappear before they ever reach state.
+exe @testToolErrorEnvelopeOnlyFailsOnTrue() = [
+  let @success = @toolCallError({ error: false, text: "ok" })
+  let @failure = @toolCallError({ error: true, summary: "boom" })
+  let @actual = {
+    successIsNull: @success == null,
+    failureSummary: @failure.summary
+  }
+  => @assertEq(@actual, { successIsNull: true, failureSummary: "boom" })
+]
+
+>> --- Group: display projection ---------------------------------------------
+
+exe @testDisplayProjection() = [
+  let @plannerSummary = @plannerVisibleState(@sampleAgent, @sampleState) | @pretty
+  let @workerSummary = @workerStateSummary(@sampleAgent, @sampleState) | @pretty
+  let @actual = {
+    plannerHasAlice: @plannerSummary.includes("Alice"),
+    plannerHasEmail: @plannerSummary.includes("alice.example"),
+    plannerHidesNote: !@plannerSummary.includes("planner-hidden note"),
+    workerSeesNote: @workerSummary.includes("planner-hidden note")
+  }
+  => @assertEq(@actual, {
+    plannerHasAlice: true,
+    plannerHasEmail: true,
+    plannerHidesNote: true,
+    workerSeesNote: true
+  })
+]
+
+exe @testDisplayShorthandArray() = [
+  let @flatRecord = {
+    email: "carol.example",
+    name: "Carol",
+    notes: "plain-display"
+  } as record @flat_display_contact
+  let @summary = @plannerVisibleState(
+    {
+      suite: "fixtures",
+      records: { flat_display_contact: @flat_display_contact }
+    },
+    {
+      resolved: {
+        flat_display_contact: [{
+          handle: "r_flat_display_contact_carol.example",
+          key: "carol.example",
+          value: @flatRecord,
+          field_values: {
+            email: @flatRecord.email,
+            name: @flatRecord.name,
+            notes: @flatRecord.notes
+          }
+        }]
+      },
+      extracted: {},
+      derived: {},
+      extract_sources: {}
+    }
+  ) | @pretty
+  let @actual = {
+    hasName: @summary.includes("Carol"),
+    hasEmail: @summary.includes("carol.example")
+  }
+  => @assertEq(@actual, { hasName: true, hasEmail: true })
+]
+
+exe @testDisplayPlainModeKeys() = [
+  let @msg = {
+    id_: "msg_1",
+    sender: "david.example",
+    subject: "Project kickoff agenda",
+    body: "planner-must-not-see-this"
+  } as record @plain_mode_message
+  let @resolved = {
+    plain_mode_message: [{
+      handle: "r_plain_mode_message_msg_1",
+      key: "msg_1",
+      value: @msg,
+      field_values: {
+        id_: @msg.id_,
+        sender: @msg.sender,
+        subject: @msg.subject,
+        body: @msg.body
+      }
+    }]
+  }
+  let @stateRec = {
+    resolved: @resolved,
+    extracted: {},
+    derived: {},
+    extract_sources: {}
+  }
+  let @agent = {
+    suite: "fixtures",
+    records: { plain_mode_message: @plain_mode_message }
+  }
+  let @plannerSummary = @plannerVisibleState(@agent, @stateRec) | @pretty
+  let @workerSummary = @workerStateSummary(@agent, @stateRec) | @pretty
+  let @actual = {
+    plannerHasSubject: @plannerSummary.includes("Project kickoff agenda"),
+    plannerHidesBody: !@plannerSummary.includes("planner-must-not-see-this"),
+    workerSeesBody: @workerSummary.includes("planner-must-not-see-this")
+  }
+  => @assertEq(@actual, {
+    plannerHasSubject: true,
+    plannerHidesBody: true,
+    workerSeesBody: true
+  })
+]
+
+>> --- Group: checkpoint-restore identity ------------------------------------
+
+>> Checkpoint restore can materialize resolved entries as plain objects
+>> that keep both the synthetic numeric `key` and the original fact value
+>> under `identity_value` / `value.data`. Planner summaries must keep
+>> showing the fact-bearing string id, otherwise the planner emits raw
+>> numeric args instead of structured resolved refs for follow-up tools.
+exe @checkpointRestoredState() = [
+  => {
+    resolved: {
+      plain_mode_message: [{
+        handle: "r_plain_mode_message_msg_1",
+        key: 1,
+        value: {
+          id_: 1,
+          sender: "david.example",
+          subject: "Project kickoff agenda",
+          body: "planner-must-not-see-this",
+          data: {
+            id_: "msg_1",
+            sender: "david.example",
+            subject: "Project kickoff agenda",
+            body: "planner-must-not-see-this"
+          }
+        },
+        identity_field: "id_",
+        identity_value: "msg_1",
+        field_values: {
+          id_: 1,
+          sender: "david.example",
+          subject: "Project kickoff agenda",
+          body: "planner-must-not-see-this"
+        }
+      }]
+    },
+    extracted: {},
+    derived: {},
+    extract_sources: {}
+  }
+]
+
+exe @testDisplayCheckpointIdentity() = [
+  let @stateRec = @checkpointRestoredState()
+  let @agent = {
+    suite: "fixtures",
+    records: { plain_mode_message: @plain_mode_message }
+  }
+  let @summary = @plannerVisibleState(@agent, @stateRec) | @pretty
+  let @actual = {
+    showsStringId: @summary.includes('"id_": "msg_1"'),
+    hidesNumericId: !@summary.includes('"id_": 1')
+  }
+  => @assertEq(@actual, { showsStringId: true, hidesNumericId: true })
+]
+
+exe @testResolveCheckpointIdentity() = [
+  let @stateRec = @checkpointRestoredState()
+  let @resolved = @resolveRefValue(@stateRec, {
+    source: "resolved",
+    record: "plain_mode_message",
+    handle: "r_plain_mode_message_msg_1",
+    field: "id_"
+  })
+  let @actual = { ok: @resolved.ok, value: @resolved.value }
+  => @assertEq(@actual, { ok: true, value: "msg_1" })
+]
+
+>> --- Suite construction ----------------------------------------------------
+
+var @thinArrowAndDisplaySuite = @suite("thin-arrow-and-display", [
+  @group("thin-arrow-and-envelope", [
+    @testStrictThinArrow,
+    @testToolErrorEnvelopeOnlyFailsOnTrue
+  ], {}),
+  @group("display-projection", [
+    @testDisplayProjection,
+    @testDisplayShorthandArray,
+    @testDisplayPlainModeKeys
+  ], {}),
+  @group("checkpoint-identity", [
+    @testDisplayCheckpointIdentity,
+    @testResolveCheckpointIdentity
+  ], {})
+], {})
+
+export { @thinArrowAndDisplaySuite }
+
+>> --- Standalone runner -----------------------------------------------------
+
+var @result = @runSuites([@thinArrowAndDisplaySuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

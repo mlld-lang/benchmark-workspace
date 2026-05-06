@@ -5,7 +5,7 @@
 >>     --index tests/scripted-index-banking.mld
 
 import { @runSuites } from "./runner.mld"
-import { @securityBankingSuite } from "./suites-scripted/security-banking.mld"
+import { @securityBankingSuite } from "./scripted/security-banking.mld"
 
 var @suites = [
   @securityBankingSuite

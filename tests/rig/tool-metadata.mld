@@ -1,0 +1,161 @@
+>> tests/suites/rig/tool-metadata.mld
+>>
+>> Plain-assertion tests for the rig tool catalog metadata layer:
+>>   - param-name / control-arg / payload-arg / optional-arg / risk / role
+>>     extraction off both surfaced var-tools (@tools.*) and imported
+>>     `var tools` collections (@imported_tools)
+>>   - cross-module label preservation
+>>   - factsource provenance round-trip on a fact-bearing record field
+>>   - role classification (@roleForArg) tolerating plain / .data / .mx
+>>     wrapper shapes
+>>   - rendered tool-doc projection (@renderToolDocs) for both a flat
+>>     parameter tool and an input-record tool
+>>
+>> Fixtures live in clean/rig/tests/fixtures.mld and
+>> clean/rig/tests/imported-tools-fixture.mld — we import them as-is to
+>> keep facts:/labels: annotations intact (factsource-roundtrip depends
+>> on @get_contacts() returning fact-bearing values).
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import {
+  @renderToolDocs,
+  @toolLabels,
+  @toolParamNames,
+  @toolControlArgs,
+  @toolPayloadArgs,
+  @toolOptionalArgs,
+  @toolOptionalBenign,
+  @toolRisk,
+  @toolCanAuthorizeRoles
+} from "../../rig/tooling.mld"
+import { @roleForArg } from "../../rig/intent.mld"
+import { @tools, @get_contacts } from "../fixtures.mld"
+import { @imported_tools } from "../imported-tools-fixture.mld"
+
+>> --- Module-level fixtures (shared across tests) -------------------------
+
+>> Catalog-helper probes off the surfaced @tools collection.
+var @sendParams = @toolParamNames(@tools.send_email)
+var @sendControlArgs = @toolControlArgs(@tools.send_email)
+var @crossModuleLabels = @toolLabels(@tools.send_email)
+
+var @meetingParams = @toolParamNames(@tools.schedule_meeting)
+var @meetingControlArgs = @toolControlArgs(@tools.schedule_meeting)
+var @meetingPayloadArgs = @toolPayloadArgs(@tools.schedule_meeting)
+var @meetingOptionalArgs = @toolOptionalArgs(@tools.schedule_meeting)
+var @meetingOptionalBenign = @toolOptionalBenign(@tools.schedule_meeting)
+var @meetingRisk = @toolRisk(@tools.schedule_meeting)
+var @meetingCanAuthorizeRoles = @toolCanAuthorizeRoles(@tools.schedule_meeting)
+
+>> Imported `var tools` round-trip — @toolParamNames must read native
+>> param metadata across the module boundary.
+var @importedReadParamNames = @toolParamNames(@imported_tools.search_alpha)
+var @importedDayParamNames = @toolParamNames(@imported_tools.get_day)
+var @importedWriteParamNames = @toolParamNames(@imported_tools.send_alpha)
+
+>> Factsource provenance — @get_contacts is a facts: bearer.
+var @factValue = @get_contacts()[0].email
+
+>> Doc projection: pick send_email + schedule_meeting from the rendered
+>> array. Same shape that the planner prompt would render to the LLM.
+var @renderedDocs = @renderToolDocs(@tools)
+var @sendDocs = for @entry in @renderedDocs when @entry.name == "send_email" => @entry
+var @sendDoc = @sendDocs[0]
+var @meetingDocs = for @entry in @renderedDocs when @entry.name == "schedule_meeting" => @entry
+var @meetingDoc = @meetingDocs[0]
+
+>> --- Test exes -----------------------------------------------------------
+
+exe @testToolMetadataAccess() = [
+  let @ok = @sendParams.length == 3 &&
+    @sendControlArgs.includes("recipients") &&
+    @crossModuleLabels.includes("execute:w")
+  => @assertOk(@ok, `params=@sendParams.length control=@sendControlArgs labels=@crossModuleLabels`)
+]
+
+exe @testWrappedArgNameRoleClassification() = [
+  let @plain = @roleForArg(@tools.get_note, "note_id")
+  let @dataWrapped = @roleForArg(@tools.get_note, { data: "note_id" })
+  let @mxWrapped = @roleForArg(@tools.get_note, { mx: { data: "note_id" } })
+  let @ok = @plain == "control" && @dataWrapped == "control" && @mxWrapped == "control"
+  => @assertOk(@ok, `plain=@plain data=@dataWrapped mx=@mxWrapped`)
+]
+
+exe @testImportedVarToolsPreserveParamMetadata() = [
+  let @ok = @importedReadParamNames.length == 2 &&
+    @importedReadParamNames[0] == "query" &&
+    @importedReadParamNames[1] == "sender" &&
+    @importedDayParamNames.length == 1 &&
+    @importedDayParamNames[0] == "day" &&
+    @importedWriteParamNames.length == 3 &&
+    @importedWriteParamNames[0] == "recipient" &&
+    @importedWriteParamNames[1] == "subject" &&
+    @importedWriteParamNames[2] == "body"
+  => @assertOk(@ok, `read=@importedReadParamNames day=@importedDayParamNames write=@importedWriteParamNames`)
+]
+
+exe @testInputRecordToolMetadata() = [
+  let @ok = @meetingParams.length == 4 &&
+    @meetingControlArgs.includes("participants") &&
+    @meetingPayloadArgs.includes("title") &&
+    @meetingPayloadArgs.includes("start_time") &&
+    @meetingOptionalArgs.includes("participants") &&
+    @meetingOptionalBenign.includes("participants") &&
+    @meetingRisk.includes("calendar:w") &&
+    @meetingRisk.includes("exfil:send") &&
+    @meetingCanAuthorizeRoles.includes("role:planner")
+  => @assertOk(@ok, `params=@meetingParams control=@meetingControlArgs payload=@meetingPayloadArgs optional=@meetingOptionalArgs optionalBenign=@meetingOptionalBenign risk=@meetingRisk roles=@meetingCanAuthorizeRoles`)
+]
+
+exe @testFactsourceRoundtrip() = [
+  => @assertOk(@factValue.mx.factsources.isDefined(), `factsources=@factValue.mx.factsources`)
+]
+
+exe @testToolDocsControlArgs() = [
+  let @ok = @sendDoc.controlArgs.includes("recipients") &&
+    @sendDoc.payloadArgs.includes("subject") &&
+    @sendDoc.description.includes("email")
+  => @assertOk(@ok, `control=@sendDoc.controlArgs payload=@sendDoc.payloadArgs description=@sendDoc.description`)
+]
+
+exe @testInputRecordToolDocs() = [
+  let @ok = @meetingDoc.controlArgs.includes("participants") &&
+    @meetingDoc.payloadArgs.includes("title") &&
+    @meetingDoc.optionalArgs.includes("participants") &&
+    @meetingDoc.optionalBenign.includes("participants") &&
+    @meetingDoc.description.includes("personal event")
+  => @assertOk(@ok, `control=@meetingDoc.controlArgs payload=@meetingDoc.payloadArgs optional=@meetingDoc.optionalArgs optionalBenign=@meetingDoc.optionalBenign description=@meetingDoc.description`)
+]
+
+>> --- Suite ---------------------------------------------------------------
+
+var @toolMetadataSuite = @suite("tool-metadata", [
+  @group("metadata-access", [
+    @testToolMetadataAccess,
+    @testWrappedArgNameRoleClassification,
+    @testImportedVarToolsPreserveParamMetadata,
+    @testInputRecordToolMetadata,
+    @testFactsourceRoundtrip
+  ], {}),
+  @group("docs-rendering", [
+    @testToolDocsControlArgs,
+    @testInputRecordToolDocs
+  ], {})
+], {})
+
+export { @toolMetadataSuite }
+
+>> --- Standalone runner ---------------------------------------------------
+
+var @result = @runSuites([@toolMetadataSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+if @result.skippedLine != "" [ show @result.skippedLine ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

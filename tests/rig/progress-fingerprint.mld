@@ -1,0 +1,236 @@
+>> tests/suites/rig/progress-fingerprint.mld
+>>
+>> c-3438 (B): @stateProgressFingerprint regression tests.
+>>
+>> The fingerprint detects no-progress loops by computing a stable hash of
+>> the meaningful state. Two fingerprints are equal iff the planner has not
+>> made any of these changes: new resolved handle, new field on existing
+>> handle, new bucket version, new extract/derive name with payload, or
+>> empty->non-empty extract/derive flip.
+>>
+>> Also verifies @plannerRuntimeStateWithProgress preserves progress fields
+>> through the schema round-trip.
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import {
+  @stateProgressFingerprint,
+  @plannerNoProgressThreshold,
+  @plannerRuntimeStateWithProgress
+} from "../../rig/workers/planner.mld"
+
+>> --- Shared fixtures -----------------------------------------------------
+>> @detState is the determinism baseline. Several tests compare their
+>> fingerprint against the fingerprint of @detState to assert "differs".
+
+var @detState = {
+  resolved: {
+    hotel: {
+      version: 1,
+      by_handle: {
+        "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+      }
+    }
+  },
+  extracted: {},
+  derived: {}
+}
+
+var @detFingerprint = @stateProgressFingerprint(@detState)
+
+>> --- Test exes ------------------------------------------------------------
+
+>> FP-1: empty state produces empty fingerprint
+exe @testFp1EmptyState() = [
+  let @s = { resolved: {}, extracted: {}, derived: {} }
+  let @fp = @stateProgressFingerprint(@s)
+  => @assertEq(@fp, "")
+]
+
+>> FP-2: deterministic — same state, same fingerprint
+exe @testFp2Deterministic() = [
+  let @fp1 = @stateProgressFingerprint(@detState)
+  let @fp2 = @stateProgressFingerprint(@detState)
+  => @assertOk(@fp1 == @fp2 && @fp1 != "", `'@fp1' == '@fp2'`)
+]
+
+>> FP-3: new resolved handle changes fingerprint
+exe @testFp3NewHandleChangesFp() = [
+  let @s = {
+    resolved: {
+      hotel: {
+        version: 1,
+        by_handle: {
+          "r_hotel_A": { value: { data: { name: "A", price: 100 } } },
+          "r_hotel_B": { value: { data: { name: "B", price: 200 } } }
+        }
+      }
+    },
+    extracted: {},
+    derived: {}
+  }
+  let @fp = @stateProgressFingerprint(@s)
+  => @assertOk(@fp != @detFingerprint, `before='@detFingerprint' after='@fp'`)
+]
+
+>> FP-4: new field on existing handle changes fingerprint
+>> (the dominant travel pattern — prices/ratings landing on already-resolved
+>> records)
+exe @testFp4NewFieldOnExistingHandleChangesFp() = [
+  let @s = {
+    resolved: {
+      hotel: {
+        version: 1,
+        by_handle: {
+          "r_hotel_A": { value: { data: { name: "A", price: 100, rating: 4.5 } } }
+        }
+      }
+    },
+    extracted: {},
+    derived: {}
+  }
+  let @fp = @stateProgressFingerprint(@s)
+  => @assertOk(@fp != @detFingerprint, `before='@detFingerprint' after='@fp'`)
+]
+
+>> FP-5: bucket version bump changes fingerprint
+exe @testFp5BucketVersionBumpChangesFp() = [
+  let @s = {
+    resolved: {
+      hotel: {
+        version: 2,
+        by_handle: {
+          "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+        }
+      }
+    },
+    extracted: {},
+    derived: {}
+  }
+  let @fp = @stateProgressFingerprint(@s)
+  => @assertOk(@fp != @detFingerprint, `before='@detFingerprint' after='@fp'`)
+]
+
+>> FP-6: derive with selection_refs counts as progress
+exe @testFp6DeriveWithSelectionRefCountsAsProgress() = [
+  let @s = {
+    resolved: {
+      hotel: {
+        version: 1,
+        by_handle: {
+          "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+        }
+      }
+    },
+    extracted: {},
+    derived: {
+      "best_hotel": {
+        preview_fields: ["name", "rating"],
+        selection_refs: [{ source: "selection", backing: { record: "hotel", handle: "r_hotel_A" } }]
+      }
+    }
+  }
+  let @fp = @stateProgressFingerprint(@s)
+  => @assertOk(@fp != @detFingerprint, `before='@detFingerprint' after='@fp'`)
+]
+
+>> FP-7 (regression for UT10): a derive that returned empty (preview_fields
+>> = ["items"] only, no selection_refs) must NOT count as progress. The
+>> planner re-deriving an empty result repeatedly is precisely the no-progress
+>> loop the warning is supposed to detect. Earlier fingerprint logic treated
+>> ["items"] as non-empty preview, suppressing the warning.
+exe @testFp7DeriveItemsOnlyPreviewIsNotProgress() = [
+  let @s = {
+    resolved: {
+      hotel: {
+        version: 1,
+        by_handle: {
+          "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+        }
+      }
+    },
+    extracted: {},
+    derived: {
+      "empty_derive": {
+        preview_fields: ["items"],
+        selection_refs: []
+      }
+    }
+  }
+  let @fp = @stateProgressFingerprint(@s)
+  => @assertContains(@fp, "D:empty_derive:0")
+]
+
+>> FP-8: extract with non-empty payload counts as progress
+exe @testFp8ExtractWithPayloadCountsAsProgress() = [
+  let @s = {
+    resolved: {
+      hotel: {
+        version: 1,
+        by_handle: {
+          "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
+        }
+      }
+    },
+    extracted: {
+      "hotel_address": {
+        preview_fields: ["street", "city"],
+        selection_refs: []
+      }
+    },
+    derived: {}
+  }
+  let @fp = @stateProgressFingerprint(@s)
+  let @differs = @fp != @detFingerprint
+  let @hasMarker = @fp.includes("E:hotel_address:1")
+  => @assertOk(@differs && @hasMarker, `differs=@differs hasMarker=@hasMarker fp='@fp'`)
+]
+
+>> --- Schema round-trip ---------------------------------------------------
+>> @plannerRuntime schema round-trip — c-3438 (B) schema fix. Earlier the
+>> @plannerRuntime record didn't declare progress_fingerprint or
+>> calls_since_progress; the fields were silently stripped on session
+>> writes. This test asserts the schema round-trip preserves the fields.
+
+exe @testPr1RuntimeSchemaRoundtripPreservesProgressFields() = [
+  let @rt = @plannerRuntimeStateWithProgress(5, 1, null, { phase: "resolve" }, "FP_TEST_VALUE", 3)
+  let @okShape =
+    @rt.tool_calls == 5 &&
+    @rt.invalid_calls == 1 &&
+    @rt.progress_fingerprint == "FP_TEST_VALUE" &&
+    @rt.calls_since_progress == 3
+  => @assertOk(@okShape, `tool_calls=@rt.tool_calls fp='@rt.progress_fingerprint' csp=@rt.calls_since_progress`)
+]
+
+>> --- Suite construction --------------------------------------------------
+
+var @progressFingerprintSuite = @suite("progress-fingerprint", [
+  @group("fingerprint", [
+    @testFp1EmptyState,
+    @testFp2Deterministic,
+    @testFp3NewHandleChangesFp,
+    @testFp4NewFieldOnExistingHandleChangesFp,
+    @testFp5BucketVersionBumpChangesFp,
+    @testFp6DeriveWithSelectionRefCountsAsProgress,
+    @testFp7DeriveItemsOnlyPreviewIsNotProgress,
+    @testFp8ExtractWithPayloadCountsAsProgress
+  ], { ticket: "c-3438" }),
+  @group("schema-roundtrip", [
+    @testPr1RuntimeSchemaRoundtripPreservesProgressFields
+  ], { ticket: "c-3438" })
+], {})
+
+export { @progressFingerprintSuite }
+
+>> --- Standalone runner ---------------------------------------------------
+
+var @result = @runSuites([@progressFingerprintSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

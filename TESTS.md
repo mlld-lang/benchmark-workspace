@@ -1,10 +1,40 @@
-# clean/tests — mlld test framework
+# clean tests — mlld test framework
+
+This is the canonical guide for testing in `clean/`. Tests live under `tests/`.
 
 ## Thesis
 
 > A test is a value, produced by an exe that returns `{ ok, detail }`. A suite is a record. The runner is plain mlld.
 
 No metaprogramming, no autodiscovery — explicit imports and explicit suite construction.
+
+## Quick reference
+
+```bash
+# Zero-LLM invariant gate (must pass; ~10s)
+mlld tests/index.mld --no-checkpoint
+
+# Scripted-LLM tests (deterministic multi-turn, no LLM, requires AgentDojo env; ~15s)
+uv run --project bench python3 tests/run-scripted.py --suite workspace
+uv run --project bench python3 tests/run-scripted.py --suite travel
+
+# Live-LLM worker tests (real LLM calls, ~50s, costs ~$0.05) — separate tier
+mlld rig/tests/workers/run.mld --no-checkpoint
+
+# Framework self-tests
+mlld tests/framework.tests.mld --no-checkpoint
+mlld tests/framework.runner.tests.mld --no-checkpoint
+```
+
+## Three test tiers
+
+| Tier | Determinism | LLM | Cost | Runner | Where |
+|---|---|---|---|---|---|
+| **Zero-LLM invariant** | deterministic | none | $0 | `tests/index.mld` (the new framework) | `tests/rig/`, `tests/bench/` |
+| **Scripted-LLM** | deterministic | mocked | $0 (uses MCP infra) | `tests/run-scripted.py` → `tests/scripted-index.mld` | `tests/scripted/` |
+| **Live-LLM** | stochastic | real | ~$0.05 | `rig/tests/workers/run.mld` (separate harness) | `rig/tests/workers/` |
+
+Live-LLM tests have a different contract (scoreboard, model comparison, parallel cost) and remain in `rig/tests/`. They predate this framework and may be folded in later under their own runner. For now, treat them as a separate tier.
 
 ## Which test shape do I want?
 
@@ -26,18 +56,30 @@ tests/
   framework.mld               DEPRECATED — tombstone, do not import
   framework.tests.mld         Self-tests for assertion helpers
   framework.runner.tests.mld  Self-tests for the runner
-  index.mld                   Default runner — plain assertion suites
+  index.mld                   Default runner — zero-LLM suites
   scripted-index.mld          Scripted-LLM runner (loaded by run-scripted.py)
+  scripted-index-<suite>.mld  Per-suite scripted runners (banking/slack/travel/workspace)
   run-scripted.py             Python wrapper that wires MCP for scripted runs
+  _template.mld               Copy-paste template for plain assertion suites
+  fixtures.mld                Shared records, tools, sample state used by ported rig suites
+  imported-tools-fixture.mld  Imported-tools fixture used by tool-metadata tests
   lib/
     mock-llm.mld              Re-export of mock-LLM harness + session schema
-  suites/
-    _template.mld             Copy-paste template for plain assertion suites
-    rig/                      (future: ported rig suites)
-    bench/                    (future: bench-side tests)
-  suites-scripted/
-    _template.mld             Copy-paste template for scripted-LLM suites
+    security-fixtures.mld     State factories for security tests (@stateWithExtracted, etc.)
+  rig/                        Zero-LLM suites testing the rig framework
+    <topic>.mld               One file per topic cluster
+  bench/                      Zero-LLM suites testing bench-domain logic (sparse for now)
+  scripted/                   Scripted-LLM suites (run via run-scripted.py + MCP)
+    _template.mld             Template for scripted-LLM suites
+    security-<suite>.mld      Security tests against bench domains
 ```
+
+### Where does my test go?
+
+- Testing rig framework primitives (intent, runtime, workers, orchestration, transforms, validators, tooling) → `tests/rig/`
+- Testing bench-specific logic (classifiers, exemplars, records) without LLM calls → `tests/bench/`
+- Testing multi-turn agent behavior or attack scripts (uses bench domain tools) → `tests/scripted/`
+- Testing what an LLM *does* with a real prompt → `rig/tests/workers/` (separate live-LLM tier, not folded in yet)
 
 ### Why assert.mld and runner.mld are separate
 
@@ -98,7 +140,27 @@ exe @testCorrectGuardFires() = when [
 ]
 ```
 
-See `rig/tests/index.mld:957-981` for working examples in the existing test gate.
+For working examples, see `tests/rig/execute-worker-policy.mld` (`testInputRecordAllowlistReject` and siblings).
+
+**Dual-path denial pattern (c-a873 robustness).** When other suites have already imported `rig/tests/fixtures.mld`, `with { policy: ... }` calls can return an *error envelope* instead of throwing a `denied` event. Both surfaces carry the same `code` and `phase` fields. Tests that need to be robust across import order should accept either:
+
+```mlld
+exe @testInputRecordAllowlistReject() = when [
+  denied => when [
+    @mx.guard.code == "allowlist_mismatch" && @mx.guard.phase == "dispatch" => { ok: true, detail: "denied (event)" }
+    * => { ok: false, detail: `denied but wrong code/phase: @mx.guard.code/@mx.guard.phase` }
+  ]
+  * => [
+    let @callResult = @policySectionTools.send_email(@rejectedRecipient, "hi") with { policy: @builtPolicy.policy }
+    => when [
+      @callResult.ok == false && @callResult.code == "allowlist_mismatch" && @callResult.phase == "dispatch" => { ok: true, detail: "denied (envelope)" }
+      * => { ok: false, detail: `expected denial, got: @callResult | @pretty` }
+    ]
+  ]
+]
+```
+
+This is needed because `rig/tests/fixtures.mld` activates global state on import that flips the denial surface. Until the underlying mlld bug (c-a873) is fixed, security tests that run alongside other suites should use the dual-path pattern.
 
 ### Suite construction (from `runner.mld`)
 
@@ -135,10 +197,10 @@ Groups or suites with `{ slow: true }` in opts:
 
 ```bash
 # Run everything including slow
-mlld clean/tests/index.mld --no-checkpoint
+mlld tests/index.mld --no-checkpoint
 
 # Skip slow suites/groups
-SKIP_SLOW=1 mlld clean/tests/index.mld --no-checkpoint
+SKIP_SLOW=1 mlld tests/index.mld --no-checkpoint
 ```
 
 ### Runner results
@@ -183,12 +245,12 @@ The wrapper exits 1 on any test failure (parsed from a `__SCRIPTED_STATUS__:` ma
 
 The default `mlld tests/index.mld` runs from a plain shell with no MCP server reachable. Bench domain `tools.mld` files connect to MCP at *import* time, so any test file that imports `@tools` would fail under the default runner. Two indexes solve this:
 
-- **`tests/index.mld`** — imports only `suites/` (no MCP). Plain `mlld tests/index.mld` always works.
-- **`tests/scripted-index.mld`** — imports `suites-scripted/` (which can import bench domain tools). Only loaded by `run-scripted.py`, which has MCP wired up.
+- **`tests/index.mld`** — imports only `tests/rig/` and `tests/bench/` (no MCP). Plain `mlld tests/index.mld` always works.
+- **`tests/scripted-index.mld`** — imports `tests/scripted/` (which can import bench domain tools). Only loaded by `run-scripted.py`, which has MCP wired up.
 
 ### Writing a scripted suite
 
-1. `cp tests/suites-scripted/_template.mld tests/suites-scripted/<your-suite>.mld`
+1. `cp tests/scripted/_template.mld tests/scripted/<your-suite>.mld`
 2. Pick the bench domain you're testing against (workspace / travel / banking / slack). Update the `import { @records } from "../../bench/domains/<suite>/records.mld"` and `@tools` lines to match.
 3. Update the agent build (`@rig.build({ suite: "...", ... })`) to match the chosen domain.
 4. Write test exes that invoke `@runScriptedQuery(query, script)` (the call-site helper from the template) with a tool-call script.
@@ -196,7 +258,7 @@ The default `mlld tests/index.mld` runs from a plain shell with no MCP server re
 6. `export { @<your>SuiteName }`.
 7. Add an import line to `tests/scripted-index.mld` (NOT `tests/index.mld` — scripted suites must not be loaded by the plain runner because they import bench tools that need MCP):
    ```mlld
-   import { @<your>SuiteName } from "./suites-scripted/<your-suite>.mld"
+   import { @<your>SuiteName } from "./scripted/<your-suite>.mld"
    ```
    And add `@<your>SuiteName` to the `@suites` array in that file.
 8. Run via the wrapper, with the matching `--suite`:
@@ -264,23 +326,29 @@ Crib the script structure from these when writing attack-shaped scripts. The fix
 
 ### Bench-suite scoping
 
-Each scripted run targets one bench suite (workspace/travel/banking/slack) because the MCP env is per-suite. `run-scripted.py --suite <name>` picks which env to wire up. `--task-id <id>` overrides the default seed task (defaults are in `run-scripted.py:DEFAULT_TASK_ID`); use it when a test needs a specific AgentDojo env state (e.g., a task whose initial inbox contains an attack message). If you need multiple suites in one CI cycle, run the wrapper once per suite. Scripted suites that don't match the active env will fail at import — keep one bench domain's tools per `suites-scripted/` file.
+Each scripted run targets one bench suite (workspace/travel/banking/slack) because the MCP env is per-suite. `run-scripted.py --suite <name>` picks which env to wire up. `--task-id <id>` overrides the default seed task (defaults are in `run-scripted.py:DEFAULT_TASK_ID`); use it when a test needs a specific AgentDojo env state (e.g., a task whose initial inbox contains an attack message). If you need multiple suites in one CI cycle, run the wrapper once per suite. Scripted suites that don't match the active env will fail at import — keep one bench domain's tools per `tests/scripted/` file.
 
 ## How to add a new suite
 
-1. `cp tests/suites/_template.mld tests/suites/<your-suite>.mld`
-2. Edit imports, write test exes, build your suite
-3. Add one line to `tests/index.mld`:
+1. Pick the right directory:
+   - Rig framework test → `tests/rig/<your-suite>.mld`
+   - Bench-domain test (zero-LLM) → `tests/bench/<your-suite>.mld`
+   - Scripted-LLM test → `tests/scripted/<your-suite>.mld`
+2. `cp tests/_template.mld tests/<dir>/<your-suite>.mld`
+3. Edit imports, write test exes, build your suite
+4. Add one line to the matching index:
    ```
-   import { @<your>Suite } from "./suites/<your-suite>.mld"
+   import { @<your>Suite } from "./rig/<your-suite>.mld"     >> for tests/rig/
+   import { @<your>Suite } from "./bench/<your-suite>.mld"   >> for tests/bench/
+   import { @<your>Suite } from "./scripted/<your-suite>.mld" >> for tests/scripted/
    ```
    And add `@<your>Suite` to the `@suites` array.
-4. Run: `mlld tests/index.mld --no-checkpoint`
+5. Run: `mlld tests/index.mld --no-checkpoint` (or scripted runner for tests/scripted/)
 
 ## How to port an existing suite from `rig/tests/index.mld`
 
 1. Find the topic cluster (marked by `>>` comment headers)
-2. Create a new file: `tests/suites/rig/<topic>.mld`
+2. Create a new file: `tests/rig/<topic>.mld`
 3. For each `@check(id, ok, detail)` in the cluster:
    - Create an `exe @test<Description>() = [...]` that returns an assertion record
    - Setup variables go inside the exe as `let` (block-scoped, not leaked)
@@ -309,28 +377,37 @@ Key differences from the old pattern:
 
 ```bash
 # Plain assertion suites
-mlld clean/tests/index.mld --no-checkpoint
+mlld tests/index.mld --no-checkpoint
 
 # Skip slow groups (when scripted runs are folded into the default loop)
-SKIP_SLOW=1 mlld clean/tests/index.mld --no-checkpoint
+SKIP_SLOW=1 mlld tests/index.mld --no-checkpoint
 
 # Scripted-LLM suites (requires AgentDojo env)
-uv run --project bench python3 clean/tests/run-scripted.py
-uv run --project bench python3 clean/tests/run-scripted.py --suite travel
+uv run --project bench python3 tests/run-scripted.py
+uv run --project bench python3 tests/run-scripted.py --suite travel
 
 # Framework self-tests
-mlld clean/tests/framework.tests.mld --no-checkpoint
-mlld clean/tests/framework.runner.tests.mld --no-checkpoint
+mlld tests/framework.tests.mld --no-checkpoint
+mlld tests/framework.runner.tests.mld --no-checkpoint
 
 # Single suite standalone (works because suite files have a runnable tail)
-mlld clean/tests/suites/_template.mld --no-checkpoint
+mlld tests/_template.mld --no-checkpoint
 ```
 
 ## Validating
 
 ```bash
-mlld validate clean/tests/assert.mld
-mlld validate clean/tests/runner.mld
-mlld validate clean/tests/index.mld
-mlld validate clean/tests/lib/mock-llm.mld
+mlld validate tests/
 ```
+
+## Known issues / xfails
+
+The current gate has 3 xfails. Treat the first as a permanent demo; the other two are real mlld bugs being tracked.
+
+| xfail | Ticket | Type | Why |
+|---|---|---|---|
+| `template/known-broken/intentionallyFails` | c-9999 (placeholder) | demo | Permanent example in the template. Not a bug. |
+| `xfail-and-null-blocked/.../uh1...UnicodeDashVariant` | c-bd28 | mlld bug | Selection-ref handle matching doesn't tolerate U+2011 non-breaking-hyphen variants of ASCII handles. |
+| `named-state-and-collection/.../rescheduleDispatchSucceeds` | c-a873 | mlld bug | `policy.build`'s fact-mapping resolution drops when `rig/tests/fixtures.mld` is imported first. Module-import side-effect on global policy-engine state. Affects denial surface (event ↔ envelope) too — handled in security tests via the dual-path pattern. |
+
+When c-a873 is fixed at the mlld layer, the rescheduleDispatchSucceeds xfail can be flipped back to a regular test, and security tests using the dual-path pattern can be simplified to single-path (denied event only).

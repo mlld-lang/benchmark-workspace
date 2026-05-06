@@ -5,7 +5,7 @@
 >>     --index tests/scripted-index-workspace.mld
 
 import { @runSuites } from "./runner.mld"
-import { @securityWorkspaceSuite } from "./suites-scripted/security-workspace.mld"
+import { @securityWorkspaceSuite } from "./scripted/security-workspace.mld"
 
 var @suites = [
   @securityWorkspaceSuite

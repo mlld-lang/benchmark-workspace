@@ -1,0 +1,316 @@
+>> tests/suites/rig/state-projection-b.mld
+>>
+>> Plain-assertion tests for state-projection contract (c-63fe and friends).
+>> Group C: planner-cache idempotency + invalidation on update.
+>> Group D: family-expansion / field-path resolution against indexed buckets.
+>> Group E: worker summary projection + legacy/indexed bucket adapter reads.
+>> Group F: writer + planner-cache integration via @updateResolvedStateWithDef.
+
+import { @assertEq } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import {
+  @plannerVisibleState,
+  @workerStateSummary
+} from "../../rig/orchestration.mld"
+import {
+  @bucketLength,
+  @isResolvedIndexBucket,
+  @emptyState,
+  @updateResolvedState,
+  @updateResolvedStateWithDef,
+  @cachedPlannerEntries
+} from "../../rig/runtime.mld"
+import { @resolveRefValue } from "../../rig/intent.mld"
+import { @records, @sampleAgent } from "../fixtures.mld"
+
+>> --- Group C: planner-cache idempotency / invalidation -------------------
+
+exe @testC1PlannerVisibleStateIdempotent() = [
+  let @agent = { records: @records }
+  let @state = @updateResolvedState(@emptyState(), "contact", [
+    { handle: "spc1-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice" }, value: { name: "alice" } },
+    { handle: "spc1-h2", key: "bob",   identity_field: "name", identity_value: "bob",   field_values: { name: "bob" },   value: { name: "bob" } }
+  ])
+  let @vis1 = @plannerVisibleState(@agent, @state)
+  let @vis2 = @plannerVisibleState(@agent, @state)
+  let @v1Contacts = @vis1.resolved.contact ?? []
+  let @v2Contacts = @vis2.resolved.contact ?? []
+  let @v1Handles = for @e in @v1Contacts => @e.handle
+  let @v2Handles = for @e in @v2Contacts => @e.handle
+  let @actual = {
+    len1: @v1Contacts.length,
+    len2: @v2Contacts.length,
+    handle0_match: @v1Handles[0] == @v2Handles[0],
+    handle1_match: @v1Handles[1] == @v2Handles[1]
+  }
+  => @assertEq(@actual, { len1: 2, len2: 2, handle0_match: true, handle1_match: true })
+]
+
+exe @testC2PlannerVisibleStateInvalidatesOnUpdate() = [
+  let @before = @plannerVisibleState(@sampleAgent, @emptyState())
+  let @state1 = @updateResolvedState(@emptyState(), "contact", [
+    { handle: "spc2-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com" }, value: { name: "alice", email: "a@x.com" } }
+  ])
+  let @after1 = @plannerVisibleState(@sampleAgent, @state1)
+  let @state2 = @updateResolvedState(@state1, "contact", [
+    { handle: "spc2-h2", key: "bob", identity_field: "name", identity_value: "bob", field_values: { name: "bob", email: "b@x.com" } }
+  ])
+  let @after2 = @plannerVisibleState(@sampleAgent, @state2)
+  let @beforeContacts = @before.resolved.contact ?? []
+  let @after1Contacts = @after1.resolved.contact ?? []
+  let @after2Contacts = @after2.resolved.contact ?? []
+  let @actual = {
+    before: @beforeContacts.length,
+    after_first: @after1Contacts.length,
+    after_second: @after2Contacts.length
+  }
+  => @assertEq(@actual, { before: 0, after_first: 1, after_second: 2 })
+]
+
+>> --- Group D: family-expansion / field-path resolution -------------------
+
+exe @testD1FamilyExpansionUpToDateAfterMultipleUpdates() = [
+  let @step1 = @updateResolvedState(@emptyState(), "contact", [
+    { handle: "spd1-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com" }, value: { name: "alice", email: "a@x.com" } }
+  ])
+  let @step2 = @updateResolvedState(@step1, "contact", [
+    { handle: "spd1-h2", key: "bob", identity_field: "name", identity_value: "bob", field_values: { name: "bob", email: "b@x.com" }, value: { name: "bob", email: "b@x.com" } },
+    { handle: "spd1-h3", key: "carol", identity_field: "name", identity_value: "carol", field_values: { name: "carol", email: "c@x.com" }, value: { name: "carol", email: "c@x.com" } }
+  ])
+  let @step3 = @updateResolvedState(@step2, "contact", [
+    { handle: "spd1-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "alice@new.com" }, value: { name: "alice", email: "alice@new.com" } }
+  ])
+  let @family = @resolveRefValue(@step3, { source: "resolved", record: "contact" })
+  let @emails = for @v in (@family.value ?? []) => `@v.email`
+  let @names = for @v in (@family.value ?? []) => `@v.name`
+  let @actual = {
+    ok: @family.ok,
+    count: @names.length,
+    has_alice_new: @emails.includes("alice@new.com"),
+    has_b: @emails.includes("b@x.com"),
+    has_c: @emails.includes("c@x.com"),
+    has_old_alice: @emails.includes("a@x.com")
+  }
+  => @assertEq(@actual, { ok: true, count: 3, has_alice_new: true, has_b: true, has_c: true, has_old_alice: false })
+]
+
+exe @testD2WholeRecordRefReturnsFullValue() = [
+  let @state = @updateResolvedState(@emptyState(), "contact", [
+    { handle: "spd2-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com", phone: "555-1" }, value: { name: "alice", email: "a@x.com", phone: "555-1" } }
+  ])
+  let @whole = @resolveRefValue(@state, { source: "resolved", record: "contact", handle: "spd2-h1" })
+  let @actual = {
+    ok: @whole.ok,
+    name: `@whole.value.name`,
+    email: `@whole.value.email`,
+    phone: `@whole.value.phone`
+  }
+  => @assertEq(@actual, { ok: true, name: "alice", email: "a@x.com", phone: "555-1" })
+]
+
+exe @testD3FieldPathWithArrayIndex() = [
+  let @state = @updateResolvedState(@emptyState(), "container", [
+    { handle: "spd3-h1", key: "c1", identity_field: "id", identity_value: "c1", field_values: { id: "c1", items: [{ name: "first", price: 10 }, { name: "second", price: 20 }] }, value: { id: "c1", items: [{ name: "first", price: 10 }, { name: "second", price: 20 }] } }
+  ])
+  let @fieldZero = @resolveRefValue(@state, { source: "resolved", record: "container", handle: "spd3-h1", field: "items[0].name" })
+  let @fieldOne  = @resolveRefValue(@state, { source: "resolved", record: "container", handle: "spd3-h1", field: "items[1].price" })
+  let @actual = {
+    ok0: @fieldZero.ok,
+    name0: `@fieldZero.value`,
+    ok1: @fieldOne.ok,
+    price1: `@fieldOne.value`
+  }
+  => @assertEq(@actual, { ok0: true, name0: "first", ok1: true, price1: "20" })
+]
+
+>> --- Group E: worker summary vs legacy/indexed buckets -------------------
+
+exe @testE1WorkerSummaryNoPlannerCacheLeak() = [
+  let @agent = { records: @records }
+  let @state = @updateResolvedState(@emptyState(), "message_entry", [
+    { handle: "spe1-h1", key: "m1", identity_field: "id_", identity_value: "m1",
+      field_values: { id_: "m1", sender: "alice", subject: "Hi there", body: "secret-body-content" },
+      value: { id_: "m1", sender: "alice", subject: "Hi there", body: "secret-body-content" } }
+  ])
+  let @planner = @plannerVisibleState(@agent, @state)
+  let @worker = @workerStateSummary(@agent, @state)
+  let @plMsgs = @planner.resolved.message_entry ?? []
+  let @wkMsgs = @worker.resolved.message_entry ?? []
+  let @plMsg = @plMsgs[0]
+  let @wkMsg = @wkMsgs[0]
+  let @plKeys = @plMsg.mx.keys
+  let @wkKeys = @wkMsg.mx.keys
+  let @actual = {
+    pl_len: @plMsgs.length,
+    wk_len: @wkMsgs.length,
+    pl_has_id: @plKeys.includes("id_"),
+    pl_has_sender: @plKeys.includes("sender"),
+    pl_has_body: @plKeys.includes("body"),
+    pl_has_subject: @plKeys.includes("subject"),
+    wk_has_body: @wkKeys.includes("body"),
+    wk_has_subject: @wkKeys.includes("subject")
+  }
+  => @assertEq(@actual, {
+    pl_len: 1, wk_len: 1,
+    pl_has_id: true, pl_has_sender: true,
+    pl_has_body: false, pl_has_subject: false,
+    wk_has_body: true, wk_has_subject: true
+  })
+]
+
+exe @testE2LegacyArrayBucketCompatible() = [
+  let @legacyBucket = [
+    { handle: "spe2-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com" }, value: { name: "alice", email: "a@x.com" } },
+    { handle: "spe2-h2", key: "bob",   identity_field: "name", identity_value: "bob",   field_values: { name: "bob",   email: "b@x.com" }, value: { name: "bob",   email: "b@x.com" } }
+  ]
+  let @state = {
+    resolved: { contact: @legacyBucket },
+    extracted: {},
+    derived: {},
+    extract_sources: {}
+  }
+  let @whole  = @resolveRefValue(@state, { source: "resolved", record: "contact", handle: "spe2-h1" })
+  let @field  = @resolveRefValue(@state, { source: "resolved", record: "contact", handle: "spe2-h2", field: "email" })
+  let @family = @resolveRefValue(@state, { source: "resolved", record: "contact" })
+  let @familyEmails = for @v in (@family.value ?? []) => `@v.email`
+  let @actual = {
+    whole_ok: @whole.ok,
+    whole_name: `@whole.value.name`,
+    field_ok: @field.ok,
+    field_value: `@field.value`,
+    family_ok: @family.ok,
+    family_len: @familyEmails.length,
+    family_has_a: @familyEmails.includes("a@x.com"),
+    family_has_b: @familyEmails.includes("b@x.com")
+  }
+  => @assertEq(@actual, {
+    whole_ok: true, whole_name: "alice",
+    field_ok: true, field_value: "b@x.com",
+    family_ok: true, family_len: 2,
+    family_has_a: true, family_has_b: true
+  })
+]
+
+exe @testE3IndexedBucketAdapterReads() = [
+  let @indexedBucket = {
+    _rig_bucket: "resolved_index_v1",
+    order: ["spe3-h1", "spe3-h2"],
+    by_handle: {
+      "spe3-h1": { handle: "spe3-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice", email: "a@x.com" }, value: { name: "alice", email: "a@x.com" } },
+      "spe3-h2": { handle: "spe3-h2", key: "bob",   identity_field: "name", identity_value: "bob",   field_values: { name: "bob",   email: "b@x.com" }, value: { name: "bob",   email: "b@x.com" } }
+    },
+    version: 2,
+    planner_cache: { version: 0, entries: [] }
+  }
+  let @state = {
+    resolved: { contact: @indexedBucket },
+    extracted: {},
+    derived: {},
+    extract_sources: {}
+  }
+  let @whole  = @resolveRefValue(@state, { source: "resolved", record: "contact", handle: "spe3-h1" })
+  let @field  = @resolveRefValue(@state, { source: "resolved", record: "contact", handle: "spe3-h2", field: "email" })
+  let @family = @resolveRefValue(@state, { source: "resolved", record: "contact" })
+  let @familyEmails = for @v in (@family.value ?? []) => `@v.email`
+  let @actual = {
+    whole_ok: @whole.ok,
+    whole_name: `@whole.value.name`,
+    field_ok: @field.ok,
+    field_value: `@field.value`,
+    family_ok: @family.ok,
+    family_len: @familyEmails.length,
+    family_has_a: @familyEmails.includes("a@x.com"),
+    family_has_b: @familyEmails.includes("b@x.com")
+  }
+  => @assertEq(@actual, {
+    whole_ok: true, whole_name: "alice",
+    field_ok: true, field_value: "b@x.com",
+    family_ok: true, family_len: 2,
+    family_has_a: true, family_has_b: true
+  })
+]
+
+>> --- Group F: writer + planner-cache integration ---------------------------
+
+exe @testF1WriterProducesIndexedBucketWithVersion() = [
+  let @step1 = @updateResolvedState(@emptyState(), "contact", [
+    { handle: "spf1-h1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice" }, value: { name: "alice" } }
+  ])
+  let @step2 = @updateResolvedState(@step1, "contact", [
+    { handle: "spf1-h2", key: "bob", identity_field: "name", identity_value: "bob", field_values: { name: "bob" }, value: { name: "bob" } }
+  ])
+  let @bucket1 = @step1.resolved.contact
+  let @bucket2 = @step2.resolved.contact
+  let @actual = {
+    indexed1: @isResolvedIndexBucket(@bucket1),
+    indexed2: @isResolvedIndexBucket(@bucket2),
+    v1: @bucket1.version,
+    v2: @bucket2.version,
+    len1: @bucketLength(@bucket1),
+    len2: @bucketLength(@bucket2)
+  }
+  => @assertEq(@actual, { indexed1: true, indexed2: true, v1: 1, v2: 2, len1: 1, len2: 2 })
+]
+
+exe @testF2PlannerCachePopulatedViaWithdef() = [
+  let @state = @updateResolvedStateWithDef(@emptyState(), "contact", [
+    { handle: "spf2-h1", key: "alice", identity_field: "email", identity_value: "alice@x.com", field_values: { email: "alice@x.com", name: "Alice", notes: "secret note" }, value: { email: "alice@x.com", name: "Alice", notes: "secret note" } }
+  ], @records.contact)
+  let @bucket = @state.resolved.contact
+  let @cache = @bucket.planner_cache
+  let @entries = @cachedPlannerEntries(@bucket)
+  let @actual = {
+    indexed: @isResolvedIndexBucket(@bucket),
+    cache_v: @cache.version,
+    bucket_v: @bucket.version,
+    cache_v_eq_bucket_v: @cache.version == @bucket.version,
+    entries_present: @entries != null,
+    entries_len: @entries.length
+  }
+  => @assertEq(@actual, {
+    indexed: true,
+    cache_v: 1,
+    bucket_v: 1,
+    cache_v_eq_bucket_v: true,
+    entries_present: true,
+    entries_len: 1
+  })
+]
+
+>> --- Suite construction ----------------------------------------------------
+
+var @stateProjectionBSuite = @suite("state-projection-b", [
+  @group("planner-cache", [
+    @testC1PlannerVisibleStateIdempotent,
+    @testC2PlannerVisibleStateInvalidatesOnUpdate
+  ], {}),
+  @group("family-expansion", [
+    @testD1FamilyExpansionUpToDateAfterMultipleUpdates,
+    @testD2WholeRecordRefReturnsFullValue,
+    @testD3FieldPathWithArrayIndex
+  ], {}),
+  @group("worker-summary", [
+    @testE1WorkerSummaryNoPlannerCacheLeak,
+    @testE2LegacyArrayBucketCompatible,
+    @testE3IndexedBucketAdapterReads
+  ], {}),
+  @group("bucket-version", [
+    @testF1WriterProducesIndexedBucketWithVersion,
+    @testF2PlannerCachePopulatedViaWithdef
+  ], {})
+], {})
+
+export { @stateProjectionBSuite }
+
+>> --- Standalone runner -----------------------------------------------------
+
+var @result = @runSuites([@stateProjectionBSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

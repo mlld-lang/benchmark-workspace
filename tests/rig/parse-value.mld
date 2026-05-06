@@ -1,0 +1,267 @@
+>> tests/suites/rig/parse-value.mld
+>>
+>> parse_value primitive invariants (c-69db).
+>>
+>> Pins the security-critical behaviors of @applyRegexParser and the
+>> spike-validated chain that fact-bearing parsed fields satisfy
+>> write-tool control args while extracted/derived sources do not.
+
+import { @assertOk, @assertEq } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @applyRegexParser, @parserId } from "../../rig/transforms/parse_value.mld"
+import { @compileExecuteIntent } from "../../rig/intent.mld"
+
+>> --- Module-level fixtures for PV-10..PV-12 --------------------------------
+>> record/tool declarations require module scope.
+
+record @parsedIban = {
+  facts: [
+    parse_id: handle,
+    iban_value: string?,
+    parser_id: string
+  ],
+  data: {},
+  key: parse_id
+}
+
+record @sendMoneyInputs = {
+  facts: [recipient: string],
+  data: { trusted: [amount: number] },
+  validate: "strict"
+}
+
+exe @sendMoney(recipient, amount) = [
+  => { recipient: @recipient, amount: @amount }
+]
+
+var tools @pvTools = {
+  send_money: {
+    mlld: @sendMoney,
+    inputs: @sendMoneyInputs,
+    labels: ["execute:w", "tool:w"],
+    can_authorize: "role:planner",
+    description: "Test send_money for parse_value invariant."
+  }
+}
+
+var @parsedRecord = {
+  parse_id: "pv10_test",
+  iban_value: "UK12345678901234567890",
+  parser_id: "test_parser_v1"
+} as record @parsedIban
+
+var @pvState = {
+  resolved: {
+    parsedIban: [
+      {
+        handle: "r_pv10_test",
+        key: "pv10_test",
+        value: @parsedRecord,
+        field_values: {
+          parse_id: @parsedRecord.parse_id,
+          iban_value: @parsedRecord.iban_value,
+          parser_id: @parsedRecord.parser_id
+        }
+      }
+    ]
+  },
+  extracted: {},
+  derived: {},
+  step_history: []
+}
+
+>> --- Tests ----------------------------------------------------------------
+
+>> PV-1: simple regex match with capture
+exe @testPv1RegexMatchWithCapture() = [
+  let @r = @applyRegexParser("IBAN: UK12345678901234567890", {
+    kind: "regex",
+    pattern: `IBAN:\s+([A-Z0-9]+)`,
+    captures: { iban_value: 1 }
+  })
+  => @assertOk(
+    @r.parse_status == "ok" && @r.captures.iban_value == "UK12345678901234567890",
+    `parse_status=@r.parse_status iban_value=@r.captures.iban_value`
+  )
+]
+
+>> PV-2: no match returns no_match status (no fact mint)
+exe @testPv2NoMatchYieldsNoFact() = [
+  let @r = @applyRegexParser("no IBAN here", {
+    kind: "regex",
+    pattern: `IBAN:\s+([A-Z0-9]+)`,
+    captures: { iban_value: 1 }
+  })
+  => @assertOk(
+    @r.parse_status == "no_match" && @r.captures == null,
+    `parse_status=@r.parse_status`
+  )
+]
+
+>> PV-3: post-op validation failure blocks fact mint
+exe @testPv3ValidationFailureBlocksFact() = [
+  let @r = @applyRegexParser("IBAN: BAD12", {
+    kind: "regex",
+    pattern: `IBAN:\s+(\S+)`,
+    captures: { iban_value: 1 },
+    post: {
+      iban_value: [{ op: "validate_iban_format" }]
+    }
+  })
+  => @assertEq(@r.parse_status, "validation_failed")
+]
+
+>> PV-4: many-cardinality returns array of validated matches
+exe @testPv4ManyCardinalityArray() = [
+  let @text = ::- David: do thing. Deadline: 2024-05-20.
+- Linda: email file. Deadline: 2024-05-21.
+- Mark: review. Deadline: 2024-05-19.::
+  let @r = @applyRegexParser(@text, {
+    kind: "regex",
+    pattern: `^- (\w+): (.+?)\. Deadline: (\d{4}-\d{2}-\d{2})\.$`,
+    flags: ["multiline", "global"],
+    captures: { name: 1, task: 2, deadline: 3 },
+    cardinality: "many",
+    post: {
+      deadline: [{ op: "validate_iso_date" }]
+    }
+  })
+  => @assertOk(
+    @r.parse_status == "ok" && @r.matches.length == 3 && @r.matches[0].name == "David",
+    `parse_status=@r.parse_status matches=@r.matches.length`
+  )
+]
+
+>> PV-5: cardinality "one" rejects ambiguous matches
+exe @testPv5OneCardinalityRejectsAmbiguous() = [
+  let @r = @applyRegexParser("IBAN: UK12345678901234567890\nIBAN: DE12345678901234567890", {
+    kind: "regex",
+    pattern: `IBAN:\s+([A-Z0-9]+)`,
+    flags: ["multiline", "global"],
+    captures: { iban_value: 1 },
+    cardinality: "one"
+  })
+  => @assertEq(@r.parse_status, "ambiguous")
+]
+
+>> PV-6: oversize input rejected (>64KB)
+exe @testPv6InputSizeCapEnforced() = [
+  let @big = js { return "x".repeat(70000); }
+  let @r = @applyRegexParser(@big, {
+    kind: "regex",
+    pattern: `(\w+)`,
+    captures: { v: 1 }
+  })
+  => @assertEq(@r.parse_status, "input_too_large")
+]
+
+>> PV-7: oversize pattern rejected (>512 chars)
+exe @testPv7PatternSizeCapEnforced() = [
+  let @bigPattern = js { return "(.+)".repeat(200); }
+  let @r = @applyRegexParser("hello", {
+    kind: "regex",
+    pattern: @bigPattern,
+    captures: { v: 1 }
+  })
+  => @assertEq(@r.parse_status, "pattern_too_long")
+]
+
+>> PV-8: unsupported parser kind (no eval/code injection via spec)
+exe @testPv8OnlyRegexKindSupported() = [
+  let @r = @applyRegexParser("hello", {
+    kind: "javascript",
+    code: "alert('hi')"
+  })
+  => @assertEq(@r.parse_status, "unsupported_kind")
+]
+
+>> PV-9: parserId is deterministic for same spec
+exe @testPv9ParserIdDeterministic() = [
+  let @specA = { kind: "regex", pattern: "x", captures: { v: 1 } }
+  let @specB = { kind: "regex", pattern: "x", captures: { v: 1 } }
+  let @idA = @parserId(@specA)
+  let @idB = @parserId(@specB)
+  => @assertOk(
+    @idA == @idB && @idA.length > 0,
+    `id_a=@idA id_b=@idB`
+  )
+]
+
+>> PV-10: parse_value-minted fact-bearing field satisfies write-tool control arg
+exe @testPv10ParsedFactSatisfiesControlArg() = [
+  let @attempt = @compileExecuteIntent(@pvState, @pvTools, {
+    phase: "execute",
+    operation: "send_money",
+    args: {
+      recipient: { source: "resolved", record: "parsedIban", handle: "r_pv10_test", field: "iban_value" },
+      amount: { source: "known", value: 98.7 }
+    }
+  }, "pay the bill")
+  => @assertEq(@attempt.ok, true)
+]
+
+>> PV-11: extracted source rejected for the same control arg shape
+exe @testPv11ExtractedSourceRejected() = [
+  let @attempt = @compileExecuteIntent(@pvState, @pvTools, {
+    phase: "execute",
+    operation: "send_money",
+    args: {
+      recipient: { source: "extracted", name: "iban_extract", field: "iban" },
+      amount: { source: "known", value: 98.7 }
+    }
+  }, "pay the bill")
+  => @assertEq(@attempt.ok, false)
+]
+
+>> PV-12: derived source rejected for the same control arg shape
+exe @testPv12DerivedSourceRejected() = [
+  let @attempt = @compileExecuteIntent(@pvState, @pvTools, {
+    phase: "execute",
+    operation: "send_money",
+    args: {
+      recipient: { source: "derived", name: "iban_derive", field: "iban" },
+      amount: { source: "known", value: 98.7 }
+    }
+  }, "pay the bill")
+  => @assertEq(@attempt.ok, false)
+]
+
+>> --- Suite ---------------------------------------------------------------
+
+var @parseValueSuite = @suite("parse-value", [
+  @group("parsing", [
+    @testPv1RegexMatchWithCapture,
+    @testPv2NoMatchYieldsNoFact,
+    @testPv3ValidationFailureBlocksFact,
+    @testPv4ManyCardinalityArray,
+    @testPv5OneCardinalityRejectsAmbiguous
+  ], {}),
+  @group("caps", [
+    @testPv6InputSizeCapEnforced,
+    @testPv7PatternSizeCapEnforced,
+    @testPv8OnlyRegexKindSupported
+  ], {}),
+  @group("parser-id", [
+    @testPv9ParserIdDeterministic
+  ], {}),
+  @group("source-class", [
+    @testPv10ParsedFactSatisfiesControlArg,
+    @testPv11ExtractedSourceRejected,
+    @testPv12DerivedSourceRejected
+  ], {})
+], { ticket: "c-69db" })
+
+export { @parseValueSuite }
+
+>> --- Standalone runner ---------------------------------------------------
+
+var @result = @runSuites([@parseValueSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

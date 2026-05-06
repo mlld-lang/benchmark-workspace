@@ -10,7 +10,7 @@
 >> "Bench-suite scoping".
 
 import { @runSuites } from "./runner.mld"
-import { @securitySlackSuite } from "./suites-scripted/security-slack.mld"
+import { @securitySlackSuite } from "./scripted/security-slack.mld"
 
 var @suites = [
   @securitySlackSuite

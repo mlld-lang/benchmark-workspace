@@ -8,9 +8,9 @@
 >> These are not classifier accuracy tests — those live in worker tests
 >> (live LLM). These catch typos and structural drift in the label data.
 
-import { @assertOk, @assertEq, @assertHas } from "../../assert.mld"
-import { @suite, @group, @runSuites } from "../../runner.mld"
-import { @travelClassifierLabels } from "../../../bench/domains/travel/classifier-labels.mld"
+import { @assertOk, @assertEq, @assertHas } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @travelClassifierLabels } from "../../bench/domains/travel/classifier-labels.mld"
 
 >> Labels exported as an exe (c-9c53 — `var` exports leak Literal AST
 >> nodes through module boundaries). Calling the exe forces evaluation.

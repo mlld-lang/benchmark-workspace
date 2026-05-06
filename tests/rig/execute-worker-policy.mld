@@ -1,0 +1,615 @@
+>> clean/tests/suites/rig/execute-worker-policy.mld
+>>
+>> Plain-assertion tests for the execute-worker's policy-application paths
+>> and input-record validation rules. Three sub-groups:
+>>   - control-args                    : zero/optional/known control-arg dispatch +
+>>                                        natural-datetime canonicalization at
+>>                                        compile time.
+>>   - input-record-collection         : tool-collection input-record policy on
+>>                                        known-participant + collection-derived
+>>                                        payload schedule_meeting calls.
+>>   - allowlist-blocklist-update-exact: input-record allowlist / blocklist /
+>>                                        update / exact denial-and-pass rules.
+>>
+>> The dispatch fixtures are heavyweight (build a `tools` collection, a
+>> base policy, and a built policy in some cases) so they're hoisted to
+>> module-level vars. Denial tests put the guarded `when [denied => ...; *
+>> => ...]` block inside the test exe so the `denied` handler catches the
+>> guard rejection in the same scope as the assertion.
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+
+import {
+  @create_note,
+  @schedule_meeting,
+  @create_note_inputs
+} from "../fixtures.mld"
+import { @synthesizedPolicy, @updateNamedState } from "../../rig/orchestration.mld"
+import { @emptyState } from "../../rig/runtime.mld"
+import { @dispatchExecute } from "../../rig/workers/execute.mld"
+
+>> --- Shared helpers --------------------------------------------------------
+
+exe @field(inputValue, key) = js {
+  return inputValue?.[key] ?? null;
+}
+
+exe @isBlank(value) = when [
+  !@value.isDefined() => true
+  @value == null => true
+  @value == "" => true
+  * => false
+]
+
+>> --- Module-level fixtures -------------------------------------------------
+
+>> Local execute-time wrappers: thin wrappers preserve native mlld args while
+>> relocating the policy boundary into this module.
+exe @runtime_create_note(content) = [
+  => @create_note(@content)
+]
+
+exe @runtime_schedule_meeting(title, start_time, end_time, participants: array) = [
+  let @participantsValue = @exists(@participants) ? @participants : null
+  => {
+    ok: true,
+    title: @title,
+    start_time: @start_time,
+    end_time: @end_time,
+    participants: @participantsValue
+  }
+]
+
+>> Local meeting input record with optional participants. Mirrors the
+>> shape used in the rig invariant suite — keep this here so tests
+>> exercise the planner/worker contract directly.
+record @local_meeting_request_inputs = {
+  facts: [participants: array?],
+  data: [title: string, start_time: string, end_time: string],
+  optional_benign: [participants],
+  validate: "strict"
+}
+
+var tools @localExecuteRuntimeTools = {
+  create_note: {
+    mlld: @runtime_create_note,
+    inputs: @create_note_inputs,
+    labels: ["execute:w", "tool:w", "file:w"],
+    can_authorize: "role:planner",
+    description: "Create a brand-new note with freeform content."
+  },
+  schedule_meeting: {
+    mlld: @runtime_schedule_meeting,
+    inputs: @local_meeting_request_inputs,
+    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Schedule a meeting with optional participants."
+  }
+}
+
+var @builtExecuteFixtureAgent = {
+  defense: "defended",
+  tools: @localExecuteRuntimeTools,
+  toolsCollection: @localExecuteRuntimeTools,
+  basePolicy: @synthesizedPolicy(@localExecuteRuntimeTools, null)
+}
+
+>> ---- Control-arg dispatch fixtures ----
+
+var @dispatchCreateNoteResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
+  @emptyState(),
+  {
+    phase: "execute",
+    operation: "create_note",
+    args: {
+      content: { source: "known", value: "Demo note body" }
+    }
+  },
+  "Create a note with content Demo note body."
+)
+
+var @dispatchOptionalMeetingResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
+  @emptyState(),
+  {
+    phase: "execute",
+    operation: "schedule_meeting",
+    args: {
+      title: { source: "known", value: "Solo focus block" },
+      start_time: { source: "known", value: "2026-04-14 09:00" },
+      end_time: { source: "known", value: "2026-04-14 10:00" }
+    }
+  },
+  "Create Solo focus block from 2026-04-14 09:00 to 2026-04-14 10:00."
+)
+
+var @dispatchNaturalDatetimeMeetingResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
+  @emptyState(),
+  {
+    phase: "execute",
+    operation: "schedule_meeting",
+    args: {
+      title: { source: "known", value: "Solo focus block" },
+      start_time: { source: "known", value: "2026-04-14 09:00" },
+      end_time: { source: "known", value: "2026-04-14 10:00" }
+    }
+  },
+  "Create Solo focus block at 09:00 on 2026-04-14 until 10:00 on 2026-04-14."
+)
+
+var @dispatchKnownParticipantMeetingResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
+  @emptyState(),
+  {
+    phase: "execute",
+    operation: "schedule_meeting",
+    args: {
+      participants: [{ source: "known", value: "sarah.connor@gmail.com" }],
+      title: { source: "known", value: "Lunch" },
+      start_time: { source: "known", value: "2026-04-14 12:00" },
+      end_time: { source: "known", value: "2026-04-14 13:00" }
+    }
+  },
+  "Create Lunch with sarah.connor@gmail.com from 2026-04-14 12:00 to 2026-04-14 13:00."
+)
+
+>> ---- Input-record collection fixtures ----
+
+var @dispatchKnownParticipantMeetingCollectionResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
+  @emptyState(),
+  {
+    phase: "execute",
+    operation: "schedule_meeting",
+    args: {
+      participants: [{ source: "known", value: "sarah.connor@gmail.com" }],
+      title: { source: "known", value: "Lunch" },
+      start_time: { source: "known", value: "2026-04-14 12:00" },
+      end_time: { source: "known", value: "2026-04-14 13:00" }
+    }
+  },
+  "Create Lunch with sarah.connor@gmail.com from 2026-04-14 12:00 to 2026-04-14 13:00."
+)
+
+var @availabilityDerivedState = @updateNamedState(
+  @emptyState(),
+  "derived",
+  "availability_check",
+  {
+    provenance: "derived",
+    schema_name: "inline-schema",
+    preview_fields: ["is_free", "end_time"],
+    value: {
+      is_free: true,
+      end_time: "2026-04-14 13:00"
+    },
+    selection_refs: []
+  }
+)
+
+var @dispatchKnownParticipantMeetingCollectionDerivedPayloadResult = @dispatchExecute(
+  @builtExecuteFixtureAgent,
+  @availabilityDerivedState,
+  {
+    phase: "execute",
+    operation: "schedule_meeting",
+    args: {
+      participants: [{ source: "known", value: "sarah.connor@gmail.com" }],
+      title: { source: "known", value: "Lunch" },
+      start_time: { source: "known", value: "2026-04-14 12:00" },
+      end_time: { source: "derived", name: "availability_check", field: "end_time" }
+    }
+  },
+  "Am I free for lunch at 12:00 on 2026-04-14? If so, create Lunch with sarah.connor@gmail.com at 12:00 for one hour."
+)
+
+>> ---- Allowlist / blocklist / update / exact fixtures ----
+
+var @ewpApprovedRecipients = ["ada@example.com"]
+var @ewpBlockedSubjects = ["blocked subject"]
+var known @ewpApprovedRecipient = "ada@example.com"
+var known @ewpRejectedRecipient = "mallory@example.com"
+
+record @ewp_allowlisted_send_email_inputs = {
+  facts: [recipient: string],
+  data: [subject: string],
+  allowlist: { recipient: @ewpApprovedRecipients },
+  validate: "strict"
+}
+
+record @ewp_blocked_subject_send_inputs = {
+  facts: [],
+  data: [subject: string],
+  blocklist: { subject: @ewpBlockedSubjects },
+  validate: "strict"
+}
+
+record @ewp_profile_update_inputs = {
+  facts: [],
+  data: [city: string?, street: string?],
+  update: [city, street],
+  validate: "strict"
+}
+
+record @ewp_password_change_inputs = {
+  facts: [],
+  data: [password: string],
+  exact: [password],
+  validate: "strict"
+}
+
+exe @ewp_runtime_allowlisted_send_email(recipient, subject) = [
+  => {
+    recipient: @recipient,
+    subject: @subject
+  }
+]
+
+exe @ewp_runtime_blocked_subject_send(subject) = [
+  => {
+    subject: @subject
+  }
+]
+
+exe @ewp_runtime_update_profile(city, street) = [
+  => {
+    city: @city,
+    street: @street
+  }
+]
+
+exe @ewp_runtime_change_password(password) = [
+  => {
+    password: @password
+  }
+]
+
+var tools @ewpPolicySectionTools = {
+  allowlisted_send_email: {
+    mlld: @ewp_runtime_allowlisted_send_email,
+    inputs: @ewp_allowlisted_send_email_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send an email only to approved recipients."
+  },
+  blocked_subject_send: {
+    mlld: @ewp_runtime_blocked_subject_send,
+    inputs: @ewp_blocked_subject_send_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send an email unless the subject is blocked."
+  },
+  update_profile: {
+    mlld: @ewp_runtime_update_profile,
+    inputs: @ewp_profile_update_inputs,
+    labels: ["execute:w", "tool:w", "update:w"],
+    can_authorize: "role:planner",
+    description: "Update profile fields."
+  },
+  change_password: {
+    mlld: @ewp_runtime_change_password,
+    inputs: @ewp_password_change_inputs,
+    labels: ["execute:w", "tool:w", "privileged:account"],
+    can_authorize: "role:planner",
+    description: "Change the password to an exact task literal."
+  }
+}
+
+var @ewpPolicySectionBasePolicy = {
+  defaults: { rules: [] },
+  operations: {
+    "exfil:send": ["allowlisted_send_email", "blocked_subject_send"],
+    "update:w": ["update_profile"],
+    "privileged:account": ["change_password"]
+  },
+  labels: { influenced: { deny: [] } },
+  authorizations: {
+    deny: [],
+    can_authorize: {
+      "role:planner": [
+        "allowlisted_send_email",
+        "blocked_subject_send",
+        "update_profile",
+        "change_password"
+      ]
+    }
+  }
+}
+
+var tools @ewpPolicySectionPlannerTools = {
+  allowlisted_send_email: {
+    mlld: @ewp_runtime_allowlisted_send_email,
+    inputs: @ewp_allowlisted_send_email_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send an email only to approved recipients."
+  },
+  blocked_subject_send: {
+    mlld: @ewp_runtime_blocked_subject_send,
+    inputs: @ewp_blocked_subject_send_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send an email unless the subject is blocked."
+  },
+  update_profile: {
+    mlld: @ewp_runtime_update_profile,
+    inputs: @ewp_profile_update_inputs,
+    labels: ["execute:w", "tool:w", "update:w"],
+    can_authorize: "role:planner",
+    description: "Update profile fields."
+  },
+  change_password: {
+    mlld: @ewp_runtime_change_password,
+    inputs: @ewp_password_change_inputs,
+    labels: ["execute:w", "tool:w", "privileged:account"],
+    can_authorize: "role:planner",
+    description: "Change the password to an exact task literal."
+  }
+}
+
+>> Policy-build helper must run under role:planner; rebuild for the
+>> allowlist test below.
+exe role:planner @ewpBuildAllowedToolPolicy(toolName, toolCatalog, basePolicy, task) = [
+  let @built = @policy.build(
+    { allow: { [@toolName]: true } },
+    @toolCatalog,
+    { task: @task, basePolicy: @basePolicy }
+  )
+  => @built
+]
+
+var @ewpAllowlistBuiltPolicy = @ewpBuildAllowedToolPolicy(
+  "allowlisted_send_email",
+  @ewpPolicySectionPlannerTools,
+  @ewpPolicySectionBasePolicy,
+  "Send hello to ada@example.com."
+)
+
+
+>> The allowlist-allowed denial-style call: returns either the tool's
+>> structured response, a denial envelope, or a policy-build-invalid
+>> envelope. Hoisted to module-level because the `denied` handler must
+>> be in the same scope as the call.
+var @ewpDispatchAllowlistAllowedResult = when [
+  denied => {
+    error: "denied",
+    reason: @mx.guard.reason,
+    guard: @mx.guard.name ?? null
+  }
+  !@ewpAllowlistBuiltPolicy.valid => {
+    error: "policy_build_invalid",
+    summary: @ewpAllowlistBuiltPolicy.issues | @pretty
+  }
+  * => @ewpPolicySectionTools.allowlisted_send_email(@ewpApprovedRecipient, "hello") with { policy: @ewpAllowlistBuiltPolicy.policy }
+]
+
+>> The exact-rejected case is best exercised by running the dedicated
+>> mlld test fixture and capturing its serialized output. The original
+>> invariant suite uses the same approach because the policy-build
+>> failure surfaces as a printed report rather than a denial event.
+var @dispatchExactRejectedResult = run sh {
+  mlld --new /Users/adam/mlld/mlld/tests/cases/feat/policy/tool-input-record-exact-mismatch/example.mld 2>&1 || true
+}
+var @dispatchExactRejectedRendered = `@dispatchExactRejectedResult`
+
+>> --- Group: control-args ---------------------------------------------------
+
+>> Zero control-arg dispatch: a known-payload create_note must compile and
+>> dispatch cleanly with status: "sent" and no error.
+exe @testExecuteWorkerZeroControlArgPolicy() = [
+  let @actual = {
+    errorBlank: @isBlank(@field(@dispatchCreateNoteResult, "error")),
+    status: @field(@field(@dispatchCreateNoteResult, "result"), "status")
+  }
+  => @assertEq(@actual, { errorBlank: true, status: "sent" })
+]
+
+>> Optional control-arg omission: schedule_meeting omits the optional
+>> participants control-arg entirely. Compile + dispatch must still succeed.
+exe @testExecuteWorkerOptionalFactOmission() = [
+  let @actual = {
+    errorBlank: @isBlank(@field(@dispatchOptionalMeetingResult, "error")),
+    status: @field(@field(@dispatchOptionalMeetingResult, "result"), "status")
+  }
+  => @assertEq(@actual, { errorBlank: true, status: "sent" })
+]
+
+>> Natural-language datetime task wording must canonicalize cleanly
+>> through compileExecuteIntent so dispatch still succeeds.
+exe @testKnownDatetimeCanonicalization() = [
+  let @actual = {
+    errorBlank: @isBlank(@field(@dispatchNaturalDatetimeMeetingResult, "error")),
+    status: @field(@field(@dispatchNaturalDatetimeMeetingResult, "result"), "status")
+  }
+  => @assertEq(@actual, { errorBlank: true, status: "sent" })
+]
+
+>> Known-value control-arg policy: a known participant address passes
+>> through schedule_meeting compile + dispatch without rejection.
+exe @testExecuteWorkerKnownControlArgPolicy() = [
+  let @actual = {
+    errorBlank: @isBlank(@field(@dispatchKnownParticipantMeetingResult, "error")),
+    status: @field(@field(@dispatchKnownParticipantMeetingResult, "result"), "status")
+  }
+  => @assertEq(@actual, { errorBlank: true, status: "sent" })
+]
+
+>> --- Group: input-record-collection ---------------------------------------
+
+>> Tool-collection input-record policy: same call as the known-control-arg
+>> case but routed through the policy-bearing `tools` collection. Verifies
+>> the tool collection's input-record metadata doesn't reject a clean call.
+exe @testExecuteWorkerCollectionInputRecordPolicy() = [
+  let @actual = {
+    errorBlank: @isBlank(@field(@dispatchKnownParticipantMeetingCollectionResult, "error")),
+    status: @field(@field(@dispatchKnownParticipantMeetingCollectionResult, "result"), "status")
+  }
+  => @assertEq(@actual, { errorBlank: true, status: "sent" })
+]
+
+>> Derived-payload arg into a tool with input-record metadata: end_time
+>> reads from a derived availability_check; the policy must accept the
+>> derived ref as a payload arg.
+exe @testExecuteWorkerCollectionDerivedPayloadPolicy() = [
+  let @actual = {
+    errorBlank: @isBlank(@field(@dispatchKnownParticipantMeetingCollectionDerivedPayloadResult, "error")),
+    status: @field(@field(@dispatchKnownParticipantMeetingCollectionDerivedPayloadResult, "result"), "status")
+  }
+  => @assertEq(@actual, { errorBlank: true, status: "sent" })
+]
+
+>> --- Group: allowlist-blocklist-update-exact -------------------------------
+
+>> Allowlist pass: ada@example.com is on the approved list, so the call
+>> succeeds and returns the structured tool payload.
+exe @testInputRecordAllowlistPass() = [
+  let @actual = {
+    errorBlank: @isBlank(@field(@ewpDispatchAllowlistAllowedResult, "error")),
+    recipient: @field(@ewpDispatchAllowlistAllowedResult, "recipient"),
+    subject: @field(@ewpDispatchAllowlistAllowedResult, "subject")
+  }
+  => @assertEq(@actual, {
+    errorBlank: true,
+    recipient: "ada@example.com",
+    subject: "hello"
+  })
+]
+
+>> Allowlist reject: mallory@example.com is NOT on the approved list,
+>> so the dispatcher must deny with code allowlist_mismatch in phase
+>> dispatch. The denial must fire in the same exe scope as the call.
+>> Denial surfaces two ways depending on whether the planner-session/llm-mode
+>> machinery has been warmed up by another suite's module-level code:
+>>   - "cold" path: thrown as a `denied` event with @mx.guard.{code,phase}
+>>   - "hot" path: returned as an error envelope with .ok=false, .code, .phase
+>> Both are valid denial surfaces (same security contract, same fields). Accept either.
+exe @testInputRecordAllowlistReject() = when [
+  denied => when [
+    @field(@mx.guard, "code") == "allowlist_mismatch" && @field(@mx.guard, "phase") == "dispatch" => {
+      ok: true,
+      detail: `denied (event): code=allowlist_mismatch phase=dispatch`
+    }
+    * => {
+      ok: false,
+      detail: `denied but wrong code/phase: code=@field(@mx.guard, "code") phase=@field(@mx.guard, "phase")`
+    }
+  ]
+  !@ewpAllowlistBuiltPolicy.valid => {
+    ok: false,
+    detail: `policy_build_invalid: @ewpAllowlistBuiltPolicy.issues`
+  }
+  * => [
+    let @callResult = @ewpPolicySectionTools.allowlisted_send_email(@ewpRejectedRecipient, "hello") with { policy: @ewpAllowlistBuiltPolicy.policy }
+    => when [
+      @field(@callResult, "ok") == false && @field(@callResult, "code") == "allowlist_mismatch" && @field(@callResult, "phase") == "dispatch" => {
+        ok: true,
+        detail: `denied (envelope): code=allowlist_mismatch phase=dispatch`
+      }
+      * => { ok: false, detail: `expected denial, got: @callResult | @pretty` }
+    ]
+  ]
+]
+
+>> Blocklist reject: subject "blocked subject" matches the blocklist,
+>> so the call must deny with code blocklist_match in phase dispatch.
+exe @testInputRecordBlocklistReject() = when [
+  denied => when [
+    @field(@mx.guard, "code") == "blocklist_match" && @field(@mx.guard, "phase") == "dispatch" => {
+      ok: true,
+      detail: `denied (event): code=blocklist_match phase=dispatch`
+    }
+    * => {
+      ok: false,
+      detail: `denied but wrong code/phase: code=@field(@mx.guard, "code") phase=@field(@mx.guard, "phase")`
+    }
+  ]
+  * => [
+    let @callResult = @ewpPolicySectionTools.blocked_subject_send("blocked subject")
+    => when [
+      @field(@callResult, "ok") == false && @field(@callResult, "code") == "blocklist_match" && @field(@callResult, "phase") == "dispatch" => {
+        ok: true,
+        detail: `denied (envelope): code=blocklist_match phase=dispatch`
+      }
+      * => { ok: false, detail: `expected denial, got: @callResult | @pretty` }
+    ]
+  ]
+]
+
+>> Update with no fields: update_profile() called with no arguments must
+>> deny with code no_update_fields in phase dispatch — update tools require
+>> at least one changed field beyond the control args.
+exe @testInputRecordUpdateRejectsEmptyDispatch() = when [
+  denied => when [
+    @field(@mx.guard, "code") == "no_update_fields" && @field(@mx.guard, "phase") == "dispatch" => {
+      ok: true,
+      detail: `denied (event): code=no_update_fields phase=dispatch`
+    }
+    * => {
+      ok: false,
+      detail: `denied but wrong code/phase: code=@field(@mx.guard, "code") phase=@field(@mx.guard, "phase")`
+    }
+  ]
+  * => [
+    let @callResult = @ewpPolicySectionTools.update_profile()
+    => when [
+      @field(@callResult, "ok") == false && @field(@callResult, "code") == "no_update_fields" && @field(@callResult, "phase") == "dispatch" => {
+        ok: true,
+        detail: `denied (envelope): code=no_update_fields phase=dispatch`
+      }
+      * => { ok: false, detail: `expected denial, got: @callResult | @pretty` }
+    ]
+  ]
+]
+
+>> Exact requires task literal: the `exact: [password]` policy must reject
+>> a known-mode value if the literal is not present in the task. Verified
+>> by running the dedicated mlld policy fixture and asserting on its
+>> stdout — `false`, `exact_not_in_task`, and `subject` must all appear.
+exe @testInputRecordExactRequiresTaskLiteral() = [
+  let @actual = {
+    hasFalse: @dispatchExactRejectedRendered.includes("false"),
+    hasReason: @dispatchExactRejectedRendered.includes("exact_not_in_task"),
+    hasArg: @dispatchExactRejectedRendered.includes("subject")
+  }
+  => @assertEq(@actual, { hasFalse: true, hasReason: true, hasArg: true })
+]
+
+>> --- Suite construction ----------------------------------------------------
+
+var @executeWorkerPolicySuite = @suite("execute-worker-policy", [
+  @group("control-args", [
+    @testExecuteWorkerZeroControlArgPolicy,
+    @testExecuteWorkerOptionalFactOmission,
+    @testKnownDatetimeCanonicalization,
+    @testExecuteWorkerKnownControlArgPolicy
+  ], {}),
+  @group("input-record-collection", [
+    @testExecuteWorkerCollectionInputRecordPolicy,
+    @testExecuteWorkerCollectionDerivedPayloadPolicy
+  ], {}),
+  @group("allowlist-blocklist-update-exact", [
+    @testInputRecordAllowlistPass,
+    @testInputRecordAllowlistReject,
+    @testInputRecordBlocklistReject,
+    @testInputRecordUpdateRejectsEmptyDispatch,
+    @testInputRecordExactRequiresTaskLiteral
+  ], {})
+], {})
+
+export { @executeWorkerPolicySuite }
+
+>> --- Standalone runner -----------------------------------------------------
+
+var @result = @runSuites([@executeWorkerPolicySuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

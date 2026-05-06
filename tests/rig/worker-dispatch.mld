@@ -1,0 +1,577 @@
+>> clean/tests/suites/rig/worker-dispatch.mld
+>>
+>> Worker-dispatch invariants. Covers how the resolve/extract/derive workers
+>> dispatch and how planner-tool wrappers thread session state.
+>>
+>> Tests that require `with { session: @planner, seed: {...} }` are evaluated
+>> at module load (the with clause must be statically visible at the call
+>> site — closure resolution does not work for the session schema). Test exes
+>> then read from the module-level vars.
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+
+import {
+  @records,
+  @tools,
+  @get_contacts,
+  @get_today
+} from "../fixtures.mld"
+import { @rigBuild } from "../../rig/index.mld"
+import {
+  @callTool,
+  @emptyState,
+  @llmCallEntry,
+  @bucketItems,
+  @bucketLength
+} from "../../rig/runtime.mld"
+import { @resolveRefValue } from "../../rig/intent.mld"
+import { @phaseCatalog, @phaseToolEntry, @renderToolDocs } from "../../rig/tooling.mld"
+import { @dispatchResolve } from "../../rig/workers/resolve.mld"
+import { @dispatchExtract } from "../../rig/workers/extract.mld"
+import { @planner, @plannerTools } from "../../rig/workers/planner.mld"
+import { @emptyPlannerRuntime } from "../../rig/session.mld"
+
+>> --- Module-level fixtures (built once, referenced by tests) -------------
+
+>> Reusable resolve:r tool used by the read-tool-docs / read-tool-params tests.
+exe resolve:r, tool:r @search_day_events(query, day) = [
+  => {
+    value: @day,
+    kind: @query
+  }
+] => record @records.datetime_context
+
+var @builtFixtureAgent = @rigBuild({
+  suite: "fixture-build",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools
+})
+
+>> Direct callTool against the catalog (no agent build).
+var @fixtureReadDispatchResult = @callTool(
+  @tools.get_contacts,
+  @tools,
+  "get_contacts",
+  {}
+)
+
+>> Direct callTool through a built agent's toolsCollection.
+var @builtFixtureReadDispatchResult = @callTool(
+  @builtFixtureAgent.tools.get_contacts,
+  @builtFixtureAgent.toolsCollection,
+  "get_contacts",
+  {}
+)
+
+>> Phase catalog round-trip.
+var @resolvePhaseCatalog = @phaseCatalog(@builtFixtureAgent, "resolve")
+var @phaseCatalogDispatchResult = @callTool(
+  @resolvePhaseCatalog.get_contacts,
+  @builtFixtureAgent.toolsCollection,
+  "get_contacts",
+  {}
+)
+var @phaseToolEntryValue = @phaseToolEntry(@builtFixtureAgent, "resolve", "get_contacts")
+var @phaseToolEntryDispatchResult = @callTool(
+  @phaseToolEntryValue,
+  @builtFixtureAgent.toolsCollection,
+  "get_contacts",
+  {}
+)
+
+>> Resolve-worker dispatches.
+var @dispatchResolveResult = @dispatchResolve(
+  @builtFixtureAgent,
+  @emptyState(),
+  {
+    phase: "resolve",
+    tool: "get_contacts",
+    args: {},
+    purpose: "ground the contact list"
+  },
+  "Find Alice in my contacts."
+)
+var @dispatchScalarResolveResult = @dispatchResolve(
+  @builtFixtureAgent,
+  @emptyState(),
+  {
+    phase: "resolve",
+    tool: "get_today",
+    args: {},
+    purpose: "ground one synthetic day context"
+  },
+  "What day is it?"
+)
+
+>> Planner-tool dispatch (single resolve).
+exe llm @testPlannerResolve(prompt, config) = [
+  => @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.args)
+]
+var @plannerResolveDispatchResult = @testPlannerResolve("test", {
+  args: { tool: "get_today", args: {}, purpose: "ground one synthetic day context" }
+}) with {
+  session: @planner,
+  seed: { agent: @builtFixtureAgent, query: "What day is it?", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+
+>> Planner-tool resolve_batch.
+exe llm @testPlannerResolveBatch(prompt, config) = [
+  let @batchResult = @callTool(@plannerTools.resolve_batch, @plannerTools, "resolve_batch", @config.args)
+  let @stateAfter = @planner.state
+  let @runtimeAfter = @planner.runtime
+  => {
+    result: @batchResult,
+    state: @stateAfter,
+    runtime: @runtimeAfter
+  }
+]
+var @plannerResolveBatchDispatch = @testPlannerResolveBatch("test", {
+  args: {
+    resolves: [
+      { tool: "get_contacts", args: {}, purpose: "ground contacts" },
+      { tool: "get_today", args: {}, purpose: "ground today" }
+    ],
+    purpose: "ground two independent record families"
+  }
+}) with {
+  session: @planner,
+  seed: { agent: @builtFixtureAgent, query: "Find Alice and today's date.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+
+>> Planner extract chain (resolve + ref + extract).
+var @plannerExtractFixtureAgent = @rigBuild({
+  suite: "fixture-planner-extract",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  overrides: {
+    stub: {
+      extract: [{
+        status: "ok",
+        schema_name: "contact",
+        name: "contact_details",
+        provenance: "extracted",
+        preview_fields: ["email", "name"],
+        payload: {
+          email: "alice.example",
+          name: "Alice",
+          notes: "planner-hidden note"
+        }
+      }]
+    }
+  }
+})
+exe llm @testPlannerExtractChain(prompt, config) = [
+  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.resolveArgs)
+  let @stateAfterResolve = @planner.state
+  let @resolvedEmail = @resolveRefValue(@stateAfterResolve, @config.refValue)
+  let @extractResult = @callTool(@plannerTools.extract, @plannerTools, "extract", @config.extractArgs)
+  let @stateAfterExtract = @planner.state
+  => {
+    resolveResult: @resolveResult,
+    stateAfterResolve: @stateAfterResolve,
+    resolvedEmail: @resolvedEmail,
+    extractResult: @extractResult,
+    stateAfterExtract: @stateAfterExtract
+  }
+]
+var @extractChainResult = @testPlannerExtractChain("test", {
+  resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+  refValue: { source: "resolved", record: "contact", handle: "r_contact_alice.example", field: "email" },
+  extractArgs: {
+    source: { source: "resolved", record: "contact", handle: "r_contact_alice.example" },
+    schema: { email: "string", name: "string" },
+    name: "contact_details",
+    purpose: "inspect one resolved contact"
+  }
+}) with {
+  session: @planner,
+  seed: { agent: @plannerExtractFixtureAgent, query: "Find Alice in my contacts.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+var @plannerResolveContactsResult = @extractChainResult.resolveResult
+var @plannerStateAfterContactResolve = @extractChainResult.stateAfterResolve
+var @plannerResolvedContactEmail = @extractChainResult.resolvedEmail
+var @plannerExtractDispatchResult = @extractChainResult.extractResult
+var @sessionFinalState = @extractChainResult.mx.sessions.planner
+
+>> Planner text-only call (for llmCallEntry session-snapshot omission test).
+exe llm @testPlannerTextResult(prompt, config) = [
+  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.args)
+  => "planner final text"
+]
+var @plannerTextResult = @testPlannerTextResult("test", {
+  args: { tool: "get_today", args: {}, purpose: "ground one synthetic day context" }
+}) with {
+  session: @planner,
+  seed: { agent: @builtFixtureAgent, query: "What day is it?", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+var @llmCallEntrySessionLog = @llmCallEntry("planner", "prompt", @plannerTextResult, null, "ses_debug", {
+  call_kind: "outer_planner",
+  outer_planner_session_id: "ses_debug"
+})
+var @llmCallEntrySessionLogPretty = @llmCallEntrySessionLog | @pretty
+
+>> Session factsource probes.
+var @sessionContactEntries = @bucketItems(@sessionFinalState.state.resolved.contact)
+var @sessionResolvedEntry = @sessionContactEntries[0]
+var @sessionContactCount = @bucketLength(@sessionFinalState.state.resolved.contact)
+var @sessionIdentityFs = @sessionResolvedEntry.identity_value.mx.factsources ?? []
+var @sessionFieldFs = @sessionResolvedEntry.field_values.email.mx.factsources ?? []
+var @sessionValueFs = @sessionResolvedEntry.value.email.mx.factsources ?? []
+var @sessionResolvedEmailFs = @plannerResolvedContactEmail.value.mx.factsources ?? []
+
+>> Planner derive chain.
+var @plannerDeriveFixtureAgent = @rigBuild({
+  suite: "fixture-planner-derive",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools,
+  overrides: {
+    stub: {
+      derive: [{
+        status: "derived",
+        schema_name: "action_items",
+        name: "action_items",
+        provenance: "derived",
+        payload: {
+          items: [{
+            person_name: "Alice",
+            task_description: "Send the launch update",
+            deadline: "2026-04-23"
+          }]
+        },
+        summary: "derived action_items"
+      }],
+      extract: [{
+        status: "extracted",
+        schema_name: "inline-schema",
+        name: "action_items_copy",
+        provenance: "extracted",
+        preview_fields: ["person_name", "task_description", "deadline"],
+        payload: {
+          person_name: "Alice",
+          task_description: "Send the launch update",
+          deadline: "2026-04-23"
+        },
+        summary: "extracted action_items_copy"
+      }]
+    }
+  }
+})
+exe llm @testPlannerDeriveChain(prompt, config) = [
+  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.resolveArgs)
+  let @deriveResult = @callTool(@plannerTools.derive, @plannerTools, "derive", @config.deriveArgs)
+  let @extractDerivedResult = @callTool(@plannerTools.extract, @plannerTools, "extract", @config.extractArgs)
+  => {
+    resolveResult: @resolveResult,
+    deriveResult: @deriveResult,
+    extractDerivedResult: @extractDerivedResult
+  }
+]
+var @deriveChainResult = @testPlannerDeriveChain("test", {
+  resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+  deriveArgs: {
+    sources: [{ source: "resolved", record: "contact" }],
+    goal: "Extract the action items into a typed array",
+    schema_name: "action_items",
+    name: "action_items",
+    purpose: "prepare one action-item worklist"
+  },
+  extractArgs: {
+    source: { source: "derived", name: "action_items" },
+    schema: { person_name: "string", task_description: "string", deadline: "string" },
+    name: "action_items_copy",
+    purpose: "inspect the derived action items"
+  }
+}) with {
+  session: @planner,
+  seed: { agent: @plannerDeriveFixtureAgent, query: "Email each person in the TODO list.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+}
+var @plannerDeriveResolveResult = @deriveChainResult.resolveResult
+var @plannerDeriveDispatchResult = @deriveChainResult.deriveResult
+var @plannerExtractDerivedResult = @deriveChainResult.extractDerivedResult
+
+>> Read-tool-arg fixture: every param is control by labeling.
+var tools @readArgFixtureTools = {
+  search_day_events: {
+    mlld: @search_day_events,
+    returns: @records.datetime_context,
+    labels: ["resolve:r"],
+    description: "Search one synthetic day context by query and day."
+  }
+}
+var @readArgFixtureAgent = @rigBuild({
+  suite: "fixture-read-args",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @readArgFixtureTools
+})
+var @readArgDoc = @renderToolDocs(@readArgFixtureTools)[0]
+var @dispatchReadArgResolveResult = @dispatchResolve(
+  @readArgFixtureAgent,
+  @emptyState(),
+  {
+    phase: "resolve",
+    tool: "search_day_events",
+    args: {
+      query: { source: "known", value: "lunch" },
+      day: { source: "known", value: "2026-04-21" }
+    },
+    purpose: "ground one synthetic day search result"
+  },
+  "Am I free for lunch at 12:00 on 2026-04-21?"
+)
+
+>> Wrong-phase tool dispatches.
+var @wrongPhaseExtractResult = @dispatchExtract(
+  @builtFixtureAgent,
+  @emptyState(),
+  {
+    phase: "extract",
+    tool: "get_contacts",
+    args: {},
+    name: "contact_details",
+    purpose: "inspect grounded contacts"
+  },
+  "Find Alice in my contacts."
+)
+var @wrongPhaseResolveResult = @dispatchResolve(
+  @builtFixtureAgent,
+  @emptyState(),
+  {
+    phase: "resolve",
+    tool: "get_webpage",
+    args: {
+      url: { source: "known", value: "https://example.com" }
+    },
+    purpose: "fetch one webpage"
+  },
+  "Fetch https://example.com."
+)
+
+>> --- Helpers -------------------------------------------------------------
+
+exe @field(inputValue, key) = js {
+  return inputValue?.[key] ?? null;
+}
+
+>> --- Tests ---------------------------------------------------------------
+
+exe @testFixtureReadDispatch() = [
+  let @ok = @typeof(@fixtureReadDispatchResult) == "array" &&
+    @fixtureReadDispatchResult.length == 2
+  => @assertOk(@ok, `count=@fixtureReadDispatchResult.length`)
+]
+
+exe @testBuiltAgentReadDispatch() = [
+  let @ok = @typeof(@builtFixtureReadDispatchResult) == "array" &&
+    @builtFixtureReadDispatchResult.length == 2
+  => @assertOk(@ok, `count=@builtFixtureReadDispatchResult.length`)
+]
+
+exe @testPhaseCatalogPreservesCallability() = [
+  let @ok = @typeof(@phaseCatalogDispatchResult) == "array" &&
+    @phaseCatalogDispatchResult.length == 2
+  => @assertOk(@ok, `count=@phaseCatalogDispatchResult.length`)
+]
+
+exe @testPhaseToolEntryPreservesCallability() = [
+  let @ok = @typeof(@phaseToolEntryDispatchResult) == "array" &&
+    @phaseToolEntryDispatchResult.length == 2
+  => @assertOk(@ok, `count=@phaseToolEntryDispatchResult.length`)
+]
+
+exe @testResolveWorkerSuccessPath() = [
+  let @ok = @dispatchResolveResult["error"] == null &&
+    @dispatchResolveResult.result.status == "resolved" &&
+    @dispatchResolveResult.result.count == 2
+  => @assertOk(@ok, `error=@dispatchResolveResult["error"] status=@dispatchResolveResult.result.status count=@dispatchResolveResult.result.count`)
+]
+
+exe @testResolveWorkerScalarKeyedPath() = [
+  let @ok = @dispatchScalarResolveResult["error"] == null &&
+    @dispatchScalarResolveResult.result.status == "resolved" &&
+    @dispatchScalarResolveResult.result.count == 1 &&
+    @dispatchScalarResolveResult.result.record_type == "datetime_context"
+  => @assertOk(@ok, `status=@dispatchScalarResolveResult.result.status count=@dispatchScalarResolveResult.result.count record=@dispatchScalarResolveResult.result.record_type`)
+]
+
+exe @testPlannerToolCollectionDispatchDoesNotRecurse() = [
+  let @ok = @plannerResolveDispatchResult["error"] == null &&
+    @plannerResolveDispatchResult.status == "resolved" &&
+    @plannerResolveDispatchResult.count == 1 &&
+    @plannerResolveDispatchResult.record_type == "datetime_context"
+  => @assertOk(@ok, `status=@plannerResolveDispatchResult.status count=@plannerResolveDispatchResult.count record=@plannerResolveDispatchResult.record_type`)
+]
+
+exe @testPlannerResolveBatchSettlesOnce() = [
+  let @ok = @plannerResolveBatchDispatch.result["error"] == null &&
+    @plannerResolveBatchDispatch.result.status == "batch_resolved" &&
+    @plannerResolveBatchDispatch.result.results.length == 2 &&
+    @bucketLength(@plannerResolveBatchDispatch.state.resolved.contact) == 2 &&
+    @bucketLength(@plannerResolveBatchDispatch.state.resolved.datetime_context) == 1 &&
+    @plannerResolveBatchDispatch.runtime.tool_calls == 1
+  => @assertOk(@ok, `tool_calls=@plannerResolveBatchDispatch.runtime.tool_calls results=@plannerResolveBatchDispatch.result.results.length`)
+]
+
+exe @testPlannerSessionStatePersistsAcrossDirectPlannerToolCalls() = [
+  let @ok = @plannerResolveContactsResult["error"] == null &&
+    @plannerResolveContactsResult.status == "resolved" &&
+    @plannerResolveContactsResult.count == 2 &&
+    @bucketLength(@plannerStateAfterContactResolve.resolved.contact) == 2
+  => @assertOk(@ok, `status=@plannerResolveContactsResult.status count=@plannerResolveContactsResult.count buckets=@bucketLength(@plannerStateAfterContactResolve.resolved.contact)`)
+]
+
+exe @testSessionFinalStateAccessibleViaMxSessions() = [
+  let @ok = @sessionFinalState.isDefined() &&
+    @sessionFinalState.runtime.tool_calls == 2 &&
+    @bucketLength(@sessionFinalState.state.resolved.contact) == 2
+  => @assertOk(@ok, `runtime_calls=@sessionFinalState.runtime.tool_calls resolved=@sessionContactCount`)
+]
+
+exe @testLlmCallLogOmitsSessionSnapshot() = [
+  let @raw = @field(@llmCallEntrySessionLog, "raw")
+  let @sessionId = @field(@llmCallEntrySessionLog, "session_id")
+  let @ok = @raw == "planner final text" &&
+    @sessionId == "ses_debug" &&
+    !@llmCallEntrySessionLogPretty.includes("sessions")
+  => @assertOk(@ok, `raw=@raw log=@llmCallEntrySessionLogPretty`)
+]
+
+exe @testSessionResolvedFactsourcesSurviveBoundary() = [
+  let @ok = @sessionIdentityFs.length > 0 &&
+    @sessionFieldFs.length > 0 &&
+    @sessionValueFs.length > 0 &&
+    @sessionResolvedEmailFs.length > 0
+  => @assertOk(@ok, `identity=@sessionIdentityFs.length field=@sessionFieldFs.length value=@sessionValueFs.length resolved=@sessionResolvedEmailFs.length`)
+]
+
+exe @testPlannerSessionResolvedHandleRemainsReadableAfterDirectResolve() = [
+  let @ok = @plannerResolvedContactEmail.ok == true &&
+    @plannerResolvedContactEmail.value == "alice.example"
+  => @assertOk(@ok, `ok=@plannerResolvedContactEmail.ok value=@plannerResolvedContactEmail.value`)
+]
+
+exe @testPlannerSourceBackedExtractWorksOnDirectPlannerToolPath() = [
+  let @ok = @plannerExtractDispatchResult["error"] == null &&
+    @plannerExtractDispatchResult.status == "extracted" &&
+    @plannerExtractDispatchResult.name == "contact_details"
+  => @assertOk(@ok, `status=@plannerExtractDispatchResult.status name=@plannerExtractDispatchResult.name`)
+]
+
+exe @testPlannerDeriveExposesPreviewFields() = [
+  let @ok = @plannerDeriveResolveResult["error"] == null &&
+    @plannerDeriveDispatchResult["error"] == null &&
+    @plannerDeriveDispatchResult.status == "derived" &&
+    @plannerDeriveDispatchResult.name == "action_items" &&
+    @plannerDeriveDispatchResult.schema_name == "action_items" &&
+    @plannerDeriveDispatchResult.preview_fields.includes("person_name") &&
+    @plannerDeriveDispatchResult.preview_fields.includes("task_description") &&
+    @plannerDeriveDispatchResult.preview_fields.includes("deadline")
+  => @assertOk(@ok, `status=@plannerDeriveDispatchResult.status name=@plannerDeriveDispatchResult.name`)
+]
+
+exe @testPlannerExtractFromDerivedSourceDoesNotRecurse() = [
+  let @ok = @plannerExtractDerivedResult["error"] == null &&
+    @plannerExtractDerivedResult.status == "extracted" &&
+    @plannerExtractDerivedResult.name == "action_items_copy"
+  => @assertOk(@ok, `status=@plannerExtractDerivedResult.status name=@plannerExtractDerivedResult.name`)
+]
+
+exe @testReadToolDocsClassifyAllReadParamsAsControl() = [
+  let @control = @field(@readArgDoc, "controlArgs")
+  let @payload = @field(@readArgDoc, "payloadArgs")
+  let @ok = @control.includes("query") &&
+    @control.includes("day") &&
+    @payload.length == 0
+  => @assertOk(@ok, `control=@control payload=@payload`)
+]
+
+exe @testResolveWorkerAcceptsReadToolParamsWithoutLegacyControlArgs() = [
+  let @ok = @dispatchReadArgResolveResult["error"] == null &&
+    @dispatchReadArgResolveResult.result.status == "resolved" &&
+    @dispatchReadArgResolveResult.result.count == 1 &&
+    @dispatchReadArgResolveResult.result.record_type == "datetime_context"
+  => @assertOk(@ok, `status=@dispatchReadArgResolveResult.result.status count=@dispatchReadArgResolveResult.result.count`)
+]
+
+exe @testExtractWorkerGuidesWrongPhaseReadTool() = [
+  let @issues = @wrongPhaseExtractResult.issues ?? []
+  let @issue = @issues[0] ?? null
+  let @ok = @wrongPhaseExtractResult.error == "wrong_phase_tool" &&
+    @field(@issue, "tool") == "get_contacts" &&
+    @field(@issue, "requested_phase") == "extract" &&
+    @field(@issue, "correct_phase") == "resolve" &&
+    @field(@issue, "repair").includes("Call resolve(")
+  => @assertOk(@ok, `error=@wrongPhaseExtractResult.error tool=@field(@issue, "tool") correct=@field(@issue, "correct_phase")`)
+]
+
+exe @testResolveWorkerGuidesWrongPhaseExtractTool() = [
+  let @issues = @wrongPhaseResolveResult.issues ?? []
+  let @issue = @issues[0] ?? null
+  let @ok = @wrongPhaseResolveResult.error == "wrong_phase_tool" &&
+    @field(@issue, "tool") == "get_webpage" &&
+    @field(@issue, "requested_phase") == "resolve" &&
+    @field(@issue, "correct_phase") == "extract" &&
+    @field(@issue, "repair").includes("Call extract(")
+  => @assertOk(@ok, `error=@wrongPhaseResolveResult.error tool=@field(@issue, "tool") correct=@field(@issue, "correct_phase")`)
+]
+
+>> --- Suite ---------------------------------------------------------------
+
+var @workerDispatchSuite = @suite("worker-dispatch", [
+  @group("read-dispatch", [
+    @testFixtureReadDispatch,
+    @testBuiltAgentReadDispatch
+  ], {}),
+  @group("phase-catalog", [
+    @testPhaseCatalogPreservesCallability,
+    @testPhaseToolEntryPreservesCallability
+  ], {}),
+  @group("resolve-worker", [
+    @testResolveWorkerSuccessPath,
+    @testResolveWorkerScalarKeyedPath,
+    @testResolveWorkerAcceptsReadToolParamsWithoutLegacyControlArgs,
+    @testResolveWorkerGuidesWrongPhaseExtractTool
+  ], {}),
+  @group("extract-worker", [
+    @testExtractWorkerGuidesWrongPhaseReadTool
+  ], {}),
+  @group("planner-session", [
+    @testPlannerToolCollectionDispatchDoesNotRecurse,
+    @testPlannerResolveBatchSettlesOnce,
+    @testPlannerSessionStatePersistsAcrossDirectPlannerToolCalls,
+    @testSessionFinalStateAccessibleViaMxSessions,
+    @testLlmCallLogOmitsSessionSnapshot,
+    @testSessionResolvedFactsourcesSurviveBoundary,
+    @testPlannerSessionResolvedHandleRemainsReadableAfterDirectResolve,
+    @testPlannerSourceBackedExtractWorksOnDirectPlannerToolPath,
+    @testPlannerDeriveExposesPreviewFields,
+    @testPlannerExtractFromDerivedSourceDoesNotRecurse
+  ], {}),
+  @group("read-tool-docs", [
+    @testReadToolDocsClassifyAllReadParamsAsControl
+  ], {})
+], {})
+
+export { @workerDispatchSuite }
+
+>> --- Standalone runner ---------------------------------------------------
+
+var @result = @runSuites([@workerDispatchSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+if @result.skippedLine != "" [ show @result.skippedLine ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

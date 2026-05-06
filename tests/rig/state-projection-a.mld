@@ -1,0 +1,321 @@
+>> tests/suites/rig/state-projection-a.mld
+>>
+>> Plain-assertion tests for state-projection contract (c-5a24, c-eda4, c-63fe).
+>> Group A: @mergeResolvedEntries dedup + partial-record field merge.
+>> Group B: @batchSpecMergeState parallel-spec accumulation + delta path.
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import {
+  @mergeResolvedEntries,
+  @updateResolvedState,
+  @batchSpecMergeState,
+  @projectResolvedSummary,
+  @bucketItems,
+  @bucketLength,
+  @isResolvedIndexBucket,
+  @plainObjectKeys,
+  @workerStateSummary,
+  @emptyState
+} from "../../rig/runtime.mld"
+
+>> --- A8 fixture (record directive must live at module scope) ----------------
+
+record @spA8Hotel = {
+  facts: [name: string],
+  data: { trusted: [address: string?, price_range: string?] },
+  key: name,
+  display: {
+    worker: [{ ref: "name" }, address, price_range],
+    planner: [{ ref: "name" }, address, price_range]
+  }
+}
+
+>> --- Group A: @mergeResolvedEntries dedup + partial-record field merge ------
+
+exe @testA1MergeDedupByHandle() = [
+  let @existing = [
+    { handle: "h1", key: "k1", identity_field: "name", identity_value: "alpha", field_values: { name: "alpha", city: "Paris" } },
+    { handle: "h2", key: "k2", identity_field: "name", identity_value: "beta",  field_values: { name: "beta",  city: "Paris" } }
+  ]
+  let @incoming = [
+    { handle: "h1", key: "k1", identity_field: "name", identity_value: "alpha-updated", field_values: { name: "alpha-updated", city: "Paris" } },
+    { handle: "h3", key: "k3", identity_field: "name", identity_value: "gamma", field_values: { name: "gamma", city: "Paris" } }
+  ]
+  let @bucket = @mergeResolvedEntries(@existing, @incoming)
+  let @merged = @bucketItems(@bucket)
+  let @h1Matches = for @e in @merged when @e.handle == "h1" => @e.identity_value
+  let @h2Matches = for @e in @merged when @e.handle == "h2" => @e.identity_value
+  let @h3Matches = for @e in @merged when @e.handle == "h3" => @e.identity_value
+  let @actual = {
+    length: @merged.length,
+    h1: @h1Matches[0],
+    h2: @h2Matches[0],
+    h3: @h3Matches[0],
+    indexed: @isResolvedIndexBucket(@bucket)
+  }
+  => @assertEq(@actual, { length: 3, h1: "alpha-updated", h2: "beta", h3: "gamma", indexed: true })
+]
+
+exe @testA2MergeFromEmptyExisting() = [
+  let @incoming = [
+    { handle: "h1", key: "k1", identity_field: "name", identity_value: "alpha-updated", field_values: { name: "alpha-updated" } },
+    { handle: "h3", key: "k3", identity_field: "name", identity_value: "gamma", field_values: { name: "gamma" } }
+  ]
+  let @bucket = @mergeResolvedEntries([], @incoming)
+  let @items = @bucketItems(@bucket)
+  let @actual = { length: @items.length, h0: @items[0].handle, h1: @items[1].handle }
+  => @assertEq(@actual, { length: 2, h0: "h1", h1: "h3" })
+]
+
+exe @testA3MergeNoIncomingKeepsExisting() = [
+  let @existing = [
+    { handle: "h1", key: "k1", identity_field: "name", identity_value: "alpha", field_values: { name: "alpha" } },
+    { handle: "h2", key: "k2", identity_field: "name", identity_value: "beta",  field_values: { name: "beta" } }
+  ]
+  let @bucket = @mergeResolvedEntries(@existing, [])
+  let @items = @bucketItems(@bucket)
+  let @actual = { length: @items.length, h0: @items[0].handle, h1: @items[1].handle }
+  => @assertEq(@actual, { length: 2, h0: "h1", h1: "h2" })
+]
+
+exe @testA4MergeDuplicateIncomingLastWins() = [
+  let @dup = [
+    { handle: "h9", key: "k9", identity_field: "name", identity_value: "first",  field_values: { name: "first" } },
+    { handle: "h9", key: "k9", identity_field: "name", identity_value: "second", field_values: { name: "second" } }
+  ]
+  let @bucket = @mergeResolvedEntries([], @dup)
+  let @items = @bucketItems(@bucket)
+  let @actual = { length: @items.length, identity: @items[0].identity_value }
+  => @assertEq(@actual, { length: 1, identity: "second" })
+]
+
+exe @testA5C5a24PartialFieldMergeAccumulates() = [
+  let @addressEntry = {
+    handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+    field_values: { name: "Hotel X", address: "23 Rue Lepic" }
+  }
+  let @priceEntry = {
+    handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+    field_values: { name: "Hotel X", price_range: "100" }
+  }
+  let @b1 = @mergeResolvedEntries([], [@addressEntry])
+  let @b2 = @mergeResolvedEntries(@b1, [@priceEntry])
+  let @items = @bucketItems(@b2)
+  let @entry = @items[0]
+  let @actual = {
+    length: @items.length,
+    address: @entry.field_values.address,
+    price: @entry.field_values.price_range,
+    name: @entry.field_values.name
+  }
+  => @assertEq(@actual, { length: 1, address: "23 Rue Lepic", price: "100", name: "Hotel X" })
+]
+
+exe @testA6C5a24NullIncomingPreservesExisting() = [
+  let @existing = {
+    handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+    field_values: { name: "Hotel X", address: "23 Rue Lepic" }
+  }
+  let @incomingNull = {
+    handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+    field_values: { name: "Hotel X", address: null }
+  }
+  let @b1 = @mergeResolvedEntries([], [@existing])
+  let @b2 = @mergeResolvedEntries(@b1, [@incomingNull])
+  let @items = @bucketItems(@b2)
+  => @assertEq(@items[0].field_values.address, "23 Rue Lepic")
+]
+
+exe @testA7C5a24NonnullIncomingOverrides() = [
+  let @oldEntry = {
+    handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+    field_values: { name: "Hotel X", address: "OLD" }
+  }
+  let @newEntry = {
+    handle: "h-hotel", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+    field_values: { name: "Hotel X", address: "NEW" }
+  }
+  let @b1 = @mergeResolvedEntries([], [@oldEntry])
+  let @b2 = @mergeResolvedEntries(@b1, [@newEntry])
+  let @items = @bucketItems(@b2)
+  => @assertEq(@items[0].field_values.address, "NEW")
+]
+
+exe @testA8C5a24WorkerProjectionSeesMergedFields() = [
+  let @records = { hotel: @spA8Hotel }
+  let @addressEntry = {
+    handle: "r_hotel_HotelX", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+    value: { name: "Hotel X", address: "23 Rue Lepic" },
+    field_values: { name: "Hotel X", address: "23 Rue Lepic" }
+  }
+  let @priceEntry = {
+    handle: "r_hotel_HotelX", key: "Hotel X", identity_field: "name", identity_value: "Hotel X",
+    value: { name: "Hotel X", price_range: "100" },
+    field_values: { name: "Hotel X", price_range: "100" }
+  }
+  let @b1 = @mergeResolvedEntries([], [@addressEntry])
+  let @b2 = @mergeResolvedEntries(@b1, [@priceEntry])
+  let @state = { resolved: { hotel: @b2 }, extracted: {}, derived: {}, extract_sources: {} }
+  let @summary = @workerStateSummary({ records: @records }, @state)
+  let @h0 = @summary.resolved.hotel[0]
+  let @actual = { address: @h0.address, price_range: @h0.price_range }
+  => @assertEq(@actual, { address: "23 Rue Lepic", price_range: "100" })
+]
+
+>> --- Group B: @batchSpecMergeState parallel-spec accumulation + delta -------
+
+exe @testB1UpdateIsolatesNamedBucket() = [
+  let @state = {
+    resolved: {
+      contact: [{ handle: "c1", key: "alice", identity_field: "name", identity_value: "alice", field_values: { name: "alice" } }],
+      other: [{ handle: "o1", key: "x", identity_field: "name", identity_value: "x", field_values: { name: "x" } }]
+    },
+    extracted: { ext1: { provenance: "extracted", value: "preserved" } },
+    derived: { der1: { provenance: "derived", value: "preserved" } },
+    extract_sources: { src1: "name1" }
+  }
+  let @newContacts = [
+    { handle: "c2", key: "bob", identity_field: "name", identity_value: "bob", field_values: { name: "bob" } }
+  ]
+  let @updated = @updateResolvedState(@state, "contact", @newContacts)
+  let @actual = {
+    contact: @bucketLength(@updated.resolved.contact),
+    other: @bucketLength(@updated.resolved.other),
+    ext: @updated.extracted.ext1.value,
+    der: @updated.derived.der1.value,
+    src: @updated.extract_sources.src1
+  }
+  => @assertEq(@actual, { contact: 2, other: 1, ext: "preserved", der: "preserved", src: "name1" })
+]
+
+exe @testB2CEda4BatchSpecMergeAccumulatesRecordTypes() = [
+  let @initial = @emptyState()
+  let @hotelEntries = [
+    { handle: "r_hotel_A", key: "Hotel A", identity_field: "name", identity_value: "Hotel A", field_values: { name: "Hotel A" } }
+  ]
+  let @restEntries = [
+    { handle: "r_restaurant_X", key: "X", identity_field: "name", identity_value: "X", field_values: { name: "X" } },
+    { handle: "r_restaurant_Y", key: "Y", identity_field: "name", identity_value: "Y", field_values: { name: "Y" } }
+  ]
+  let @hotelSpecState = @updateResolvedState(@initial, "hotel", @hotelEntries)
+  let @restSpecState  = @updateResolvedState(@initial, "restaurant", @restEntries)
+  let @hotelPR = { state: @hotelSpecState, result: { record_type: "hotel", count: 1, handles: ["r_hotel_A"], summary: "" } }
+  let @restPR  = { state: @restSpecState,  result: { record_type: "restaurant", count: 2, handles: ["r_restaurant_X", "r_restaurant_Y"], summary: "" } }
+  let @agent = { records: {} }
+  let @after1 = @batchSpecMergeState(@initial, @hotelPR, @agent)
+  let @after2 = @batchSpecMergeState(@after1, @restPR, @agent)
+  let @actual = {
+    hotels: @bucketLength(@after2.resolved.hotel ?? {}),
+    restaurants: @bucketLength(@after2.resolved.restaurant ?? {})
+  }
+  => @assertEq(@actual, { hotels: 1, restaurants: 2 })
+]
+
+exe @testB3CEda4ErrorSpecLeavesCumulativeUnchanged() = [
+  let @initial = @emptyState()
+  let @hotelEntries = [
+    { handle: "r_hotel_A", key: "Hotel A", identity_field: "name", identity_value: "Hotel A", field_values: { name: "Hotel A" } }
+  ]
+  let @restEntries = [
+    { handle: "r_restaurant_X", key: "X", identity_field: "name", identity_value: "X", field_values: { name: "X" } },
+    { handle: "r_restaurant_Y", key: "Y", identity_field: "name", identity_value: "Y", field_values: { name: "Y" } }
+  ]
+  let @hotelSpecState = @updateResolvedState(@initial, "hotel", @hotelEntries)
+  let @restSpecState  = @updateResolvedState(@initial, "restaurant", @restEntries)
+  let @hotelPR = { state: @hotelSpecState, result: { record_type: "hotel", count: 1, handles: ["r_hotel_A"], summary: "" } }
+  let @restPR  = { state: @restSpecState,  result: { record_type: "restaurant", count: 2, handles: ["r_restaurant_X", "r_restaurant_Y"], summary: "" } }
+  let @agent = { records: {} }
+  let @after1 = @batchSpecMergeState(@initial, @hotelPR, @agent)
+  let @after2 = @batchSpecMergeState(@after1, @restPR, @agent)
+  let @errPR = { error: "intent_compile_failed", state: @initial, result: {} }
+  let @after3 = @batchSpecMergeState(@after2, @errPR, @agent)
+  let @actual = {
+    hotels: @bucketLength(@after3.resolved.hotel ?? {}),
+    restaurants: @bucketLength(@after3.resolved.restaurant ?? {})
+  }
+  => @assertEq(@actual, { hotels: 1, restaurants: 2 })
+]
+
+exe @testB4CEda4SameRecordTypeBatchSpecsFieldMerge() = [
+  let @initial = @emptyState()
+  let @addrEntry = { handle: "r_hotel_A", key: "Hotel A", identity_field: "name", identity_value: "Hotel A", field_values: { name: "Hotel A", address: "1 Rue X" } }
+  let @priceEntry = { handle: "r_hotel_A", key: "Hotel A", identity_field: "name", identity_value: "Hotel A", field_values: { name: "Hotel A", price_range: "100" } }
+  let @addrState = @updateResolvedState(@initial, "hotel", [@addrEntry])
+  let @priceState = @updateResolvedState(@initial, "hotel", [@priceEntry])
+  let @addrPR = { state: @addrState, result: { record_type: "hotel", count: 1, handles: ["r_hotel_A"] } }
+  let @pricePR = { state: @priceState, result: { record_type: "hotel", count: 1, handles: ["r_hotel_A"] } }
+  let @agent = { records: {} }
+  let @after1 = @batchSpecMergeState(@initial, @addrPR, @agent)
+  let @after2 = @batchSpecMergeState(@after1, @pricePR, @agent)
+  let @items = @bucketItems(@after2.resolved.hotel)
+  let @entry = @items[0]
+  let @actual = {
+    length: @items.length,
+    address: @entry.field_values.address,
+    price: @entry.field_values.price_range
+  }
+  => @assertEq(@actual, { length: 1, address: "1 Rue X", price: "100" })
+]
+
+exe @testB5C63feBatchSpecMergePrefersDelta() = [
+  let @initial = @emptyState()
+  let @initEntry = { handle: "r_hotel_base", key: "Base", identity_field: "name", identity_value: "Base", field_values: { name: "Base" } }
+  let @deltaEntry = { handle: "r_hotel_delta", key: "Delta", identity_field: "name", identity_value: "Delta", field_values: { name: "Delta" } }
+  let @bogusEntry = { handle: "r_hotel_bogus", key: "Bogus", identity_field: "name", identity_value: "Bogus", field_values: { name: "Bogus" } }
+  let @baseState = @updateResolvedState(@initial, "hotel", [@initEntry])
+  let @bogusState = @updateResolvedState(@baseState, "hotel", [@bogusEntry])
+  let @phaseResult = {
+    state: @bogusState,
+    state_delta: { resolved: { hotel: [@deltaEntry] } },
+    result: { record_type: "hotel", count: 1, handles: ["r_hotel_delta"] }
+  }
+  let @agent = { records: {} }
+  let @after = @batchSpecMergeState(@baseState, @phaseResult, @agent)
+  let @items = @bucketItems(@after.resolved.hotel)
+  let @handles = for @entry in @items => `@entry.handle`
+  let @actual = {
+    length: @items.length,
+    hasBase: @handles.includes("r_hotel_base"),
+    hasDelta: @handles.includes("r_hotel_delta"),
+    hasBogus: @handles.includes("r_hotel_bogus")
+  }
+  => @assertEq(@actual, { length: 2, hasBase: true, hasDelta: true, hasBogus: false })
+]
+
+>> --- Suite construction ----------------------------------------------------
+
+var @stateProjectionASuite = @suite("state-projection-a", [
+  @group("merge", [
+    @testA1MergeDedupByHandle,
+    @testA2MergeFromEmptyExisting,
+    @testA3MergeNoIncomingKeepsExisting,
+    @testA4MergeDuplicateIncomingLastWins,
+    @testA5C5a24PartialFieldMergeAccumulates,
+    @testA6C5a24NullIncomingPreservesExisting,
+    @testA7C5a24NonnullIncomingOverrides,
+    @testA8C5a24WorkerProjectionSeesMergedFields
+  ], { ticket: "c-5a24" }),
+  @group("batch-spec-merge", [
+    @testB1UpdateIsolatesNamedBucket,
+    @testB2CEda4BatchSpecMergeAccumulatesRecordTypes,
+    @testB3CEda4ErrorSpecLeavesCumulativeUnchanged,
+    @testB4CEda4SameRecordTypeBatchSpecsFieldMerge,
+    @testB5C63feBatchSpecMergePrefersDelta
+  ], { ticket: "c-eda4" })
+], {})
+
+export { @stateProjectionASuite }
+
+>> --- Standalone runner -----------------------------------------------------
+
+var @result = @runSuites([@stateProjectionASuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

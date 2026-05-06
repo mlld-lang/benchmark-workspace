@@ -12,7 +12,7 @@
 >> Add a scripted suite by importing it below.
 
 import { @runSuites } from "./runner.mld"
-import { @scriptedTemplateSuite } from "./suites-scripted/_template.mld"
+import { @scriptedTemplateSuite } from "./scripted/_template.mld"
 
 var @suites = [
   @scriptedTemplateSuite

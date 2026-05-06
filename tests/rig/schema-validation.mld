@@ -1,0 +1,80 @@
+>> tests/suites/rig/schema-validation.mld
+>>
+>> Lock-in tests for @validateExtractSchema (originally c-c79c/V1..V5).
+>> Production bench (run 25008228406) showed extract_empty_inline_schema
+>> firing on perfectly well-formed inline schemas. Local repros via
+>> in-process literals + JSON parse + record coercion all PASS, so the
+>> production failure path differs (likely MCP-arrival-only). These tests
+>> lock in the in-process behavior so it can't silently regress while
+>> the failure-path cause stays open.
+
+import { @assertOk, @assertEq } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @validateExtractSchema } from "../../rig/workers/extract.mld"
+
+>> --- Test exes ----------------------------------------------------------
+
+exe @testV1NonEmptyInlineSchemaPasses() = [
+  let @schema = { type: "object", properties: { description: { type: "string" } } }
+  let @result = @validateExtractSchema({}, @schema)
+  => @assertEq(@result.ok, true)
+]
+
+exe @testV2JsonParsedInlineSchemaPasses() = [
+  let @jsonStr = `{"type":"object","properties":{"title":{"type":"string"},"description":{"type":"string"}}}`
+  let @parsed = @jsonStr | @parse
+  let @result = @validateExtractSchema({}, @parsed)
+  => @assertEq(@result.ok, true)
+]
+
+exe @testV3EmptyObjectCorrectlyRejected() = [
+  let @result = @validateExtractSchema({}, {})
+  => @assertOk(
+    @result.ok == false && @result.error == "extract_empty_inline_schema",
+    `expected ok=false error=extract_empty_inline_schema; got ok=@result.ok error=@result.error`
+  )
+]
+
+exe @testV4NullSchemaPasses() = [
+  let @result = @validateExtractSchema({}, null)
+  => @assertEq(@result.ok, true)
+]
+
+exe @testV5SchemaNameStringPasses() = [
+  let @records = { calendar_evt: { facts: [], data: [] } }
+  let @result = @validateExtractSchema(@records, "calendar_evt")
+  => @assertOk(
+    @result.ok == true && @result.record == true,
+    `expected ok=true record=true; got ok=@result.ok record=@result.record`
+  )
+]
+
+>> --- Suite construction -------------------------------------------------
+
+var @schemaValidationSuite = @suite("schema-validation", [
+  @group("inline-schema", [
+    @testV1NonEmptyInlineSchemaPasses,
+    @testV2JsonParsedInlineSchemaPasses,
+    @testV3EmptyObjectCorrectlyRejected,
+    @testV4NullSchemaPasses,
+    @testV5SchemaNameStringPasses
+  ], { ticket: "c-c79c" })
+], {})
+
+export { @schemaValidationSuite }
+
+>> --- Standalone runner --------------------------------------------------
+>> Runnable when this file is the entrypoint:
+>>   mlld clean/tests/suites/rig/schema-validation.mld --no-checkpoint
+
+var @result = @runSuites([@schemaValidationSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+if @result.skippedLine != "" [ show @result.skippedLine ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]
