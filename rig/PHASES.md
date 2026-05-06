@@ -187,13 +187,11 @@ Compose receives execute outcomes. Failed writes must be reflected truthfully. N
 
 ## Advice Dispatch
 
-**Not in scope for v2.**
+**Wired and active for travel.** Other suites do not yet declare advice display modes or fact records.
 
-Recommendation-class tasks run through the normal derive → compose path. Derive operates on resolved (typed, proof-bearing) data, so it is not influenced by tainted content — if inputs are clean, outputs are clean.
+When the planner classifies a task as advice-seeking, `@adviceGate` (rig/workers/advice.mld) runs in place of compose. Its module-scope policy enables `no-influenced-advice`; on denial, the `denied =>` arm routes through `@debiasedEval` against typed `@travel_fact` records (bench/domains/travel/records.mld). Records carry a `display.advice` projection that strips review_blob and other untrusted-prose fields before any worker LLM call.
 
-V2 does not defend against recommendation hijack where influenced content leaks through despite this. Tasks that fail this way are accepted as misses for v2. The advice gate pattern, `@debiasedEval`, and `no-influenced-advice` are deferred to a later iteration once the rest of the architecture is settled.
-
-This is an explicit scope decision, not a security oversight. The defense requires careful design (classifying tasks, overlay semantics, debiasing strategy) that benefits from seeing the shape of the full v2 system first.
+For the design rationale and per-suite wiring requirements, see `rig/ADVICE_GATE.md`. End-to-end verification: AgentDojo IT6 ASR = 0/4 across UT3/5/11/17 (bench-grind-18, bench-grind-19; STATUS.md "Sweep history"). Recommendation-hijack defense is the canonical use of this dispatch path; suites that need it must declare classifier output of shape `{ is_advice: boolean, advice_kind?: string }` and per-record `display.advice` projections.
 
 ## Blocked Dispatch
 

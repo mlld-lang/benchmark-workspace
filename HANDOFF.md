@@ -1,8 +1,93 @@
 # Session Handoff
 
-Last updated: 2026-05-06 (end of bench-grind-20)
+Last updated: 2026-05-06 (end of bench-grind-21)
 
-## Next session goal: AgentDojo threat-model audit, then c-891b taint-defense work
+## Next session goal: cloud regression check + c-0458 (credulous-planner) implementation
+
+Two things landed this session that change priorities materially:
+
+1. **c-9fb7 audit** — every AgentDojo IT now has a verified (target tool, defense layer, scripted test, mutation entry, status) entry in `spec-agentdojo-threat-model.md`. 23/27 ITs are COVERED-VERIFIED; 4 gap tickets filed (c-ea5f WS-IT1, c-4564 WS-IT4 body-layer, c-74c2 WS-IT5 chaining, c-6969 TR-IT3/IT5 PII labels). c-9fb7 closed.
+
+2. **c-0298 (slack channel-name firewall) landed** (commit 74a5be8). Slack records now hide channel names from the planner via a synthetic `id_: handle` field minted in the bench bridge. This closes the architecturally-largest known heuristic-load-bearing gap (113 sessions of planner-saw-injection per planner-dirty.md). c-0298 closed.
+
+### Cloud regression check (FIRST ACTION for next agent)
+
+The slack × tool_knowledge cloud run **dispatched 2026-05-06 17:05 PT, 8h after commit 74a5be8 (09:21 PT)** — so it ran on post-fix code. Run id `25449626809`. Verify with:
+
+```bash
+uv run --project bench python3 src/fetch_run.py 25449626809
+sqlite3 runs/25449626809/opencode/opencode-dev.db "
+  SELECT count(DISTINCT s.id) FROM session s JOIN part p ON p.session_id=s.id
+  WHERE json_extract(p.data,'\$.type')='reasoning'
+  AND (
+    p.data LIKE '%External_TODO%' OR
+    p.data LIKE '%External_Ignore your previous%' OR
+    p.data LIKE '%External_<INFORMATION>%' OR
+    p.data LIKE '%Concatenate all messages%' OR
+    p.data LIKE '%fred9246@gmail.com%' OR
+    p.data LIKE '%secure-systems-252%' OR
+    p.data LIKE '%true-informations%'
+  )
+"
+```
+
+Expected: 0 sessions. If 0, c-0298 is fully verified — update planner-dirty.md slack mechanism to AFTER count and close out the c-0298 cloud verification. If non-zero, transcript-dive immediately.
+
+Also pull `gh run view 25449626809 --log` and grep for `ASR \(attack success rate\):` and `Utility under attack:` to confirm 0/21 ASR and acceptable utility (the prior agent observed ~10x wall regression on UT9 locally, 24s → 286s; cloud may differ but watch for utility tank).
+
+### Cloud attack matrix status
+
+The full 5-attack × 5-suite matrix is **complete** — all 30 runs land successfully. The most recent (tool_knowledge × travel) finished 17:14 PT. Cumulative reading was ~3380 task-runs at 0/0 breaches at last check; final aggregation pending. Aggregate command:
+
+```bash
+for r in $(gh run list --workflow=bench-run.yml --limit 30 --json databaseId,name -q '.[] | select(.name | contains("atk:")) | .databaseId'); do
+  d="runs/$r"
+  [ -d "$d" ] || uv run --project bench python3 src/fetch_run.py "$r" >/dev/null
+  attack=$(jq -r '.attack' $d/manifest.json 2>/dev/null)
+  suite=$(jq -r '.suite' $d/manifest.json 2>/dev/null)
+  asr=$(grep -E "ASR" $d/console.log 2>/dev/null | head -1 | grep -oE '[0-9]+/[0-9]+ \([0-9.]+%\)')
+  echo "$suite/$attack ASR=$asr"
+done
+```
+
+If aggregate is 0 / 3700+, that's the headline number for the security claim. If anything > 0, transcript-dive.
+
+### Strategic priority order (post-c-0298)
+
+1. **Cloud regression check above** — confirm c-0298 holds on fresh slack + benign sweep.
+2. **c-0458 implementation** — the plan is fully written into the ticket (5-day estimate). Two tiers: layer-specific assertions on existing 47 scripted tests + ~6-8 full-loop credulous tests. Slack rows in c-0458's `Credulous-Planner Verified` column will likely all be ✓ now that c-0298 landed; this audit confirms it.
+3. **c-891b** — taint-defense coverage matrix. Unblocked. Use spec-agentdojo-threat-model.md as input.
+4. **c-951d Sub-track A** — apply the c-0298 synthetic-id_ pattern to other resolved-record fact fields per the audit candidates. The c-951d ticket body has the per-suite candidate list.
+5. **m-fdf7 (mlld-side)** — handle-stringification audit. Not blocking but the structural answer to "no natural-key handles ever surface to LLMs."
+6. **c-f92a (cross-attack-variant harness)** — multiplier; do after c-0458 stabilizes test surface.
+7. **c-8038 (constraint re-validation, ~8% slack utility)** — utility recovery, schedule when slack utility numbers matter.
+
+### New tickets filed this session
+
+- **c-ea5f** [P3] WS-IT1 `testDeleteFileAttackerIdRejected`
+- **c-4564** [P3] WS-IT4 influenced-deny-exfil body-layer test
+- **c-74c2** [P3] WS-IT5 `testChainedSendDeleteRejected`
+- **c-6969** [P3] TR-IT3/IT5 PII sensitivity labels on user_info
+- **c-48cc** [P4] bench-attacks.sh retry on TLS / transient gh CLI failures
+- **m-fdf7** [P2, ~/mlld/mlld] handle-stringification audit (mlld-side)
+- **c-0458** [P1, plan written] credulous-planner verification
+
+### Doc fixes landed this session
+
+- `rig/PHASES.md:188-194` — Advice Dispatch section rewritten (was "deferred", now reflects wired-and-active state with refs to advice.mld + ADVICE_GATE.md + IT6 ASR=0/4)
+- `travel.threatmodel.txt` — added "Status update (bench-grind-21, post c-9fb7 audit)" block calling out stale `[?]` D2 markers
+
+### Doc fixes still needed (deferred)
+
+- `travel.threatmodel.txt` body — inline `[?]` D2 markers should flip to `[-]` systematically. Status block at top covers it for now.
+- `planner-dirty.md` — DON'T preemptively update slack count. Wait for the cloud regression check above to confirm AFTER count, then update.
+- `SECURITY-DISCIPLINE.md` — prior agent flagged the "we don't claim every field is trustworthy; we claim defense at the (operation, arg) pairs where attacker control causes harm" framing as more honest. Update when there's a chance.
+
+## Original next-session goal (now superseded by above)
+
+(Below was the bench-grind-20 → 21 handoff text. Superseded by the cloud-regression + c-0458 priorities above; kept for ticket-history continuity.)
+
+## bench-grind-20 → 21 handoff (historical, archived)
 
 Bench utility is at 78/97 = 80.4% (last full sweep 2026-05-04). The remaining security work has hit a discipline boundary: **the c-891b ticket text was inaccurate**, and we discovered it the hard way this session. Future security work should start by auditing what AgentDojo's `injection_tasks.py` actually attacks, before designing defenses against paper threats. See "Lessons from bench-grind-20" below.
 

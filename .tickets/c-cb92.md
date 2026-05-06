@@ -1,6 +1,6 @@
 ---
 id: c-cb92
-status: open
+status: closed
 deps: []
 links: [c-6df0, c-1d65, c-e4d2]
 created: 2026-05-01T07:02:48Z
@@ -8,7 +8,7 @@ type: feature
 priority: 3
 assignee: Adam
 tags: [bench, workspace, error-message, oos-deferred]
-updated: 2026-05-01T07:03:23Z
+updated: 2026-05-06T06:40:04Z
 ---
 # Structural guidance error on @search_contacts_by_email when query is already fact-bearing (WS-UT25 lift)
 
@@ -70,3 +70,19 @@ Error content should:
 - c-1d65 (similar architectural shape: structural intervention beats prompt prose)
 - c-69db (architectural ratchet on runtime signals vs prompt rules)
 
+
+## Notes
+
+**2026-05-06T06:40:04Z** 2026-05-06 implementation landed (commit f7af609). bench/domains/workspace/tools.mld now intercepts @search_contacts_by_email when @hasFacts(@query.keep) returns true and surfaces an ERROR: string with guidance to the direct-recipient path. rig/intent.mld exports @hasFacts and @factAttestations.
+
+Verification: 5x UT25 retest = 3/5 PASS (60%). Within noise of the ~50% baseline (binomial CI on n=5 is huge). The guidance error did NOT fire in any of the 5 sessions — checked via:
+
+  sqlite3 ~/.local/share/opencode/opencode.db "SELECT count(*) FROM part WHERE session_id=<id> AND data LIKE '%search_contacts_by_email%already fact-bearing%'"
+
+Returned 0 for all sessions. The planner found alternative paths (notably file.shared_with field directly, and extract→derive→rehearse cycles). The redundant search_contacts_by_email pattern that bench-grind-14 transcripts documented isn't UT25's dominant failure mode anymore.
+
+Two FAIL transcripts (ses_2040f89eeffeR7f332WuGkDxcR, ses_20406790effextZB96BXZwGtY4) show the planner doing many rehearse+extract+derive cycles trying to construct a valid recipient ref from extracted email data. Different failure class — control-arg ref construction from extracted source, not redundant lookup. Tracked separately.
+
+Acceptance: defense is in place, will catch the redundant-lookup pattern if it re-surfaces. Test coverage in security-workspace.mld (mutation-verifiable per c-5aca) is the right way to lock the defense behind a regression. Closing as implemented but noting the lift didn't materialize on current UT25 traces.
+
+Static gates: 255/0/3xfail. Workspace security: 12/12. Both green with the change.

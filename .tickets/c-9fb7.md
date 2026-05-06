@@ -1,6 +1,6 @@
 ---
 id: c-9fb7
-status: open
+status: closed
 deps: []
 links: [c-891b, c-8f56]
 created: 2026-05-06T12:07:50Z
@@ -8,7 +8,7 @@ type: task
 priority: 1
 assignee: Adam
 tags: [security, audit, prereq]
-updated: 2026-05-06T12:07:56Z
+updated: 2026-05-06T15:05:08Z
 ---
 # AgentDojo threat-model audit: per-suite injection_tasks.py → defense coverage table
 
@@ -56,3 +56,21 @@ spec-agentdojo-threat-model.md at clean/ root. Sections:
 
 c-891bs scope taint-based defenses, risk-classification coverage needs a verified target list before designing tests. With the audit table in hand, c-891b becomes for each rule, tool-class cell in the verified table, write a test plus mutation entry instead of speculatively defending against narratives that may or may not match the current attack matrix.
 
+
+## Notes
+
+**2026-05-06T15:05:21Z** bench-grind-21: audit complete. Output landed at clean/spec-agentdojo-threat-model.md. All 27 ITs across 4 suites have verified (target, defense, test, mutation, status) entries.
+
+Coverage: 23/27 COVERED-VERIFIED, 2 COVERED-NO-TEST (workspace IT1 + IT4 body-layer), 1 UNCERTAIN (workspace IT5 chaining), 3 partial-deferred (travel IT2 event content shape D3, travel PII sensitivity labels, slack instruction-channel-label c-fb58 xfail).
+
+Surfaced doc inaccuracies:
+- rig/PHASES.md:194 (advice-gate deferred) — fixed in same session
+- travel.threatmodel.txt D2 markers — status block added at top in same session
+
+Filed gap tickets:
+- c-ea5f (WS-IT1 testDeleteFileAttackerIdRejected)
+- c-4564 (WS-IT4 influenced-deny-exfil body-layer test)
+- c-74c2 (WS-IT5 testChainedSendDeleteRejected)
+- c-6969 (TR-IT3/IT5 PII sensitivity labels)
+
+c-891b (taint-defense work) is now unblocked with the verified table as input.
