@@ -1,4 +1,25 @@
+>> AgentDojo's MCP tools surface tool-side exceptions as raw strings
+>> prefixed with `ERROR:` (e.g. `ERROR: ValueError: Channel '<polluted-name>'
+>> not found ...`). Without explicit detection, downstream parsers treat
+>> the error string as data — string-list parsers turn it into a user
+>> name, structured parsers may extract fragments. The result class is
+>> dangerous: the MCP error echoes the resolved control-arg value back
+>> through the wrapper into the resolved bucket, undoing the c-0298
+>> handle-opacity guarantee for any tool whose control arg can be a
+>> handle-resolved attacker-controllable string.
+>>
+>> @isMcpError centralizes the detection so wrappers can branch on it
+>> uniformly. Match shape per AgentDojo tool conventions: the MCP raw
+>> output is a plain string starting with `ERROR:` (case-sensitive prefix).
+exe @isMcpError(raw) = js {
+  return typeof raw === "string" && /^ERROR:\s/.test(raw.trim());
+}
+
 exe @stringListItems(raw) = js {
+  if (typeof raw === "string" && /^ERROR:\s/.test(raw.trim())) {
+    return [];
+  }
+
   if (Array.isArray(raw)) {
     return raw
       .map((value) => String(value ?? "").trim())
@@ -17,6 +38,44 @@ exe @stringListItems(raw) = js {
     .filter(Boolean);
 }
 
+>> User records need a synthetic id_ separate from name. Same shape as
+>> @channelItems below: random base36 id per user, framework auto-handle
+>> becomes opaque (`r_slack_user_<random_id>`), name is preserved as a
+>> fact for workers but hidden from the planner's display projection.
+>> c-a8d2.
+exe @userItems(raw) = js {
+  if (typeof raw === "string" && /^ERROR:\s/.test(raw.trim())) {
+    return [];
+  }
+
+  const callId = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+  let counter = 0;
+  const nextId = () => `${callId}_${counter++}`;
+
+  const fromName = (name) => {
+    const trimmed = String(name ?? "").trim();
+    if (!trimmed) return null;
+    return { id_: nextId(), name: trimmed };
+  };
+
+  if (Array.isArray(raw)) {
+    return raw.map(fromName).filter(Boolean);
+  }
+
+  if (typeof raw !== "string") {
+    return [];
+  }
+
+  return raw
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^-+\s*/, "").trim())
+    .filter(Boolean)
+    .map(fromName)
+    .filter(Boolean);
+}
+
 >> Channel records need a synthetic id_ separate from name. Per AgentDojo's
 >> data model the channel name IS the channel's identity (no separate ID),
 >> AND attacker-controllable (channels can be created with arbitrary names
@@ -27,6 +86,10 @@ exe @stringListItems(raw) = js {
 >> from the planner's perspective; workers can still read name via
 >> projection. c-0298.
 exe @channelItems(raw) = js {
+  if (typeof raw === "string" && /^ERROR:\s/.test(raw.trim())) {
+    return [];
+  }
+
   const callId = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
   let counter = 0;
   const nextId = () => `${callId}_${counter++}`;
@@ -56,6 +119,14 @@ exe @channelItems(raw) = js {
 }
 
 exe @messageItems(raw) = js {
+  // c-a8d2: detect MCP error responses before parsing. The structured
+  // line parser below silently drops error strings (they don't match
+  // the `--- field: value` shape) but explicit detection is defense in
+  // depth and matches the @userItems / @channelItems shape.
+  if (typeof raw === "string" && /^ERROR:\s/.test(raw.trim())) {
+    return [];
+  }
+
   // AgentDojo's slack messages have no id. Synthesize a unique id_ per
   // message so slack_msg can `key: id_` and the runtime mints a distinct
   // handle per message. Without this, multiple messages from the same
@@ -143,4 +214,4 @@ exe @messageItems(raw) = js {
   return items.filter((item) => item.sender || item.recipient || item.body);
 }
 
-export { @stringListItems, @channelItems, @messageItems }
+export { @isMcpError, @stringListItems, @userItems, @channelItems, @messageItems }

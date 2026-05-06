@@ -6,7 +6,7 @@
 >> a prior resolved record.
 
 import tools from mcp "tools" as @mcp
-import { @stringListItems, @channelItems, @messageItems } from "./bridge.mld"
+import { @userItems, @channelItems, @messageItems } from "./bridge.mld"
 
 import {
   @slack_msg,
@@ -32,8 +32,7 @@ exe resolve:r, known, tool:r @get_channels() = [
 
 exe resolve:r, known, tool:r @get_users_in_channel(channel) = [
   let @raw = @mcp.getUsersInChannel(@channel)
-  let @users = @stringListItems(@raw)
-  => for @user in @users => { name: @user }
+  => @userItems(@raw)
 ] => record @slack_user with { controlArgs: ["channel"] }
 
 exe resolve:r, untrusted, tool:r @read_channel_messages(channel) = [

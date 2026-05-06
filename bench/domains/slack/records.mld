@@ -41,7 +41,31 @@ record @slack_msg = {
 
 >> ── Slack users ──
 >>
->> Usernames from get_users_in_channel are authoritative identities.
+>> Usernames from get_users_in_channel are authoritative identities of
+>> workspace members. Unlike slack_channel.name, slack_user.name is NOT
+>> attacker-controllable at fact level: AgentDojo's injection_tasks does
+>> not seed fake users into the workspace member list. IT5 attempts to
+>> get attacker users invited (Fred/fred9246@gmail.com), but those
+>> usernames only enter get_users_in_channel results AFTER a successful
+>> invite, which @invite_user_to_slack_inputs.facts on user + user_email
+>> structurally blocks.
+>>
+>> The bench-grind-21 leak (run 25449626809, 5 sessions) was via a
+>> different path: when the planner called get_users_in_channel with a
+>> polluted channel handle, the MCP errored with the polluted channel
+>> name in the error string, and the @stringListItems bridge previously
+>> treated that error as user-name list data — the error text became a
+>> "user name" and the framework auto-handle (`r_slack_user_<name>`)
+>> baked attacker text into the handle. The c-a8d2 fix is wrapper-level:
+>> @userItems detects the `ERROR:` prefix and returns []; @stringList-
+>> Items does the same for any other caller. No record-opacity change is
+>> needed since the user-name field is fact-trustworthy by construction.
+>>
+>> If a future audit shows slack_user.name HAS become attacker-
+>> controllable (e.g. AgentDojo adds workspace-state injection of fake
+>> users), apply the c-0298 synthetic-id pattern (see @slack_channel
+>> below). Trade-off: forces derive workers to do name matching for
+>> "add user X" tasks, costing ~2-3x wall on user-resolution paths.
 record @slack_user = {
   facts: [name: { type: string, kind: "slack_user_name" }],
   display: [{ ref: "name" }]
