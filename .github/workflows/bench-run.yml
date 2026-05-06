@@ -172,29 +172,29 @@ jobs:
           PREBUILT_REF="ghcr.io/mlld-lang/mlld-prebuilt:$BAKED_REF"
           docker pull "$PREBUILT_REF" >/dev/null
           PREBUILT_MLLD_SHA=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$PREBUILT_REF")
-          CURRENT_MLLD_SHA=$(gh api --repo mlld-lang/mlld "repos/mlld-lang/mlld/git/ref/heads/$BAKED_REF" --jq .object.sha)
+          CURRENT_MLLD_SHA=$(gh api "repos/mlld-lang/mlld/git/ref/heads/$BAKED_REF" --jq .object.sha)
           echo "mlld-prebuilt baked: $PREBUILT_MLLD_SHA"
           echo "mlld@$BAKED_REF HEAD: $CURRENT_MLLD_SHA"
           if [ -n "$PREBUILT_MLLD_SHA" ] && [ "$PREBUILT_MLLD_SHA" != "$CURRENT_MLLD_SHA" ]; then
             echo "::notice::mlld-prebuilt:$BAKED_REF is stale — refreshing via mlld-prebuild.yml before bench-image rebuild"
             # Reuse in-flight or queued mlld-prebuild dispatch if one exists.
-            PREBUILD_IN_FLIGHT=$(gh run list --repo "$GH_REPO" --workflow=mlld-prebuild.yml \
+            PREBUILD_IN_FLIGHT=$(gh run list --workflow=mlld-prebuild.yml \
               --status in_progress --limit 5 --json databaseId -q '.[0].databaseId' || true)
             if [ -z "$PREBUILD_IN_FLIGHT" ]; then
-              PREBUILD_IN_FLIGHT=$(gh run list --repo "$GH_REPO" --workflow=mlld-prebuild.yml \
+              PREBUILD_IN_FLIGHT=$(gh run list --workflow=mlld-prebuild.yml \
                 --status queued --limit 5 --json databaseId -q '.[0].databaseId' || true)
             fi
             if [ -n "$PREBUILD_IN_FLIGHT" ]; then
               echo "joining in-flight mlld-prebuild: $PREBUILD_IN_FLIGHT"
               PREBUILD_ID=$PREBUILD_IN_FLIGHT
             else
-              gh workflow run mlld-prebuild.yml --repo "$GH_REPO" -f mlld_ref="$BAKED_REF"
+              gh workflow run mlld-prebuild.yml -f mlld_ref="$BAKED_REF"
               sleep 8
-              PREBUILD_ID=$(gh run list --repo "$GH_REPO" --workflow=mlld-prebuild.yml --limit 1 \
+              PREBUILD_ID=$(gh run list --workflow=mlld-prebuild.yml --limit 1 \
                 --json databaseId -q '.[0].databaseId')
               echo "started mlld-prebuild: $PREBUILD_ID"
             fi
-            gh run watch "$PREBUILD_ID" --repo "$GH_REPO" --exit-status
+            gh run watch "$PREBUILD_ID" --exit-status
             docker pull "$PREBUILT_REF" >/dev/null
             REFRESHED=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$PREBUILT_REF")
             echo "mlld-prebuilt refreshed: $REFRESHED"
