@@ -108,6 +108,18 @@ def main() -> int:
     if (out / "_unpacked").exists():
         shutil.rmtree(out / "_unpacked", ignore_errors=True)
 
+    # Inner-worker opencode db (workers run under their own opencode home)
+    inner_tgz = out / "inner-worker-transcripts.tgz"
+    if inner_tgz.exists():
+        extract_tar(inner_tgz, out / "_inner_unpacked")
+        nested_inner = out / "_inner_unpacked" / "opencode"
+        if nested_inner.exists():
+            if (out / "opencode-inner").exists():
+                shutil.rmtree(out / "opencode-inner")
+            shutil.move(str(nested_inner), str(out / "opencode-inner"))
+        if (out / "_inner_unpacked").exists():
+            shutil.rmtree(out / "_inner_unpacked", ignore_errors=True)
+
     summarize(out)
 
     if (out / "opencode" / "opencode.db").exists() or (out / "opencode" / "opencode-dev.db").exists():

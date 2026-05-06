@@ -165,5 +165,19 @@ else
   echo "[bench-remote] note: no opencode dir (claude harness or no sessions)"
 fi
 
+# Inner-worker opencode db — separate from the outer planner db.
+# Workers (extract/derive/compose/advice) run as their own opencode CLI
+# invocations under /tmp/mlld-rig-inner-worker-data/opencode/ and use
+# the configured worker model (Cerebras by default for opencode harness).
+# Without this archive the cloud artifact only shows the outer planner
+# provider, masking the actual planner-vs-worker call mix.
+if [[ -d "/tmp/mlld-rig-inner-worker-data/opencode" ]]; then
+  tar czf "$ARTIFACTS/inner-worker-transcripts.tgz" -C /tmp/mlld-rig-inner-worker-data opencode 2>/dev/null \
+    && echo "[bench-remote] packed inner-worker-transcripts.tgz" \
+    || echo "[bench-remote] WARN: inner-worker transcript pack failed"
+else
+  echo "[bench-remote] note: no inner-worker opencode dir (no worker dispatches)"
+fi
+
 echo "[bench-remote] done RUN_ID=$RUN_ID exit=$RUN_STATUS"
 exit "$RUN_STATUS"
