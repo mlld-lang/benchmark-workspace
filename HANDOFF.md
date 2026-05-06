@@ -1,26 +1,44 @@
 # Session Handoff
 
-Last updated: 2026-05-05 (end of bench-grind-19)
+Last updated: 2026-05-06 (end of bench-grind-20)
 
-## Next session goal: build out security test coverage
+## Next session goal: continue security test buildout
 
 Bench utility is structurally near its ceiling (~78/97 = 80.4% per STATUS.md classification). The work surface that delivers the most value now is **the security test buildout** — attack-side regressions that exercise the defenses we built but haven't yet locked behind tests.
 
-Read this section first; everything below is supporting context.
+This session (bench-grind-20) landed B7 + B8 regression tests AND a mutation-coverage harness that proves each security test actually catches its claimed defense. Read the [Mutation Coverage](#mutation-coverage-status) section below before starting new security tests — every new test should land with a registry entry.
 
-### Current security test inventory (35 zero-LLM + 18+2 zero-LLM/live-LLM)
+### Current security test inventory (41 scripted + 18+2 zero-LLM/live-LLM)
 
 | File | Tests | Coverage |
 |---|---|---|
 | `tests/scripted/security-travel.mld` | 10 | source-class firewall, kind-tag wrong-record-fact firewall, recommendation-hijack deterministic part |
 | `tests/scripted/security-slack.mld` | 11 | source-class firewall, real-handle backing rejection, URL-promotion path |
 | `tests/scripted/security-banking.mld` | 8 | source-class firewall, kind-tag firewall on payment writes |
-| `tests/scripted/security-workspace.mld` | 6 | source-class firewall on calendar/email writes |
+| `tests/scripted/security-workspace.mld` | **12** (was 6, +B7×3 +B8×3 in bench-grind-20) | source-class firewall on calendar/email writes; B7 extraction-fallback poisoning; B8 'true' authorization bypass |
 | `tests/suites/rig/advice-gate.mld` | 9 | advice-gate config propagation, role:advice projection, dispatch routing |
 | `tests/suites/rig/classify.mld` | 9 | classifier fan-out primitive |
 | `tests/suites/bench/travel-classifier-{labels,exemplars}.mld` | 20 | classifier label/exemplar shape + vocabulary |
 | `bench/tests/travel-advice-gate-live.mld` | 2 | live-LLM end-to-end advice-gate (deterministic poisoned + clean state) |
 | `bench/tests/travel-classifiers.mld` | live | classifier accuracy on synthetic + held-out AgentDojo labels |
+
+### Mutation coverage status
+
+`tests/run-mutation-coverage.py` is a meta-test that proves each security test actually catches its claimed defense. For each registered defense, the harness disables it via a one-line mutation, re-runs the affected suites, and confirms the right tests fail. Files restored via `try/finally`. See `TESTS.md` "Mutation coverage for security tests".
+
+```bash
+uv run --project bench python3 tests/run-mutation-coverage.py
+```
+
+| State | Count |
+|---|---|
+| Mutation-verified (in some `expected_fails`) | 30 of 41 |
+| Positive controls (assert ok=true, untouched by negative mutations) | 3 |
+| Unverified, needing registry extension (c-5aca) | 8 |
+
+c-5aca tracks extending the registry. Of the 8 unverified, 5 are caught only by mlld runtime `policy.build` kind-tag firewall (need a runtime-side mutation), 2 need a 3-way combined mutation (source-class + known-task-text + policy-build), 1 is a malformed-shape rejection that needs its own mutation point.
+
+**Discipline going forward**: every new security test ships with a mutation entry. A test added without an entry is unverified by definition.
 
 Run scripted suites via:
 ```bash
@@ -38,23 +56,23 @@ The path of least resistance — independent test-writing first, architectural t
 
 | Order | Ticket | What | Effort |
 |---|---|---|---|
-| 1 | **c-83f3** | B7 workspace extraction-fallback poisoning. Plain assertion test that extract worker null-handling never surfaces raw data to the planner | 1-2 hours |
-| 2 | **c-ae22** | B8 workspace 'true' authorization bypass. Defense already at `rig/intent.mld:680-695` (`allow_requires_no_control_args`). Add the regression test | 1-2 hours |
-| 3 | **c-d374** | B10 get_webpage exfil:send classification + no-novel-urls. Two related defenses to test | 2-3 hours |
-| 4 | **c-a720** | B5 slack recursive URL fetch (UT1 × IT3). c-c2e7 closed via state-factory pattern; use `@runWithState` like `testSelectionRefRealSlackMsgHandleRejected` | 2-3 hours |
-| 5 | **c-fb58** | B6 slack instruction-channel-label not promoted (UT18 × IT3). Same harness pattern as #4 | 2-3 hours |
-| 6 | **c-800d** | Correlate cross-record-mixing firewall (banking). `update_scheduled_transaction_inputs` declares `correlate: true` — test the cross-record mixture rejection | 2-3 hours |
-| 7 | **c-7016** | B9 travel recommendation-hijack zero-LLM tests. **Live-LLM defense already verified 0/4 ASR on IT6.** This adds zero-LLM regression cushion: label propagation test + advice-gate denial test | 2-3 hours |
-| 8 | **c-891b** | Taint-based defenses (no-untrusted-privileged, label propagation). Bigger — audit which write tools across all 4 suites get which risk classifications, build a coverage table, write tests | 1-2 days |
-| 9 | **c-634c** | Typed-instruction-channel class tests (WS-UT13/UT19/SL-UT18/UT19/UT20). Different defense surface than source-class firewall. Depends on c-6479 design | 1-2 days |
+| ✓ | ~~c-83f3~~ | ~~B7 workspace extraction-fallback poisoning~~ — landed bench-grind-20 (3 tests, mutation-verified) | done |
+| ✓ | ~~c-ae22~~ | ~~B8 workspace 'true' authorization bypass~~ — landed bench-grind-20 (3 tests, mutation-verified) | done |
+| 1 | **c-5aca** | Extend mutation registry to cover the remaining 8 unverified scripted tests (3-way combined + runtime kind-firewall mutation) | 1-2 hours |
+| 2 | **c-d374** | B10 get_webpage exfil:send classification + no-novel-urls. Two related defenses to test | 2-3 hours |
+| 3 | **c-a720** | B5 slack recursive URL fetch (UT1 × IT3). c-c2e7 closed via state-factory pattern; use `@runWithState` like `testSelectionRefRealSlackMsgHandleRejected` | 2-3 hours |
+| 4 | **c-fb58** | B6 slack instruction-channel-label not promoted (UT18 × IT3). Same harness pattern as #3 | 2-3 hours |
+| 5 | **c-800d** | Correlate cross-record-mixing firewall (banking). `update_scheduled_transaction_inputs` declares `correlate: true` — test the cross-record mixture rejection | 2-3 hours |
+| 6 | **c-7016** | B9 travel recommendation-hijack zero-LLM tests. **Live-LLM defense already verified 0/4 ASR on IT6.** This adds zero-LLM regression cushion: label propagation test + advice-gate denial test | 2-3 hours |
+| 7 | **c-891b** | Taint-based defenses (no-untrusted-privileged, label propagation). Bigger — audit which write tools across all 4 suites get which risk classifications, build a coverage table, write tests | 1-2 days |
+| 8 | **c-634c** | Typed-instruction-channel class tests (WS-UT13/UT19/SL-UT18/UT19/UT20). Different defense surface than source-class firewall. Depends on c-6479 design | 1-2 days |
+| - | **c-bc1f** | Stale `@stateWithResolved` test fixture — emits non-canonical bucket shape that production `@lookupResolvedEntry` can't read. Uncovered while writing B7 tests; worked around with inline canonical seed. Audit other callers when convenient | 1-2 hours |
 
 ### Where to start (concrete first move)
 
-Read `~/mlld/benchmarks/archive/SCIENCELOG-v2.md` lines 440-460 for the historic B5–B10 breach analyses. Each ticket links to its specific lines. Then start on **c-83f3 (B7)** — it's the most self-contained:
-
-1. Read `rig/workers/extract.mld` for null/empty handling (search for `extract_empty_inline_schema`)
-2. Verify the current behavior structurally rejects raw-data fallback
-3. Write a scripted-LLM test in `tests/scripted/security-workspace.mld` that scripts an extract call returning null and asserts the planner doesn't see attacker content in the fallback
+1. Run `uv run --project bench python3 tests/run-mutation-coverage.py` — should report Overall: OK with 7 mutations across 4 suites. Re-baselines that nothing regressed.
+2. Tackle **c-5aca**: extend the mutation registry to the remaining 8 unverified tests. Pattern is documented in `tests/run-mutation-coverage.py` MUTATIONS array — add an `edits` list for combined mutations, find the rejection point in `rig/intent.mld` or `rig/workers/`, list the test ids whose docstrings claim that defense.
+3. Then **c-d374** (B10 get_webpage). Read `~/mlld/benchmarks/archive/SCIENCELOG-v2.md` lines 440-460 for the historic B5–B10 breach analyses.
 
 ### Cross-cutting verification
 
