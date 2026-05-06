@@ -272,6 +272,8 @@ jobs:
           MLLD_TRACE_VAL: ${{ inputs.trace && 'effects' || '' }}
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
         run: |
           # PYTHONUNBUFFERED forces line-buffered stdout from src/run.py.
           # Without it Python block-buffers when piped through `tee`, so
@@ -284,6 +286,7 @@ jobs:
             -e PARALLELISM -e STAGGER -e DEFENSE -e ATTACK -e RESUME \
             -e MLLD_TRACE="$MLLD_TRACE_VAL" \
             -e CEREBRAS_API_KEY -e TOGETHER_API_KEY \
+            -e OPENROUTER_API_KEY -e FIREWORKS_API_KEY \
             "$IMAGE_REF"
 
       - name: Upload artifacts
