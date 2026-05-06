@@ -439,6 +439,27 @@ exe @lookupResolvedControlValue(state, recordName, handle, fieldName) = [
     ]
   ]
 
+  >> Fieldless-resolved with a handle-typed identity is always a planner
+  >> mistake. Records like @slack_channel and @slack_msg use a synthetic
+  >> id_:handle as their key (c-0298, c-a8d2) so the framework's auto-
+  >> handle string is opaque. The id_ value itself is a rig-internal
+  >> token with no meaning to MCP — passing it as a control arg makes
+  >> MCP look up a non-existent identifier and return an empty result,
+  >> which the planner sees as `count: 0` with a generic summary and
+  >> wastes iterations debugging. Error loudly with the handle the
+  >> planner sent and the available fact fields, so the next call adds
+  >> the right `field:` selector.
+  if @entry.identity_is_handle [
+    let @factFields = for @field, @value in (@entry.field_values ?? {}) when @value != null && @field != @entry.identity_field => `@field`
+    => {
+      ok: false,
+      error: "fieldless_resolved_handle_identity",
+      record: @recordName,
+      handle: @handle,
+      hint: `@recordName.@entry.identity_field is a rig-internal handle, not a meaningful value. Specify field: \"<name>\" — available fact fields: @factFields.join(", ")`
+    }
+  ]
+
   if @entry.identity_field.isDefined() [
     let @identityValue = @resolvedEntryFieldValue(@entry, @entry.identity_field)
     if @identityValue.isDefined() && @identityValue != null [ => @resolvedControlResult(@entry.identity_field, @identityValue) ]

@@ -259,6 +259,23 @@ exe @recordIdentityField(recordDef) = [
   ]
 ]
 
+>> Whether the named field on this record is declared `type: handle`.
+>> Handle-typed identifiers are rig-internal opaque tokens (see c-0298 +
+>> c-a8d2 — slack_channel and slack_msg both mint a synthetic id_:handle
+>> as their key). They have no meaningful value to pass to MCP, so a
+>> fieldless-resolved control arg whose default field is handle-typed is
+>> always a planner mistake — they meant to specify field: "name" (or
+>> whatever fact field carries the value MCP actually needs).
+exe @recordFieldIsHandleType(recordDef, fieldName) = [
+  if !@fieldName.isDefined() || @typeof(@fieldName) != "string" || @fieldName == "" [ => false ]
+  let @match = for @field in @recordFieldDefs(@recordDef) when @field.name == @fieldName => @field
+  => when [
+    @match.length == 0 => false
+    @match[0].valueType == "handle" => true
+    * => false
+  ]
+]
+
 exe @nativeRecordFieldValue(recordValue, fieldName) = [
   let @fieldKey = `@fieldName`
   => when [
@@ -291,6 +308,7 @@ exe @normalizeResolvedValues(recordType, recordDef, rawValue) = [
     * => []
   ]
   let @identityField = @recordIdentityField(@recordDef)
+  let @identityIsHandle = @recordFieldIsHandleType(@recordDef, @identityField)
   let @fieldNames = @recordFieldNames(@recordDef)
   => for @value in @items [
     let @index = @mx.for.index
@@ -310,6 +328,7 @@ exe @normalizeResolvedValues(recordType, recordDef, rawValue) = [
       value: @value,
       identity_field: @identityField,
       identity_value: @identityValue,
+      identity_is_handle: @identityIsHandle,
       field_values: @fieldValues
     }
   ]
@@ -1242,6 +1261,7 @@ export {
   @recordFieldDefs,
   @recordFieldNames,
   @recordIdentityField,
+  @recordFieldIsHandleType,
   @nativeRecordFieldValue,
   @stateHandle,
   @normalizeResolvedValues,
