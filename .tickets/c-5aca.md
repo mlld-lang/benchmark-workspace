@@ -1,6 +1,6 @@
 ---
 id: c-5aca
-status: open
+status: closed
 deps: []
 links: [c-bc1f, c-83f3, c-ae22]
 created: 2026-05-06T05:52:18Z
@@ -8,7 +8,7 @@ type: task
 priority: 2
 assignee: Adam
 tags: [security, tests, coverage]
-updated: 2026-05-06T05:52:22Z
+updated: 2026-05-06T10:43:40Z
 ---
 # Extend mutation-coverage registry to all 35 scripted security tests
 
@@ -65,3 +65,26 @@ OK mutations:
 - 1 malformed shape: testKnownMissingValueRejected (slack) — known with no value field
 - 2 caught by known-value-task-text-check on a SECOND control arg when source-class is also disabled: updateScheduledTxExtractedRecipientRejected (banking, id field), shareFileExtractedEmailRejected (workspace, file_id field). Need 3-way mutation.
 - 5 caught by mlld-runtime policy.build kind-tag firewall (rig framework has no rejection layer between them and the runtime backstop): selectionRefNonexistentBackingHandleRejected, selectionRefBackingWithoutIdentityRejected, selectionRefMismatchedHandleAfterResolveRejected, selectionRefRealSlackMsgHandleRejected (slack), reserveHotelSelectionRefRestaurantNameRejected (travel) — already covered by source-class-and-backstop-combined for some, others need runtime kind-firewall mutation
+
+**2026-05-06T10:43:37Z** Closing 2026-05-06 (bench-grind-20). The mutation-coverage registry has been substantially extended over multiple session phases:
+
+11 mutations OK, 42 of 47 scripted security tests mutation-verified:
+1. source-class-firewall (8 tests)
+2. allow-control-args-gate (2 tests)
+3. known-value-task-text-check (5 tests)
+4. exact-arg-and-backstop-combined (3 tests)
+5. policy-build-backstop (2 tests)
+6. source-class-and-backstop-combined (21 tests, defense-in-depth)
+7. source-class-known-task-text-and-backstop-combined (11 tests, defense-in-depth)
+8. control-ref-lookup-and-backstop-combined (5 tests, defense-in-depth)
+9. known-task-text-and-no-novel-urls-combined (2 tests, defense-in-depth)
+10. correlate-control-args-firewall (1 test)
+11. extract-empty-response-guard (3 tests)
+
+Remaining unverified (5 of 47):
+- 4 positive controls (assert ok=true) — untouched by negative mutations by design
+- 1 deferred shape-validation: testKnownMissingValueRejected (slack) — defends against malformed planner JSON, not security values; documented in registry header
+
+Plus 1 xfail surfacing a real defense gap (testInstructionChannelLabelNotPromoted, c-fb58 — instruction-shaped channel names not detected; will flip to pass when defense lands).
+
+The discipline is now baked in: TESTS.md "Writing a new security test — the verification checklist" plus mutation-verification notes on every remaining open security ticket. Going forward, every new security test ships with a registry entry as a merge-gate.
