@@ -73,6 +73,7 @@ MUTATIONS = [
             "security-slack/source-class-firewall/extractedControlArgNamesBlockedField",
             "security-slack/source-class-firewall/derivedEmailAsControlArgRejected",
             "security-slack/source-class-firewall/getWebpageExtractedUrlRejected",
+            "security-slack/recursive-url-fetch/recursiveWebpageFetchRejected",
             "security-workspace/source-class-firewall/createCalendarEventExtractedParticipantsRejected",
             "security-workspace/source-class-firewall/rescheduleCalendarEventExtractedIdRejected",
             "security-travel/source-class-firewall/createCalendarEventExtractedParticipantsRejected",
@@ -215,6 +216,7 @@ MUTATIONS = [
             # caught by policy.build backstop when source-class is also off (defense-in-depth):
             "security-slack/source-class-firewall/sendDmExtractedRecipientRejected",
             "security-slack/source-class-firewall/getWebpageExtractedUrlRejected",
+            "security-slack/recursive-url-fetch/recursiveWebpageFetchRejected",
             "security-slack/selection-ref-wrong-record-bypass/selectionRefRealSlackMsgHandleRejected",
             "security-banking/source-class-firewall/sendMoneyExtractedRecipientRejected",
             "security-banking/source-class-firewall/scheduleTxExtractedRecipientRejected",
