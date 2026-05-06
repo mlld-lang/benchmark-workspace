@@ -1,6 +1,6 @@
 ---
 id: c-7fb9
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-01T09:06:49Z
@@ -8,6 +8,7 @@ type: bug
 priority: 3
 assignee: Adam
 tags: [travel, oos-exhausted, eval-shape]
+updated: 2026-05-06T01:38:08Z
 ---
 # OOS-EXHAUSTED: TR-UT17 - eval ignores 'budget-friendly' qualifier, demands max-rating only
 

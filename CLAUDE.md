@@ -248,7 +248,7 @@ Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagge
 
 The bench image is composed of three pieces, two of which are pre-built into separate images and `COPY --from`'d into the final bench image:
 
-- **`ghcr.io/mlld-lang/mlld-prebuilt:2.1.0`** — built by `.github/workflows/mlld-prebuild.yml`. Self-skip: re-running with no upstream change is a ~30s no-op. Re-run when mlld@2.1.0 ref moves: `gh workflow run mlld-prebuild.yml`.
+- **`ghcr.io/mlld-lang/mlld-prebuilt:2.1.0`** — built by `.github/workflows/mlld-prebuild.yml`. Self-skip: re-running with no upstream change is a ~30s no-op. **Self-healed by bench-run.yml**: when the freshness check sees mlld is stale, the rebuild step dispatches mlld-prebuild *first*, waits, then dispatches bench-image. Post-rebuild verify checks both `clean.sha` (matches dispatched HEAD) and `mlld.sha` (matches mlld@<ref> HEAD) and fails loud if either is still stale. Manual re-dispatch is normally unnecessary; only needed for hotfixes that haven't been pushed to the ref yet: `gh workflow run mlld-prebuild.yml`.
 - **`ghcr.io/mlld-lang/opencode-prebuilt:dev`** — built by `.github/workflows/opencode-prebuild.yml`. Manual dispatch only. Re-run when adamavenir/opencode#dev changes: `gh workflow run opencode-prebuild.yml`.
 - **`ghcr.io/mlld-lang/benchmark-workspace:main`** — bench-image.yml builds this on every push to bench/, rig/, src/, agents/, bench/docker/. Pulls the two prebuilt images, adds bench code + uv venv, pushes. ~1-2 min wall (was ~9 min before the prebuild split).
 
