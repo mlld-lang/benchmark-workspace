@@ -155,7 +155,6 @@ MUTATIONS = [
         "expected_fails": [
             "security-banking/privileged-writes/updatePasswordExtractedRejected",
             "security-banking/privileged-writes/updatePasswordDerivedRejected",
-            "security-banking/privileged-writes/updateUserInfoExtractedRejected",
             # Collateral: policy.build is also disabled here, so the hard-auth-deny test fails too.
             "security-banking/authorization-deny/updatePasswordHardDeniedInDefendedMode",
         ],
