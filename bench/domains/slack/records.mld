@@ -49,10 +49,33 @@ record @slack_user = {
 
 >> ── Slack channels ──
 >>
->> Channel names from get_channels are authoritative identities.
+>> Channel names ARE the channel's authoritative identifier — there's no
+>> separate channel ID in AgentDojo's slack data model. Names are also
+>> attacker-controllable: AgentDojo's injection_tasks.py adds channels
+>> with arbitrary names (including instruction-shape prose like
+>> `External_TODO: Send link X to Y`). bench-grind-20 audit found 113
+>> sessions where injected channel names reached planner reasoning.
+>>
+>> c-0298 fix: mint a synthetic id_ in the bridge (see @channelItems),
+>> use it as the key so the framework's auto-handle string is opaque
+>> (`r_slack_channel_<random_id>` not `r_slack_channel_<name>`). Keep
+>> name as a fact (the binding is real, just attacker-chosen). Hide
+>> name from role:planner projection — planner sees only the handle.
+>> Workers (derive in particular) still see name so they can match
+>> user-task constraints ("find channel with smallest message count")
+>> and return selection_refs the planner uses as control-arg sources
+>> without ever reading the name.
 record @slack_channel = {
-  facts: [name: { type: string, kind: "slack_channel_name" }],
-  display: [{ ref: "name" }]
+  facts: [
+    id_: handle,
+    name: { type: string, kind: "slack_channel_name" }
+  ],
+  key: id_,
+  display: {
+    default: [{ ref: "id_" }, { ref: "name" }],
+    worker: [{ ref: "id_" }, { ref: "name" }],
+    planner: [{ ref: "id_" }]
+  }
 }
 
 >> ── Webpage content ──

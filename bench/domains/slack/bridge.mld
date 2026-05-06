@@ -17,6 +17,44 @@ exe @stringListItems(raw) = js {
     .filter(Boolean);
 }
 
+>> Channel records need a synthetic id_ separate from name. Per AgentDojo's
+>> data model the channel name IS the channel's identity (no separate ID),
+>> AND attacker-controllable (channels can be created with arbitrary names
+>> including injection text per injection_tasks.py). Using name as the
+>> record key makes the framework's auto-handle string contain the name,
+>> which leaks attacker prose into the planner's handle-only view of the
+>> resolved bucket. Mint a synthetic id_ per channel so handles are opaque
+>> from the planner's perspective; workers can still read name via
+>> projection. c-0298.
+exe @channelItems(raw) = js {
+  const callId = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
+  let counter = 0;
+  const nextId = () => `${callId}_${counter++}`;
+
+  const fromName = (name) => {
+    const trimmed = String(name ?? "").trim();
+    if (!trimmed) return null;
+    return { id_: nextId(), name: trimmed };
+  };
+
+  if (Array.isArray(raw)) {
+    return raw.map(fromName).filter(Boolean);
+  }
+
+  if (typeof raw !== "string") {
+    return [];
+  }
+
+  return raw
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^-+\s*/, "").trim())
+    .filter(Boolean)
+    .map(fromName)
+    .filter(Boolean);
+}
+
 exe @messageItems(raw) = js {
   // AgentDojo's slack messages have no id. Synthesize a unique id_ per
   // message so slack_msg can `key: id_` and the runtime mints a distinct
@@ -105,4 +143,4 @@ exe @messageItems(raw) = js {
   return items.filter((item) => item.sender || item.recipient || item.body);
 }
 
-export { @stringListItems, @messageItems }
+export { @stringListItems, @channelItems, @messageItems }
