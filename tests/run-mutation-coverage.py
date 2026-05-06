@@ -115,6 +115,7 @@ MUTATIONS = [
         "suites": ["slack", "banking", "workspace", "travel"],
         "expected_fails": [
             "security-slack/source-class-firewall/knownEmailNotInTaskTextRejected",
+            "security-slack/source-class-firewall/influencedNovelUrlOnGetWebpageRejected",
             "security-banking/source-class-firewall/sendMoneyKnownIbanNotInTaskTextRejected",
             "security-workspace/source-class-firewall/sendEmailKnownRecipientNotInTaskTextRejected",
             "security-travel/source-class-firewall/reserveHotelKnownNotInTaskTextRejected",
@@ -213,6 +214,7 @@ MUTATIONS = [
             "security-travel/source-class-firewall/createCalendarEventExtractedParticipantsRejected",
             # caught by policy.build backstop when source-class is also off (defense-in-depth):
             "security-slack/source-class-firewall/sendDmExtractedRecipientRejected",
+            "security-slack/source-class-firewall/getWebpageExtractedUrlRejected",
             "security-slack/selection-ref-wrong-record-bypass/selectionRefRealSlackMsgHandleRejected",
             "security-banking/source-class-firewall/sendMoneyExtractedRecipientRejected",
             "security-banking/source-class-firewall/scheduleTxExtractedRecipientRejected",
@@ -330,6 +332,44 @@ exe @lookupResolvedControlValueOriginal(state, recordName, handle, fieldName) = 
             "security-slack/selection-ref-graceful-failure/selectionRefMismatchedHandleAfterResolveRejected",
             "security-slack/selection-ref-wrong-record-bypass/selectionRefRealSlackMsgHandleRejected",
             "security-travel/wrong-record-fact-firewall/reserveHotelSelectionRefRestaurantNameRejected",
+        ],
+    },
+    {
+        "id": "known-task-text-and-no-novel-urls-combined",
+        "description": "Disable BOTH known_value_not_in_task_text AND no-novel-urls. Catches tests where an influenced URL not in task text would normally be rejected by EITHER known-task-text (rig firewall) OR no-novel-urls (mlld policy backstop). This combined verifies the no-novel-urls defense layer for c-d374 Test 2.",
+        "edits": [
+            {
+                "file": "rig/intent.mld",
+                "search": '''  if @resolved.source == "known" [
+    if !@knownInTask(@query, @resolved.value) && @role == "control" [
+      => {
+        ok: false,
+        arg: @arg,
+        error: "known_value_not_in_task_text",''',
+                "replace": '''  if @resolved.source == "known" [
+    if false [  >> MUTATION-COVERAGE: known-task-text disabled (no-novel-urls combined)
+      => {
+        ok: false,
+        arg: @arg,
+        error: "known_value_not_in_task_text",''',
+            },
+            {
+                "file": "rig/orchestration.mld",
+                "search": '''  let @policyRules = when [
+    @hasNovelUrlRisk(@tools) => @rules.concat(["no-novel-urls"])
+    * => @rules
+  ]''',
+                "replace": '''  let @policyRules = when [
+    false => @rules.concat(["no-novel-urls"])  >> MUTATION-COVERAGE: no-novel-urls stripped from policy
+    * => @rules
+  ]''',
+            },
+        ],
+        "suites": ["slack"],
+        "expected_fails": [
+            "security-slack/source-class-firewall/influencedNovelUrlOnGetWebpageRejected",
+            # collateral: known-task-text is disabled here, so the existing slack known-not-in-task test also fails
+            "security-slack/source-class-firewall/knownEmailNotInTaskTextRejected",
         ],
     },
     {
