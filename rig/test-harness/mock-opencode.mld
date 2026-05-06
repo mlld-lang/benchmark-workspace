@@ -38,15 +38,11 @@ exe @dispatchScriptStep(step) = [
 >> Returns the LAST step's result (typically compose).
 exe @runScript(script) = [
   let @results = loop(100) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "mockScript" => @input
-      * => { _rig_cursor: "mockScript", index: 0, results: [], lastResult: null }
-    ]
+    let @ctx = @input ?? { index: 0, results: [], lastResult: null }
     if @ctx.index >= @script.length [ done @ctx ]
     let @step = @script[@ctx.index]
     let @result = @dispatchScriptStep(@step)
     continue {
-      _rig_cursor: "mockScript",
       index: @ctx.index + 1,
       results: @ctx.results.concat([@result]),
       lastResult: @result

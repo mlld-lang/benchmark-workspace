@@ -90,13 +90,9 @@ exe @allowedSelectionKeys(state, sources) = [
     ]
   ]
   let @flattened = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "deriveFlattened" => @input
-      * => { _rig_cursor: "deriveFlattened", index: 0, values: [] }
-    ]
+    let @ctx = @input ?? { index: 0, values: [] }
     if @ctx.index >= @pairs.length [ done @ctx.values ]
     continue {
-      _rig_cursor: "deriveFlattened",
       index: @ctx.index + 1,
       values: @ctx.values.concat(@pairs[@ctx.index] ?? [])
     }

@@ -557,10 +557,7 @@ exe @plannerResolveBatch(input) = [
   >> state/runtime and recomputes progress, which creates the long
   >> resolve_batch tail on travel.
   let @mergedState = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "resolveBatchMerge" => @input
-      * => { _rig_cursor: "resolveBatchMerge", index: 0, state: @initialCtx.state }
-    ]
+    let @ctx = @input ?? { index: 0, state: @initialCtx.state }
     if @ctx.index >= @dispatched.length [ done @ctx.state ]
     let @item = @dispatched[@ctx.index]
     let @nextState = @batchSpecMergeState(
@@ -569,7 +566,6 @@ exe @plannerResolveBatch(input) = [
       @initialCtx.agent
     )
     continue {
-      _rig_cursor: "resolveBatchMerge",
       index: @ctx.index + 1,
       state: @nextState
     }

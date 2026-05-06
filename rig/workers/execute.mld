@@ -49,10 +49,7 @@ exe @hasNonNullFieldValue(inputValue, fieldNames) = [
 
 exe @mergeArgSources(values) = [
   let @pairs = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "mergeArgSources" => @input
-      * => { _rig_cursor: "mergeArgSources", index: 0, values: [] }
-    ]
+    let @ctx = @input ?? { index: 0, values: [] }
     if @ctx.index >= @values.length [ done @ctx.values ]
     let @source = @values[@ctx.index] ?? {}
     let @sourcePairs = for @argKey, @argValue in @source => {
@@ -60,7 +57,6 @@ exe @mergeArgSources(values) = [
       value: @argValue
     }
     continue {
-      _rig_cursor: "mergeArgSources",
       index: @ctx.index + 1,
       values: @ctx.values.concat(@sourcePairs)
     }

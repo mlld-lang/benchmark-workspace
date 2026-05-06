@@ -103,13 +103,9 @@ exe @plannerSchemaIssues(basePath, candidate) = [
 exe @plannerFlattenIssues(groups) = [
   let @items = @arrayItems(@groups)
   let @flattened = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "plannerFlattenIssues" => @input
-      * => { _rig_cursor: "plannerFlattenIssues", index: 0, values: [] }
-    ]
+    let @ctx = @input ?? { index: 0, values: [] }
     if @ctx.index >= @items.length [ done @ctx.values ]
     continue {
-      _rig_cursor: "plannerFlattenIssues",
       index: @ctx.index + 1,
       values: @ctx.values.concat(@items[@ctx.index] ?? [])
     }

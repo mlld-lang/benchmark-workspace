@@ -7,12 +7,7 @@
 exe @pairsToObject(pairs) = [
   if !@pairs.isDefined() [ => {} ]
   let @acc = loop(1000) [
-    let @cursor = when [
-      >> Loop bodies can inherit ambient caller input on the first turn.
-      >> Resume only from this loop's own tagged continuation object.
-      @input["_rig_cursor"] == "pairsToObject" => @input
-      * => { _rig_cursor: "pairsToObject", index: 0, obj: {} }
-    ]
+    let @cursor = @input ?? { index: 0, obj: {} }
     if @cursor.index >= @pairs.length [ done @cursor ]
     let @pair = @pairs.at(@cursor.index)
     >> Object spread over an accumulator breaks when the computed key is
@@ -24,7 +19,6 @@ exe @pairsToObject(pairs) = [
       @nextObj += { [@pair.key]: @pair.value }
     ]
     continue {
-      _rig_cursor: "pairsToObject",
       index: @cursor.index + 1,
       obj: @nextObj
     }
@@ -382,15 +376,12 @@ exe @arrayContainsFetchRisk(values) = [
 exe @uniqueValues(values) = [
   if !@values.isDefined() [ => [] ]
   let @acc = loop(1000) [
-    let @cursor = when [
-      @input["_rig_cursor"] == "uniqueValues" => @input
-      * => { _rig_cursor: "uniqueValues", index: 0, values: [] }
-    ]
+    let @cursor = @input ?? { index: 0, values: [] }
     if @cursor.index >= @values.length [ done @cursor ]
     let @value = @values[@cursor.index]
     continue when [
-      @cursor.values.includes(@value) => { _rig_cursor: "uniqueValues", index: @cursor.index + 1, values: @cursor.values }
-      * => { _rig_cursor: "uniqueValues", index: @cursor.index + 1, values: @cursor.values.concat([@value]) }
+      @cursor.values.includes(@value) => { index: @cursor.index + 1, values: @cursor.values }
+      * => { index: @cursor.index + 1, values: @cursor.values.concat([@value]) }
     ]
   ]
   => @acc.values
@@ -576,13 +567,9 @@ exe @synthesizedOperations(tools) = [
     => for @risk in @risks => { key: @risk, value: @name }
   ]
   let @flattened = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "riskPairs" => @input
-      * => { _rig_cursor: "riskPairs", index: 0, pairs: [] }
-    ]
+    let @ctx = @input ?? { index: 0, pairs: [] }
     if @ctx.index >= @explicitPairs.length [ done @ctx.pairs ]
     continue {
-      _rig_cursor: "riskPairs",
       index: @ctx.index + 1,
       pairs: @ctx.pairs.concat(@explicitPairs[@ctx.index] ?? [])
     }
@@ -615,13 +602,9 @@ exe @synthesizedAuthorizations(tools) = [
     }
   ]
   let @rolePairs = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "canAuthorizeRolePairs" => @input
-      * => { _rig_cursor: "canAuthorizeRolePairs", index: 0, pairs: [] }
-    ]
+    let @ctx = @input ?? { index: 0, pairs: [] }
     if @ctx.index >= @rolePairsNested.length [ done @ctx.pairs ]
     continue {
-      _rig_cursor: "canAuthorizeRolePairs",
       index: @ctx.index + 1,
       pairs: @ctx.pairs.concat(@rolePairsNested[@ctx.index] ?? [])
     }

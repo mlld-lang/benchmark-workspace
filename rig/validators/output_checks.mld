@@ -165,10 +165,7 @@ exe @entryForSource(src, stateSummary) = [
 >> collectFieldDivergenceCandidates whose nested-for produces array-of-arrays.
 exe @flattenOne(nested) = [
   => loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "flattenOne" => @input
-      * => { _rig_cursor: "flattenOne", index: 0, accumulator: [] }
-    ]
+    let @ctx = @input ?? { index: 0, accumulator: [] }
     if @ctx.index >= @nested.length [ done @ctx.accumulator ]
     let @inner = @nested[@ctx.index] ?? []
     let @innerArr = when [
@@ -176,7 +173,6 @@ exe @flattenOne(nested) = [
       * => []
     ]
     continue {
-      _rig_cursor: "flattenOne",
       index: @ctx.index + 1,
       accumulator: @ctx.accumulator.concat(@innerArr)
     }
@@ -188,10 +184,7 @@ exe @flattenOne(nested) = [
 exe @longestBlock(blocks) = [
   if @blocks.length == 0 [ => null ]
   => loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "longest" => @input
-      * => { _rig_cursor: "longest", index: 0, best: @blocks[0] }
-    ]
+    let @ctx = @input ?? { index: 0, best: @blocks[0] }
     if @ctx.index >= @blocks.length [ done @ctx.best ]
     let @candidate = @blocks[@ctx.index]
     let @nextBest = when [
@@ -199,7 +192,6 @@ exe @longestBlock(blocks) = [
       * => @ctx.best
     ]
     continue {
-      _rig_cursor: "longest",
       index: @ctx.index + 1,
       best: @nextBest
     }
@@ -219,16 +211,12 @@ exe @runOutputValidators(validators, rawOutput, context) = [
     => { ok: true, failed: null, hint: null }
   ]
   => loop(100) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "runValidators" => @input
-      * => { _rig_cursor: "runValidators", index: 0 }
-    ]
+    let @ctx = @input ?? { index: 0 }
     if @ctx.index >= @list.length [ done { ok: true, failed: null, hint: null } ]
     let @validator = @list[@ctx.index]
     let @result = @validator(@rawOutput, @context)
     if @result.ok == false [ done { ok: false, failed: @result.kind ?? "unknown", hint: @result.hint ?? "Validation failed; revise your output." } ]
     continue {
-      _rig_cursor: "runValidators",
       index: @ctx.index + 1
     }
   ]

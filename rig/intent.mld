@@ -103,10 +103,7 @@ exe @indexedBucketEntries(bucket) = [
     * => 0
   ]
   let @resolved = loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "indexedEntries" => @input
-      * => { _rig_cursor: "indexedEntries", index: 0, entries: [] }
-    ]
+    let @ctx = @input ?? { index: 0, entries: [] }
     if @ctx.index >= @orderLength [ done @ctx.entries ]
     let @handle = @rawOrder[@ctx.index]
     let @entry = @valueField(@byHandle, @name(@handle))
@@ -115,7 +112,6 @@ exe @indexedBucketEntries(bucket) = [
       @nextEntries += [@entry]
     ]
     continue {
-      _rig_cursor: "indexedEntries",
       index: @ctx.index + 1,
       entries: @nextEntries
     }
@@ -272,14 +268,11 @@ exe @lookupResolvedEntry(state, recordName, handle) = [
   ]
   let @entries = @resolvedEntries(@state, @recordName)
   => loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "lookupResolvedEntry" => @input
-      * => { _rig_cursor: "lookupResolvedEntry", index: 0 }
-    ]
+    let @ctx = @input ?? { index: 0 }
     if @ctx.index >= @entries.length [ done null ]
     let @entry = @entries[@ctx.index]
     if @name(@entry.handle) == @name(@handle) [ done @entry ]
-    continue { _rig_cursor: "lookupResolvedEntry", index: @ctx.index + 1 }
+    continue { index: @ctx.index + 1 }
   ]
 ]
 
@@ -304,15 +297,11 @@ exe @resolvedEntryFieldValue(entry, fieldName) = [
   if @steps.length == 1 [ => @rootValue ]
 
   => loop(1000) [
-    let @ctx = when [
-      @input["_rig_cursor"] == "resolvedEntryFieldPath" => @input
-      * => { _rig_cursor: "resolvedEntryFieldPath", index: 1, value: @rootValue }
-    ]
+    let @ctx = @input ?? { index: 1, value: @rootValue }
     if !@ctx.value.isDefined() || @ctx.value == null [ done null ]
     if @ctx.index >= @steps.length [ done @ctx.value ]
     let @nextValue = @pathStepValue(@ctx.value, @steps[@ctx.index])
     continue {
-      _rig_cursor: "resolvedEntryFieldPath",
       index: @ctx.index + 1,
       value: @nextValue
     }
@@ -531,19 +520,14 @@ exe @resolveNamedValue(state, bucketName, ref) = [
         (@firstKind == "field") &&
         (@firstValue == @schemaName) &&
         @schemaFieldMissing
-      let @ctx = when [
-        @input["_rig_cursor"] == "namedEntryFieldPath" => @input
-        * => {
-          _rig_cursor: "namedEntryFieldPath",
+      let @ctx = @input ?? {
           index: when [ @stripSchemaPrefix => 1 * => 0 ],
           value: @rootValue
         }
-      ]
       if !@ctx.value.isDefined() || @ctx.value == null [ done null ]
       if @ctx.index >= @steps.length [ done @ctx.value ]
       let @nextValue = @pathStepValue(@ctx.value, @steps[@ctx.index])
       continue {
-        _rig_cursor: "namedEntryFieldPath",
         index: @ctx.index + 1,
         value: @nextValue
       }
@@ -886,10 +870,7 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
     ]
     let @first = @compiled[0]
     let @backingRefs = loop(1000) [
-      let @ctx = when [
-        @input["_rig_cursor"] == "backingRefs" => @input
-        * => { _rig_cursor: "backingRefs", index: 0, values: [] }
-      ]
+      let @ctx = @input ?? { index: 0, values: [] }
       if @ctx.index >= @compiled.length [ done @ctx.values ]
       let @nextValues = @ctx.values
       let @entryValues = @compiled[@ctx.index].backing_refs ?? []
@@ -897,16 +878,12 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
         @nextValues += @entryValues
       ]
       continue {
-        _rig_cursor: "backingRefs",
         index: @ctx.index + 1,
         values: @nextValues
       }
     ]
     let @flatAttestations = loop(1000) [
-      let @ctx = when [
-        @input["_rig_cursor"] == "flatAttestations" => @input
-        * => { _rig_cursor: "flatAttestations", index: 0, values: [] }
-      ]
+      let @ctx = @input ?? { index: 0, values: [] }
       if @ctx.index >= @compiled.length [ done @ctx.values ]
       let @nextValues = @ctx.values
       let @entryValues = @compiled[@ctx.index].flat_attestations ?? []
@@ -914,7 +891,6 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
         @nextValues += @entryValues
       ]
       continue {
-        _rig_cursor: "flatAttestations",
         index: @ctx.index + 1,
         values: @nextValues
       }
