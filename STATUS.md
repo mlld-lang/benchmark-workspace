@@ -144,5 +144,8 @@ Open tickets that affect multiple tasks or that introduce new architecture:
 
 ## Sweep history
 
-- 2026-05-04 — last full sweep, run ids `25324559458` (banking) `25324561113` (slack) `25324557648` (workspace) `25324563037` (travel). Totals 78/97.
+- 2026-05-04 — full sweep, run ids `25324559458` (banking) `25324561113` (slack) `25324557648` (workspace) `25324563037` (travel). Totals 78/97 (~242 × 429s combined). Includes ~5 OPEN-item lucky passes above the deterministic PASS floor.
 - 2026-05-05 — bench-grind-19 travel 5-task canary (UT3/5/11/13/17): 3/5. UT11 + UT17 are eval-quirks.
+- 2026-05-06 — first batched 2-at-a-time sweep with workspace split. Run ids `25417255652` (workspace-a 16/20) `25417483572` (workspace-b 18/20) `25417256831` (banking 10/16) `25417833945` (slack 13/21) `25417986076` (travel 16/20). **Totals 73/97 (75.3%)** — exactly the deterministic PASS floor (no OPEN-bucket luck). 429 count dropped from ~5000+ on 4-parallel to 87 combined; peak memory 20.6 GB / 31 GB on travel (66% utilization, 16x32 shape confirmed adequate).
+
+The 73 vs 78 gap is the difference between "PASS-classified count" (deterministic floor) and "PASS + occasional OPEN-item lucky pass" (what observed sweep numbers can hit). To deterministically lift the floor: land BK-UT6 (b2-94c7), BK-UT15 (c-6ed8), TR-UT16 (c-57a6), WS-UT25 (c-cb92). Each lifts the bucket by 1; collectively could push to ~78/97 reliably.
