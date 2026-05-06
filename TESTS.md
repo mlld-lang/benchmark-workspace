@@ -366,6 +366,50 @@ Add a mutation when you add a security test:
 
 The registry is the canonical record of which security tests are mutation-verified. Tests not represented in any mutation's `expected_fails` are unverified and should be treated with the same skepticism as untested code.
 
+### Writing a new security test — the verification checklist
+
+Every new security test ships with a mutation entry. Follow this order; skipping a step is how fake coverage gets in.
+
+1. **Name the specific defense.** Not "the firewall rejects" — name the rule. E.g., "`no-send-to-unknown` denies because the URL arg has no fact attestation". Every defense has a name; if you can't name it, you don't have a test target yet, you have a vague claim.
+2. **Locate the rejection site.** The exact file + line in `rig/` (or `rig/workers/`) where the `ok: false` originates. Grep for the error string. If the rejection is in mlld runtime (e.g., kind firewall in `policy.build`), the mutation site is the rig-side check that propagates the verdict (`execute.mld:138 if !@built.valid`).
+3. **Design the one-line mutation FIRST.** Before writing the test, write the mutation: what edit disables exactly this rejection? Common patterns:
+   - `if <condition> [reject]` → `if false [reject]`
+   - Forge a successful return: `=> { ok: true, ... }` ahead of the original logic
+   - Strip a label from a tool's `labels:` array
+   - Disable a rule by removing it from the synthesized policy's `defaults.rules`
+
+   If you can't write the mutation, you can't verify the test. Either find the real rejection site or accept the test is integration-level (caught by some defense, not specifically named).
+4. **Write the test and the mutation entry in the same commit.** No exceptions. A test without a registry entry is unverified by definition.
+5. **Run `tests/run-mutation-coverage.py --only <new-mutation-id>`.** Confirm `expected_fails` matches the actual fail set under the mutation. If your test isn't in actual fails, your test is passing for the wrong reason — fix the seed shape, strengthen the assertion, or find the real rejection layer before merging.
+6. **If the mutation catches more tests than expected** (collateral fails), those are defense-in-depth coverage of the same defense. Add them to `expected_fails`.
+7. **If no plausible single mutation makes the test fail** — multiple layers naturally catch (defense-in-depth) — write a *combined* mutation entry (`edits: [...]`) that disables every layer involved. The combined mutation proves the test catches the attack via this stack of defenses, even if no single layer is load-bearing alone.
+
+### When the test is integration-level, not layer-specific
+
+Some attacks are caught by multiple layers simultaneously and any one of them suffices (e.g., source-class firewall AND policy.build kind firewall both reject extracted email values). The scripted test catches the attack end-to-end; that's a real security property. But disabling any *single* layer doesn't make the test fail.
+
+Two valid responses:
+- **Combined mutation.** Disable every involved layer in one mutation entry. The test fails iff all layers are off — proof that the defense-in-depth stack holds. Existing examples: `source-class-and-backstop-combined`, `control-ref-lookup-and-backstop-combined`.
+- **Convert to a unit test.** Move the assertion into `tests/rig/` and call the rejection function directly (e.g., `compileForDispatch`, `lookupResolvedControlValue`). Assert on the specific `issue.error` value. This pins the test to one layer at the cost of less-realistic harness coverage.
+
+Pick combined when the defense-in-depth pattern matters (it usually does — the layers exist for a reason). Pick unit-test when you specifically need to verify a single rule for refactor protection.
+
+### Defense site map for the remaining ticket queue
+
+For the security tickets in HANDOFF priority order, the rejection site to mutate:
+
+| Ticket | Specific defense | Mutation site |
+|---|---|---|
+| **c-d374** B10 get_webpage | `no-send-to-unknown` denies URL exfil; `no-novel-urls` denies LLM-fabricated URLs | `bench/domains/slack/tools.mld` get_webpage `labels:` (remove `exfil:send`); mlld policy `no-novel-urls` rule (disable in synthesized policy via rig) |
+| **c-a720** B5 recursive URL fetch | `influenced` label propagation onto URLs; `no-novel-urls` blocks the second fetch | label-propagation site in `rig/transforms/url_refs.mld`; same novel-urls check |
+| **c-fb58** B6 instruction-label promotion | label-propagation: instruction-shaped text in untrusted content stays non-actionable | wherever influenced-label promotion happens; or the planner-state filter |
+| **c-800d** correlate firewall | `correlated_control_args_failed` rejection | `rig/workers/execute.mld:118-122` — flip `if !@correlated.ok` to `if false` |
+| **c-7016** B9 advice-gate | advice-gate dispatch routing for influenced data; classifier output gating | `rig/workers/advice.mld` and the advice-gate config check |
+| **c-891b** taint-based defenses | `no-untrusted-privileged` rule firing; label propagation through values | mlld policy rule (disable in synthesized policy); label-strip in the relevant transform |
+| **c-634c** typed-instruction-channel | Doesn't exist yet — design lands first (c-6479), then defense, then test | N/A until defense is built |
+
+This map is the starting point, not the authoritative answer. Verify each rejection site by grepping for the error string and reading the surrounding code before designing the mutation. Update the map when the defense surface changes.
+
 ## How to add a new suite
 
 1. Pick the right directory:

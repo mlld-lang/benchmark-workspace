@@ -58,3 +58,13 @@ If NO defense fires today, this becomes a real-bug ticket like c-3c2b.
 2. Either: rehearse rejects when the instruction-shaped channel ref reaches a get_users_in_channel call, OR the test is xfail-marked surfacing a real defense gap.
 3. Test docstring documents which defense layer fires (or which is missing).
 
+
+## Notes
+
+**2026-05-06T07:05:49Z** MUTATION VERIFICATION REQUIRED (added 2026-05-06 bench-grind-20). Per the discipline in TESTS.md "Writing a new security test" section: every test in this ticket ships with a mutation entry in tests/run-mutation-coverage.py.
+
+Defense to mutate: instruction-shaped text in untrusted content does not get promoted to actionable. The mutation point depends on where promotion happens — likely in the planner-state projection (rig/runtime.mld display projection) or the influenced-label propagation. Trace from the rejection symptom backward.
+
+Note: this defense surface is less crisply layered than the source-class firewall. Probably needs a combined mutation. Read SCIENCELOG-v2.md line 449-460 for the historic UT18 × IT3 breach analysis to identify the specific defense path.
+
+Workflow: write test, identify rejection site via grep + read, design mutation, run `tests/run-mutation-coverage.py --only b6-instruction-channel-label`. Confirm actual fails == expected before merging.
