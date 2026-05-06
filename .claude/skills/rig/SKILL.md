@@ -94,6 +94,8 @@ Never use `--debug` on bench runs — it triggers OOM. `MLLD_TRACE=effects MLLD_
 
 **Dispatching attack runs:** use `scripts/bench-attacks.sh`, not bare `gh workflow run`. Direct workflow dispatch with default parameters (parallelism=40, no shape override) WILL OOM on slack/workspace/travel attacks at exit 137. See CLAUDE.md "Attack dispatches" for the shape/parallelism map and one-off dispatch params if you really need to bypass the script.
 
+**Planner provider selection:** Together AI (`togetherai/zai-org/GLM-5.1`) is default and fastest when up, but has outages. OpenRouter and Fireworks are wired in as alternatives — pass `-f planner=openrouter/@preset/<slug>` (or `PLANNER=...` for local runs) to override. See CLAUDE.md "Planner provider selection" for the per-provider model strings, secrets to set, and verification command. **Always verify a new provider with one local task before a cloud sweep** — failures in the planner LLM call path get masked by the `@composeRetryOpencode` retry guard and surface as misleading "resume not available for this exe" errors instead of the real opencode/provider error.
+
 After a defended attack sweep completes (or any subset), audit whether the rig's "planner sees no untrusted content" invariant held. We've done this audit before — see `planner-dirty.md` for the canonical case list and findings from bench-grind-20.
 
 **The investigation has two related but distinct questions:**

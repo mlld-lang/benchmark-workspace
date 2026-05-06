@@ -18,14 +18,14 @@ Several things landed this session that change priorities materially:
 
 ### Cloud regression check (FIRST ACTION for next agent)
 
-Two cloud runs were dispatched this session against post-fix code (commit 6b10e43):
-- **25458741885** — slack × direct
-- **25458743593** — slack × important_instructions
+Two **OpenRouter** cloud runs in flight against post-c-a8d2 + framework-fix + opencode.json code (commit 64f5e9b). Together AI was hitting outages mid-session; OpenRouter via the `@preset/glm-5-1` preset is the working alternative. Dispatched 23:25 UTC, ETA ~30-60 min wall:
+- **25466790521** — slack × direct (planner=openrouter/@preset/glm-5-1)
+- **25466791386** — slack × important_instructions (planner=openrouter/@preset/glm-5-1)
 
-These should land within ~30-60 min of dispatch (around 19:30-20:30 PT). When complete, fetch + verify with the planner-dirty signature query. Pre-fix baselines per planner-dirty.md: direct = 32 sessions, important_instructions = 22 sessions. Target: 0 sessions. Combined with c-a8d2 + framework-fix landings, this should be the publishable verification.
+When complete, fetch + signature-query both. Pre-fix baselines per planner-dirty.md: direct = 32, important_instructions = 22. Target: 0.
 
 ```bash
-for RUN in 25458741885 25458743593; do
+for RUN in 25466790521 25466791386; do
   uv run --project bench python3 src/fetch_run.py $RUN
   echo "=== $RUN ==="
   grep -E "ASR|Utility under attack" runs/$RUN/console.log
@@ -45,11 +45,33 @@ for RUN in 25458741885 25458743593; do
 done
 ```
 
-If 0 sessions on both: update planner-dirty.md slack mechanism with AFTER counts. If >0: transcript-dive immediately on the residual paths.
+### Together AI completed-runs reference (this session, post-fix code)
+
+After the OOM-recovery dispatch (commit 6b10e43, with corrected shape=32x64 + parallelism=21), the Together regression runs landed cleanly. They're the comparable-provider numbers for the same fix-stack:
+
+| Run | Suite × Attack | Provider | ASR | Utility under attack | Planner-dirty | Pre-fix baseline |
+|---|---|---|---|---|---|---|
+| 25462424362 | slack × direct | Together (GLM-5.1) | 0/104 | 44/104 (42.3%) | **22 sessions** | 32 |
+| 25462425708 | slack × important_instructions | Together (GLM-5.1) | 0/105 | 41/105 (39.0%) | **5 sessions** | 22 |
+| 25449626809 | slack × tool_knowledge | Together (GLM-5.1) | 0/105 | 40/105 (38.1%) | 5 sessions | (not measured pre-fix) |
+
+ASR holds at 0 across all three. **Direct attack still has 22 residual planner-dirty sessions** post all fixes — the c-a8d2 wrapper-error path is closed but a different leak path is active for direct-attack injections. Investigation hasn't started; would be a follow-up item.
+
+The OpenRouter dispatches above will produce the same cells with `Provider=OpenRouter` to test whether residuals shift across providers — useful for distinguishing model-vs-framework explanations.
+
+### Provider plumbing landed this session
+
+Commits `a79fb2c`, `cde9bf6`, `64f5e9b`:
+- `bench-run.yml` accepts `OPENROUTER_API_KEY` + `FIREWORKS_API_KEY` from GitHub secrets and forwards them into the bench Docker container
+- CLAUDE.md "Planner provider selection" documents the per-provider model strings + 2-at-a-time advice (provider-independent — runner concurrency, not RPM)
+- `opencode.json` at project root registers `@preset/glm-5-1` as a known model under the openrouter provider (without this opencode rejects preset model strings as unknown). Picked up automatically in cloud since `clean/` is the Docker cwd
+- SKILL.md "Auditing attack runs" entry-note added: provider override + verification discipline
+
+If Together comes back up faster than OpenRouter, dispatch can switch back via `-f planner=togetherai/zai-org/GLM-5.1` (or just omit the flag — that's the workflow default).
 
 ### Earlier slack tool_knowledge run (post-c-0298, pre-c-a8d2)
 
-Run `25449626809` was dispatched 17:05 PT on post-c-0298 code but BEFORE c-a8d2 landed. Reading: **0/105 ASR, 38.1% utility under attack, 5 planner-dirty sessions** (down from 113 pre-fix per planner-dirty.md). Those 5 sessions traced to the wrapper-error leak that c-a8d2 fixes. Don't re-cite this run as "current" once the new dispatches above complete — it's now historical. Verify with:
+Run `25449626809` was dispatched 17:05 PT on post-c-0298 code but BEFORE c-a8d2 landed. Reading: **0/105 ASR, 38.1% utility under attack, 5 planner-dirty sessions** (down from 113 pre-fix per planner-dirty.md). Those 5 sessions traced to the wrapper-error leak that c-a8d2 fixes. Now superseded by the post-c-a8d2 numbers in the table above. Verify with:
 
 ```bash
 uv run --project bench python3 src/fetch_run.py 25449626809
