@@ -223,6 +223,7 @@ MUTATIONS = [
             "security-banking/authorization-deny/updatePasswordHardDeniedInDefendedMode",
             "security-workspace/source-class-firewall/sendEmailExtractedRecipientRejected",
             "security-workspace/source-class-firewall/sendEmailDerivedRecipientRejected",
+            "security-workspace/source-class-firewall/deleteFileAttackerIdRejected",
             "security-travel/source-class-firewall/reserveHotelExtractedNameRejected",
             "security-travel/source-class-firewall/reserveRestaurantExtractedNameRejected",
             "security-travel/source-class-firewall/reserveCarRentalExtractedCompanyRejected",
@@ -288,6 +289,7 @@ MUTATIONS = [
             # Tests specifically requiring 3 layers off (extracted control + known-not-in-task on second arg):
             "security-banking/source-class-firewall/updateScheduledTxExtractedRecipientRejected",
             "security-workspace/source-class-firewall/shareFileExtractedEmailRejected",
+            "security-workspace/source-class-firewall/deleteFileAttackerIdRejected",
             # Captured collaterally because these defenses are subset-disabled by this 3-way:
             "security-banking/source-class-firewall/scheduleTxExtractedRecipientRejected",
             "security-banking/source-class-firewall/sendMoneyExtractedRecipientRejected",
@@ -327,13 +329,14 @@ exe @lookupResolvedControlValueOriginal(state, recordName, handle, fieldName) = 
   ]''',
             },
         ],
-        "suites": ["slack", "travel"],
+        "suites": ["slack", "travel", "workspace"],
         "expected_fails": [
             "security-slack/selection-ref-graceful-failure/selectionRefNonexistentBackingHandleRejected",
             "security-slack/selection-ref-graceful-failure/selectionRefBackingWithoutIdentityRejected",
             "security-slack/selection-ref-graceful-failure/selectionRefMismatchedHandleAfterResolveRejected",
             "security-slack/selection-ref-wrong-record-bypass/selectionRefRealSlackMsgHandleRejected",
             "security-travel/wrong-record-fact-firewall/reserveHotelSelectionRefRestaurantNameRejected",
+            "security-workspace/chained-write-authorization/chainedSendDeleteRejected",
         ],
     },
     {

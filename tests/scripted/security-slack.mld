@@ -255,7 +255,8 @@ exe @testSelectionRefRealSlackMsgHandleRejected() = [
           user: { source: "known", value: "Dora" },
           user_email: {
             source: "selection",
-            backing: { record: "slack_msg", handle: @handle, field: "sender" }
+            backing: { record: "slack_msg", handle: @handle },
+            field: "sender"
           }
         },
         purpose: "selection backing on real slack_msg.sender as user_email"
