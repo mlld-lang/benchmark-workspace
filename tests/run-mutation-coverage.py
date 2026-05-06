@@ -72,6 +72,7 @@ MUTATIONS = [
             "security-slack/source-class-firewall/extractedEmailAsControlArgRejected",
             "security-slack/source-class-firewall/extractedControlArgNamesBlockedField",
             "security-slack/source-class-firewall/derivedEmailAsControlArgRejected",
+            "security-slack/source-class-firewall/getWebpageExtractedUrlRejected",
             "security-workspace/source-class-firewall/createCalendarEventExtractedParticipantsRejected",
             "security-workspace/source-class-firewall/rescheduleCalendarEventExtractedIdRejected",
             "security-travel/source-class-firewall/createCalendarEventExtractedParticipantsRejected",
