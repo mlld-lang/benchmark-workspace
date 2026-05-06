@@ -218,15 +218,20 @@ uv run --project bench python3 src/opencode_debug.py --home runs/<run-id>/openco
 
 ### What runs where
 
-| Target | Shape | Parallelism | Tasks | Notes |
+5 sub-suites, all 16x32 (workspace splits in half so peak per-runner stays under ~20 GB):
+
+| Sub-suite | Shape | Parallelism | Tasks | Notes |
 |---|---|---|---|---|
-| `workspace` | 32x64 | -p 40 | 40 | Heaviest — needs 64 GB; ~30 GB peak at -p 34 fast |
-| `travel` | 32x64 | -p 20 | 20 | Full parallelism; no fan-out throttle |
-| `banking` | 16x32 | -p 16 | 16 | Light |
-| `slack` | 32x64 | -p 21 | 21 | Light |
-| (no args) | per-target | per-target | all 4 above | Dispatched concurrently |
+| `workspace-a` | 16x32 | -p 20 | UT0–19 | ~15-17 GB peak (projected) |
+| `workspace-b` | 16x32 | -p 20 | UT20–39 | ~15-17 GB peak (projected) |
+| `banking` | 16x32 | -p 16 | 16 | 3-13 GB peak measured |
+| `slack` | 16x32 | -p 21 | 21 | 16.7 GB peak measured |
+| `travel` | 16x32 | -p 20 | 20 | 19.6 GB peak measured (worst case, ~63% of 31 GB) |
+| (no args) | per-suite | per-suite | all 5 above | Dispatched 2-at-a-time by default |
 
 Parallelism defaults to `task_counts.<suite>` from `bench/grind-tasks.json` — the same source-of-truth file that drives `--fast` / `--grind` carve-outs. Update the JSON if AgentDojo's task count changes.
+
+32x64 was historically needed when workspace ran -p 40 (peak 30-34 GB). The split + recent mlld memory reductions moved every sub-suite comfortably under 16x32 (31 GB available). Bump back to LARGE only if peak utilization trends past 75% across consecutive runs.
 
 ### One-off / targeted runs
 
@@ -242,7 +247,7 @@ Inputs: `suite`, `tasks`, `planner`, `worker`, `harness`, `parallelism`, `stagge
 
 ### Where to run travel
 
-`scripts/bench.sh travel` dispatches travel at 32x64 + -p 20. The historic c-63fe fan-out throttle (-p 5) and `MLLD_HEAP=8g` overrides have been removed — the throttle inflated travel wall to ~1000s without buying anything, and the heap ceiling was a workaround for memory growth that should be fixed at the source. If MCP "Not connected" cascades reappear at full parallelism, file a fresh ticket rather than reinstating the throttle.
+`scripts/bench.sh travel` dispatches travel at 16x32 + -p 20. The historic c-63fe fan-out throttle (-p 5) and `MLLD_HEAP=8g` overrides have been removed — the throttle inflated travel wall to ~1000s without buying anything, and the heap ceiling was a workaround for memory growth that should be fixed at the source. If MCP "Not connected" cascades reappear at full parallelism, file a fresh ticket rather than reinstating the throttle.
 
 ### Image freshness
 
@@ -307,7 +312,7 @@ done
 - **Never use `show` in exe functions during bench runs.** It writes to stdout and corrupts the host's JSON parsing. Use `log` (stderr) or `MLLD_TRACE` instead.
 - **Never rename record fields to match MCP parameter names.** The intent compiler maps arg keys to resolved values — the names don't need to match. Field renaming across the MCP boundary destroys StructuredValue metadata.
 - **Run worker tests before and after prompt changes.** `mlld tests/live/workers/run.mld --no-checkpoint` catches regressions in ~50s. If tests pass too easily, the assertions are too weak.
-- **Per-task memory ≈ 0.9 GB on workspace at full parallelism (measured 2026-05-05).** Workspace at -p 34 on 32x64 hit 30.3 GB peak / 62.9 GB available (48% utilization, plenty of headroom). Earlier "1.5-2 GB per task" estimates predated the recent mlld memory reduction. Workspace and travel still want 32x64 for headroom; banking and slack are fine on 16x32. `scripts/bench.sh` sets the shape per suite. Memory peaks land in `manifest.json` (`mem_peak_kb` / `mem_total_kb`) per `bench/docker/entrypoint.sh`'s sampler.
+- **Per-task memory ≈ 0.9 GB across all sub-suites (measured 2026-05-05).** Workspace at -p 34 on 32x64 hit 30.3 GB peak (48% of 62.9 GB) before the workspace split; with -p 20 halves the projected peak is ~15-17 GB. Travel measured 19.6 GB at -p 20, slack 16.7 GB at -p 21, banking 3-13 GB at -p 16. All five sub-suites fit 16x32 (31 GB) with worst-case ~63% utilization. Earlier "1.5-2 GB per task" estimates predated the mlld memory reductions. Memory peaks land in `manifest.json` (`mem_peak_kb` / `mem_total_kb`) per `bench/docker/entrypoint.sh`'s sampler. Bump back to 32x64 only if peak utilization trends past 75%.
 
 ## Status, Categories, and Ticket Conventions
 

@@ -53,11 +53,24 @@ GRIND_FILE="bench/grind-tasks.json"
 # investigation in HANDOFF.md. Set higher only with dedicated capacity.
 MAX_CONCURRENT=2
 
-# Per-target shape. Travel + workspace need 64GB headroom at full -p 20;
-# banking + slack are lighter and fit on 16x32. The fast/grind splits use
-# the same shapes — task count drops but per-task memory is unchanged.
-SHAPE_WORKSPACE=nscloud-ubuntu-22.04-amd64-32x64
-SHAPE_TRAVEL=nscloud-ubuntu-22.04-amd64-32x64
+# Per-target shape. Workspace splits into halves of 20 tasks each, so all
+# 5 sub-suites are roughly 16-21 tasks. Measured peak memory across recent
+# benign runs at this size: workspace-half ~15-17 GB, slack 16.7 GB,
+# travel 19.6 GB, banking 3-13 GB. 16x32 (31 GB) fits all with headroom
+# (worst case travel at 63% utilization).
+#
+# 32x64 was historically needed when workspace ran -p 40 (peak 30-34 GB)
+# and before mlld memory reductions landed. The split + memory work moved
+# us comfortably under 16x32. Bump back to LARGE only if peak utilization
+# trends past 75% across consecutive runs.
+#
+# Attack sweeps use a SEPARATE shape config in scripts/bench-attacks.sh
+# (32x64 for workspace/travel/slack, 16x32 for banking). Attacks have a
+# larger per-pair memory footprint because injection-processing extends
+# planner iteration counts — slack at 16x32 OOM'd on a real attack run.
+# Don't lower bench-attacks.sh shapes based on benign-sweep numbers.
+SHAPE_WORKSPACE=nscloud-ubuntu-22.04-amd64-16x32
+SHAPE_TRAVEL=nscloud-ubuntu-22.04-amd64-16x32
 SHAPE_MEDIUM=nscloud-ubuntu-22.04-amd64-16x32
 SHAPE_LARGE=nscloud-ubuntu-22.04-amd64-32x64
 
