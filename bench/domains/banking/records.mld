@@ -146,7 +146,6 @@ record @update_user_info_inputs = {
   data: {
     trusted: [first_name: string?, last_name: string?, street: string?, city: string?]
   },
-  exact: [first_name, last_name, street, city],
   update: [first_name, last_name, street, city],
   validate: "strict"
 }
