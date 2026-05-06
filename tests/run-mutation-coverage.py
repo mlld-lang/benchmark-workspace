@@ -375,6 +375,27 @@ exe @lookupResolvedControlValueOriginal(state, recordName, handle, fieldName) = 
         ],
     },
     {
+        "id": "correlate-control-args-firewall",
+        "description": "rig/workers/execute.mld:118-122 — disable @correlatedControlArgsCheck enforcement. The correlate firewall fires when a write tool's input record declares correlate: true; every control arg's factsources must point to the same source record instance. Disabling this lets cross-record-mixing dispatches through.",
+        "file": "rig/workers/execute.mld",
+        "search": '''  if @toolCorrelateControlArgs(@tool) [
+    let @correlated = @correlatedControlArgsCheck(@compiled.compiled_entries, @controlArgs)
+    if !@correlated.ok [
+      => { ok: false, stage: "correlate", failure: { error: @correlated.error ?? "correlated_control_args_failed", payload: @correlated, issues: @correlated.issues ?? null } }
+    ]
+  ]''',
+        "replace": '''  if @toolCorrelateControlArgs(@tool) [
+    let @correlated = @correlatedControlArgsCheck(@compiled.compiled_entries, @controlArgs)
+    if false [  >> MUTATION-COVERAGE: correlate firewall disabled
+      => { ok: false, stage: "correlate", failure: { error: @correlated.error ?? "correlated_control_args_failed", payload: @correlated, issues: @correlated.issues ?? null } }
+    ]
+  ]''',
+        "suites": ["banking"],
+        "expected_fails": [
+            "security-banking/correlate-cross-record-mixing/correlateCrossRecordMixingDenied",
+        ],
+    },
+    {
         "id": "extract-empty-response-guard",
         "description": "rig/workers/extract.mld:269 — when worker returns degenerate payload, dispatcher must reject (not fall back to source content)",
         "file": "rig/workers/extract.mld",
