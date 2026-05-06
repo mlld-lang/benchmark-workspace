@@ -27,6 +27,8 @@ import {
   @share_file_inputs
 } from "./records.mld"
 
+import { @hasFacts, @factAttestations } from "../../../rig/intent.mld"
+
 >> Read tools
 
 exe resolve:r, untrusted, tool:r @get_unread_emails() = [
@@ -69,7 +71,16 @@ exe resolve:r, known, tool:r @search_contacts_by_name(query) = [
   => @mcp.searchContactsByName(@query)
 ] => record @contact with { controlArgs: ["query"] }
 
+>> c-cb92: structural guidance error when query is already fact-bearing.
+>> If the email came from a resolved/extracted record field with
+>> factsources, contact lookup is redundant — the email is already
+>> grounded. Surface a guidance error pointing at the direct-recipient
+>> path before the MCP call.
 exe resolve:r, known, tool:r @search_contacts_by_email(query) = [
+  if @hasFacts(@query.keep) [
+    let @sources = @factAttestations(@query.keep)
+    => `ERROR: This email is already fact-bearing (sources: @sources.join(", ")). Skip search_contacts_by_email — use the email directly as a recipient on send_email or add_calendar_event_participants. Pass it as a resolved ref pointing at the source record/handle/field rather than running another lookup.`
+  ]
   => @mcp.searchContactsByEmail(@query)
 ] => record @contact with { controlArgs: ["query"] }
 

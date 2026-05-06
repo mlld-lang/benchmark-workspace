@@ -1160,5 +1160,7 @@ export {
   @bucketObject,
   @valueField,
   @canonicalizeDashes,
-  @lookupResolvedEntry
+  @lookupResolvedEntry,
+  @hasFacts,
+  @factAttestations
 }
