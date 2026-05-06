@@ -217,7 +217,7 @@ def _run_benign(args, suite, tasks):
     utility_results = {}
     errors = {}
 
-    stagger = getattr(args, 'stagger', 2.0)
+    stagger = getattr(args, 'stagger', 10.0)
     with ThreadPoolExecutor(max_workers=n) as pool:
         futures = {}
         for i, task in enumerate(tasks):
@@ -319,7 +319,7 @@ def _run_multi_suite_benign(args, pairs):
     errors = {}
     task_times = {}
 
-    stagger = getattr(args, "stagger", 2.0)
+    stagger = getattr(args, "stagger", 10.0)
     with ThreadPoolExecutor(max_workers=n) as pool:
         futures = {}
         for i, (suite_name, task) in enumerate(resolved):
@@ -514,8 +514,8 @@ def main():
     parser.add_argument("--harness", choices=["claude", "opencode"],
                         help="LLM harness override; if omitted, runtime picks from planner model")
     parser.add_argument("-p", "--parallel", type=int, default=20)
-    parser.add_argument("--stagger", type=float, default=5.0,
-                        help="Seconds between launching parallel tasks (default: 2.0)")
+    parser.add_argument("--stagger", type=float, default=10.0,
+                        help="Seconds between launching parallel tasks (default: 10.0; smooths burst pressure on Together AI rate limits)")
     parser.add_argument("-d", "--defense", default="undefended",
                         help="Defense level: undefended (default) or defended (authorization bundles)")
     parser.add_argument("-a", "--attack", choices=ATTACKS,

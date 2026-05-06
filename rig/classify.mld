@@ -40,7 +40,7 @@ exe @mergeClassificationResults(pairs) = js {
 exe @classifyParallel(query, classifiers) = [
   let @entries = @classifiers.mx.entries
   if @entries.length == 0 [ => {} ]
-  let @results = for parallel(@entries.length) @entry in @entries [
+  let @results = for parallel(@entries.length, 5s) @entry in @entries [
     let @name = @entry[0]
     let @clsExe = @entry[1]
     let @value = @clsExe(@query)

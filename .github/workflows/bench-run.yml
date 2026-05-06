@@ -32,9 +32,9 @@ on:
         required: false
         default: '40'
       stagger:
-        description: 'Seconds between launches'
+        description: 'Seconds between task launches (smoothing burst pressure on Together AI rate limits)'
         required: false
-        default: '2'
+        default: '10'
       defense:
         description: 'Defense level'
         required: false

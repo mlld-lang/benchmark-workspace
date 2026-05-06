@@ -51,7 +51,7 @@ def main() -> int:
     p.add_argument("--worker", default="")
     p.add_argument("--harness", choices=["", "opencode", "claude"], default="")
     p.add_argument("-p", "--parallel", type=int, default=40)
-    p.add_argument("--stagger", type=float, default=2.0)
+    p.add_argument("--stagger", type=float, default=10.0)
     p.add_argument("--defense", choices=["defended", "undefended"], default="defended")
     p.add_argument("--trace", action="store_true",
                    help="Enable MLLD_TRACE=effects")
