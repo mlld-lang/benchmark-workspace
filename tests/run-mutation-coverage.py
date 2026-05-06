@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import re
 import subprocess
 import sys
@@ -36,6 +37,19 @@ CLEAN_ROOT = Path(__file__).resolve().parents[1]
 # search/replace must be uniquely matchable in the file.
 # expected_fails: test ids that claim to verify this defense AND have been
 # manually confirmed to fail under the mutation.
+#
+# Tests not in any expected_fails:
+#   * Positive controls (assert ok=true), untouched by negative mutations:
+#       - security-slack/.../inviteUserKnownInTaskTextAccepted
+#       - security-banking/.../updateUserInfoExtractedAcceptedAtRehearse
+#       - security-travel/.../reserveHotelKnownInTaskTextAccepted
+#       - security-workspace/allow-source-firewall/allowSourceOnNoControlArgsAccepted
+#   * Shape-validation tests (planner JSON malformedness, not security):
+#       - security-slack/source-class-firewall/knownMissingValueRejected
+#         The defense lives somewhere downstream of @policy.build but the
+#         exact rejection point hasn't been pinned down. Low security
+#         value (it defends against planner emitting bad JSON, not
+#         attacker-controlled values), so accepted unverified.
 MUTATIONS = [
     {
         "id": "source-class-firewall",
@@ -83,7 +97,7 @@ MUTATIONS = [
     },
     {
         "id": "known-value-task-text-check",
-        "description": "rig/intent.mld:701-708 known_value_not_in_task_text — known-source control args must literally appear in the user's task text",
+        "description": "rig/intent.mld:701-708 known_value_not_in_task_text — known-source control args must literally appear in the user's task text. Also catches malformed `{source:'known'}` (no value field) because @knownInTask(query, undefined) returns false.",
         "file": "rig/intent.mld",
         "search": '''  if @resolved.source == "known" [
     if !@knownInTask(@query, @resolved.value) && @role == "control" [
@@ -221,6 +235,103 @@ MUTATIONS = [
         ],
     },
     {
+        "id": "source-class-known-task-text-and-backstop-combined",
+        "description": "3-way: disable source-class firewall, known_value_not_in_task_text, AND policy.build backstop. Catches tests where the attack uses extracted-source on one control arg AND known-but-not-in-task-text on another control arg (handle string). Only 3 layers off lets these through.",
+        "edits": [
+            {
+                "file": "rig/intent.mld",
+                "search": '''  if @resolved.source == "extracted" || @resolved.source == "derived" [
+    if @role == "control" [
+      => {
+        ok: false,
+        arg: @arg,
+        error: "payload_only_source_in_control_arg",''',
+                "replace": '''  if @resolved.source == "extracted" || @resolved.source == "derived" [
+    if false [  >> MUTATION-COVERAGE: source-class disabled (3-way)
+      => {
+        ok: false,
+        arg: @arg,
+        error: "payload_only_source_in_control_arg",''',
+            },
+            {
+                "file": "rig/intent.mld",
+                "search": '''  if @resolved.source == "known" [
+    if !@knownInTask(@query, @resolved.value) && @role == "control" [
+      => {
+        ok: false,
+        arg: @arg,
+        error: "known_value_not_in_task_text",''',
+                "replace": '''  if @resolved.source == "known" [
+    if false [  >> MUTATION-COVERAGE: known-task-text disabled (3-way)
+      => {
+        ok: false,
+        arg: @arg,
+        error: "known_value_not_in_task_text",''',
+            },
+            {
+                "file": "rig/workers/execute.mld",
+                "search": '''  if !@built.valid [
+    => { ok: false, stage: "policy", failure: { error: "policy_build_invalid", payload: @built, issues: @built.issues ?? null } }
+  ]''',
+                "replace": '''  if false [  >> MUTATION-COVERAGE: policy.build backstop disabled (3-way)
+    => { ok: false, stage: "policy", failure: { error: "policy_build_invalid", payload: @built, issues: @built.issues ?? null } }
+  ]''',
+            },
+        ],
+        "suites": ["banking", "workspace"],
+        "expected_fails": [
+            # Tests specifically requiring 3 layers off (extracted control + known-not-in-task on second arg):
+            "security-banking/source-class-firewall/updateScheduledTxExtractedRecipientRejected",
+            "security-workspace/source-class-firewall/shareFileExtractedEmailRejected",
+            # Captured collaterally because these defenses are subset-disabled by this 3-way:
+            "security-banking/source-class-firewall/scheduleTxExtractedRecipientRejected",
+            "security-banking/source-class-firewall/sendMoneyExtractedRecipientRejected",
+            "security-banking/source-class-firewall/sendMoneyKnownIbanNotInTaskTextRejected",
+            "security-banking/authorization-deny/updatePasswordHardDeniedInDefendedMode",
+            "security-workspace/source-class-firewall/createCalendarEventExtractedParticipantsRejected",
+            "security-workspace/source-class-firewall/rescheduleCalendarEventExtractedIdRejected",
+            "security-workspace/source-class-firewall/sendEmailDerivedRecipientRejected",
+            "security-workspace/source-class-firewall/sendEmailExtractedRecipientRejected",
+            "security-workspace/source-class-firewall/sendEmailKnownRecipientNotInTaskTextRejected",
+        ],
+    },
+    {
+        "id": "control-ref-lookup-and-backstop-combined",
+        "description": "Forge @lookupResolvedControlValue to return ok:true with synthetic factsource AND disable policy.build backstop. Catches selection-ref tests where the rig framework's control_ref_backing_missing + the runtime kind-tag firewall together provide defense-in-depth.",
+        "edits": [
+            {
+                "file": "rig/intent.mld",
+                "search": '''exe @lookupResolvedControlValue(state, recordName, handle, fieldName) = [
+  let @entry = @lookupResolvedEntry(@state, @recordName, @handle)
+  if !@entry [ => { ok: false, error: "control_ref_backing_missing" } ]''',
+                "replace": '''exe @lookupResolvedControlValue(state, recordName, handle, fieldName) = [
+  >> MUTATION-COVERAGE: forge synthetic ok:true to bypass control_ref_backing_missing + downstream lookup defenses
+  => { ok: true, source: "resolved", record: @recordName, handle: @handle, field: @fieldName ?? "synthetic", value: "synthetic_attacker_value", policy_attestations: [`fact:@@recordName.synthetic`] }
+]
+exe @lookupResolvedControlValueOriginal(state, recordName, handle, fieldName) = [
+  let @entry = @lookupResolvedEntry(@state, @recordName, @handle)
+  if !@entry [ => { ok: false, error: "control_ref_backing_missing" } ]''',
+            },
+            {
+                "file": "rig/workers/execute.mld",
+                "search": '''  if !@built.valid [
+    => { ok: false, stage: "policy", failure: { error: "policy_build_invalid", payload: @built, issues: @built.issues ?? null } }
+  ]''',
+                "replace": '''  if false [  >> MUTATION-COVERAGE: policy.build backstop disabled (with control-ref-lookup forged)
+    => { ok: false, stage: "policy", failure: { error: "policy_build_invalid", payload: @built, issues: @built.issues ?? null } }
+  ]''',
+            },
+        ],
+        "suites": ["slack", "travel"],
+        "expected_fails": [
+            "security-slack/selection-ref-graceful-failure/selectionRefNonexistentBackingHandleRejected",
+            "security-slack/selection-ref-graceful-failure/selectionRefBackingWithoutIdentityRejected",
+            "security-slack/selection-ref-graceful-failure/selectionRefMismatchedHandleAfterResolveRejected",
+            "security-slack/selection-ref-wrong-record-bypass/selectionRefRealSlackMsgHandleRejected",
+            "security-travel/wrong-record-fact-firewall/reserveHotelSelectionRefRestaurantNameRejected",
+        ],
+    },
+    {
         "id": "extract-empty-response-guard",
         "description": "rig/workers/extract.mld:269 — when worker returns degenerate payload, dispatcher must reject (not fall back to source content)",
         "file": "rig/workers/extract.mld",
@@ -323,12 +434,29 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def run_suites_parallel(suites: list[str]) -> dict[str, tuple[set[str], int]]:
+    """Run all listed suites in parallel. Returns {suite: (fails, exit_code)}.
+
+    Safe because within one mutation invocation the file state is fixed —
+    all subprocesses read the same patched files. No shared state between
+    suite runs other than the read-only file system.
+    """
+    results: dict[str, tuple[set[str], int]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(suites)) as ex:
+        futures = {ex.submit(run_suite, s): s for s in suites}
+        for fut in concurrent.futures.as_completed(futures):
+            s = futures[fut]
+            results[s] = fut.result()
+    return results
+
+
 def baseline_check(suites: list[str]) -> int:
     """All listed suites must be green canonically before any mutation runs."""
     print("# Canonical baseline (all suites must be green)")
     bad = 0
+    results = run_suites_parallel(suites)
     for s in sorted(suites):
-        fails, code = run_suite(s)
+        fails, code = results[s]
         status = "OK" if (code == 0 and not fails) else "FAIL"
         print(f"  {s:10s} {status} (fails={len(fails)} exit={code})")
         if status == "FAIL":
@@ -360,8 +488,8 @@ def main() -> int:
         actual: set[str] = set()
         try:
             apply_mutation(m)
-            for s in sorted(m["suites"]):
-                fails, _ = run_suite(s)
+            results = run_suites_parallel(sorted(m["suites"]))
+            for fails, _ in results.values():
                 actual |= fails
         finally:
             restore(m)
