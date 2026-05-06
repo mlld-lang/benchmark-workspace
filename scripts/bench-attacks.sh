@@ -1,72 +1,128 @@
 #!/usr/bin/env bash
-# Dispatch the defended attack sweep across all 4 suites in 2 cycles.
+# Dispatch the defended attack sweep across the 5 sub-suites in batches of 2.
+#
+# Sub-suite layout (same as scripts/bench.sh):
+#
+#   workspace-a   user_task_0..19   (20 tasks)   32x64
+#   workspace-b   user_task_20..39  (20 tasks)   32x64
+#   banking       all               (16 tasks)   16x32
+#   slack         all               (21 tasks)   32x64
+#   travel        all               (20 tasks)   32x64
+#
+# Workspace splits the same way as the benign sweep so attack runs stay
+# under the per-runner memory + per-model rate limit. Slack and travel
+# keep 32x64 because attack runs add planner iterations (injection
+# processing) that pushed slack OOM at 16x32 historically (run
+# 25227133626 exit 137 at 47min). Banking stays 16x32.
 #
 # Usage:
-#   scripts/bench-attacks.sh cycle1     # direct + ignore_previous
-#   scripts/bench-attacks.sh cycle2     # important_instructions + injecagent
-#   scripts/bench-attacks.sh cycle3     # system_message + tool_knowledge
-#   scripts/bench-attacks.sh single <attack_type>   # one attack type, all 4 suites
+#   scripts/bench-attacks.sh                    # full matrix: 6 attacks × 5 sub-suites = 30 jobs
+#   scripts/bench-attacks.sh cycle1             # direct + ignore_previous (10 jobs)
+#   scripts/bench-attacks.sh cycle2             # important_instructions + injecagent (10 jobs)
+#   scripts/bench-attacks.sh cycle3             # system_message + tool_knowledge (10 jobs)
+#   scripts/bench-attacks.sh single <attack>    # one attack × all 5 sub-suites (5 jobs)
+#   scripts/bench-attacks.sh single <attack> <suite>  # narrow to one sub-suite (1 job)
 #
-# Capacity math (Personal Business + 7-day double = 320 vCPU concurrent):
-#   Per attack type × 4 suites:
-#     workspace 32x64 -p 40                      = 32 vCPU
-#     travel    32x64 -p 20 heap=8g (solo shape) = 32 vCPU
-#     banking   16x32 -p 16                      = 16 vCPU
-#     slack     32x64 -p 21                      = 32 vCPU
-#                                                  ----
-#                                                 112 vCPU per attack type
-#   2 attack types in parallel = 224 vCPU. Fits the 320 cap with 96 spare.
-#   3 cycles × ~60-90 min each ≈ ~3-4 hr total wall for the attack sweep.
+# Capacity math:
+#   Full matrix = 30 dispatches. At MAX_CONCURRENT=2 = 15 batches.
+#   Each batch ~8-12 min wall (attack runs are longer than benign because
+#   planner navigates poisoned content with more iterations). Total wall
+#   ~2-3 hr for the full matrix. Fits an overnight window.
 #
-# Per-suite shapes were sized empirically:
-#   - banking 8x16 / slack 8x16 OOM under benign at full task count (16/21
-#     active) after SKIP_TASKS removal — bumped to 16x32 first.
-#   - slack 16x32 -p 21 OOM'd on cycle 1 attack take 1 (run 25227133626
-#     exit 137 at 47min) — attacks have larger per-pair footprint than
-#     benign because injection-processing adds iterations. Bumped to 32x64.
-#   - workspace and travel solo at 32x64 already validated by the benign
-#     run (run IDs 25222263461 / 25222265101).
+# Rate-limit posture: matches scripts/bench.sh — at most 2 bench-run
+# jobs in flight simultaneously, polling for capacity between dispatches.
+# Avoids the 5k+ HTTP 429s a 4+ way fan-out would generate against
+# Together AI's per-model GLM-5.1 capacity.
 #
-# Travel runs at the 32x64 *solo* shape with -p 20 even when other suites
-# are dispatching alongside, because the 320 vCPU cap accommodates it
-# without throttling. MLLD_HEAP=8g preserved for c-63fe headroom.
-#
-# c-63fe MCP "Not connected" issue was fixed in opencode locally
-# (commit d10bb76 picks up the patched binary via OPENCODE_BIN). With that
-# fix, the second-large-resolve_batch failure mode should be resolved.
+# Pre-flight: c-63fe MCP "Not connected" issue was fixed in opencode
+# (commit d10bb76). With that in the prebuilt opencode binary the
+# second-large-resolve_batch failure mode should be resolved.
 
 set -euo pipefail
 
 WORKFLOW=bench-run.yml
+GRIND_FILE="bench/grind-tasks.json"
+MAX_CONCURRENT=2
 
-CYCLE1_ATTACKS=(direct ignore_previous)
-CYCLE2_ATTACKS=(important_instructions injecagent)
-CYCLE3_ATTACKS=(system_message tool_knowledge)
+# Per-sub-suite shape. Workspace-a/b stay at 32x64 because attacks
+# concentrate planner iterations and we want headroom; benign runs
+# can fit 16x32 but attacks are not yet measured at that shape.
+SHAPE_LARGE=nscloud-ubuntu-22.04-amd64-32x64
+SHAPE_MEDIUM=nscloud-ubuntu-22.04-amd64-16x32
 
-dispatch_suite_attack() {
-  local suite=$1 attack=$2
-  local shape parallelism heap=""
-  case "$suite" in
-    workspace) shape=nscloud-ubuntu-22.04-amd64-32x64; parallelism=40 ;;
-    travel)    shape=nscloud-ubuntu-22.04-amd64-32x64; parallelism=20; heap=8g ;;
-    banking)   shape=nscloud-ubuntu-22.04-amd64-16x32; parallelism=16 ;;
-    # Slack bumped 16x32 → 32x64 after cycle 1 OOM (exit 137 at ~47min).
-    # 21 parallel attack pairs × ~1.5–2 GB peak = ~32–42 GB, exceeds the
-    # 32 GB cap on 16x32. 64 GB shape gives comfortable headroom.
-    slack)     shape=nscloud-ubuntu-22.04-amd64-32x64; parallelism=21 ;;
-    *) echo "unknown suite: $suite" >&2; return 1 ;;
+ATTACK_CYCLES_1=(direct ignore_previous)
+ATTACK_CYCLES_2=(important_instructions injecagent)
+ATTACK_CYCLES_3=(system_message tool_knowledge)
+ATTACK_FULL=(direct ignore_previous important_instructions injecagent system_message tool_knowledge)
+
+SUB_SUITES=(workspace-a workspace-b banking slack travel)
+
+# ---- sub-suite mapping (mirrors scripts/bench.sh) ----
+
+sub_suite_info() {
+  local sub=$1
+  case "$sub" in
+    workspace-a)
+      local tasks=""
+      for i in {0..19}; do tasks+="user_task_$i "; done
+      echo "workspace ${tasks% }"
+      ;;
+    workspace-b)
+      local tasks=""
+      for i in {20..39}; do tasks+="user_task_$i "; done
+      echo "workspace ${tasks% }"
+      ;;
+    banking|slack|travel) echo "$1" ;;
+    *) echo "" ;;
   esac
+}
+
+underlying_suite() {
+  case "$1" in
+    workspace-a|workspace-b) echo "workspace" ;;
+    *) echo "$1" ;;
+  esac
+}
+
+shape_for() {
+  case "$1" in
+    workspace-a|workspace-b|slack|travel) echo "$SHAPE_LARGE" ;;
+    banking) echo "$SHAPE_MEDIUM" ;;
+  esac
+}
+
+parallelism_for() {
+  local sub=$1
+  case "$sub" in
+    workspace-a|workspace-b) echo 20 ;;
+    banking) jq -r ".task_counts.banking" "$GRIND_FILE" ;;
+    slack)   jq -r ".task_counts.slack" "$GRIND_FILE" ;;
+    travel)  jq -r ".task_counts.travel" "$GRIND_FILE" ;;
+  esac
+}
+
+# ---- dispatch ----
+
+dispatch_attack() {
+  local sub=$1 attack=$2
+  read -r suite raw_tasks <<< "$(sub_suite_info "$sub")"
+  local underlying
+  underlying=$(underlying_suite "$sub")
 
   local args=(
-    -f "suite=$suite"
+    -f "suite=$underlying"
     -f "attack=$attack"
-    -f "shape=$shape"
-    -f "parallelism=$parallelism"
+    -f "shape=$(shape_for "$sub")"
+    -f "parallelism=$(parallelism_for "$sub")"
     -f "defense=defended"
   )
-  [[ -n "$heap" ]] && args+=(-f "heap=$heap")
 
-  printf '→ %-9s × %-23s ' "$suite" "$attack"
+  # workspace-a/b inject task slice; the others run all suite tasks
+  if [[ -n "${raw_tasks:-}" ]]; then
+    args+=(-f "tasks=$raw_tasks")
+  fi
+
+  printf '→ %-13s × %-23s ' "$sub" "$attack"
   if gh workflow run "$WORKFLOW" "${args[@]}" >/dev/null 2>&1; then
     printf 'dispatched\n'
   else
@@ -75,38 +131,77 @@ dispatch_suite_attack() {
   fi
 }
 
-dispatch_cycle() {
-  local cycle=$1; shift
+# Block until fewer than MAX_CONCURRENT bench-run jobs are in flight.
+wait_for_capacity() {
+  local target=$((MAX_CONCURRENT - 1))
+  while true; do
+    local in_flight
+    in_flight=$(gh run list --workflow="$WORKFLOW" --limit 20 \
+      --json status,conclusion \
+      -q '[.[] | select(.status=="in_progress" or .status=="queued")] | length')
+    if [[ "$in_flight" -le "$target" ]]; then
+      return 0
+    fi
+    sleep 30
+  done
+}
+
+dispatch_matrix() {
+  local label=$1; shift
   local attacks=("$@")
 
-  echo "== $cycle: ${attacks[*]} =="
+  local total=$((${#attacks[@]} * ${#SUB_SUITES[@]}))
+  echo "== $label: ${attacks[*]} (${#SUB_SUITES[@]} sub-suites × ${#attacks[@]} attacks = $total jobs, batched 2-at-a-time) =="
+
+  local count=0
   for attack in "${attacks[@]}"; do
-    for suite in workspace travel banking slack; do
-      dispatch_suite_attack "$suite" "$attack"
-      sleep 0.5  # avoid rapid-fire dispatch race on GH side
+    for sub in "${SUB_SUITES[@]}"; do
+      wait_for_capacity
+      dispatch_attack "$sub" "$attack"
+      count=$((count + 1))
     done
   done
   echo
-  echo "$((${#attacks[@]} * 4)) jobs dispatched."
-  echo "Watch:    gh run list --workflow=$WORKFLOW --limit 12"
-  echo "Wait:     until [[ \$(gh run list --workflow=$WORKFLOW --limit 12 --json status -q '[.[] | select(.status == \"completed\")] | length') -eq 12 ]]; do sleep 60; done"
+  echo "$count jobs dispatched."
+  echo "Watch:    gh run list --workflow=$WORKFLOW --limit 30"
+  echo "Wait:     until [[ \$(gh run list --workflow=$WORKFLOW --limit 30 --json status -q '[.[] | select(.status == \"completed\")] | length') -ge $count ]]; do sleep 60; done"
+}
+
+dispatch_single_narrow() {
+  local attack=$1 sub=$2
+  for valid in "${SUB_SUITES[@]}"; do
+    if [[ "$sub" == "$valid" ]]; then
+      dispatch_attack "$sub" "$attack"
+      return 0
+    fi
+  done
+  echo "unknown sub-suite: $sub (valid: ${SUB_SUITES[*]})" >&2
+  return 1
 }
 
 usage() {
-  echo "usage: $0 cycle1 | cycle2 | cycle3 | single <attack_type>" >&2
-  echo "  cycle1: ${CYCLE1_ATTACKS[*]}" >&2
-  echo "  cycle2: ${CYCLE2_ATTACKS[*]}" >&2
-  echo "  cycle3: ${CYCLE3_ATTACKS[*]}" >&2
+  echo "usage: $0 [cycle1 | cycle2 | cycle3 | single <attack> [sub-suite]]" >&2
+  echo "  (no args)         full matrix: ${ATTACK_FULL[*]} × ${SUB_SUITES[*]}" >&2
+  echo "  cycle1            ${ATTACK_CYCLES_1[*]}" >&2
+  echo "  cycle2            ${ATTACK_CYCLES_2[*]}" >&2
+  echo "  cycle3            ${ATTACK_CYCLES_3[*]}" >&2
+  echo "  single <attack>   one attack × all 5 sub-suites" >&2
+  echo "  single <attack> <sub>  narrow to one sub-suite (no batching)" >&2
   exit 1
 }
 
 case "${1:-}" in
-  cycle1) dispatch_cycle "cycle1" "${CYCLE1_ATTACKS[@]}" ;;
-  cycle2) dispatch_cycle "cycle2" "${CYCLE2_ATTACKS[@]}" ;;
-  cycle3) dispatch_cycle "cycle3" "${CYCLE3_ATTACKS[@]}" ;;
+  ""|full)  dispatch_matrix "full" "${ATTACK_FULL[@]}" ;;
+  cycle1)   dispatch_matrix "cycle1" "${ATTACK_CYCLES_1[@]}" ;;
+  cycle2)   dispatch_matrix "cycle2" "${ATTACK_CYCLES_2[@]}" ;;
+  cycle3)   dispatch_matrix "cycle3" "${ATTACK_CYCLES_3[@]}" ;;
   single)
-    [[ $# -eq 2 ]] || usage
-    dispatch_cycle "single" "$2"
+    case $# in
+      2) dispatch_matrix "single $2" "$2" ;;
+      3) dispatch_single_narrow "$2" "$3" ;;
+      *) usage ;;
+    esac
     ;;
+  -h|--help) usage ;;
   *) usage ;;
 esac
