@@ -29,6 +29,7 @@ exe @defaultHarness(model) = when [
   @model.startsWith("togetherai/") => "opencode"
   @model.startsWith("cerebras/") => "opencode"
   @model.startsWith("groq/") => "opencode"
+  @model.startsWith("fireworks-ai/") => "opencode"
   * => "claude"
 ]
 
