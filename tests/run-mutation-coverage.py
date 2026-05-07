@@ -77,6 +77,15 @@ MUTATIONS = [
             "security-workspace/source-class-firewall/createCalendarEventExtractedParticipantsRejected",
             "security-workspace/source-class-firewall/rescheduleCalendarEventExtractedIdRejected",
             "security-travel/source-class-firewall/createCalendarEventExtractedParticipantsRejected",
+            # c-0458 layer-assertion update: banking extracted-recipient tests now assert on
+            # @last.error == "payload_only_source_in_control_arg", not just @last.ok == false.
+            # Previously these tests passed under the source-class-firewall mutation because
+            # the policy.build backstop (kind: iban requires fact attestation; extracted has
+            # none) would reject and `ok: false` still held. The layer assertion correctly
+            # fails when the source-class layer specifically is disabled.
+            "security-banking/source-class-firewall/sendMoneyExtractedRecipientRejected",
+            "security-banking/source-class-firewall/scheduleTxExtractedRecipientRejected",
+            "security-banking/source-class-firewall/updateScheduledTxExtractedRecipientRejected",
         ],
     },
     {
@@ -230,13 +239,20 @@ MUTATIONS = [
             "security-travel/source-class-firewall/sendEmailExtractedRecipientsRejected",
             "security-travel/source-class-firewall/cancelCalendarEventExtractedEventIdRejected",
             "security-travel/source-class-firewall/reserveHotelDerivedNameRejected",
-            # 4 tests not in this list (caught by yet-deeper third layers, in their own
+            # c-0458 fixture canonicalization: updateScheduledTxExtractedRecipientRejected
+            # was rewritten to use a real resolved scheduled_transaction handle for the
+            # `id` arg (was synthetic `known: h_synthetic_id` which fired
+            # known_value_not_in_task_text first). With the canonical fixture, the test
+            # exercises the recipient-side source-class firewall directly, so it now
+            # joins this combined mutation's expected_fails (was previously only caught
+            # by source-class-known-task-text-and-backstop-combined).
+            "security-banking/source-class-firewall/updateScheduledTxExtractedRecipientRejected",
+            # 3 tests not in this list (caught by yet-deeper third layers, in their own
             # layer-specific mutations: exact-arg-task-text-check covers the 2 banking
-            # update_password tests; the 2 banking/workspace tests with handle-string
-            # control args are caught by known-value-task-text-check on those args):
+            # update_password tests; the 1 workspace test with a handle-string control
+            # arg is caught by known-value-task-text-check on that arg):
             #   - security-banking/privileged-writes/updatePasswordExtractedRejected
             #   - security-banking/privileged-writes/updatePasswordDerivedRejected
-            #   - security-banking/source-class-firewall/updateScheduledTxExtractedRecipientRejected
             #   - security-workspace/source-class-firewall/shareFileExtractedEmailRejected
         ],
     },
@@ -286,7 +302,10 @@ MUTATIONS = [
         ],
         "suites": ["banking", "workspace"],
         "expected_fails": [
-            # Tests specifically requiring 3 layers off (extracted control + known-not-in-task on second arg):
+            # Tests specifically requiring 3 layers off (extracted control + known-not-in-task on second arg).
+            # updateScheduledTxExtractedRecipientRejected appears here as a SUPERSET capture: c-0458's
+            # canonical fixture made source-class-firewall the load-bearing layer (single mutation), but
+            # this 3-way mutation also disables source-class so the test still fails collaterally.
             "security-banking/source-class-firewall/updateScheduledTxExtractedRecipientRejected",
             "security-workspace/source-class-firewall/shareFileExtractedEmailRejected",
             "security-workspace/source-class-firewall/deleteFileAttackerIdRejected",

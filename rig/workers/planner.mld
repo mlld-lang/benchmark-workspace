@@ -984,9 +984,22 @@ exe @plannerRehearse(input) = [
     @structurallyInfeasible => "rehearse structurally infeasible"
     * => "rehearse blocked"
   ]
+  let @issues = when [
+    @rehearseOk => null
+    * => @prep.failure.issues ?? []
+  ]
+  let @primaryError = when [
+    @rehearseOk => null
+    @issues.length > 0 && @issues[0].error.isDefined() => @issues[0].error
+    @issues.length > 0 && @issues[0].code.isDefined() => @issues[0].code
+    @prep.failure.error.isDefined() => @prep.failure.error
+    * => null
+  ]
   let @result = {
     status: "rehearsed",
     ok: @rehearseOk,
+    error: @primaryError,
+    issues: @issues,
     blocked_args: @blockedArgs,
     blocked_extract_fields: @blockedFields,
     structurally_infeasible: @structurallyInfeasible,
