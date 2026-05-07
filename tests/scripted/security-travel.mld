@@ -21,6 +21,8 @@ import { @assertEq, @assertOk, @assertContains } from "../assert.mld"
 import { @suite, @group, @runSuites } from "../runner.mld"
 import {
   @mockOpencode,
+  @runScriptedQuery as @runQ,
+  @runWithState as @runState,
   @planner,
   @emptyState,
   @emptyPlannerRuntime
@@ -45,19 +47,11 @@ var @agent = @rig.build({
   maxIterations: 10
 })
 
-exe @runScriptedQuery(query, script) =
-  @mockOpencode(@query, { toolScript: @script }) with {
-    display: "role:planner",
-    session: @planner,
-    seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() }
-  }
-
-exe @runWithState(query, script, seedState) =
-  @mockOpencode(@query, { toolScript: @script }) with {
-    display: "role:planner",
-    session: @planner,
-    seed: { agent: @agent, query: @query, state: @seedState, runtime: @emptyPlannerRuntime() }
-  }
+>> Per-suite shims close over @agent so call sites stay terse. The
+>> shared base helpers in lib/mock-llm.mld take @agent as a param, but
+>> within a suite there's only one agent so closing it in here is cleaner.
+exe @runScriptedQuery(query, script) = @runQ(@agent, @query, @script)
+exe @runWithState(query, script, seedState) = @runState(@agent, @query, @script, @seedState)
 
 >> --- A2: extracted-class control args rejected ---------------------------
 >> Each travel write tool must reject extracted-source control args. These

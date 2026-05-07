@@ -123,6 +123,19 @@ record @datetime_context = {
   }
 }
 
+>> Indexed-array selection-proof fixture used by tests/rig/proof-chain-firewall.mld.
+>> shared_with stays in `data` so the array can be referenced by index in selection
+>> refs (`fact:@@shared_file_entry.shared_with[0]`).
+record @shared_file_entry = {
+  facts: [id_: string],
+  data: [filename: string, shared_with: array],
+  key: id_,
+  display: {
+    role:planner: [{ ref: "id_" }, filename],
+    role:worker: [{ ref: "id_" }, filename, shared_with]
+  }
+}
+
 >> Read tools return static fixtures so the phase loop tests can focus
 >> on rig mechanics instead of external variability.
 exe resolve:r, tool:r @get_contacts() = [
@@ -454,6 +467,7 @@ export {
   @summary_payload,
   @number_row,
   @datetime_context,
+  @shared_file_entry,
   @records,
   @tools,
   @sampleState,

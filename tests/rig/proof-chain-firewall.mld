@@ -13,7 +13,8 @@ import { @suite, @group, @runSuites } from "../runner.mld"
 import {
   @records,
   @tools,
-  @sampleState
+  @sampleState,
+  @shared_file_entry
 } from "../fixtures.mld"
 
 import {
@@ -266,16 +267,8 @@ var @correlateControlArgs = ["note_id", "recipient"]
 var @correlateCheck = @correlatedControlArgsCheck(@correlateEntries, @correlateControlArgs)
 
 >> --- indexed-array-selection fixtures -------------------------------------
-
-record @shared_file_entry = {
-  facts: [id_: string],
-  data: [filename: string, shared_with: array],
-  key: id_,
-  display: {
-    role:planner: [{ ref: "id_" }, filename],
-    role:worker: [{ ref: "id_" }, filename, shared_with]
-  }
-}
+>> @shared_file_entry imported from canonical fixtures (was redeclared here
+>> per c-5a08; moved to tests/fixtures.mld so other suites can share it).
 
 var @sharedFileRecord = {
   id_: "24",

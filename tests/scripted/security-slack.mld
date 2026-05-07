@@ -51,6 +51,12 @@ var @agent = @rig.build({
 >> is not enough). Variant that accepts a custom seed state for security
 >> tests that need extracted/derived/resolved entries pre-populated so the
 >> firewall logic actually fires (instead of bottoming out at lookup-fail).
+>> Inline (not the lib/mock-llm.mld hoist) — slack uses @setupSlackMsgState
+>> which calls @runScriptedQuery from inside ANOTHER exe to chain a setup
+>> run into a state-seeded attack. That nested exe → shim → lib chain breaks
+>> the @plannerRuntime type identity in `with { session: @planner }` ("session
+>> slot 'runtime' expects @plannerRuntime but received object"). Keeping
+>> these inline avoids the extra closure layer. See c-9c6f for context.
 exe @runScriptedQuery(query, script) =
   @mockOpencode(@query, { toolScript: @script }) with {
     display: "role:planner",

@@ -43,11 +43,37 @@ import {
   @emptyPlannerRuntime
 } from "../../rig/session.mld"
 
+>> @runScriptedQuery and @runWithState: convenience wrappers that build the
+>> `with { session: @planner, seed: {...} }` block. Defined here (rather than
+>> inline in each suite) so callers don't have to repeat the boilerplate.
+>> Per c-c2e7 and Phase 5 finding, `with { session: @planner }` historically
+>> required the schema visible at the call site. These helpers are tagged
+>> `exe llm` so they share the same session-binding semantics as the real
+>> @opencode/@claude — which means @planner IS resolved correctly via the
+>> import here. If callers hit "session must reference a declared session
+>> schema", import `@planner` and inline the `with` block at the call site
+>> as a fallback.
+exe @runScriptedQuery(agent, query, script) =
+  @mockOpencode(@query, { toolScript: @script }) with {
+    display: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+
+exe @runWithState(agent, query, script, seedState) =
+  @mockOpencode(@query, { toolScript: @script }) with {
+    display: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: @query, state: @seedState, runtime: @emptyPlannerRuntime() }
+  }
+
 export {
   @mockPlannerRun,
   @mockOpencode,
   @runScript,
   @dispatchScriptStep,
+  @runScriptedQuery,
+  @runWithState,
   @planner,
   @emptyState,
   @emptyPlannerRuntime
