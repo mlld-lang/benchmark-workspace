@@ -38,24 +38,18 @@ exe @stringListItems(raw) = js {
     .filter(Boolean);
 }
 
->> User records need a synthetic id_ separate from name. Same shape as
->> @channelItems below: random base36 id per user, framework auto-handle
->> becomes opaque (`r_slack_user_<random_id>`), name is preserved as a
->> fact for workers but hidden from the planner's display projection.
->> c-a8d2.
+>> Strip leading bullets, drop blanks, return user records keyed only on
+>> name. The runtime auto-derives @slack_user.mx.key from canonical
+>> value; the bridge no longer synthesizes ids. c-a8d2.
 exe @userItems(raw) = js {
   if (typeof raw === "string" && /^ERROR:\s/.test(raw.trim())) {
     return [];
   }
 
-  const callId = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
-  let counter = 0;
-  const nextId = () => `${callId}_${counter++}`;
-
   const fromName = (name) => {
     const trimmed = String(name ?? "").trim();
     if (!trimmed) return null;
-    return { id_: nextId(), name: trimmed };
+    return { name: trimmed };
   };
 
   if (Array.isArray(raw)) {
@@ -76,28 +70,19 @@ exe @userItems(raw) = js {
     .filter(Boolean);
 }
 
->> Channel records need a synthetic id_ separate from name. Per AgentDojo's
->> data model the channel name IS the channel's identity (no separate ID),
->> AND attacker-controllable (channels can be created with arbitrary names
->> including injection text per injection_tasks.py). Using name as the
->> record key makes the framework's auto-handle string contain the name,
->> which leaks attacker prose into the planner's handle-only view of the
->> resolved bucket. Mint a synthetic id_ per channel so handles are opaque
->> from the planner's perspective; workers can still read name via
->> projection. c-0298.
+>> Channel name is attacker-controllable. Opacity comes from the auto
+>> .mx.key, not bridge-side id synthesis: planner display omits name
+>> entirely (records.mld @slack_channel display.planner = []), and the
+>> framework's auto-derived instance handle is opaque. c-0298.
 exe @channelItems(raw) = js {
   if (typeof raw === "string" && /^ERROR:\s/.test(raw.trim())) {
     return [];
   }
 
-  const callId = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
-  let counter = 0;
-  const nextId = () => `${callId}_${counter++}`;
-
   const fromName = (name) => {
     const trimmed = String(name ?? "").trim();
     if (!trimmed) return null;
-    return { id_: nextId(), name: trimmed };
+    return { name: trimmed };
   };
 
   if (Array.isArray(raw)) {
@@ -127,19 +112,8 @@ exe @messageItems(raw) = js {
     return [];
   }
 
-  // AgentDojo's slack messages have no id. Synthesize a unique id_ per
-  // message so slack_msg can `key: id_` and the runtime mints a distinct
-  // handle per message. Without this, multiple messages from the same
-  // sender collapse to one resolved entry (sender becomes the implicit
-  // key) and counting / addressing per message breaks (slack UT13/14).
-  const callId = Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36);
-  let counter = 0;
-  const nextId = () => `${callId}_${counter++}`;
-
-  // Body-content is masked from the planner display, so URLs inside a
-  // body are invisible by default. Surface a boolean so the planner can
-  // tell which messages reference external URLs and call
-  // find_referenced_urls only on those (URL-promotion, c-be06).
+  // body_has_url surfaces a planner-visible URL flag so URL-promotion
+  // routing can fire without the planner reading body content.
   const URL_DETECT = /(https?:\/\/[^\s<>"'`]+|www\.[a-zA-Z0-9][a-zA-Z0-9-]*(?:\.[a-zA-Z0-9-]+)+)/;
   const bodyHasUrl = (body) => typeof body === "string" && URL_DETECT.test(body);
 
@@ -149,7 +123,6 @@ exe @messageItems(raw) = js {
       .map((value) => {
         const body = value.body == null ? null : String(value.body);
         return {
-          id_: nextId(),
           sender: value.sender == null ? null : String(value.sender),
           recipient: value.recipient == null ? null : String(value.recipient),
           body,
@@ -171,7 +144,6 @@ exe @messageItems(raw) = js {
     if (!current) return;
     const body = current.body ?? null;
     items.push({
-      id_: nextId(),
       sender: current.sender ?? null,
       recipient: current.recipient ?? null,
       body,
