@@ -8,15 +8,15 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ## Current state
 
-- **Phase**: Phase 1 fully landed and closed. All gates green. Ready for Phase 2.
-- **Commits**: `01698fa` (0.A) → `f58ddad` (0.B) → `bbf2e7d` (Phase 1 main) → `694c9cd` (Phase 1 closeout: banking description + test error code).
-- **Pinned binary**: REMOVED. System mlld v2.0.6 (current main with m-rec-perms-update + m-shelf-wildcard) is the binary.
+- **Phase**: Phase 1 fully landed and closed. Phase 2 readiness validator wired into main gate (commit `100a343`). Indirect-call shelf-scope mlld bug FIXED (`e35af264b`, in v2.0.6). Ready to start Phase 2 Stage B.
+- **Commits**: `01698fa` (0.A) → `f58ddad` (0.B) → `bbf2e7d` (Phase 1 main) → `694c9cd` (Phase 1 closeout) → `31992fc` (Phase 1 docs) → `50418dc` (output records write: shelves) → `100a343` (shelf-integration wired into tests/index.mld, gate 286/0/5) → `48088de` (handoff: Phase 2 architecture locked).
+- **Pinned binary**: REMOVED. System mlld v2.0.6 (current main with m-rec-perms-update + m-shelf-wildcard + indirect-shelf-scope fix) is the binary.
 
-## Gate state (post-Phase-1)
+## Gate state (post-shelf-integration wire-up)
 
 | Gate | Result |
 |---|---|
-| Zero-LLM (`mlld tests/index.mld`) | 270 pass / 0 fail / 5 xfail |
+| Zero-LLM (`mlld tests/index.mld`) | 286 pass / 0 fail / 5 xfail |
 | Mutation matrix (`tests/run-mutation-coverage.py`) | all 11 mutations OK; Overall OK |
 | Scripted banking | 9 pass / 0 fail |
 | Scripted workspace | 14 pass / 0 fail |
@@ -126,9 +126,7 @@ in v2.0.6. All probed working against rig-shaped records:
 - `@shelf.write(...)` rejected as bare statement. Use `let @x = @shelf.write(...)` or assign to throwaway. Matches existing rig style (`let @next = @updateResolvedStateWithDef(...)`).
 - `var` not allowed inside block bodies (e.g. inside `for parallel`). Use `let`.
 
-**mlld bug (REPORT BEFORE STAGE B EXECUTION)**: `shelf @s from @recordsVar` inside an exe body fails with `Record '@hotel' is not defined` (or `Variable not found: <var>`) when that exe is invoked via *indirect* reference — e.g. through `@runSuites([@suite])` which calls test exes by handle, or via `exe @callIt(fn) = [ => @fn() ]; @callIt(@indirectFn)`. Direct calls work; standalone module runs work. The shelf decl's `from <expr>` resolution does NOT appear to capture the defining module's scope across indirect-call boundaries.
-
-Reproducer: `/tmp/probe-wrapper-pattern.mld` + `/tmp/probe-wrapper-B.mld` (also `/tmp/probe-shelf-runner-indirect.mld`). Stage B's planner-loop tools dispatch through the LLM-bridge runtime — that's an indirect call path. **This bug is likely to bite Stage B.** File the mlld ticket and verify it's resolved before starting Stage B implementation, OR design Stage B around the workaround (records inlined into a no-arg wrapper exe defined in the same module as the shelf decl).
+**mlld indirect-call shelf-scope bug — FIXED in mlld `e35af264b` (in v2.0.6)**: `shelf @s from @recordsVar` inside an exe body invoked via indirection (`@runSuites([@suite])`, wrapper-exe call chains) previously failed with `Record '@hotel' is not defined`. mlld commit `e35af264b "Fix indirect imported executable shelf scope"` resolves it. Verified on the real `tests/index.mld` runner-indirect path: shelf-integration suite (16 tests across all three new mlld features) passes inside the main gate at 286/0/5. The fix covers Stage B's planner-loop tool dispatch path. Probes at `/tmp/probe-wrapper-pattern.mld` etc. now run clean.
 
 ### Phase 2 readiness validator (this session)
 
@@ -138,7 +136,7 @@ Reproducer: `/tmp/probe-wrapper-pattern.mld` + `/tmp/probe-wrapper-B.mld` (also 
 - `shelf-parallel` (3): pre-parallel snapshot reads, post-block commit, same-key field-merge across branches
 - `projection-cache-per-key` (1): Phase 2 gate per migration-plan §2 — write A, write B, mutate A, B's content unchanged
 
-All 16 pass standalone (`mlld tests/rig/shelf-integration.mld --no-checkpoint`). NOT wired into `tests/index.mld` due to the indirect-call shelf-scope bug above. Wire-up follow-up after the mlld fix.
+All 16 pass inside the main `tests/index.mld` gate (286/0/5 total). Wired in commit `100a343`. The wire-up itself is the verification that the mlld indirect-call fix covers the runner-indirect path Stage B will use.
 
 **Wire-format handle decision LOCKED — Path A**:
 - Phase 2 keeps the `r_<recordType>_<keyValue>` synthetic format that the planner LLM currently produces/consumes. New helper: `@stateHandleFromAddress(@val)` returns `r_@val.mx.address.record_@val.mx.address.key`.
@@ -298,4 +296,5 @@ Phase 2 is too tightly coupled to ship in one commit safely. Suggested split:
 | 2026-05-07 | pre-phase-2 (this session) | Output records' write: shelves blocks (26 records); can_authorize transitional comment; Phase 2 pre-flight probes (bounded-shelf rejection, field-merge, versioning) + state.resolved consumer inventory captured in handoff. Mutation matrix Overall OK, zero-LLM 270/0/5. | `50418dc` |
 | 2026-05-07 | pre-phase-2-recon (this session) | Reconnaissance only, no code change. Probed: shelf field-merge by `.mx.key` works; `.byKey()` lookup is unimplemented in v2.0.6 (filter-on-read instead). Surveyed all consumers; produced per-file change map and Stage A/B/C breakdown in handoff. Surfaced two unresolved questions: wire-format handle (path A vs B) and shelf scope (module vs box vs exe). | (no commit) |
 | 2026-05-08 | phase-2-architecture-lock (this session) | mlld v2.0.6 ships m-box-shelf + m-stable-address + m-shelf-parallel + `.byKey()` / `.byAddress()`. All three probed working against rig-shaped records (probes at `/tmp/probe-new-*.mld`). Architecture LOCKED: shelf in `@runPlannerSession` body, threaded via `@agent.plannerShelf`, Path A wire-format. Per-function migration table written. Stage B execution deferred to next session. | (handoff-only) |
-| 2026-05-08 | phase-2-readiness-validator (this session) | Wrote `tests/rig/shelf-integration.mld` — 16 tests across 4 groups validating all three mlld features against rig-shaped records. 16/16 pass standalone. NOT wired into `tests/index.mld` due to indirect-call shelf-scope mlld bug surfaced during wire-up: `shelf @x from @recordsVar` fails when exe is invoked via @runSuites indirection. Bug must be fixed before Stage B (planner-loop tool dispatch is also an indirect-call path). Main gate stays 270/0/5. | (uncommitted) |
+| 2026-05-08 | phase-2-readiness-validator | Wrote `tests/rig/shelf-integration.mld` — 16 tests across 4 groups validating all three mlld features against rig-shaped records. Wired into `tests/index.mld`; gate 286/0/5. The wire-up is itself the verification that mlld `e35af264b "Fix indirect imported executable shelf scope"` covers the runner-indirect path Stage B will dispatch through. Stage B unblocked. | `100a343` |
+| 2026-05-08 | phase-2-handoff-refresh (this session) | Verified mlld indirect-shelf-scope fix (`e35af264b`) is in v2.0.6 binary; gate at 286/0/5; refreshed handoff to reflect Stage B unblocked. No code change. | (handoff-only) |
