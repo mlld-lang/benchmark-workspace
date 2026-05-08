@@ -35,6 +35,7 @@ import { @thinArrowAndDisplaySuite } from "./rig/thin-arrow-and-display.mld"
 import { @proofChainFirewallSuite } from "./rig/proof-chain-firewall.mld"
 import { @extractDeriveAndExecuteCompileSuite } from "./rig/extract-derive-and-execute-compile.mld"
 import { @namedStateAndCollectionSuite } from "./rig/named-state-and-collection.mld"
+import { @identityContractsSuite } from "./rig/identity-contracts.mld"
 
 var @suites = [
   @templateSuite,
@@ -60,7 +61,8 @@ var @suites = [
   @thinArrowAndDisplaySuite,
   @proofChainFirewallSuite,
   @extractDeriveAndExecuteCompileSuite,
-  @namedStateAndCollectionSuite
+  @namedStateAndCollectionSuite,
+  @identityContractsSuite
 ]
 
 var @result = @runSuites(@suites)
