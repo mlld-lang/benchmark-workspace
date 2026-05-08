@@ -34,6 +34,9 @@ record @slack_msg = {
     default: [{ mask: "sender" }, { mask: "recipient" }, body],
     role:worker: [{ mask: "sender" }, { mask: "recipient" }, body],
     role:planner: [{ value: "sender" }, { value: "recipient" }, { value: "body_has_url" }]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -66,7 +69,10 @@ record @slack_msg = {
 >> "add user X" tasks, costing ~2-3x wall on user-resolution paths.
 record @slack_user = {
   facts: [name: { type: string, kind: "slack_user_name" }],
-  read: [{ value: "name" }]
+  read: [{ value: "name" }],
+  write: {
+    role:worker: { shelves: true }
+  }
 }
 
 >> ── Slack channels ──
@@ -95,6 +101,9 @@ record @slack_channel = {
     default: [{ value: "name" }],
     role:worker: [{ value: "name" }],
     role:planner: []
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -111,6 +120,9 @@ record @webpage_content = {
     default: [{ value: "url" }, content],
     role:worker: [{ value: "url" }, content],
     role:planner: [{ value: "url" }]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -140,6 +152,9 @@ record @url_ref = {
     default: [{ value: "id_" }, { value: "source_msg" }, { value: "ordinal_in_message" }, { value: "canonical_url_hash" }, { value: "has_query" }, { value: "has_fragment" }, { value: "safety_status" }],
     role:worker: [{ value: "id_" }, { value: "source_msg" }, { value: "ordinal_in_message" }, { value: "canonical_url_hash" }, { value: "has_query" }, { value: "has_fragment" }, { value: "safety_status" }],
     role:planner: [{ value: "id_" }, { value: "source_msg" }, { value: "ordinal_in_message" }, { value: "canonical_url_hash" }, { value: "has_query" }, { value: "has_fragment" }, { value: "safety_status" }]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -160,6 +175,9 @@ record @referenced_webpage_content = {
     default: [{ value: "id_" }, { value: "source_url_ref" }, content],
     role:worker: [{ value: "id_" }, { value: "source_url_ref" }, content],
     role:planner: [{ value: "id_" }, { value: "source_url_ref" }, { value: "fetch_status" }]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 

@@ -306,6 +306,16 @@ exe @toolRisk(toolEntry) = [
   => @frameworkRiskLabels(@toolLabels(@toolEntry))
 ]
 
+>> TRANSITIONAL (Phase 1): @toolCanAuthorizeRoles still reads
+>> @entry.can_authorize from the tool catalog. The records-as-policy
+>> migration moves authorization to record-bound `write:` declarations
+>> (`write.role:planner.tools.authorize: true`); the runtime enforces
+>> deny-by-default at @policy.build via `WRITE_DENIED_NO_DECLARATION`.
+>> can_authorize on tools is now a fallback for the planner-facing
+>> deny synthesis the orchestrator emits. Replace with a write:-reading
+>> helper post-Phase-3 once all tool catalogs have migrated and the
+>> orchestrator's deny synthesis is rewritten. See migration-plan.md
+>> §1.B for the migration target.
 exe @toolCanAuthorizeRoles(toolEntry) = [
   let @entry = @toolEntryObject(@toolEntry)
   let @topLevelType = @typeof(@entry.can_authorize)

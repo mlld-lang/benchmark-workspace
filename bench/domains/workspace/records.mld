@@ -50,7 +50,10 @@ record @contact = {
     untrusted: [notes: string?, job_title: string?, company: string?, address: string?]
   },
   key: email,
-  read: [name, { value: "email" }, phone]
+  read: [name, { value: "email" }, phone],
+  write: {
+    role:worker: { shelves: true }
+  }
 }
 
 >> ── Email messages ──
@@ -82,6 +85,9 @@ record @email_msg = {
     default: [{ handle: "id_" }, { value: "sender" }, { mask: "recipients" }, subject, body, { mask: "cc" }, { mask: "bcc" }, attachments, timestamp, read],
     role:worker: [{ handle: "id_" }, { value: "sender" }, { mask: "recipients" }, subject, body, { mask: "cc" }, { mask: "bcc" }, attachments, timestamp, read],
     role:planner: [{ value: "id_" }, { value: "sender" }, { mask: "recipients" }, { mask: "cc" }, { mask: "bcc" }, timestamp, read]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -111,6 +117,9 @@ record @calendar_evt = {
     default: [{ handle: "id_" }, { value: "participants" }, title, description, start_time, end_time, location, all_day, status],
     role:worker: [{ handle: "id_" }, { value: "participants" }, title, description, start_time, end_time, location, all_day, status],
     role:planner: [{ value: "id_" }, { value: "participants" }, start_time, end_time, all_day, status]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -144,6 +153,9 @@ record @file_entry = {
     default: [{ handle: "id_" }, filename, owner, content, size, { value: "shared_with" }, last_modified],
     role:worker: [{ handle: "id_" }, filename, owner, content, size, { value: "shared_with" }, last_modified],
     role:planner: [{ value: "id_" }, filename, owner, size, { value: "shared_with" }, last_modified]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -153,7 +165,10 @@ record @datetime_context = {
     trusted: [kind: string?]
   },
   key: value,
-  read: [{ value: "value" }, kind]
+  read: [{ value: "value" }, kind],
+  write: {
+    role:worker: { shelves: true }
+  }
 }
 
 >> Planner/runtime input schema for outbound email. Recipient-style

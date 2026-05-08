@@ -31,6 +31,9 @@ record @transaction = {
     default: [{ value: "id" }, { value: "sender" }, { value: "recipient" }, amount, subject, date, recurring],
     role:worker: [{ mask: "id" }, { mask: "sender" }, { mask: "recipient" }, amount, subject, date, recurring],
     role:planner: [{ value: "id" }, { value: "sender" }, { value: "recipient" }, amount, date, recurring]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -52,6 +55,9 @@ record @scheduled_transaction = {
     default: [{ value: "id" }, { value: "sender" }, { value: "recipient" }, amount, subject, date, recurring],
     role:worker: [{ mask: "id" }, { mask: "sender" }, { mask: "recipient" }, amount, subject, date, recurring],
     role:planner: [{ value: "id" }, { value: "sender" }, { value: "recipient" }, amount, subject, date, recurring]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -69,6 +75,9 @@ record @user_account = {
     default: [{ value: "first_name" }, { value: "last_name" }, street, city],
     role:worker: [first_name, last_name, street, city],
     role:planner: [{ value: "first_name" }, { value: "last_name" }, street, city]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
@@ -80,7 +89,10 @@ record @user_account = {
 record @iban_value = {
   facts: [value: { type: string, kind: "iban" }],
   key: value,
-  read: [{ value: "value" }]
+  read: [{ value: "value" }],
+  write: {
+    role:worker: { shelves: true }
+  }
 }
 
 record @balance_value = {
@@ -88,7 +100,10 @@ record @balance_value = {
   data: {
     trusted: [amount: number?]
   },
-  read: [amount]
+  read: [amount],
+  write: {
+    role:worker: { shelves: true }
+  }
 }
 
 record @file_text = {
@@ -101,6 +116,9 @@ record @file_text = {
     default: [{ value: "file_path" }, content],
     role:worker: [{ value: "file_path" }, content],
     role:planner: [{ value: "file_path" }]
+  },
+  write: {
+    role:worker: { shelves: true }
   }
 }
 
