@@ -19,16 +19,17 @@ import { @travelClassifierExemplarsSuite } from "./bench/travel-classifier-exemp
 import { @schemaValidationSuite } from "./rig/schema-validation.mld"
 import { @parseValueSuite } from "./rig/parse-value.mld"
 import { @urlRefsASuite } from "./rig/url-refs-a.mld"
->> Stage B TODO: tests/rig/url-refs-b.mld needs fixture conversion to
->> shelf shape (UR-13..24 use bucket-shape envelopes). Skipped from the
->> main gate until converted; functionality is exercised by url-refs-a +
->> bench scripted security-slack url_ref attack tests.
->> import { @urlRefsBSuite } from "./rig/url-refs-b.mld"
+>> url-refs-b: Group B (capability-map invariants) + Group C (recordArgs
+>> validation) converted; Group D (dispatch) deferred — see in-file
+>> notes. UR-19 also deferred (recordArgs validator no longer checks
+>> handle existence; that moved to @lookupResolvedEntry).
+import { @urlRefsBSuite } from "./rig/url-refs-b.mld"
 import { @outputValidatorsSuite } from "./rig/output-validators.mld"
->> Stage B follow-up: worker-dispatch, proof-chain-firewall import
->> deleted bucket helpers (@mergeResolvedEntries, @updateResolvedState,
->> @bucketItems, etc.) and need shelf-shape rewrites. Tracked in
->> MIGRATION-HANDOFF.md. Skipped from the main gate until converted.
+>> Stage B follow-up: worker-dispatch, proof-chain-firewall need
+>> shelf-shape rewrites (worker-dispatch is mostly scripted-LLM and
+>> blocks on task #17; proof-chain-firewall is pure compile-test
+>> rewrite). Tracked in MIGRATION-HANDOFF.md. Skipped from the main
+>> gate until converted.
 >>
 >> state-projection-{a,b}.mld DELETED in Stage B Phase 2 conversion: their
 >> entire test surface targeted bucket helpers that no longer exist
@@ -62,6 +63,7 @@ var @suites = [
   @schemaValidationSuite,
   @parseValueSuite,
   @urlRefsASuite,
+  @urlRefsBSuite,
   @outputValidatorsSuite,
   @progressFingerprintSuite,
   @exhaustionSuite,
