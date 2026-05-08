@@ -208,39 +208,6 @@ exe @isPayloadNonEmpty(rec) = [
   => true
 ]
 
->> Fallback content signature for entries that did NOT come through record
->> coercion (so .mx.hash is null). Mirrors the .mx.hash contract — same
->> canonical content yields the same string, content drift yields a new
->> string. Used by @stateProgressFingerprint so the no-progress detector
->> still works on synthetic test fixtures and any direct-mutation entries.
-exe @entryFallbackHash(value) = node {
-  if (value === null || value === undefined) return '0';
-  const crypto = require('crypto');
-  const seen = new WeakSet();
-  const encode = (entry) => {
-    if (entry === null || entry === undefined) return 'n';
-    if (typeof entry === 'string') return 's:' + JSON.stringify(entry);
-    if (typeof entry === 'number') return 'd:' + entry;
-    if (typeof entry === 'boolean') return 'b:' + (entry ? '1' : '0');
-    if (Array.isArray(entry)) return 'a:[' + entry.map(encode).join(',') + ']';
-    if (typeof entry !== 'object') return 'x';
-    if (seen.has(entry)) return 'c';
-    seen.add(entry);
-    const keys = Object.keys(entry).sort();
-    return 'o:{' + keys.map(k => JSON.stringify(k) + ':' + encode(entry[k])).join(',') + '}';
-  };
-  return crypto.createHash('sha256').update(encode(value)).digest('hex').slice(0, 8);
-}
-
-exe @entryHash(entry) = [
-  let @value = @entry.value ?? @entry
-  let @mxHash = @value.mx.hash
-  => when [
-    @mxHash.isDefined() && @mxHash != null => @mxHash
-    * => @entryFallbackHash(@value)
-  ]
-]
-
 >> Stage B: progress fingerprint reads the planner shelf instead of
 >> walking state.resolved buckets. Each record's stable .mx.address.key
 >> fills the slot of the old handle; .mx.hash captures content drift.
@@ -260,7 +227,7 @@ exe @stateProgressFingerprint(agent, state) = [
     let @sigs = for @r in @entries [
       let @addr = @r.mx.address
       let @key = when [ @addr.isDefined() && @addr.key.isDefined() => @addr.key * => "?" ]
-      let @hash = when [ @r.mx.hash.isDefined() && @r.mx.hash != null => @r.mx.hash * => @entryFallbackHash(@r) ]
+      let @hash = @r.mx.hash
       => `@key^@hash`
     ]
     let @sortedSigs = @sigs.sort()
@@ -1273,17 +1240,13 @@ guard after @composeRetryClaude for op:named:plannerLlmCallClaude = when [
 ]
 
 exe @runPlannerSession(rawAgent, query) = [
-  >> Phase 2 Stage B scaffolding: declare a per-session wildcard shelf
-  >> bounded to this agent's record set, then thread it onto the agent
-  >> as @agent.plannerShelf. The shelf has session lifetime (one shelf
-  >> per @runPlannerSession call) and is the migration target for
-  >> state.resolved buckets. Worker dispatchers read this off
-  >> @toolCtx.agent.plannerShelf via the existing seed: { agent } pattern;
-  >> object-spread preserves shelf identity (validated by
-  >> tests/rig/shelf-integration.mld testShelfSurvivesObjectSpread).
-  >>
-  >> Reads/writes through this shelf are not yet wired — bucket remains
-  >> the read-side authority. The next Stage B commit migrates consumers.
+  >> Per-session wildcard shelf bounded to this agent's record set,
+  >> threaded onto the agent as @agent.plannerShelf. Session-scoped
+  >> (one shelf per @runPlannerSession call). Worker dispatchers read
+  >> this off @toolCtx.agent.plannerShelf via the existing
+  >> seed: { agent } pattern; object-spread preserves shelf identity
+  >> (validated by tests/rig/shelf-integration.mld
+  >> testShelfSurvivesObjectSpread).
   let @shelfableRecords = @shelfRecords(@rawAgent.records ?? {})
   shelf @plannerShelf from @shelfableRecords with { versioned: true, projection_cache: ["role:planner"] }
   let @agent = { ...@rawAgent, plannerShelf: @plannerShelf }

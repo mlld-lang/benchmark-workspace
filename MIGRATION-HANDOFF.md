@@ -6,20 +6,90 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ---
 
-## What's next: finish Phase 2 verification surface
+## What's next
 
-**Stage B core landed at `c7ad4c8`.** Runtime, intent, and all 5 workers are on shelf API. ~430 lines of bucket helpers deleted. `state.resolved` field is gone. `@agent.plannerShelf` is the resolved-record store. Path A wire format preserved.
+**Session 2026-05-08 (migrator-2) progress** (mostly uncommitted; partial 744ba93 commit by user mid-session):
+- Records audit landed (8 output records: type:handle → type:string,kind) — committed in 744ba93
+- 4 zero-LLM files converted, 2 deleted as obsolete (state-projection-{a,b}) — committed in 744ba93
+- identity-contracts.mld rewritten as 5 shelf-shape tests — uncommitted
+- @entryHash + @entryFallbackHash deleted from rig/workers/planner.mld — uncommitted
+- @parseRigHandle kept in JS with rationale comment (native rewrite via @parse.address breaks null-comparability) — uncommitted
+- testExecuteResultHandlesFromReturnsRecord (writeback test) revived in named-state-and-collection.mld post-m-4b6f fix — uncommitted
+- Gate at **207/0/1** (up from 169/0/1 baseline)
+- m-4b6f filed and fixed by mlld-dev (function-call frame role-leak via stale exe labels)
 
-**What's incomplete**: the verification surface. 9 zero-LLM test files were skipped to land Stage B core; 5 scripted-LLM tests regressed on fixture conversion. Until those are converted/fixed, the gate is GREEN-FOR-SUBSET (169/0/1), not GREEN-FOR-CORPUS (was 286/0/5 pre-Stage-B).
+**Real findings worth keeping in head**:
 
-**This session's job**: mechanical conversion of 9 test files + 5 fixture helpers using the proven template below, then mutation-matrix re-baseline, then ARCHITECTURE.md updates.
+1. **type:handle is for INPUT records (LLM-emitted, bridge-validated). Output records (tool returns:, projected to LLM, shelved) declare authoritative IDs as type:string, kind:"X".** Conflating these was the original audit blocker. The principle is now load-bearing — applies to any future record-shape changes.
 
-**Goal**:
-- Zero-LLM gate at 286+/0/5, full corpus, zero skipped suites
-- Mutation matrix Overall: OK
-- All 4 scripted suites green
-- `rig/ARCHITECTURE.md` + `bench/ARCHITECTURE.md` + `labels-policies-guards.md` updated (Phase 2 doc discipline)
-- **The 2 handle-drift xfails in `identity-contracts.mld` flipped to xpass** — Phase 2's central observable milestone.
+2. **Stage B left a scripted-LLM architectural gap.** Scripted-LLM tests bypass `@runPlannerSession` (they invoke `@mockOpencode` with `with { session: @planner, seed: {...} }` directly). The shelf is created inside `@runPlannerSession`, so scripted tests have no shelf at session start. This means:
+   - 3 mutation-matrix baseline-fails (banking B3, slack handle test, workspace extract-empty) — fixture helpers need to populate a shelf that doesn't exist for scripted
+   - 5 scripted-LLM regression tests in worker-dispatch.mld likely affected
+   - `@stateWithResolved` in security-fixtures.mld can't be straightforwardly converted
+
+   Tracked as task #17. Real fix: add shelf-aware seed mechanism to mock-llm.mld's @runWithState path. NOT a fixture-helper conversion — it's mlld + mock-llm architecture work.
+
+3. **m-4b6f fix unblocks function-call dispatch in zero-LLM tests.** `@dispatchExecute` from a test exe now respects role context. `@dispatchResolve` likely the same. This is what made testExecuteResultHandlesFromReturnsRecord revival possible.
+
+4. **Three deleted dispatch tests remain blocked**, but for a different reason: cross-tool dispatch threads resolved-record id_ (now type:string post-audit) to handle-typed input records. Production mints handles via real resolve dispatch; zero-LLM can't reproduce that path. Keep deleted; covered by scripted/live tier.
+
+## Remaining work, ranked by leverage
+
+**Likely-mechanical (no blocker beyond writing the code):**
+1. **`url-refs-b.mld`** (369 lines, 18 tests) — uses `@dispatchResolve` directly; m-4b6f fix unblocks. Pattern: dispatch + read shelf via `@shelf.read(@agent.plannerShelf[<rt>])` instead of `state.resolved.<rt>` bucket reads.
+2. **`proof-chain-firewall.mld`** (536 lines, 17 tests) — pure compile-test file, no scripted-LLM. 11 module-scope `var` consumers of `@sampleState`. Need to thread agent first arg through `@compileExecuteIntent` / `@resolveRefValue` / `@lowerSelectionRef`. Restructure module-scope vars into per-test exe builds, OR build a shared shelf-bearing `@sampleAgent` exe (need to verify module-scope role:worker calls work — untested).
+3. **3 ARCHITECTURE.md doc updates** (rig, bench, labels-policies-guards) — pure docs. Should describe: shelf as resolved-record store; type:string,kind vs type:handle principle (per audit); planner-shelf threading; removed bucket primitives; m-shelf-wildcard primitive integration.
+
+**Architectural / requires design (not mechanical):**
+4. **Task #17: shelf-aware seed for scripted-LLM tests (mock-llm.mld).** Unblocks: mutation matrix re-baseline (3 fixture-fails clear), scripted-suite seed-resolved tests (security-banking B3 etc.), most of `worker-dispatch.mld` conversion. Options: (A) add shelf decl + seed-write to `@runWithState`; (B) refactor scripted to go through `@runPlannerSession`; (C) add pre-session shelf-preload hook on `@planner` session schema.
+
+**Likely-blocked-on-#17:**
+5. **`worker-dispatch.mld`** — 577 lines, mostly `exe llm` scripted-LLM. Post-dispatch `state.resolved.*` reads everywhere. Some non-scripted tests may be convertible standalone; needs assessment.
+6. **`security-fixtures.mld` shelf-resolved fixtures + 4 scripted suite consumers** — direct dependency on #17.
+
+**Suggested order**: #1, #2, #3 (parallel-ish, no inter-dependencies) → #4 (the architectural unblock) → #5, #6 (mechanical once #4 lands) → mutation matrix re-baseline → close.
+
+---
+
+## Session 2026-05-08 (stage-b-completion-1) findings
+
+### Records audit landed (LOAD-BEARING for everything else)
+
+8 output records reshaped from `id_: { type: handle, kind: ... }` → `id_: { type: string, kind: ... }`:
+- workspace: email_msg, calendar_evt, file_entry
+- banking: transaction.id, scheduled_transaction.id
+- slack: url_ref.id_, referenced_webpage_content.id_
+- travel: calendar_evt.id_
+
+9 input records keep `type: handle` (correct — input records validate LLM-emitted handles via the bridge). 
+
+**Architectural principle (now load-bearing)**: `type: handle` = session-local authorization proof (bridge-minted). `type: string, kind: "X"` = authoritative ID with cross-call identity. `.mx.address.key` = stable lookup address. Output records use string-with-kind; input records use handle. Conflating them was the original blocker that surfaced post-Stage-B because shelf validates strictly. See "Background" below for full thread.
+
+### Files converted (4) — full pass with shelf-shape patterns
+
+1. `xfail-and-null-blocked.mld` — UH-1 dropped (out-of-scope per user; track c-bd28 separately). NF + BFH groups intact.
+2. `extract-derive-and-execute-compile.mld` — stub agent `{ records: {}, plannerShelf: undefined }` works for tests that only hit extracted/derived (not selection/resolved) refs.
+3. `named-state-and-collection.mld` — 7/11 tests converted. **4 dispatch-composition tests deleted with comments**: testExecuteResultHandlesFromReturnsRecord (returns:-shelf-writeback hits role-context bug — see below); testRescheduleDispatchSucceeds + testCollectionDispatchPolicyBuild + testCollectionDispatchCrossModuleM5178 (event_id flowing from resolved-record to handle-typed input now requires real resolve dispatch to mint handles — end-to-end territory, not zero-LLM).
+4. `identity-contracts.mld` — rewritten as 5 shelf-shape tests. **slack handle-drift xfail flips DEFERRED**: needs `key:` declaration on slack_msg derived from canonical (sender, recipient, body) for shelf field-merge to apply. Without `key:`, identical `.mx.address.key` produces 2 separate entries, not 1. This is a bench-side records change beyond test conversion scope. Cross-suite-sentinel + entry-shape-bucket groups dropped (tested deleted `_rig_bucket: "resolved_index_v1"` shape).
+
+### Files deleted (2) — concept obsoleted
+
+- `state-projection-a.mld` and `state-projection-b.mld` DELETED. 100% test surface targeted bucket helpers (@mergeResolvedEntries, @batchSpecMergeState, @bucketItems, @cachedPlannerEntries) that no longer exist. Structural properties (dedup by handle, partial-field merge, parallel-batch accumulation, per-key cache invalidation) now provided by `@shelf.write` directly and tested by shelf-integration.mld groups 1 (box-shelf-lifetime), 3 (shelf-parallel), 4 (projection-cache-per-key).
+
+### Real findings worth surfacing to mlld-dev / next session
+
+**1. Stage B role-context propagation bug (BLOCKS testExecuteResultHandlesFromReturnsRecord and probably worker-dispatch.mld scripted-LLM tests).** When a test exe (role:worker) calls `@dispatchExecute` (role:worker) which calls `@compileForDispatch` (role:planner) which returns, subsequent `@writeRecordsToShelf` inside `@dispatchExecute` body fires `WRITE_DENIED_NO_ROLE` with `activeRole: role:planner`. The role context appears to taint forward across the sub-call return. **Naive `role:worker` decl on `@writeRecordsToShelf` regresses banking scripted** (`updateUserInfoExtractedAcceptedAtRehearse` flips PASS→FAIL). Needs mlld-side review of role-context propagation through `exe role:X` boundaries. Verified with minimal probe (probe-role.mld, since deleted).
+
+**2. slack_msg needs content-derived `key:` declaration for the migration milestone xfail flip.** Per the audit, slack_msg has no `key:` field; @shelf.write produces a fresh entry per call even when `@r1.mx.address.key == @r2.mx.address.key`. Without `key:`, shelf can't field-merge. The handle-drift case stays observably broken until slack_msg gets a content-derived key (e.g. `key: [sender, recipient, body]` or a synthesized canonical fact field).
+
+**3. Cross-tool dispatch composition tests (input-handle validation) belong in scripted/live, not zero-LLM.** Tests that thread `event_id: { source: "resolved", record: "calendar_evt", handle: ..., field: "id_" }` to a write tool whose input record requires `event_id: { type: handle }` will fail post-audit because resolved-ref returns string id_, not a handle. Production works because resolve dispatch mints real handles before execute; tests can't reproduce that without running real dispatch.
+
+### Conversion patterns proven this session
+
+- **Build inline test agents with shelf in caller scope**, return `{ suite, defense, records, plannerShelf, tools, toolsCollection, basePolicy }` plus any test-specific bindings. Don't try `@rigBuild`; it doesn't construct a shelf.
+- **Pre-bind `@shelfRecords()` via `let`**: `shelf @ps from @shelfRecords(@recs)` doesn't parse. Two lines: `let @shelfable = @shelfRecords(@recs); shelf @ps from @shelfable with { ... }`.
+- **Mint wire-format handles via `r_<rt>_@rec.mx.address.key`** when a test needs to thread a stable handle to a downstream call (parse-value pattern).
+- **Stub fixture exes that produce records for shelf-write need `=> <recordName>` arrow** (without it, the value is plain JSON without factsources, and shelf-write rejects with `SHELF_FACT_PROOF_REQUIRED`).
 
 ---
 
@@ -39,21 +109,21 @@ If you find yourself wanting to:
 
 ## Current state
 
-- **Phase**: Phase 2 Stage B core landed. Verification surface incomplete.
-- **Latest commits**: `485bb88` (scaffolding) → `c7ad4c8` (Stage B core).
+- **Phase**: Phase 2 Stage B partial verification surface landed (uncommitted as of session 2026-05-08).
+- **Latest commits**: `485bb88` (scaffolding) → `c7ad4c8` (Stage B core) → `eb8bc47` (handoff backfill). **Session 2026-05-08 stage-b-completion-1 work uncommitted: records audit + 4 file conversions + 2 deletes.**
 - **Pinned binary**: REMOVED. System mlld v2.0.6.
-- **Architecture**: shelf decl in `@runPlannerSession` body; `@agent.plannerShelf` threaded; Path A wire format via `@stateHandleFromAddress` / `@parseRigHandle`.
+- **Architecture**: shelf decl in `@runPlannerSession` body; `@agent.plannerShelf` threaded; Path A wire format via `@stateHandleFromAddress` / `@parseRigHandle`. Output records use `id_: { type: string, kind: ... }` post-audit; input records keep `type: handle`.
 
 ## Gate state
 
 | Gate | Result |
 |---|---|
-| Zero-LLM (REDUCED — 9 suites skipped) | 169/0/1 |
-| Mutation matrix | BASELINE FAILS (banking 1, slack 1, workspace 1; travel OK) |
-| Scripted banking | 7/3 |
-| Scripted slack | 13/1 + 1 xpass |
-| Scripted workspace | 10/0 |
-| Scripted travel | 13/1 |
+| Zero-LLM (3 suites still skipped: worker-dispatch, proof-chain-firewall, url-refs-b) | **207/0/1** (was 169/0/1 baseline) |
+| Mutation matrix | NOT YET RE-BASELINED (3 baseline fails persist; clearing them depends on task #17) |
+| Scripted banking | 7/3 (baseline; B3 + 2 correlate fails — fixture/shelf-seed gap) |
+| Scripted slack | 13/1 + 1 xpass (baseline; 1 selection-ref fail — same gap) |
+| Scripted workspace | 13/1 (1 extract-empty fail — same gap) |
+| Scripted travel | 10/0 (clean) |
 
 ---
 

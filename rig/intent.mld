@@ -197,6 +197,14 @@ exe @lookupResolvedEntry(agent, recordName, handle) = [
   => @slot.byAddress(@addr)
 ]
 
+>> Parses the rig wire-format `r_<record>_<key>` into a plain-object
+>> record-address shape `{ record, key, string }` for shelf lookup. JS
+>> here is justified: input is a plain string, output is a structural
+>> lookup key with no fact-bearing metadata to preserve. A native
+>> rewrite via @parse.address loses null-comparability at @lookupResolved-
+>> Entry (`@addr == null` evaluates the wrapped-null surface, not the
+>> JS sentinel) — keep this primitive in JS until @parse.address grows
+>> a returns-actual-null mode.
 exe @parseRigHandle(handle) = js {
   if (typeof handle !== "string") return null;
   if (!handle.startsWith("r_")) return null;

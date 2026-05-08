@@ -81,7 +81,7 @@ exe role:worker @ut7AgentWith() = [
 >> Execute result-handle fixtures (write tool with returns:)
 exe tool:w, file:w @stubCreateFile(filename, content) = [
   => { id_: "42", filename: @filename, content: @content, owner: "test", size: 100, last_modified: "2026-04-23" }
-]
+] => file_entry
 var tools @executeResultHandleTools = {
   create_file: {
     mlld: @stubCreateFile,
@@ -407,16 +407,50 @@ exe role:worker @testUpdateFieldsInPolicyIntent() = [
 >> resolved-ref returns calendar_evt.id_ which is post-audit a string.
 >> Cross-tool dispatch composition belongs in scripted/live, not zero-LLM.
 
->> Stage B follow-up: testExecuteResultHandlesFromReturnsRecord (returns:
->> shelf-writeback path) was deleted during conversion. The test exercises
->> @dispatchExecute → @compileForDispatch (role:planner) → @callTool →
->> @writeRecordsToShelf, but the @writeRecordsToShelf @shelf.write inherits
->> role:planner from the compileForDispatch sub-call and trips
->> WRITE_DENIED_NO_ROLE since output records' write: declares role:worker
->> only. Naive `role:worker` decl on @writeRecordsToShelf regresses banking
->> scripted (updateUserInfoExtractedAcceptedAtRehearse). Tracked separately
->> as an mlld role-context propagation question; reintroduce a shelf-shape
->> writeback assertion test once that's resolved.
+>> Returns:-record writeback path: dispatch a tool with `returns:` set,
+>> verify the result is shelf-written and result_handles surfaces.
+>> Pre-Stage-B asserted on `state.resolved.<rt>` post-dispatch; post-
+>> Stage-B reads the agent's plannerShelf directly. Originally blocked
+>> on m-4b6f (role-context leak through function-call frames); revived
+>> after that mlld fix landed.
+exe role:worker @testExecuteResultHandlesFromReturnsRecord() = [
+  let @shelfable = @shelfRecords(@executeResultHandleRecords)
+  shelf @ps from @shelfable with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = {
+    suite: "fixture-result-handles",
+    defense: "defended",
+    records: @executeResultHandleRecords,
+    plannerShelf: @ps,
+    tools: @executeResultHandleTools,
+    toolsCollection: @executeResultHandleTools,
+    basePolicy: @synthesizedPolicy(@executeResultHandleTools, null)
+  }
+  let @decision = {
+    phase: "execute",
+    operation: "create_file",
+    args: {
+      filename: { source: "known", value: "test.txt" },
+      content: { source: "known", value: "hello world" }
+    }
+  }
+  let @result = @dispatchExecute(@agent, @emptyState(), @decision, "Create a file called test.txt with hello world")
+  let @recordType = @recordTypeName(@file_entry)
+  let @entries = @shelf.read(@agent.plannerShelf[@recordType])
+  let @actual = {
+    status: @result.result.status,
+    handlesPositive: @result.result.result_handles.length > 0,
+    entriesDefined: @entries.isDefined(),
+    entriesPositive: @entries.length > 0,
+    firstId: @entries[0].id_
+  }
+  => @assertEq(@actual, {
+    status: "sent",
+    handlesPositive: true,
+    entriesDefined: true,
+    entriesPositive: true,
+    firstId: "42"
+  })
+]
 
 >> Stage B follow-up: testCollectionDispatchPolicyBuild was deleted
 >> during conversion. The test calls add_calendar_event_participants
@@ -451,7 +485,10 @@ var @namedStateAndCollectionSuite = @suite("named-state-and-collection", [
   ], {}),
   @group("ut7-reschedule-intent", [
     @testUpdateFieldsInPolicyIntent
-  ], { ticket: "c-ut7" })
+  ], { ticket: "c-ut7" }),
+  @group("collection-dispatch-returns-writeback", [
+    @testExecuteResultHandlesFromReturnsRecord
+  ], { ticket: "m-4b6f", notes: "Returns:-record shelf writeback after dispatch. Revived post-m-4b6f fix." })
 ], {})
 
 export { @namedStateAndCollectionSuite }

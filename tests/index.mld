@@ -25,11 +25,10 @@ import { @urlRefsASuite } from "./rig/url-refs-a.mld"
 >> bench scripted security-slack url_ref attack tests.
 >> import { @urlRefsBSuite } from "./rig/url-refs-b.mld"
 import { @outputValidatorsSuite } from "./rig/output-validators.mld"
->> Stage B follow-up: identity-contracts, worker-dispatch, proof-chain-
->> firewall all import deleted bucket helpers (@mergeResolvedEntries,
->> @updateResolvedState, @bucketItems, etc.) and need shelf-shape
->> rewrites. Tracked in MIGRATION-HANDOFF.md. Skipped from the main gate
->> until converted.
+>> Stage B follow-up: worker-dispatch, proof-chain-firewall import
+>> deleted bucket helpers (@mergeResolvedEntries, @updateResolvedState,
+>> @bucketItems, etc.) and need shelf-shape rewrites. Tracked in
+>> MIGRATION-HANDOFF.md. Skipped from the main gate until converted.
 >>
 >> state-projection-{a,b}.mld DELETED in Stage B Phase 2 conversion: their
 >> entire test surface targeted bucket helpers that no longer exist
@@ -44,6 +43,7 @@ import { @outputValidatorsSuite } from "./rig/output-validators.mld"
 import { @xfailAndNullBlockedSuite } from "./rig/xfail-and-null-blocked.mld"
 import { @extractDeriveAndExecuteCompileSuite } from "./rig/extract-derive-and-execute-compile.mld"
 import { @namedStateAndCollectionSuite } from "./rig/named-state-and-collection.mld"
+import { @identityContractsSuite } from "./rig/identity-contracts.mld"
 import { @progressFingerprintSuite } from "./rig/progress-fingerprint.mld"
 import { @exhaustionSuite } from "./rig/exhaustion.mld"
 import { @policyBuildCatalogArchSuite } from "./rig/policy-build-catalog-arch.mld"
@@ -73,7 +73,8 @@ var @suites = [
   @shelfIntegrationSuite,
   @xfailAndNullBlockedSuite,
   @extractDeriveAndExecuteCompileSuite,
-  @namedStateAndCollectionSuite
+  @namedStateAndCollectionSuite,
+  @identityContractsSuite
 ]
 
 var @result = @runSuites(@suites)
