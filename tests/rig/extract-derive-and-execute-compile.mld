@@ -35,10 +35,15 @@ var @indexedExtractMarker = "INDEXED_EXTRACT_BODY_MARKER"
 var @indexedDerivedMarker = "INDEXED_DERIVED_BODY_MARKER"
 var @schemaPrefixedDerivedMarker = "SCHEMA_PREFIXED_DERIVED_BODY_MARKER"
 
+>> Stub agent — these tests don't hit resolved/selection refs, so no
+>> plannerShelf is needed. Projection fns gate on `@agent.records`;
+>> compileExecuteIntent / resolveRefValue gate on plannerShelf only for
+>> `source: resolved | selection` refs.
+var @edceAgent = { suite: "fixtures", records: {} }
+
 >> Hostile state: extracted/derived buckets carry payloads with markers.
 >> Used by both the named-state-taint group and most execute-compile-reads tests.
 var @stateWithTaintedNamedValues = {
-  resolved: {},
   extracted: {
     email_task: {
       provenance: "extracted",
@@ -109,7 +114,6 @@ var @stateWithTaintedNamedValues = {
 >> Wrapped-scalar fixture: schema-named "text" extract/derive with a single
 >> wrapping `value` field that the compiler should unwrap to the inner string.
 var @wrappedScalarNamedState = {
-  resolved: {},
   extracted: {
     note_text: {
       provenance: "extracted",
@@ -147,7 +151,6 @@ exe @testScalarExtractPayload() = [
     payload: "bounded text payload"
   })
   let @scalarExtractState = {
-    resolved: {},
     extracted: {
       body_text: {
         provenance: "extracted",
@@ -159,14 +162,8 @@ exe @testScalarExtractPayload() = [
     derived: {},
     extract_sources: {}
   }
-  let @plannerSummary = @plannerVisibleState(
-    { suite: "fixtures", records: {} },
-    @scalarExtractState
-  ) | @pretty
-  let @workerSummary = @workerStateSummary(
-    { suite: "fixtures", records: {} },
-    @scalarExtractState
-  ) | @pretty
+  let @plannerSummary = @plannerVisibleState(@edceAgent, @scalarExtractState) | @pretty
+  let @workerSummary = @workerStateSummary(@edceAgent, @scalarExtractState) | @pretty
   let @actual = {
     payload: @field(@scalarExtractAttestation, "payload"),
     plannerHidesValue: !@plannerSummary.includes('"bounded text payload"'),
@@ -256,10 +253,7 @@ exe @testCoerceDeriveRejectsDegenerateOutput() = [
 >> include payload values from extracted or derived state. Schema/field
 >> structure stays so the planner can emit refs by name.
 exe @testPlannerNamedStateHidesTaintedValues() = [
-  let @summary = @plannerVisibleState(
-    { suite: "fixtures", records: {} },
-    @stateWithTaintedNamedValues
-  ) | @pretty
+  let @summary = @plannerVisibleState(@edceAgent, @stateWithTaintedNamedValues) | @pretty
   let @actual = {
     hidesExtractMarker: !@summary.includes(@taintedExtractMarker),
     hidesDerivedMarker: !@summary.includes(@taintedDerivedMarker),
@@ -279,10 +273,7 @@ exe @testPlannerNamedStateHidesTaintedValues() = [
 >> Worker projection mirror: workers DO see the payload values so they can
 >> derive/extract from them. Same fixture, opposite expectation.
 exe @testWorkerNamedStateRetainsTaintedValues() = [
-  let @summary = @workerStateSummary(
-    { suite: "fixtures", records: {} },
-    @stateWithTaintedNamedValues
-  ) | @pretty
+  let @summary = @workerStateSummary(@edceAgent, @stateWithTaintedNamedValues) | @pretty
   let @actual = {
     keepsExtractMarker: @summary.includes(@taintedExtractMarker),
     keepsDerivedMarker: @summary.includes(@taintedDerivedMarker)
@@ -295,6 +286,7 @@ exe @testWorkerNamedStateRetainsTaintedValues() = [
 >> @compileExecuteIntent reads named extracted payload via { source, name, field }.
 exe @testExecuteCompileReadsExtractedState() = [
   let @compile = @compileExecuteIntent(
+    @edceAgent,
     @stateWithTaintedNamedValues,
     @tools,
     {
@@ -312,6 +304,7 @@ exe @testExecuteCompileReadsExtractedState() = [
 >> Same but reading from derived state.
 exe @testExecuteCompileReadsDerivedState() = [
   let @compile = @compileExecuteIntent(
+    @edceAgent,
     @stateWithTaintedNamedValues,
     @tools,
     {
@@ -329,6 +322,7 @@ exe @testExecuteCompileReadsDerivedState() = [
 >> Indexed access into an extracted bucket: rows[1].body picks row 1 out of an array.
 exe @testExecuteCompileReadsIndexedExtractedState() = [
   let @compile = @compileExecuteIntent(
+    @edceAgent,
     @stateWithTaintedNamedValues,
     @tools,
     {
@@ -346,6 +340,7 @@ exe @testExecuteCompileReadsIndexedExtractedState() = [
 >> Same indexed access against derived state.
 exe @testExecuteCompileReadsIndexedDerivedState() = [
   let @compile = @compileExecuteIntent(
+    @edceAgent,
     @stateWithTaintedNamedValues,
     @tools,
     {
@@ -363,6 +358,7 @@ exe @testExecuteCompileReadsIndexedDerivedState() = [
 >> Numeric-dot syntax against a derived array: "1.body" (not "[1].body").
 exe @testExecuteCompileReadsNumericDotDerivedArrayIndex() = [
   let @compile = @compileExecuteIntent(
+    @edceAgent,
     @stateWithTaintedNamedValues,
     @tools,
     {
@@ -380,6 +376,7 @@ exe @testExecuteCompileReadsNumericDotDerivedArrayIndex() = [
 >> Schema-prefixed access: "messages[1].body" (the schema_name prefix is stripped).
 exe @testExecuteCompileReadsSchemaPrefixedDerivedArrayIndex() = [
   let @compile = @compileExecuteIntent(
+    @edceAgent,
     @stateWithTaintedNamedValues,
     @tools,
     {
@@ -398,12 +395,13 @@ exe @testExecuteCompileReadsSchemaPrefixedDerivedArrayIndex() = [
 >> @compileExecuteIntent should reject with intent_compile_failed +
 >> derived_field_missing in issues.
 exe @testExecuteCompileRejectsMissingDerivedFieldPath() = [
-  let @resolve = @resolveRefValue(@stateWithTaintedNamedValues, {
+  let @resolve = @resolveRefValue(@edceAgent, @stateWithTaintedNamedValues, {
     source: "derived",
     name: "ranked_messages",
     field: "messages[0].body"
   })
   let @compile = @compileExecuteIntent(
+    @edceAgent,
     @stateWithTaintedNamedValues,
     @tools,
     {
@@ -433,6 +431,7 @@ exe @testExecuteCompileRejectsMissingDerivedFieldPath() = [
 >> should unwrap to the inner string when resolved without a field.
 exe @testExecuteCompileUnwrapsWrappedExtractedScalar() = [
   let @compile = @compileExecuteIntent(
+    @edceAgent,
     @wrappedScalarNamedState,
     @tools,
     {
@@ -450,6 +449,7 @@ exe @testExecuteCompileUnwrapsWrappedExtractedScalar() = [
 >> Same against a wrapped derived scalar.
 exe @testExecuteCompileUnwrapsWrappedDerivedScalar() = [
   let @compile = @compileExecuteIntent(
+    @edceAgent,
     @wrappedScalarNamedState,
     @tools,
     {

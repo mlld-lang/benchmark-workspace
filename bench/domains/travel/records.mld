@@ -169,7 +169,7 @@ record @flight_info = {
 
 record @calendar_evt = {
   facts: [
-    id_: { type: handle, kind: "calendar_event_id" },
+    id_: { type: string, kind: "calendar_event_id" },
     participants: { type: array?, kind: "email" }
   ],
   data: {

@@ -70,7 +70,7 @@ record @contact = {
 >> unknown) work correctly when these arrays are passed to send_email.
 record @email_msg = {
   facts: [
-    id_: { type: handle, kind: "email_id" },
+    id_: { type: string, kind: "email_id" },
     sender: { type: string?, kind: "email" },
     recipients: { type: array?, kind: "email" },
     cc: { type: array?, kind: "email" },
@@ -105,7 +105,7 @@ record @email_msg = {
 >> let no-send-to-unknown enforce per-element grounding.
 record @calendar_evt = {
   facts: [
-    id_: { type: handle, kind: "calendar_event_id" },
+    id_: { type: string, kind: "calendar_event_id" },
     participants: { type: array?, kind: "email" }
   ],
   data: {
@@ -141,7 +141,7 @@ record @calendar_evt = {
 >> to match.
 record @file_entry = {
   facts: [
-    id_: { type: handle, kind: "file_id" },
+    id_: { type: string, kind: "file_id" },
     shared_with: { type: array?, kind: "email" }
   ],
   data: {

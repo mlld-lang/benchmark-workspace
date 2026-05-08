@@ -137,7 +137,7 @@ record @webpage_content = {
 >> (URL_PROMOTION.md "url_ref" + threat enumeration).
 record @url_ref = {
   facts: [
-    id_: handle,
+    id_: { type: string, kind: "url_ref_id" },
     source_msg: string?,
     ordinal_in_message: number?,
     position_in_message: number?,
@@ -166,7 +166,7 @@ record @url_ref = {
 >> handle. Content stays untrusted — fetched via a fact-bearing capability,
 >> but the page contents themselves remain attacker-influenced data.
 record @referenced_webpage_content = {
-  facts: [id_: handle, source_url_ref: string?, fetch_status: string?],
+  facts: [id_: { type: string, kind: "referenced_webpage_id" }, source_url_ref: string?, fetch_status: string?],
   data: {
     untrusted: [content: string?]
   },

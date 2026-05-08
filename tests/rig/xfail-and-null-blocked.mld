@@ -1,11 +1,6 @@
 >> tests/suites/rig/xfail-and-null-blocked.mld
 >>
->> Plain-assertion tests for three loosely related rig primitives:
->>
->>   - UH-1 (xfail, c-bd28): selection_ref lookup must tolerate Unicode-dash
->>     variants in handles when the stored bucket key uses ASCII hyphen.
->>     Captures the regression that bit TR-UT15 / TR-UT13. Marked xfail
->>     until c-bd28 ships dash canonicalization in the comparison path.
+>> Plain-assertion tests for two rig primitives:
 >>
 >>   - NF-1..5: @nullFields helper — given a value, return the schema
 >>     field keys whose values are null. Empty for non-records and for
@@ -17,36 +12,18 @@
 >>     (payload_only_source_in_control_arg, known_value_not_in_task_text)
 >>     are NOT surfaced.
 >>
->> Ported from rig/tests/index.mld lines 3719-3806 (and check rows at 4785-4795).
+>> UH-1 (Unicode-dash tolerance, c-bd28) was removed during Phase 2
+>> bucket→shelf conversion: the test fabricated a synthetic bucket handle
+>> with ASCII hyphen and looked it up with a Unicode-hyphen ref. With Path
+>> A wire format, handles are derived from .mx.key on the value, so the
+>> mismatch UH-1 needed isn't constructible the same way. Dash
+>> canonicalization remains tracked under c-bd28; reintroduce a shelf-shape
+>> regression test there if the fix lands.
 
 import { @assertOk, @assertEq } from "../assert.mld"
-import { @suite, @group, @xfailGroup, @runSuites } from "../runner.mld"
-import { @nullFields, @emptyState, @updateResolvedState } from "../../rig/runtime.mld"
-import { @lowerSelectionRef } from "../../rig/intent.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @nullFields } from "../../rig/runtime.mld"
 import { @blockedFieldHints } from "../../rig/workers/planner.mld"
-import { @records } from "../fixtures.mld"
-
->> --- UH-1 -----------------------------------------------------------------
-
->> UH-1: lowerSelectionRef must canonicalize dash variants when comparing
->> a worker-emitted handle (Unicode hyphen U+2011) against a stored bucket
->> handle (ASCII hyphen U+002D). Currently FAILS — c-bd28 tracks the fix.
-exe @testUh1SelectionRefToleratesUnicodeDashVariant() = [
-  let @uhState = @updateResolvedState(@emptyState(), "car_company_review", [
-    {
-      handle: "r_car_company_review_SunSet Rent-A-Car",
-      key: "SunSet Rent-A-Car",
-      field_values: { name: "SunSet Rent-A-Car", rating: 4.5 },
-      value: { name: "SunSet Rent-A-Car", rating: 4.5 }
-    }
-  ], @records.contact)
-  let @ref = {
-    source: "selection",
-    backing: { record: "car_company_review", handle: "r_car_company_review_SunSet Rent‑A‑Car" }
-  }
-  let @result = @lowerSelectionRef(@uhState, @ref)
-  => @assertEq(@result.ok, true)
-]
 
 >> --- NF-1..5 --------------------------------------------------------------
 
@@ -130,9 +107,6 @@ exe @testBfh5NoFieldMissingIssuesReturnsEmpty() = [
 >> --- Suite ----------------------------------------------------------------
 
 var @xfailAndNullBlockedSuite = @suite("xfail-and-null-blocked", [
-  @xfailGroup("unicode-dash-tolerance", [
-    @testUh1SelectionRefToleratesUnicodeDashVariant
-  ], { ticket: "c-bd28" }),
   @group("null-fields", [
     @testNf1AllDefinedReturnsEmpty,
     @testNf2SparseReturnsNullKeys,

@@ -68,7 +68,7 @@ Each ~30-90 min of mechanical conversion using the template below. Run `mlld tes
 | `named-state-and-collection.mld` | 515 | 7 | `@compileExecuteIntent` callsites + `@bucketItems` reads |
 | `state-projection-a.mld` | 321 | 44 | projection contracts |
 | `state-projection-b.mld` | 316 | 34 | writer + planner-cache; some tests obsolete (test deleted bucket-merge fns) — rewrite as per-key cache invalidation tests |
-| **`identity-contracts.mld`** | 438 | 43 | **Phase 0.A invariants**. **The 2 handle-drift xfails MUST flip to xpass** — remove `xfail: true` markers in same commit. **Highest symbolic priority** — convert this even if others are deferred. |
+| **`identity-contracts.mld`** | 438 | 43 | **Phase 0.A invariants**. **The 2 group-level `xfail: true` markers MUST be removed in same commit**: line 399 (group `cross-resolve-identity-handle-drift`, contains `@testCrossResolveIdentitySlackHandleDrift` line 228) and line 406 (group `selection-ref-survives-reresolve-handle-drift`, contains `@testSelectionRefSurvivesHandleDriftSlack` line 272). Both ticketed `m-shelf-wildcard`. **Also**: 3 `@testEntryShapeBucket*` tests (banking/workspace/travel/slack) test `_rig_bucket: "resolved_index_v1"` sentinel directly — obsolete, rewrite as shelf-shape entry contracts (not just xfail removal). **Highest symbolic priority** — convert this even if others are deferred. |
 | `worker-dispatch.mld` | 577 | 8 | largest rewrite |
 | `proof-chain-firewall.mld` | 536 | 13 | |
 | `url-refs-b.mld` | 369 | 18 | UR-13..24, large bucket fixtures; some tests obsolete — rewrite via shelf-write through `@dispatchResolve` rigTransform |
@@ -77,9 +77,40 @@ Recommended order: smallest first to build pattern fluency.
 
 ## The 5 scripted-LLM fixture regressions
 
-Located in `tests/lib/security-fixtures.mld`. ~5 helper exes that build state with `state.resolved.<rt> = [...]` need to populate a shelf instead. Each helper becomes an exe that takes a shelf slot ref or returns a populated agent.
+Located in `tests/lib/security-fixtures.mld`. ~5 helper exes that build state with `state.resolved.<rt> = [...]` need to populate a shelf via slot-ref-passing pattern (see template below).
 
 Affects: banking (3 fail), slack (1 fail + 1 xpass), travel (1 fail).
+
+**Mutation matrix baseline-fail attribution**: all three are fixture-conversion regressions, not independent bugs:
+
+- **banking** — `updateScheduledTxExtractedRecipientRejected`: expects `payload_only_source_in_control_arg`; gets `control_ref_backing_missing` because the resolved-bucket fixture path no longer populates the shelf. Fixture needs to call shelf-write before invoking `@compileExecuteIntent`.
+- **slack** — `selectionRefRealSlackMsgHandleRejected`: "fixture setup minted no slack_msg handles" because fixture builds `state.resolved.slack_msg = [...]` directly; with shelf, those entries never land.
+- **workspace** — `extractEmptyResponseRejected`: same family; fixture builds bucket-shape state for an extract path.
+
+All three clear once the fixture helpers populate via shelf. No independent investigation needed. Travel's mutation matrix passing despite scripted fail tells you mutation matrix uses a stricter fixture path that's already shelf-clean for travel.
+
+**Fixture helper signature** (Q4 from prior session, verified pattern):
+
+```mlld
+>> tests/lib/security-fixtures.mld
+exe role:worker @populateBankingScheduledTxs(slot, recipientName) = [
+  let @t1 = @mintScheduledTx("tx_001", @recipientName, "100") as record @scheduled_transaction
+  let @w1 = @shelf.write(@slot, @t1)
+  let @t2 = @mintScheduledTx("tx_002", "Bob", "50") as record @scheduled_transaction
+  let @w2 = @shelf.write(@slot, @t2)
+  => 2  >> count for verification
+]
+
+>> consuming test
+exe role:worker @testFoo() = [
+  shelf @ps from @shelfRecords(@bankingRecords) with { ... }
+  let @count = @populateBankingScheduledTxs(@ps.scheduled_transaction, "Alice")
+  let @agent = { records: @bankingRecords, plannerShelf: @ps }
+  ... assertions ...
+]
+```
+
+Helpers take slot refs as params; shelf decl stays in caller's body so the slot stays alive. Helpers never return an agent (shelf reference dies across exe boundaries).
 
 ---
 
@@ -100,13 +131,23 @@ exe role:worker @testFoo() = [
 
 - Shelf scope expires at exe-body exit. Each test exe declares its own shelf inline.
 - Records used in shelves need `write: { role:worker: { shelves: { upsert: true } } }`.
-- `@shelfRecords()` filters out input-only `*_inputs` shapes (those have `direction != "output"`).
+- `@shelfRecords()` filters out input-only `*_inputs` shapes (those have `direction != "output"`). Don't use `from @records` directly when `@records` includes `*_inputs` shapes — error is loud but easy to miss the helper exists.
 - Signatures changed across these exes — agent now threads as first arg: `@compileExecuteIntent`, `@compileToolArgs`, `@compileRecordArgs`, `@resolveRefValue`, `@lookupResolvedEntry`.
 - Test exes calling `@shelf.write` need `role:worker`.
 - `let @x = @shelf.write(...)` — bare statement is rejected.
 - `var` not allowed inside block bodies (e.g. `for parallel`). Use `let`.
 - Parameter named `shelf` shadows the `@shelf.*` global API. Use `ps` / `slotRef` / etc.
 - `state.resolved` is gone. Replace with `@agent.plannerShelf.<rt>` slot ref OR `@shelf.read(@agent.plannerShelf.<rt>)` array.
+
+**Gotchas observed during the 14 conversions in `c7ad4c8`** (apply prophylactically):
+
+- **Helpers can't return populated agents — shelf reference dies across exe boundaries.** Pattern that works: shelf decl in caller's body; helper takes slot ref(s) as params and writes to them; helper signature is `(slotRef, ...params) → recordsWritten` not `(...) → agent`. For multi-slot population, take multiple slot refs.
+- **`tests/fixtures.mld` records need `write:` blocks too.** Phase 1 added them to `bench/domains/*/records.mld` but not to test-only records. `@contact`, `@note_entry`, `@flat_display_contact`, `@plain_mode_message` already updated; `message_entry`, `number_row`, others may need same when their tests come up. Without the declaration, `@shelf.write` denies with `WRITE_DENIED_NO_DECLARATION`.
+- **Helper-record vars need explicit re-export from `tests/fixtures.mld`.** Updating the file's export list (around lines 476-507) when a converted test imports `@aliceContactRecord` etc. Already added: `@aliceContactRecord`, `@bobContactRecord`, `@noteEntryRecord`, `@numberOneRecord`, `@numberTwoRecord`, `@summaryRecord`.
+- **Records with `key: <typed-handle-field>` reject string fixture values at shelf-write time.** Pre-Stage-B, tests assigned `parse_id: "pv10_test"` to `state.resolved` directly with no validation. Shelf validates strictly. Either change `key:` to a string fact field (parse-value test did this — `key: iban_value`) or use a runtime-handle-minting helper that produces a real handle value.
+- **`projection_cache:` array must list every role the test asserts through.** If a test projects via `role:advice`, decl needs `projection_cache: ["role:planner", "role:worker", "role:advice"]`. Missing roles don't cache (correctness fine; versioning behavior may surprise in cache-correctness tests).
+- **`[rig:diag:resolveRef]` trace lines are noisier post-Stage-B.** Every `@resolveRefValue` goes through the agent-shelf path. Stub responses now produce extra trace lines that aren't failures — easy to mistake for errors when scanning output.
+- **`as record @def` inside a `for` doesn't parse as expression form.** `for @v in @items => @v as record @def` fails. Use let binding: `for @v in @items [ let @c = @v as record @def => @c ]`.
 
 ## State shape change
 

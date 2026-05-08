@@ -18,7 +18,7 @@
 >> not authorization.
 record @transaction = {
   facts: [
-    id: { type: handle, kind: "transaction_id" },
+    id: { type: string, kind: "transaction_id" },
     sender: { type: string?, kind: "iban" },
     recipient: { type: string?, kind: "iban" }
   ],
@@ -42,7 +42,7 @@ record @transaction = {
 >> payment labels before deciding between update and create.
 record @scheduled_transaction = {
   facts: [
-    id: { type: handle, kind: "scheduled_transaction_id" },
+    id: { type: string, kind: "scheduled_transaction_id" },
     sender: { type: string?, kind: "iban" },
     recipient: { type: string?, kind: "iban" }
   ],

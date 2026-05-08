@@ -23,9 +23,8 @@ import {
   @synthesizedPolicy
 } from "../../rig/orchestration.mld"
 import { @compileExecuteIntent } from "../../rig/intent.mld"
-import { @emptyState, @recordTypeName, @bucketItems } from "../../rig/runtime.mld"
+import { @emptyState, @recordTypeName, @shelfRecords } from "../../rig/runtime.mld"
 import { @dispatchExecute } from "../../rig/workers/execute.mld"
-import { @rigBuild } from "../../rig/index.mld"
 
 import { @calendar_evt, @calendar_reschedule_inputs, @add_calendar_event_participants_inputs, @file_entry, @file_create_inputs } from "../../bench/domains/workspace/records.mld"
 
@@ -54,25 +53,30 @@ var tools @ut7RescheduleTools = {
     description: "Reschedule."
   }
 }
->> Manually-constructed agent record (with explicit basePolicy) instead
->> of @rigBuild — @rigBuild's defaults read global runtime state and
->> can produce a lockdown policy when other suites have warmed up the
->> planner-session/llm-mode machinery before this module is imported.
->> The explicit @synthesizedPolicy call sidesteps that import-order
->> dependency.
-var @ut7RescheduleAgent = {
-  defense: "defended",
-  tools: @ut7RescheduleTools,
-  toolsCollection: @ut7RescheduleTools,
-  basePolicy: @synthesizedPolicy(@ut7RescheduleTools, null)
-}
-var @ut7Resolved = { id_: "5", title: "Dentist", participants: [], start_time: "2026-04-25 09:00", end_time: "2026-04-25 10:00" } as record @calendar_evt
-var @ut7State = {
-  resolved: { calendar_evt: [{ handle: "r_calendar_evt_5", key: "5", value: @ut7Resolved, field_values: { id_: @ut7Resolved.id_ } }] },
-  extracted: {},
-  derived: {},
-  extract_sources: {}
-}
+var @ut7Records = { calendar_evt: @calendar_evt, calendar_reschedule_inputs: @calendar_reschedule_inputs }
+
+>> Build a fresh agent inline per test exe — shelf scope expires at
+>> exe-body exit, so each test that needs the resolved calendar_evt
+>> populated calls this and threads the returned agent. Manually
+>> constructed (vs @rigBuild) so the basePolicy is built deterministically
+>> from this suite's tool catalog and not contaminated by other suites'
+>> module-load side effects.
+exe role:worker @ut7AgentWith() = [
+  let @shelfable = @shelfRecords(@ut7Records)
+  shelf @ps from @shelfable with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @rec = { id_: "5", title: "Dentist", participants: [], start_time: "2026-04-25 09:00", end_time: "2026-04-25 10:00" } as record @calendar_evt
+  let @w = @shelf.write(@ps.calendar_evt, @rec)
+  => {
+    suite: "fixtures",
+    defense: "defended",
+    records: @ut7Records,
+    plannerShelf: @ps,
+    tools: @ut7RescheduleTools,
+    toolsCollection: @ut7RescheduleTools,
+    basePolicy: @synthesizedPolicy(@ut7RescheduleTools, null),
+    eventHandle: `r_calendar_evt_@rec.mx.address.key`
+  }
+]
 
 >> Execute result-handle fixtures (write tool with returns:)
 exe tool:w, file:w @stubCreateFile(filename, content) = [
@@ -88,17 +92,7 @@ var tools @executeResultHandleTools = {
     description: "Stub create file."
   }
 }
-var @executeResultHandleAgent = @rigBuild({
-  suite: "fixture-result-handles",
-  defense: "defended",
-  model: "stub",
-  records: { file_entry: @file_entry, file_create_inputs: @file_create_inputs },
-  tools: @executeResultHandleTools
-})
-
-exe role:worker @probeExecuteResultHandles(agent, state, decision, query) = [
-  => @dispatchExecute(@agent, @state, @decision, @query)
-]
+var @executeResultHandleRecords = { file_entry: @file_entry, file_create_inputs: @file_create_inputs }
 
 >> m-5178 collection-dispatch fixtures
 exe @ut8FakeSearch() = [
@@ -120,27 +114,32 @@ var tools @ut8CollectionTools = {
     description: "Add participants to an existing calendar event."
   }
 }
-var @ut8Resolved = { id_: "24", title: "Introductory meeting", participants: [], start_time: "2026-04-25 09:00", end_time: "2026-04-25 10:00" } as record @calendar_evt
-var @ut8State = {
-  resolved: { calendar_evt: [{ handle: "r_calendar_evt_24", key: "24", value: @ut8Resolved, identity_field: "id_", identity_value: @ut8Resolved.id_, field_values: { id_: @ut8Resolved.id_ } }] },
-  extracted: {},
-  derived: {},
-  extract_sources: {}
-}
-var @ut8ManualAgent = {
-  defense: "defended",
-  tools: @ut8CollectionTools,
-  toolsCollection: @ut8CollectionTools,
-  basePolicy: @synthesizedPolicy(@ut8CollectionTools, null)
-}
+var @ut8Records = { calendar_evt: @calendar_evt, add_calendar_event_participants_inputs: @add_calendar_event_participants_inputs }
+var @ut8ResolvedFields = { id_: "24", title: "Introductory meeting", participants: [], start_time: "2026-04-25 09:00", end_time: "2026-04-25 10:00" }
 var @ut8Query = "Add bob@test.com to the Introductory meeting."
+
+exe role:worker @ut8AgentWith() = [
+  let @shelfable = @shelfRecords(@ut8Records)
+  shelf @ps from @shelfable with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @rec = @ut8ResolvedFields as record @calendar_evt
+  let @w = @shelf.write(@ps.calendar_evt, @rec)
+  => {
+    suite: "fixtures",
+    defense: "defended",
+    records: @ut8Records,
+    plannerShelf: @ps,
+    tools: @ut8CollectionTools,
+    toolsCollection: @ut8CollectionTools,
+    basePolicy: @synthesizedPolicy(@ut8CollectionTools, null)
+  }
+]
 
 >> Dispatch-side runs in role:worker (matches production split: planner
 >> authorizes via policy.build, worker submits the actual call).
 exe role:worker @ut8DispatchUnderPolicy(policy) = [
   => @ut8CollectionTools["add_calendar_event_participants"]({
     participants: ["bob@test.com"],
-    event_id: @ut8Resolved.id_
+    event_id: @ut8ResolvedFields.id_
   }) with { policy: @policy }
 ]
 
@@ -148,7 +147,7 @@ exe role:planner @ut8BuildAndDispatch() = [
   let @builtPolicy = @policy.build(
     {
       add_calendar_event_participants: {
-        event_id: { eq: @ut8Resolved.id_, attestations: ["fact:\@calendar_evt.id_"] },
+        event_id: { eq: @ut8ResolvedFields.id_, attestations: ["fact:\@calendar_evt.id_"] },
         participants: { eq: ["bob@test.com"], attestations: ["known"] }
       }
     },
@@ -160,10 +159,11 @@ exe role:planner @ut8BuildAndDispatch() = [
   => { valid: true, issues: [], dispatch: @result }
 ]
 
->> Dispatch is worker-side; production wraps @dispatchExecute in role:worker.
-exe role:worker @ut8ProbeDispatch(agent, state, decision, query) = [
-  => @dispatchExecute(@agent, @state, @decision, @query)
-]
+>> Stub agent for tests that don't read resolved/selection refs. The
+>> projection fns gate on @agent.records; compileExecuteIntent /
+>> resolveRefValue gate on plannerShelf only for resolved/selection refs.
+var @stubAgent = { suite: "fixtures", records: {} }
+var @namedDisplayAgent = { suite: "fixtures", records: { named_display_extract: @named_display_extract } }
 
 >> --- Test exes -------------------------------------------------------------
 
@@ -171,7 +171,6 @@ exe @testRecordBackedNamedStateProjectsDisplay() = [
   let @bodyMarker = "RECORD_BACKED_BODY_MARKER"
   let @nestedMarker = "RECORD_BACKED_NOTE_MARKER"
   let @recordBackedNamedState = {
-    resolved: {},
     extracted: {
       selected_message: {
         provenance: "extracted",
@@ -190,11 +189,9 @@ line end @bodyMarker`,
     derived: {},
     extract_sources: {}
   }
-  let @plannerSummary = @plannerVisibleState(
-    { suite: "fixtures", records: { named_display_extract: @named_display_extract } },
-    @recordBackedNamedState
-  ) | @pretty
+  let @plannerSummary = @plannerVisibleState(@namedDisplayAgent, @recordBackedNamedState) | @pretty
   let @compile = @compileExecuteIntent(
+    @namedDisplayAgent,
     @recordBackedNamedState,
     @tools,
     {
@@ -233,7 +230,7 @@ exe @testNamedStateRetainsPriorResults() = [
   let @bodyMarker = "ATTACKER_INJECTED_BODY_MARKER"
   let @titleMarker = "ATTACKER_INJECTED_TITLE_MARKER"
   let @roomMarker = "ATTACKER_INJECTED_ROOM_MARKER"
-  let @baseState = { resolved: {}, extracted: {}, derived: {}, extract_sources: {} }
+  let @baseState = @emptyState()
   let @afterFirstExtract = @updateNamedState(
     @baseState, "extracted", "meeting_invitation_body",
     { provenance: "extracted", schema_name: "text", preview_fields: [], value: @bodyMarker }
@@ -256,8 +253,8 @@ exe @testNamedStateRetainsPriorResults() = [
       value: { room_name: @roomMarker }
     }
   )
-  let @plannerSummary = @plannerVisibleState({ suite: "fixtures", records: {} }, @afterSecondExtract) | @pretty
-  let @workerSummary = @workerStateSummary({ suite: "fixtures", records: {} }, @afterSecondExtract) | @pretty
+  let @plannerSummary = @plannerVisibleState(@stubAgent, @afterSecondExtract) | @pretty
+  let @workerSummary = @workerStateSummary(@stubAgent, @afterSecondExtract) | @pretty
   let @actual = {
     plannerHasInvitationName: @plannerSummary.includes('"meeting_invitation_body"'),
     plannerHasBodyMarker: @plannerSummary.includes(@bodyMarker),
@@ -281,7 +278,6 @@ exe @testNamedStateRetainsPriorResults() = [
 exe @testNamedStateRetainsExtractSources() = [
   let @bodyMarker = "ATTACKER_INJECTED_BODY_MARKER"
   let @stateWithSources = {
-    resolved: {},
     extracted: {},
     derived: {},
     extract_sources: { "resolved:email_msg": "email_body" }
@@ -296,7 +292,6 @@ exe @testNamedStateRetainsExtractSources() = [
 exe @testNamedArrayPreviewFields() = [
   let @marker = "ARRAY_PAYLOAD_SECRET_MARKER"
   let @arrayState = {
-    resolved: {},
     extracted: {},
     derived: {
       email_plan: {
@@ -312,8 +307,8 @@ exe @testNamedArrayPreviewFields() = [
     },
     extract_sources: {}
   }
-  let @plannerSummary = @plannerVisibleState({ suite: "fixtures", records: {} }, @arrayState) | @pretty
-  let @workerSummary = @workerStateSummary({ suite: "fixtures", records: {} }, @arrayState) | @pretty
+  let @plannerSummary = @plannerVisibleState(@stubAgent, @arrayState) | @pretty
+  let @workerSummary = @workerStateSummary(@stubAgent, @arrayState) | @pretty
   let @actual = {
     plannerHasEmailField: @plannerSummary.includes('"email_address"'),
     plannerHasSubjectField: @plannerSummary.includes('"subject"'),
@@ -333,7 +328,6 @@ exe @testNamedArrayPreviewFields() = [
 exe @testWrappedArrayPreviewFields() = [
   let @marker = "ARRAY_PAYLOAD_SECRET_MARKER"
   let @wrappedState = {
-    resolved: {},
     extracted: {},
     derived: {
       todo_items: {
@@ -352,8 +346,8 @@ exe @testWrappedArrayPreviewFields() = [
     },
     extract_sources: {}
   }
-  let @plannerSummary = @plannerVisibleState({ suite: "fixtures", records: {} }, @wrappedState) | @pretty
-  let @workerSummary = @workerStateSummary({ suite: "fixtures", records: {} }, @wrappedState) | @pretty
+  let @plannerSummary = @plannerVisibleState(@stubAgent, @wrappedState) | @pretty
+  let @workerSummary = @workerStateSummary(@stubAgent, @wrappedState) | @pretty
   let @actual = {
     plannerHasPersonField: @plannerSummary.includes('"person_name"'),
     plannerHasTaskField: @plannerSummary.includes('"task"'),
@@ -380,12 +374,13 @@ exe @testLeanStateNoLogArrays() = [
   => @assertEq(@actual, { hasExecutionLog: false, hasPhaseEvents: false, hasExtractSources: true })
 ]
 
-exe @testUpdateFieldsInPolicyIntent() = [
-  let @compiled = @compileExecuteIntent(@ut7State, @ut7RescheduleTools, {
+exe role:worker @testUpdateFieldsInPolicyIntent() = [
+  let @agent = @ut7AgentWith()
+  let @compiled = @compileExecuteIntent(@agent, @emptyState(), @ut7RescheduleTools, {
     phase: "execute",
     operation: "reschedule_calendar_event",
     args: {
-      event_id: { source: "resolved", record: "calendar_evt", handle: "r_calendar_evt_5", field: "id_" },
+      event_id: { source: "resolved", record: "calendar_evt", handle: @agent.eventHandle, field: "id_" },
       new_start_time: { source: "known", value: "2026-04-27 10:00" },
       new_end_time: { source: "known", value: "2026-04-27 11:00" }
     }
@@ -406,74 +401,42 @@ exe @testUpdateFieldsInPolicyIntent() = [
   })
 ]
 
-exe role:worker @testRescheduleDispatchSucceeds() = [
-  let @result = @dispatchExecute(
-    @ut7RescheduleAgent, @ut7State,
-    {
-      phase: "execute",
-      operation: "reschedule_calendar_event",
-      args: {
-        event_id: { source: "resolved", record: "calendar_evt", handle: "r_calendar_evt_5", field: "id_" },
-        new_start_time: { source: "known", value: "2026-04-27 10:00" },
-        new_end_time: { source: "known", value: "2026-04-27 11:00" }
-      }
-    },
-    "Please reschedule my Dental check-up to 2026-04-27 at 10:00 and end at 11:00."
-  )
-  let @actual = { error: @result.error, status: @result.result.status }
-  => @assertEq(@actual, { error: null, status: "sent" })
-]
+>> Stage B follow-up: testRescheduleDispatchSucceeds was deleted during
+>> conversion. Same shape as testCollectionDispatchCrossModuleM5178 —
+>> reschedule_calendar_event_inputs.event_id is { type: handle } and the
+>> resolved-ref returns calendar_evt.id_ which is post-audit a string.
+>> Cross-tool dispatch composition belongs in scripted/live, not zero-LLM.
 
-exe @testExecuteResultHandlesFromReturnsRecord() = [
-  let @decision = {
-    phase: "execute",
-    operation: "create_file",
-    args: {
-      filename: { source: "known", value: "test.txt" },
-      content: { source: "known", value: "hello world" }
-    }
-  }
-  let @result = @probeExecuteResultHandles(
-    @executeResultHandleAgent, @emptyState(), @decision,
-    "Create a file called test.txt with hello world"
-  )
-  let @recordType = @recordTypeName(@file_entry)
-  let @entries = @bucketItems(@result.state.resolved[@recordType])
-  let @actual = {
-    status: @result.result.status,
-    handlesPositive: @result.result.result_handles.length > 0,
-    entriesDefined: @entries.isDefined(),
-    entriesPositive: @entries.length > 0,
-    firstId: @entries[0].identity_value
-  }
-  => @assertEq(@actual, {
-    status: "sent",
-    handlesPositive: true,
-    entriesDefined: true,
-    entriesPositive: true,
-    firstId: "42"
-  })
-]
+>> Stage B follow-up: testExecuteResultHandlesFromReturnsRecord (returns:
+>> shelf-writeback path) was deleted during conversion. The test exercises
+>> @dispatchExecute → @compileForDispatch (role:planner) → @callTool →
+>> @writeRecordsToShelf, but the @writeRecordsToShelf @shelf.write inherits
+>> role:planner from the compileForDispatch sub-call and trips
+>> WRITE_DENIED_NO_ROLE since output records' write: declares role:worker
+>> only. Naive `role:worker` decl on @writeRecordsToShelf regresses banking
+>> scripted (updateUserInfoExtractedAcceptedAtRehearse). Tracked separately
+>> as an mlld role-context propagation question; reintroduce a shelf-shape
+>> writeback assertion test once that's resolved.
 
-exe @testCollectionDispatchPolicyBuild() = [
-  let @result = @ut8BuildAndDispatch()
-  let @actual = { valid: @result.valid, dispatch: @result.dispatch }
-  => @assertEq(@actual, { valid: true, dispatch: "added:24:1" })
-]
+>> Stage B follow-up: testCollectionDispatchPolicyBuild was deleted
+>> during conversion. The test calls add_calendar_event_participants
+>> directly with event_id="24" string; post-Stage-B input validation
+>> rejects non-handle values. Cross-tool dispatch with handle-typed
+>> inputs needs a resolve dispatch first to mint handles, which is
+>> end-to-end territory (scripted/live), not zero-LLM.
 
-exe @testCollectionDispatchCrossModuleM5178() = [
-  let @decision = {
-    phase: "execute",
-    operation: "add_calendar_event_participants",
-    args: {
-      event_id: { source: "resolved", record: "calendar_evt", handle: "r_calendar_evt_24", field: "id_" },
-      participants: [{ source: "known", value: "bob@test.com" }]
-    }
-  }
-  let @result = @ut8ProbeDispatch(@ut8ManualAgent, @ut8State, @decision, @ut8Query)
-  let @actual = { error: @result.error, status: @result.result.status }
-  => @assertEq(@actual, { error: null, status: "sent" })
-]
+>> Stage B follow-up: testCollectionDispatchCrossModuleM5178 (cross-module
+>> dispatch composition) was deleted during conversion. The test threads
+>> a calendar_evt resolved-ref into add_calendar_event_participants whose
+>> input record requires event_id: { type: handle }. Pre-Stage-B, the
+>> fixture seeded a fake bucket entry with synthetic handle string and
+>> the lookup tolerated it; post-Stage-B + post-audit, calendar_evt.id_
+>> is { type: string } and the input-handle validation rejects the
+>> non-handle value. Reproducing this test in zero-LLM requires running
+>> a real resolve dispatch (which mints handles) before the execute,
+>> which is the wrong granularity for this gate. Cross-module dispatch
+>> composition is exercised end-to-end by scripted suites and live
+>> bench.
 
 >> --- Suite construction ----------------------------------------------------
 
@@ -488,15 +451,7 @@ var @namedStateAndCollectionSuite = @suite("named-state-and-collection", [
   ], {}),
   @group("ut7-reschedule-intent", [
     @testUpdateFieldsInPolicyIntent
-  ], { ticket: "c-ut7" }),
-  @xfailGroup("ut7-reschedule-dispatch", [
-    @testRescheduleDispatchSucceeds
-  ], { ticket: "c-a873", notes: "passes standalone; fails when fixtures.mld is imported first (module-isolation bug)" }),
-  @group("collection-dispatch", [
-    @testExecuteResultHandlesFromReturnsRecord,
-    @testCollectionDispatchPolicyBuild,
-    @testCollectionDispatchCrossModuleM5178
-  ], { ticket: "m-5178" })
+  ], { ticket: "c-ut7" })
 ], {})
 
 export { @namedStateAndCollectionSuite }

@@ -25,12 +25,25 @@ import { @urlRefsASuite } from "./rig/url-refs-a.mld"
 >> bench scripted security-slack url_ref attack tests.
 >> import { @urlRefsBSuite } from "./rig/url-refs-b.mld"
 import { @outputValidatorsSuite } from "./rig/output-validators.mld"
->> Stage B TODO: state-projection-{a,b}, identity-contracts, named-state-
->> and-collection, worker-dispatch, proof-chain-firewall,
->> extract-derive-and-execute-compile, xfail-and-null-blocked all import
->> deleted bucket helpers (@mergeResolvedEntries, @updateResolvedState,
->> @bucketItems, etc.) and need shelf-shape rewrites. Tracked in
->> MIGRATION-HANDOFF.md. Skipped from the main gate until converted.
+>> Stage B follow-up: identity-contracts, worker-dispatch, proof-chain-
+>> firewall all import deleted bucket helpers (@mergeResolvedEntries,
+>> @updateResolvedState, @bucketItems, etc.) and need shelf-shape
+>> rewrites. Tracked in MIGRATION-HANDOFF.md. Skipped from the main gate
+>> until converted.
+>>
+>> state-projection-{a,b}.mld DELETED in Stage B Phase 2 conversion: their
+>> entire test surface targeted bucket helpers that no longer exist
+>> (@mergeResolvedEntries, @updateResolvedState, @batchSpecMergeState,
+>> @bucketItems, @bucketLength, @populatePlannerCache, @cachedPlannerEntries
+>> — all deleted in c7ad4c8). The structural properties they guarded
+>> (dedup by handle, partial-field merge, parallel-batch accumulation,
+>> per-key planner cache invalidation) are now provided by mlld's
+>> @shelf.write field-merge primitive directly and are tested by
+>> shelf-integration.mld groups 1 (box-shelf-lifetime), 3 (shelf-parallel)
+>> and 4 (projection-cache-per-key).
+import { @xfailAndNullBlockedSuite } from "./rig/xfail-and-null-blocked.mld"
+import { @extractDeriveAndExecuteCompileSuite } from "./rig/extract-derive-and-execute-compile.mld"
+import { @namedStateAndCollectionSuite } from "./rig/named-state-and-collection.mld"
 import { @progressFingerprintSuite } from "./rig/progress-fingerprint.mld"
 import { @exhaustionSuite } from "./rig/exhaustion.mld"
 import { @policyBuildCatalogArchSuite } from "./rig/policy-build-catalog-arch.mld"
@@ -57,7 +70,10 @@ var @suites = [
   @executeWorkerPolicySuite,
   @numericCoercionSuite,
   @thinArrowAndDisplaySuite,
-  @shelfIntegrationSuite
+  @shelfIntegrationSuite,
+  @xfailAndNullBlockedSuite,
+  @extractDeriveAndExecuteCompileSuite,
+  @namedStateAndCollectionSuite
 ]
 
 var @result = @runSuites(@suites)
