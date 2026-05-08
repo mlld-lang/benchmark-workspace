@@ -8,17 +8,17 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ## Current state
 
-- **Phase**: Phase 1 fully landed and closed. Phase 2 readiness validator wired into main gate (commit `100a343`). Indirect-call shelf-scope mlld bug FIXED (`e35af264b`, in v2.0.6). Ready to start Phase 2 Stage B.
-- **Commits**: `01698fa` (0.A) → `f58ddad` (0.B) → `bbf2e7d` (Phase 1 main) → `694c9cd` (Phase 1 closeout) → `31992fc` (Phase 1 docs) → `50418dc` (output records write: shelves) → `100a343` (shelf-integration wired into tests/index.mld, gate 286/0/5) → `48088de` (handoff: Phase 2 architecture locked).
+- **Phase**: Phase 2 Stage B in flight. Scaffolding commit landed: Path A wire-format helpers + per-session shelf threaded onto agent. **Bucket remains read-side authority — no consumers migrated yet.** Next session does the consumer migration + bucket deletion.
+- **Commits**: `01698fa` (0.A) → `f58ddad` (0.B) → `bbf2e7d` (Phase 1 main) → `694c9cd` (Phase 1 closeout) → `31992fc` (Phase 1 docs) → `50418dc` (output records write: shelves) → `100a343` (shelf-integration wired into tests/index.mld) → `48088de` (architecture lock) → `9a102c2` (handoff refresh: Stage B unblocked) → `485bb88` (Stage B scaffolding: Path A helpers + @plannerShelf threading).
 - **Pinned binary**: REMOVED. System mlld v2.0.6 (current main with m-rec-perms-update + m-shelf-wildcard + indirect-shelf-scope fix) is the binary.
 
-## Gate state (post-shelf-integration wire-up)
+## Gate state (post-Stage-B scaffolding)
 
 | Gate | Result |
 |---|---|
 | Zero-LLM (`mlld tests/index.mld`) | 286 pass / 0 fail / 5 xfail |
 | Mutation matrix (`tests/run-mutation-coverage.py`) | all 11 mutations OK; Overall OK |
-| Scripted banking | 9 pass / 0 fail |
+| Scripted banking | 10 pass / 0 fail |
 | Scripted workspace | 14 pass / 0 fail |
 | Scripted slack | 14 pass / 0 fail / 1 xfail (c-fb58, pre-existing) |
 | Scripted travel | 10 pass / 0 fail |
@@ -40,7 +40,20 @@ Phase 1 deferred items (low-priority cleanups; gates already green without them)
 
 ## What's next
 
-**Phase 2 (bucket → shelf collapse)** is the next major work. Per migration-plan.md §2.
+**Phase 2 Stage B consumer migration** — the load-bearing commit. Scaffolding (Path A helpers + `@agent.plannerShelf` threading) already in place; next session migrates consumers and deletes bucket.
+
+### Stage B scaffolding landed (this session)
+
+- **Path A wire-format helpers** in `rig/runtime.mld`:
+  - `@stateHandleFromAddress(@recordValue)` — synthesizes `r_<recordType>_<.mx.key>` from a record-coerced value's `.mx.address`. Bridges shelf addresses to the planner LLM's existing wire format. Phase 3.B can flip the planner prompt to consume `.mx.address.string` directly.
+  - `@parseRigHandle(handle)` — JS reverse: parses `r_<rt>_<key>` back to `{ record, key, string }`. Used at intent-compile + selection-lower seams that need to map a planner-supplied handle to a shelf `.byAddress()` lookup.
+- **Shelf decl in `@runPlannerSession` body** (`rig/workers/planner.mld`):
+  ```mlld
+  shelf @plannerShelf from @rawAgent.records with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = { ...@rawAgent, plannerShelf: @plannerShelf }
+  ```
+  The augmented `@agent` flows through `seed: { agent }` to the planner LLM session and reaches every worker dispatcher via `@toolCtx.agent.plannerShelf`. Object-spread preserves shelf identity (validated by `tests/rig/shelf-integration.mld testShelfSurvivesObjectSpread`).
+- **Bucket remains read-side authority.** No consumers read or write the shelf yet. The threading is passive scaffolding.
 
 ### Pre-flight done in this session
 
@@ -297,4 +310,5 @@ Phase 2 is too tightly coupled to ship in one commit safely. Suggested split:
 | 2026-05-07 | pre-phase-2-recon (this session) | Reconnaissance only, no code change. Probed: shelf field-merge by `.mx.key` works; `.byKey()` lookup is unimplemented in v2.0.6 (filter-on-read instead). Surveyed all consumers; produced per-file change map and Stage A/B/C breakdown in handoff. Surfaced two unresolved questions: wire-format handle (path A vs B) and shelf scope (module vs box vs exe). | (no commit) |
 | 2026-05-08 | phase-2-architecture-lock (this session) | mlld v2.0.6 ships m-box-shelf + m-stable-address + m-shelf-parallel + `.byKey()` / `.byAddress()`. All three probed working against rig-shaped records (probes at `/tmp/probe-new-*.mld`). Architecture LOCKED: shelf in `@runPlannerSession` body, threaded via `@agent.plannerShelf`, Path A wire-format. Per-function migration table written. Stage B execution deferred to next session. | (handoff-only) |
 | 2026-05-08 | phase-2-readiness-validator | Wrote `tests/rig/shelf-integration.mld` — 16 tests across 4 groups validating all three mlld features against rig-shaped records. Wired into `tests/index.mld`; gate 286/0/5. The wire-up is itself the verification that mlld `e35af264b "Fix indirect imported executable shelf scope"` covers the runner-indirect path Stage B will dispatch through. Stage B unblocked. | `100a343` |
-| 2026-05-08 | phase-2-handoff-refresh (this session) | Verified mlld indirect-shelf-scope fix (`e35af264b`) is in v2.0.6 binary; gate at 286/0/5; refreshed handoff to reflect Stage B unblocked. No code change. | (handoff-only) |
+| 2026-05-08 | phase-2-handoff-refresh | Verified mlld indirect-shelf-scope fix (`e35af264b`) is in v2.0.6 binary; gate at 286/0/5; refreshed handoff to reflect Stage B unblocked. No code change. | `9a102c2` |
+| 2026-05-08 | stage-b-scaffolding (this session) | Path A wire-format helpers (`@stateHandleFromAddress`, `@parseRigHandle`) added to `rig/runtime.mld`; shelf decl + agent threading in `@runPlannerSession`. No consumer migration; bucket stays read-side authority. All gates green: 286/0/5, all 4 scripted suites, mutation matrix Overall OK. Threading pattern validated end-to-end through scripted-stub planner runs. | `485bb88` |
