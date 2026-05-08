@@ -1,6 +1,6 @@
 ---
 id: c-2ec6
-status: open
+status: closed
 deps: []
 links: [c-c2e7, c-9c6f]
 created: 2026-05-06T00:16:39Z
@@ -8,7 +8,7 @@ type: chore
 priority: 3
 assignee: Adam
 tags: [tests, docs]
-updated: 2026-05-06T00:16:42Z
+updated: 2026-05-07T00:46:33Z
 ---
 # Document seeding/state-factory pattern in tests/README.md
 
@@ -24,3 +24,7 @@ Acceptance:
 - README has a Seeding state subsection that covers all three points above
 - A new author writing 'attack against a real minted handle' has enough to start without reading the existing security suites
 
+
+## Notes
+
+**2026-05-07T00:46:33Z** Done in commit 686b0fe. New 'Seeding state for security tests' subsection in TESTS.md covers @stateWithExtracted/Derived/Resolved/ResolvedAndExtracted factories, the two-call setup pattern for real-handle attacks, and when to use each. testSelectionRefRealSlackMsgHandleRejected called out as the canonical worked example.

@@ -172,13 +172,14 @@ exe @plannerNoProgressThreshold() = [
 
 >> c-3438 (B): compute a stable signature of the meaningful state.
 >> Two signatures are equal iff the planner has not added/changed any
->> resolved handle, gained any new field on an existing handle, named
->> a new extract/derive, or flipped one from empty to non-empty.
+>> resolved record, named a new extract/derive, or flipped one from
+>> empty to non-empty.
 >>
->> Captures (per GPT review):
->> - new resolved handle (changes per-bucket key list)
->> - existing record gained a previously-null field (changes per-handle
->>   field count)
+>> Captures:
+>> - new resolved entry (changes per-bucket handle list)
+>> - existing record content drift (per-entry .mx.hash changes when any
+>>   tracked field changes — supersedes the old field-count proxy and
+>>   catches same-field value changes the count missed)
 >> - resolved bucket version change (e.g. from a write that touched it)
 >> - new extract/derive name with non-empty payload
 >> - existing extract/derive name flipped empty→non-empty
@@ -186,69 +187,91 @@ exe @plannerNoProgressThreshold() = [
 >> Does NOT capture (intentional — those are not progress):
 >> - repeated zero-result resolves to the same tool+args
 >> - repeated validation errors
-exe @stateProgressFingerprint(state) = node {
-  if (!state || typeof state !== 'object') return '';
-  const parts = [];
+>>
+>> Format: `R:<type>:v<n>:<handle>^<hash>|<handle>^<hash>;E:<name>:<0|1>;D:<name>:<0|1>`
+>> The `^` separates handle from hash so the string is unambiguous in
+>> mlld templates (`@` would interpolate). Comparison is string equality;
+>> consumers do not parse the format.
+exe @sortedObjectKeys(obj) = [
+  let @raw = @obj.mx.keys ?? []
+  => @raw.sort()
+]
 
-  // Resolved buckets — sorted by record type for stable signature.
-  const resolved = state.resolved || {};
-  for (const recordType of Object.keys(resolved).sort()) {
-    const bucket = resolved[recordType];
-    if (!bucket) continue;
-    const version = (typeof bucket.version === 'number') ? bucket.version : 0;
-    const byHandle = bucket.by_handle || {};
-    const handleSigs = [];
-    for (const handle of Object.keys(byHandle).sort()) {
-      const entry = byHandle[handle];
-      // Field count = # of non-null/non-empty fields visible on the entry.
-      // Walk multiple shapes since records can be wrapped or raw depending
-      // on whether they came through coerce-record vs direct mutation.
-      const data = (entry && entry.value && entry.value.data)
-        ? entry.value.data
-        : (entry && entry.value && typeof entry.value === 'object')
-          ? entry.value
-          : (entry && entry.field_values) || {};
-      let fieldCount = 0;
-      for (const k of Object.keys(data || {})) {
-        const v = data[k];
-        if (v === null || v === undefined || v === '') continue;
-        if (Array.isArray(v) && v.length === 0) continue;
-        if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) continue;
-        fieldCount++;
-      }
-      handleSigs.push(handle + '@' + fieldCount);
-    }
-    parts.push('R:' + recordType + ':v' + version + ':' + handleSigs.join('|'));
-  }
+exe @isPayloadNonEmpty(rec) = [
+  if !@rec.isDefined() [ => false ]
+  let @refs = @rec.selection_refs ?? []
+  if @refs.length > 0 [ => true ]
+  let @fields = @rec.preview_fields ?? []
+  if @fields.length == 0 [ => false ]
+  if @fields.length == 1 && @fields[0] == "items" [ => false ]
+  => true
+]
 
-  // Extract/derive — name + non-empty status.
-  // A derive/extract is "non-empty progress" iff it has selection_refs OR
-  // its preview_fields contain content beyond just ["items"]. The bare
-  // ["items"] preview signals an empty payload (UT10 case): worker returned
-  // {items: []} which serializes as preview=["items"] selection=[]. Treating
-  // that as progress would suppress the no-progress warning when the planner
-  // re-derives an empty result repeatedly.
-  const isPayloadNonEmpty = (rec) => {
-    if (!rec) return false;
-    const refs = Array.isArray(rec.selection_refs) ? rec.selection_refs : [];
-    if (refs.length > 0) return true;
-    const fields = Array.isArray(rec.preview_fields) ? rec.preview_fields : [];
-    if (fields.length === 0) return false;
-    if (fields.length === 1 && fields[0] === 'items') return false;
-    return true;
+>> Fallback content signature for entries that did NOT come through record
+>> coercion (so .mx.hash is null). Mirrors the .mx.hash contract — same
+>> canonical content yields the same string, content drift yields a new
+>> string. Used by @stateProgressFingerprint so the no-progress detector
+>> still works on synthetic test fixtures and any direct-mutation entries.
+exe @entryFallbackHash(value) = node {
+  if (value === null || value === undefined) return '0';
+  const crypto = require('crypto');
+  const seen = new WeakSet();
+  const encode = (entry) => {
+    if (entry === null || entry === undefined) return 'n';
+    if (typeof entry === 'string') return 's:' + JSON.stringify(entry);
+    if (typeof entry === 'number') return 'd:' + entry;
+    if (typeof entry === 'boolean') return 'b:' + (entry ? '1' : '0');
+    if (Array.isArray(entry)) return 'a:[' + entry.map(encode).join(',') + ']';
+    if (typeof entry !== 'object') return 'x';
+    if (seen.has(entry)) return 'c';
+    seen.add(entry);
+    const keys = Object.keys(entry).sort();
+    return 'o:{' + keys.map(k => JSON.stringify(k) + ':' + encode(entry[k])).join(',') + '}';
   };
-
-  const extracted = state.extracted || {};
-  for (const name of Object.keys(extracted).sort()) {
-    parts.push('E:' + name + ':' + (isPayloadNonEmpty(extracted[name]) ? '1' : '0'));
-  }
-  const derived = state.derived || {};
-  for (const name of Object.keys(derived).sort()) {
-    parts.push('D:' + name + ':' + (isPayloadNonEmpty(derived[name]) ? '1' : '0'));
-  }
-
-  return parts.join(';');
+  return crypto.createHash('sha256').update(encode(value)).digest('hex').slice(0, 8);
 }
+
+exe @entryHash(entry) = [
+  let @value = @entry.value ?? @entry
+  let @mxHash = @value.mx.hash
+  => when [
+    @mxHash.isDefined() && @mxHash != null => @mxHash
+    * => @entryFallbackHash(@value)
+  ]
+]
+
+exe @stateProgressFingerprint(state) = [
+  if !@state.isDefined() || @typeof(@state) != "object" [ => "" ]
+  let @resolved = @state.resolved ?? {}
+  let @resolvedTypes = @sortedObjectKeys(@resolved)
+  let @resolvedParts = for @recordType in @resolvedTypes [
+    let @bucket = @resolved[@recordType] ?? {}
+    let @version = @bucket.version ?? 0
+    let @byHandle = @bucket.by_handle ?? {}
+    let @handles = @sortedObjectKeys(@byHandle)
+    let @handleSigs = for @h in @handles [
+      let @entry = @byHandle[@h]
+      let @hash = @entryHash(@entry)
+      => `@h^@hash`
+    ]
+    let @joined = @handleSigs.join("|")
+    => `R:@recordType:v@version:@joined`
+  ]
+  let @extracted = @state.extracted ?? {}
+  let @extractedParts = for @name in @sortedObjectKeys(@extracted) [
+    let @nonEmpty = @isPayloadNonEmpty(@extracted[@name])
+    let @flag = when [ @nonEmpty => "1" * => "0" ]
+    => `E:@name:@flag`
+  ]
+  let @derived = @state.derived ?? {}
+  let @derivedParts = for @name in @sortedObjectKeys(@derived) [
+    let @nonEmpty = @isPayloadNonEmpty(@derived[@name])
+    let @flag = when [ @nonEmpty => "1" * => "0" ]
+    => `D:@name:@flag`
+  ]
+  let @combined = @resolvedParts.concat(@extractedParts).concat(@derivedParts)
+  => @combined.join(";")
+]
 
 
 exe @plannerResolvedRecords(records, state, recordType, handles) = [
@@ -1221,13 +1244,13 @@ var tools @plannerTools = {
 }
 
 exe @plannerLlmCallStub(prompt, config, agent, query) =
-  @llmCall("stub", @prompt, @config) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
+  @llmCall("stub", @prompt, @config) with { read: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
 
 exe @plannerLlmCallOpencode(prompt, config, agent, query) =
-  @opencode(@prompt, @config) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
+  @opencode(@prompt, @config) with { read: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
 
 exe @plannerLlmCallClaude(prompt, config, agent, query) =
-  @claude(@prompt, @config) with { display: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
+  @claude(@prompt, @config) with { read: "role:planner", session: @planner, seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() } }
 
 >> Compose retry: when the planner session ends without a terminal tool,
 >> resume with terminal-only tools. Blocked on m-0f63 (opencode provider

