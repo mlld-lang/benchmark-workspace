@@ -148,11 +148,26 @@ exe role:planner @compileForDispatch(agent, state, decision, query) = [
   }
 ]
 
->> @dispatchExecute is the worker-side dispatcher: it calls
->> @compileForDispatch (role:planner — authorize) to get a built policy,
->> then submits the tool under role:worker. Pre-cutover this was a
->> single role:planner exe; post-m-rec-perms-update the submit must
->> happen under role:worker (input records' write.role:worker.tools.submit).
+>> @dispatchExecute is exe role:worker because the actual MCP submit is
+>> the worker's action. The inner @compileForDispatch is exe role:planner
+>> — it activates planner role briefly for authorize. Don't change either
+>> role annotation without understanding both gates that protect a write:
+>>
+>>   1. @policy.build verdict (planner-side, certifies intent fits the
+>>      tool's input record schema + record permission for tools.authorize)
+>>   2. write.role:worker.tools.submit (worker-side, certifies the active
+>>      role at submit time has explicit submit permission)
+>>
+>> Both fire independently — defense in depth. Reverting either role
+>> annotation regresses the migration in subtle ways: role:planner outer
+>> would break submit (active role mismatch), role:worker on the inner
+>> compile would skip planner-side intent verification.
+>>
+>> The worker-outer/planner-inner pattern is general for authorize-then-
+>> submit flows. Tests that exercise this path inherit the same role
+>> structure; see migration-plan.md §1 for context. `with { read: "role:X" }`
+>> at call-site only affects projection — does NOT activate the write
+>> context (verified via probe; error: WRITE_DENIED_NO_ROLE persists).
 exe role:worker @dispatchExecute(agent, state, decision, query) = [
   let @prep = @compileForDispatch(@agent, @state, @decision, @query)
   if !@prep.ok [

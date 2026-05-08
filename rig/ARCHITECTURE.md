@@ -167,6 +167,39 @@ Rig composes the mlld security primitives into six layers. Each catches what the
 
 An attack that gets past one layer hits the next.
 
+## Role context across authorize-then-submit flows
+
+Post-m-rec-perms-update, rig's write-tool dispatch path activates two role contexts in sequence:
+
+- **Outer exe is `role:worker`** — the role that performs the side effect. The MCP submit happens here, and the input record's `write.role:worker.tools.submit` permission is checked against the active role at that moment.
+- **Inner exe is `role:planner`** — invoked from inside the worker exe to do the authorization compile (`@policy.build`). The planner role is activated briefly; `@policy.build` checks the input record's `write.role:planner.tools.authorize` permission AND the value-attestation/source-class proofs for the planner-supplied args.
+
+The canonical example is `rig/workers/execute.mld`:
+
+```mlld
+exe role:planner @compileForDispatch(...) = [
+  let @built = @policy.build(...)   >> planner-side authorize check
+  => { ok: ..., built: @built, ... }
+]
+
+exe role:worker @dispatchExecute(...) = [
+  let @prep = @compileForDispatch(...)   >> role transitions to planner
+  ...                                     >> role transitions back to worker
+  let @raw = @callToolWithPolicy(...)    >> submit happens under role:worker
+  ...
+]
+```
+
+**Both gates fire — defense in depth.** `@policy.build` certifies that the planner's intent matches the tool's input record schema and the planner has authorize permission. The runtime's `write.role:worker.tools.submit` check certifies that the active role at submit time has explicit submit permission. An attacker that bypasses one still hits the other.
+
+**Don't simplify either role annotation.** Reverting `@dispatchExecute` to `role:planner` regresses the migration: post-cutover, `policy.build` would still pass (planner has authorize) but the submit would fail (`WRITE_DENIED_NO_ROLE: activeRole=role:planner, declaredRoles=role:worker`). Reverting `@compileForDispatch` to `role:worker` would skip the planner-side intent verification; the submit would succeed but planner-side proofs wouldn't be re-validated.
+
+**Call-site role assertion does NOT activate the write context.** `@call(...) with { read: "role:worker" }` only affects projection, not write authorization. The active role for write enforcement is the EXE's declared role, period. (Verified by parse probe; error: `WRITE_DENIED_NO_ROLE` persists with `activeRole: role:planner` despite `with { read: "role:worker" }`.)
+
+**Test scaffold inherits the production role structure.** Tests of write-dispatch paths need `exe role:worker @testFoo()` outer; tests of `@policy.build` invariants need `exe role:planner @testBar()` outer. Tests that mix both (e.g., build-and-dispatch in one logical flow) split into two role-scoped exes. The pattern catches in test runs as `WRITE_DENIED_NO_ACTIVE_ROLE` (module scope) or `WRITE_DENIED_NO_ROLE: activeRole=role:planner` (planner-outer test invoking a worker-side dispatch).
+
+This pattern generalizes for any future authorize-then-submit flow rig adds. As of Phase 1, only `@dispatchExecute` follows it; resolve and extract phases call read-side tools whose input records don't trigger write enforcement.
+
 ## The AgentDojo MCP Bridge
 
 Rig ships a Python MCP server (`rig/agentdojo-mcp/`) that exposes AgentDojo's per-task fixtures as MCP tools and persists post-run env state. It lives under rig because it's part of the rig/host integration contract, not a per-suite concern. Suites use it via `import tools from mcp "tools"` in their `tools.mld`. The server handles state coercion, fixture loading, and env-state writeback for AgentDojo's evaluator. A legacy `clean/src/mcp_server.py` exists as a fallback path; new work targets the rig-hosted server.
