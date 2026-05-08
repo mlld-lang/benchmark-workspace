@@ -41,13 +41,21 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 3. **3 ARCHITECTURE.md doc updates** (rig, bench, labels-policies-guards) — pure docs. Should describe: shelf as resolved-record store; type:string,kind vs type:handle principle (per audit); planner-shelf threading; removed bucket primitives; m-shelf-wildcard primitive integration.
 
 **Architectural / requires design (not mechanical):**
-4. **Task #17: shelf-aware seed for scripted-LLM tests (mock-llm.mld).** Unblocks: mutation matrix re-baseline (3 fixture-fails clear), scripted-suite seed-resolved tests (security-banking B3 etc.), most of `worker-dispatch.mld` conversion. Options: (A) add shelf decl + seed-write to `@runWithState`; (B) refactor scripted to go through `@runPlannerSession`; (C) add pre-session shelf-preload hook on `@planner` session schema.
+4. **Task #17: shelf-aware seed for scripted-LLM tests (mock-llm.mld).** Unblocks: mutation matrix re-baseline (3 fixture-fails clear), scripted-suite seed-resolved tests (security-banking B3 etc.), most of `worker-dispatch.mld` conversion. **The fix: `@runWithState` (and `@runScriptedQuery`) in `tests/lib/mock-llm.mld` declare a shelf inline mirroring `@runPlannerSession`'s body, thread it onto the agent before the `@mockOpencode` call.** ~20 lines per consumer, mirroring planner.mld:1256.
+
+   Why inline (not a helper): shelves have scope-local lifetime per m-box-shelf — `shelf @x from ...` must live at the call-site scope. Can't factor into a helper that returns the agent (shelf dies on return). Same pattern as the c7ad4c8 batch, applied to the scripted-LLM scaffold instead of zero-LLM tests.
+
+   **DO NOT** add a hook to the `@planner` session schema. Sessions and shelves are different primitives that happen to share lifetime in the planner case. Coupling them on the session primitive makes future non-shelf agents harder. Push back if this comes up.
+
+   **Scope discipline**: ~20 lines mirroring `@runPlannerSession`. If it grows beyond that — refactoring the session primitive, adding cross-cutting test infra, etc. — stop and reconsider scope.
 
 **Likely-blocked-on-#17:**
 5. **`worker-dispatch.mld`** — 577 lines, mostly `exe llm` scripted-LLM. Post-dispatch `state.resolved.*` reads everywhere. Some non-scripted tests may be convertible standalone; needs assessment.
 6. **`security-fixtures.mld` shelf-resolved fixtures + 4 scripted suite consumers** — direct dependency on #17.
 
-**Suggested order**: #1, #2, #3 (parallel-ish, no inter-dependencies) → #4 (the architectural unblock) → #5, #6 (mechanical once #4 lands) → mutation matrix re-baseline → close.
+**Suggested order**: #1, #2, #3 (parallel-ish — test conversions don't change rig, so docs are stable). DO NOT parallelize #3 against #4 — task #4 lands scaffolding details the docs need to describe accurately. After #1-3: #4 (the architectural unblock) → #5, #6 (mechanical once #4 lands) → mutation matrix re-baseline → close.
+
+**Effort sanity check**: ~2-3 sessions. Session A: #1 + #2 + #3 in parallel. Session B: #4 (scoped tight per task #17 description). Session C: #5 + #6 + mutation re-baseline + closeout.
 
 ---
 
