@@ -36,6 +36,7 @@ import { @proofChainFirewallSuite } from "./rig/proof-chain-firewall.mld"
 import { @extractDeriveAndExecuteCompileSuite } from "./rig/extract-derive-and-execute-compile.mld"
 import { @namedStateAndCollectionSuite } from "./rig/named-state-and-collection.mld"
 import { @identityContractsSuite } from "./rig/identity-contracts.mld"
+import { @shelfIntegrationSuite } from "./rig/shelf-integration.mld"
 
 var @suites = [
   @templateSuite,
@@ -62,7 +63,8 @@ var @suites = [
   @proofChainFirewallSuite,
   @extractDeriveAndExecuteCompileSuite,
   @namedStateAndCollectionSuite,
-  @identityContractsSuite
+  @identityContractsSuite,
+  @shelfIntegrationSuite
 ]
 
 var @result = @runSuites(@suites)

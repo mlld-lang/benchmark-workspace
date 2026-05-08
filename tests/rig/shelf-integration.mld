@@ -1,0 +1,340 @@
+>> tests/rig/shelf-integration.mld
+>>
+>> Phase 2 integration gate. Validates that mlld's three Phase-2-enabling
+>> features (m-box-shelf, m-stable-address, m-shelf-parallel) compose
+>> correctly against rig-shaped records.
+>>
+>> Test groups:
+>>   1. box-shelf-lifetime — shelf declared in exe body has per-call
+>>      lifetime; from @records binds at call time; spread preserves
+>>      shelf identity through @agent.plannerShelf threading
+>>   2. stable-address — .mx.address.{record,key,string}, @parse.address
+>>      round-trip, .byKey() / .byAddress() lookups, Path A wire-format
+>>      synthesis (r_<recordType>_<key>)
+>>   3. shelf-parallel — parallel branches see pre-parallel snapshot;
+>>      writes commit on parallel exit; same-key field-merge across
+>>      branches matches m-shelf-wildcard's field-merge default
+>>   4. projection-cache-per-key — explicit Phase 2 gate per
+>>      migration-plan.md §2: write A, write B, mutate A, B's content
+>>      remains unchanged (per-key invalidation, not per-slot)
+>>
+>> These tests are the integration checkpoint between Phase 1 (records-
+>> as-policy landed) and Stage B (consumer migration to shelf API).
+>> They use rig-shaped records (key field + facts + read projection +
+>> write declaration) to mirror the actual migration target.
+
+import { @assertOk, @assertEq } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+
+>> --- Fixture record analogous to bench domain records ---------------------
+
+record @hotel = {
+  key: name,
+  facts: [name: string],
+  data: [address: string?, price_range: string?, score: number?],
+  read: [name, { value: "address" }, { value: "price_range" }, { value: "score" }],
+  write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }
+}
+
+var @testRecords = { hotel: @hotel }
+
+exe @mintHotelAddr(name, addr) = js {
+  return { name, address: addr };
+} => hotel
+
+exe @mintHotelPrice(name, p) = js {
+  return { name, price_range: p };
+} => hotel
+
+exe @mintHotelScore(name, s) = js {
+  return { name, score: s };
+} => hotel
+
+>> Path A wire-format synthesizer (the helper Stage B will add to runtime.mld).
+>> Address is content-derived hash; the rig handle wraps it with the record-type
+>> prefix so the planner LLM sees the format it currently produces.
+exe @rigHandleFromRecord(val) = [
+  let @addr = @val.mx.address
+  if !@addr.isDefined() || @addr == null [ => null ]
+  => `r_@addr.record\_@addr.key`
+]
+
+exe @parseRigHandle(handle) = js {
+  if (typeof handle !== "string") return null;
+  if (!handle.startsWith("r_")) return null;
+  const rest = handle.slice(2);
+  const keyIdx = rest.lastIndexOf("_");
+  if (keyIdx < 0) return null;
+  const record = rest.slice(0, keyIdx);
+  const key = rest.slice(keyIdx + 1);
+  return { record, key, string: `${record}:${key}` };
+}
+
+>> --- Group 1: box-shelf-lifetime ------------------------------------------
+
+exe role:worker @testShelfDeclaredInExeBody() = [
+  shelf @s from @testRecords with { versioned: true }
+  let @w = @shelf.write(@s.hotel, @mintHotelAddr("Hotel A", "addr-A"))
+  let @entries = @shelf.read(@s.hotel)
+  => @assertEq(
+    { count: @entries.length, version: @s.hotel.mx.version, name: @entries[0].name },
+    { count: 1, version: 1, name: "Hotel A" }
+  )
+]
+
+exe role:worker @runOneShelfCall(label) = [
+  shelf @s from @testRecords with { versioned: true }
+  let @w1 = @shelf.write(@s.hotel, @mintHotelAddr("Hotel A", "addr-A"))
+  let @w2 = @shelf.write(@s.hotel, @mintHotelAddr("Hotel B", "addr-B"))
+  => { label: @label, count: @shelf.read(@s.hotel).length, version: @s.hotel.mx.version }
+]
+
+exe role:worker @testPerCallLifetime() = [
+  let @r1 = @runOneShelfCall("c1")
+  let @r2 = @runOneShelfCall("c2")
+  let @r3 = @runOneShelfCall("c3")
+  >> Each call should see only its own writes — fresh shelf per invocation.
+  => @assertEq(
+    { c1: @r1.count, c1v: @r1.version, c2: @r2.count, c2v: @r2.version, c3: @r3.count, c3v: @r3.version },
+    { c1: 2, c1v: 2, c2: 2, c2v: 2, c3: 2, c3v: 2 }
+  )
+]
+
+exe role:worker @innerWriter(slotRef, val) = [
+  let @w = @shelf.write(@slotRef, @val)
+  => @shelf.read(@slotRef).length
+]
+
+exe role:worker @testSlotRefThreading() = [
+  shelf @s from @testRecords with { versioned: true }
+  let @r1 = @innerWriter(@s.hotel, @mintHotelAddr("Hotel X", "addr-X"))
+  let @r2 = @innerWriter(@s.hotel, @mintHotelAddr("Hotel Y", "addr-Y"))
+  => @assertEq({ first: @r1, second: @r2 }, { first: 1, second: 2 })
+]
+
+>> Spread-preserves-shelf-identity check (Stage B threading depends on this)
+exe role:worker @testShelfSurvivesObjectSpread() = [
+  shelf @s from @testRecords with { versioned: true }
+  let @rawAgent = { name: "test" }
+  let @agent = { ...@rawAgent, plannerShelf: @s }
+  let @w = @shelf.write(@agent.plannerShelf.hotel, @mintHotelAddr("Hotel Z", "addr-Z"))
+  let @entries = @shelf.read(@agent.plannerShelf.hotel)
+  => @assertEq(
+    { count: @entries.length, name: @entries[0].name, agentName: @agent.name },
+    { count: 1, name: "Hotel Z", agentName: "test" }
+  )
+]
+
+>> --- Group 2: stable-address ----------------------------------------------
+
+exe @testAddressOnCoercedRecord() = [
+  let @h = @mintHotelAddr("Hotel X", "addr-X")
+  let @addr = @h.mx.address
+  >> .mx.key is content-derived hash, NOT the literal name field.
+  => @assertEq(
+    { record: @addr.record, hasKey: @addr.key.length > 0, string: @addr.string },
+    { record: "hotel", hasKey: true, string: `hotel:@addr.key` }
+  )
+]
+
+exe @testAddressIsContentStable() = [
+  let @h1 = @mintHotelAddr("Hotel X", "addr-X")
+  let @h2 = @mintHotelAddr("Hotel X", "different-address")
+  >> Same key field value (name="Hotel X") → same .mx.key, regardless of
+  >> other field values. This is the property cross-call addressing depends on.
+  => @assertOk(@h1.mx.address.key == @h2.mx.address.key,
+    `h1.key=@h1.mx.address.key h2.key=@h2.mx.address.key`)
+]
+
+exe @testParseAddressRoundTrip() = [
+  let @h = @mintHotelAddr("Hotel X", "addr-X")
+  let @s = @h.mx.address.string
+  let @parsed = @s | @parse.address
+  => @assertEq(
+    { record: @parsed.record, key: @parsed.key, string: @parsed.string },
+    { record: "hotel", key: @h.mx.address.key, string: @s }
+  )
+]
+
+exe @testParseAddressMalformedReturnsNull() = [
+  let @bad1 = "not-an-address" | @parse.address
+  let @bad2 = "" | @parse.address
+  let @bad3 = "no:colon:format-but-extra" | @parse.address
+  >> @bad3 may parse depending on mlld's grammar; the strict invariant is
+  >> that completely malformed input yields null. Test only the unambiguous
+  >> non-address cases.
+  => @assertOk(@bad1 == null && @bad2 == null,
+    `bad1=@bad1 bad2=@bad2`)
+]
+
+exe role:worker @testByKeyLookup() = [
+  shelf @s from @testRecords with { versioned: true }
+  let @w1 = @shelf.write(@s.hotel, @mintHotelAddr("Hotel A", "addr-A"))
+  let @w2 = @shelf.write(@s.hotel, @mintHotelAddr("Hotel B", "addr-B"))
+  let @addrA = @mintHotelAddr("Hotel A", "_").mx.address.key
+  let @byKey = @s.hotel.byKey(@addrA)
+  => @assertEq(
+    { name: @byKey.name, address: @byKey.address },
+    { name: "Hotel A", address: "addr-A" }
+  )
+]
+
+exe role:worker @testByAddressLookup() = [
+  shelf @s from @testRecords with { versioned: true }
+  let @w1 = @shelf.write(@s.hotel, @mintHotelAddr("Hotel A", "addr-A"))
+  let @w2 = @shelf.write(@s.hotel, @mintHotelAddr("Hotel B", "addr-B"))
+  let @addrB = @mintHotelAddr("Hotel B", "_").mx.address
+  let @byAddr = @s.hotel.byAddress(@addrB)
+  => @assertEq(@byAddr.name, "Hotel B")
+]
+
+exe role:worker @testByKeyMissReturnsNull() = [
+  shelf @s from @testRecords with { versioned: true }
+  let @w = @shelf.write(@s.hotel, @mintHotelAddr("Hotel A", "addr-A"))
+  let @miss = @s.hotel.byKey("nonexistent-key")
+  >> Missing keys must yield null/undefined so callers can null-check.
+  => @assertOk(!@miss.isDefined() || @miss == null, `miss=@miss`)
+]
+
+exe @testRigHandlePathA() = [
+  >> Path A wire-format: r_<recordType>_<.mx.key>
+  let @h = @mintHotelAddr("Hotel X", "addr-X")
+  let @rigHandle = @rigHandleFromRecord(@h)
+  let @parsed = @parseRigHandle(@rigHandle)
+  => @assertEq(
+    { record: @parsed.record, key: @parsed.key, matchesAddr: @parsed.key == @h.mx.address.key },
+    { record: "hotel", key: @h.mx.address.key, matchesAddr: true }
+  )
+]
+
+>> --- Group 3: shelf-parallel ----------------------------------------------
+
+exe role:worker @testParallelBranchesSeeSnapshot() = [
+  shelf @s from @testRecords with { versioned: true }
+  let @seed = @shelf.write(@s.hotel, @mintHotelAddr("Hotel Seed", "seed"))
+  let @specs = ["a", "b", "c"]
+  let @results = for parallel(3) @label in @specs [
+    >> Each branch reads pre-parallel state — should see only @seed.
+    let @snap = @shelf.read(@s.hotel)
+    let @w = @shelf.write(@s.hotel, @mintHotelAddr(`Hotel @label`, `addr-@label`))
+    => { label: @label, snapshotLen: @snap.length }
+  ]
+  let @snapshotLens = for @r in @results => @r.snapshotLen
+  >> All branches should report snapshotLen=1 (just the seed).
+  => @assertEq(@snapshotLens, [1, 1, 1])
+]
+
+exe role:worker @testParallelWritesCommitAfterBlock() = [
+  shelf @s from @testRecords with { versioned: true }
+  let @seed = @shelf.write(@s.hotel, @mintHotelAddr("Hotel Seed", "seed"))
+  let @specs = ["a", "b", "c"]
+  let @r = for parallel(3) @label in @specs [
+    let @w = @shelf.write(@s.hotel, @mintHotelAddr(`Hotel @label`, `addr-@label`))
+    => @label
+  ]
+  let @final = @shelf.read(@s.hotel)
+  >> Post-parallel: seed + 3 distinct hotels = 4.
+  => @assertEq(@final.length, 4)
+]
+
+exe role:worker @testParallelSameKeyFieldMerge() = [
+  shelf @s from @testRecords with { versioned: true }
+  >> Three branches each write a partial record for "Hotel A" with different fields.
+  >> Field-merge by .mx.key should collapse to one entry with all fields populated.
+  let @specs = [
+    { kind: "addr", val: @mintHotelAddr("Hotel A", "merged-addr") },
+    { kind: "price", val: @mintHotelPrice("Hotel A", "100") },
+    { kind: "score", val: @mintHotelScore("Hotel A", 4.5) }
+  ]
+  let @r = for parallel(3) @spec in @specs [
+    let @w = @shelf.write(@s.hotel, @spec.val)
+    => @spec.kind
+  ]
+  let @final = @shelf.read(@s.hotel)
+  let @h = @final[0]
+  >> Single entry with all three fields filled (subject to branch ordering on
+  >> conflict — but here each branch writes a different field, no conflict).
+  => @assertEq(
+    { count: @final.length, name: @h.name, addr: @h.address, price: @h.price_range, score: @h.score },
+    { count: 1, name: "Hotel A", addr: "merged-addr", price: "100", score: 4.5 }
+  )
+]
+
+>> --- Group 4: projection-cache-per-key ------------------------------------
+
+>> Per-key cache invalidation: write A, write B, mutate A, B's stored content
+>> remains correct. The migration-plan §2 gate requires this be observable.
+>> Direct cache observability isn't exposed; verify via content correctness
+>> (correct merged output proves correct invalidation).
+
+exe role:worker @testPerKeyInvalidationOnMutation() = [
+  shelf @s from @testRecords with { versioned: true, projection_cache: ["role:planner"] }
+  let @w1 = @shelf.write(@s.hotel, @mintHotelAddr("Hotel A", "addr-A"))
+  let @w2 = @shelf.write(@s.hotel, @mintHotelAddr("Hotel B", "addr-B"))
+  let @r1 = @shelf.read(@s.hotel)
+  let @initialB = for @e in @r1 when @e.name == "Hotel B" => @e
+  >> Mutate ONLY Hotel A.
+  let @w3 = @shelf.write(@s.hotel, @mintHotelPrice("Hotel A", "100"))
+  let @r2 = @shelf.read(@s.hotel)
+  let @afterB = for @e in @r2 when @e.name == "Hotel B" => @e
+  let @afterA = for @e in @r2 when @e.name == "Hotel A" => @e
+  >> Hotel B should be byte-identical (cache slot still hit OR re-read same data).
+  >> Hotel A should reflect merged content (price field now present).
+  => @assertEq(
+    {
+      bUnchanged: @afterB[0].address == @initialB[0].address && @afterB[0].name == @initialB[0].name,
+      aMergedAddr: @afterA[0].address,
+      aMergedPrice: @afterA[0].price_range,
+      slotVersion: @s.hotel.mx.version
+    },
+    {
+      bUnchanged: true,
+      aMergedAddr: "addr-A",
+      aMergedPrice: "100",
+      slotVersion: 3
+    }
+  )
+]
+
+>> --- Suite construction ---------------------------------------------------
+
+var @shelfIntegrationSuite = @suite("shelf-integration", [
+  @group("box-shelf-lifetime", [
+    @testShelfDeclaredInExeBody,
+    @testPerCallLifetime,
+    @testSlotRefThreading,
+    @testShelfSurvivesObjectSpread
+  ], { ticket: "m-box-shelf", notes: "Validates shelf-in-exe-body lifetime and slot-ref threading patterns Stage B depends on." }),
+  @group("stable-address", [
+    @testAddressOnCoercedRecord,
+    @testAddressIsContentStable,
+    @testParseAddressRoundTrip,
+    @testParseAddressMalformedReturnsNull,
+    @testByKeyLookup,
+    @testByAddressLookup,
+    @testByKeyMissReturnsNull,
+    @testRigHandlePathA
+  ], { ticket: "m-stable-address", notes: "Validates .mx.address contract, parse round-trip, byKey/byAddress lookups, and Path A wire-format synthesis." }),
+  @group("shelf-parallel", [
+    @testParallelBranchesSeeSnapshot,
+    @testParallelWritesCommitAfterBlock,
+    @testParallelSameKeyFieldMerge
+  ], { ticket: "m-shelf-parallel", notes: "Validates parallel buffer-and-merge: branches see pre-parallel snapshot; writes commit on exit; same-key field-merges across branches." }),
+  @group("projection-cache-per-key", [
+    @testPerKeyInvalidationOnMutation
+  ], { ticket: "migration-phase-2", notes: "Phase 2 gate per migration-plan.md §2: per-key cache invalidation (not per-slot). Content-based check; mlld doesn't expose cache observability directly." })
+], {})
+
+export { @shelfIntegrationSuite }
+
+>> --- Standalone runner ----------------------------------------------------
+
+var @result = @runSuites([@shelfIntegrationSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]
