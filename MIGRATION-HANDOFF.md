@@ -9,7 +9,7 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 ## Current state
 
 - **Phase**: Phase 2 Stage B partial — runtime/intent/workers fully migrated to shelf API; 8/23 zero-LLM test files converted; 7 test files with bucket-shape fixtures temporarily skipped from main gate; 5 scripted-LLM tests fail (fixture-conversion regressions). Bucket helpers (`@mergeResolvedEntries`, `@updateResolvedState*`, `@bucketItems`, etc.) deleted from runtime + intent; `state.resolved` field removed from state shape.
-- **Commits**: `01698fa` (0.A) → `f58ddad` (0.B) → `bbf2e7d` (Phase 1 main) → `694c9cd` (Phase 1 closeout) → `31992fc` (Phase 1 docs) → `50418dc` (output records write: shelves) → `100a343` (shelf-integration wired) → `48088de` (architecture lock) → `9a102c2` (handoff refresh) → `485bb88` (Stage B scaffolding) → `<TBD>` (Stage B core: bucket→shelf collapse, partial test conversion).
+- **Commits**: `01698fa` (0.A) → `f58ddad` (0.B) → `bbf2e7d` (Phase 1 main) → `694c9cd` (Phase 1 closeout) → `31992fc` (Phase 1 docs) → `50418dc` (output records write: shelves) → `100a343` (shelf-integration wired) → `48088de` (architecture lock) → `9a102c2` (handoff refresh) → `485bb88` (Stage B scaffolding) → `c7ad4c8` (Stage B core: bucket→shelf collapse, partial test conversion).
 - **Pinned binary**: REMOVED. System mlld v2.0.6 (current main with m-rec-perms-update + m-shelf-wildcard + indirect-shelf-scope fix) is the binary.
 
 ## Gate state (post-Stage-B core)
