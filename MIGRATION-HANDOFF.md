@@ -1,46 +1,93 @@
 # Migration Handoff
 
-Session-passing breadcrumb for the records-as-policy + bucket→shelf migration. Read at session start. Update at session end. **Keep terse — under 30 lines.**
+Session-passing breadcrumb for the records-as-policy + bucket→shelf migration. Read at session start. Update at session end.
 
 For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill.
 
 ---
 
+## What's next: finish Phase 2 verification surface
+
+**Stage B core landed at `c7ad4c8`.** Runtime, intent, and all 5 workers are on shelf API. ~430 lines of bucket helpers deleted. `state.resolved` field is gone. `@agent.plannerShelf` is the resolved-record store. Path A wire format preserved.
+
+**What's incomplete**: the verification surface. 9 zero-LLM test files were skipped to land Stage B core; 5 scripted-LLM tests regressed on fixture conversion. Until those are converted/fixed, the gate is GREEN-FOR-SUBSET (169/0/1), not GREEN-FOR-CORPUS (was 286/0/5 pre-Stage-B).
+
+**This session's job**: mechanical conversion of 9 test files + 5 fixture helpers using the proven template below, then mutation-matrix re-baseline, then ARCHITECTURE.md updates.
+
+**Goal**:
+- Zero-LLM gate at 286+/0/5, full corpus, zero skipped suites
+- Mutation matrix Overall: OK
+- All 4 scripted suites green
+- `rig/ARCHITECTURE.md` + `bench/ARCHITECTURE.md` + `labels-policies-guards.md` updated (Phase 2 doc discipline)
+- **The 2 handle-drift xfails in `identity-contracts.mld` flipped to xpass** — Phase 2's central observable milestone.
+
+---
+
+## Anti-pattern to avoid
+
+This migration went through **4 sessions of accumulating preparation before Stage B core landed**. Each session found a plausible reason to defer execution (probe, scaffold, validate, prepare). The 5th session executed.
+
+If you find yourself wanting to:
+- Add more scaffolding ("dual-write," "transitional helpers")
+- Probe / investigate / validate before converting
+- Split conversion into more sub-stages
+- Defer parts to next session
+
+— recognize that as the deferral pattern this migration spent 4 sessions on. **The pattern is mechanical conversion. The template is below. The files are listed. Apply.**
+
+---
+
 ## Current state
 
-- **Phase**: Phase 2 Stage B partial — runtime/intent/workers fully migrated to shelf API; 8/23 zero-LLM test files converted; 7 test files with bucket-shape fixtures temporarily skipped from main gate; 5 scripted-LLM tests fail (fixture-conversion regressions). Bucket helpers (`@mergeResolvedEntries`, `@updateResolvedState*`, `@bucketItems`, etc.) deleted from runtime + intent; `state.resolved` field removed from state shape.
-- **Commits**: `01698fa` (0.A) → `f58ddad` (0.B) → `bbf2e7d` (Phase 1 main) → `694c9cd` (Phase 1 closeout) → `31992fc` (Phase 1 docs) → `50418dc` (output records write: shelves) → `100a343` (shelf-integration wired) → `48088de` (architecture lock) → `9a102c2` (handoff refresh) → `485bb88` (Stage B scaffolding) → `c7ad4c8` (Stage B core: bucket→shelf collapse, partial test conversion).
-- **Pinned binary**: REMOVED. System mlld v2.0.6 (current main with m-rec-perms-update + m-shelf-wildcard + indirect-shelf-scope fix) is the binary.
+- **Phase**: Phase 2 Stage B core landed. Verification surface incomplete.
+- **Latest commits**: `485bb88` (scaffolding) → `c7ad4c8` (Stage B core).
+- **Pinned binary**: REMOVED. System mlld v2.0.6.
+- **Architecture**: shelf decl in `@runPlannerSession` body; `@agent.plannerShelf` threaded; Path A wire format via `@stateHandleFromAddress` / `@parseRigHandle`.
 
-## Gate state (post-Stage-B core)
+## Gate state
 
 | Gate | Result |
 |---|---|
-| Zero-LLM (`mlld tests/index.mld`, reduced suite list) | 169 pass / 0 fail / 1 xfail |
-| Mutation matrix (`tests/run-mutation-coverage.py`) | BASELINE FAILS — banking 1, slack 1, workspace 1; travel OK |
-| Scripted banking | 7 pass / 3 fail (fixture-conversion regressions) |
-| Scripted slack | 13 pass / 1 fail / 1 xpass |
-| Scripted workspace | 10 pass / 0 fail |
-| Scripted travel | 13 pass / 1 fail |
+| Zero-LLM (REDUCED — 9 suites skipped) | 169/0/1 |
+| Mutation matrix | BASELINE FAILS (banking 1, slack 1, workspace 1; travel OK) |
+| Scripted banking | 7/3 |
+| Scripted slack | 13/1 + 1 xpass |
+| Scripted workspace | 10/0 |
+| Scripted travel | 13/1 |
 
-**7 zero-LLM suites skipped** from `tests/index.mld` pending shelf-shape conversion: `state-projection-a`, `state-projection-b`, `identity-contracts`, `named-state-and-collection`, `worker-dispatch`, `proof-chain-firewall`, `extract-derive-and-execute-compile`, `xfail-and-null-blocked`, `url-refs-b`. All import deleted bucket helpers; their tests target legacy bucket primitives directly. Per-test rewrite needed (~30-90 min per file).
+---
 
-**5 scripted-LLM regressions** likely tied to `tests/lib/security-fixtures.mld` still building bucket-shape state; helper functions need rewrite to populate shelves via the live runtime path.
+## The 9 skipped zero-LLM files
 
-## Tickets
+Each ~30-90 min of mechanical conversion using the template below. Run `mlld tests/index.mld --no-checkpoint` after each file to verify localized green.
 
-- **m-ed0b** (mlld): policy.build returns valid:false in role-scoped exe wrappers post-m-rec-perms-update. Resolved by Phase 1 (clean-side write: declarations on input records). **Can close.**
-- **m-68b6** (mlld): MCP camelCase method names not resolving. **CLOSED — not an mlld bug.** Default scripted-index.mld imports workspace tools causing listFiles to dispatch against a non-workspace MCP server. Per-suite indexes already exist; mutation runner uses them correctly. The actual clean-side error after fixing index mismatch was a `.write` interpolation bug in a description string, fixed in Phase 1 closeout.
+| File | LoC | Bucket refs | Notes |
+|---|---:|---:|---|
+| `xfail-and-null-blocked.mld` | 165 | 2 | smallest — start here |
+| `extract-derive-and-execute-compile.mld` | 506 | 1 | trivial |
+| `named-state-and-collection.mld` | 515 | 7 | `@compileExecuteIntent` callsites + `@bucketItems` reads |
+| `state-projection-a.mld` | 321 | 44 | projection contracts |
+| `state-projection-b.mld` | 316 | 34 | writer + planner-cache; some tests obsolete (test deleted bucket-merge fns) — rewrite as per-key cache invalidation tests |
+| **`identity-contracts.mld`** | 438 | 43 | **Phase 0.A invariants**. **The 2 handle-drift xfails MUST flip to xpass** — remove `xfail: true` markers in same commit. **Highest symbolic priority** — convert this even if others are deferred. |
+| `worker-dispatch.mld` | 577 | 8 | largest rewrite |
+| `proof-chain-firewall.mld` | 536 | 13 | |
+| `url-refs-b.mld` | 369 | 18 | UR-13..24, large bucket fixtures; some tests obsolete — rewrite via shelf-write through `@dispatchResolve` rigTransform |
 
-## What's still pending
+Recommended order: smallest first to build pattern fluency.
 
-### Stage B test conversion (next session priority)
+## The 5 scripted-LLM fixture regressions
 
-Each of the 9 skipped/failing test files needs fixture conversion to shelf shape. The pattern is well-validated by the 8 tests already converted (advice-gate, parse-value, progress-fingerprint, numeric-coercion, thin-arrow-and-display, plus 3 trivial ones):
+Located in `tests/lib/security-fixtures.mld`. ~5 helper exes that build state with `state.resolved.<rt> = [...]` need to populate a shelf instead. Each helper becomes an exe that takes a shelf slot ref or returns a populated agent.
+
+Affects: banking (3 fail), slack (1 fail + 1 xpass), travel (1 fail).
+
+---
+
+## Conversion template
 
 ```mlld
 exe role:worker @testFoo() = [
-  let @shelfable = @shelfRecords(@records)  >> filters out direction!="output"
+  let @shelfable = @shelfRecords(@records)  >> filters direction!="output"
   shelf @ps from @shelfable with { versioned: true, projection_cache: ["role:planner"] }
   let @v = { ... } as record @recordDef
   let @w = @shelf.write(@ps.<rt>, @v)
@@ -49,302 +96,69 @@ exe role:worker @testFoo() = [
 ]
 ```
 
-**Caveats**:
-- Shelf scope expires at exe-body exit — can't memoize an agent across module-scope vars; each test exe declares its own shelf inline.
-- Records used in shelves need `write: { role:worker: { shelves: { upsert: true, ... } } }`.
-- Records with `direction != "output"` (input-only `*_inputs` shapes) must be filtered out via `@shelfRecords()` before shelf decl.
-- `@compileExecuteIntent`, `@compileToolArgs`, `@compileRecordArgs`, `@resolveRefValue`, `@lookupResolvedEntry` — all signatures changed: agent threads through as the new first arg.
-- Test exe bodies that call `@shelf.write` need `role:worker`.
+**Required gotchas** (each one bites at least once during conversion):
 
-Files to convert (rough size; each is 30-90 min):
-- `tests/rig/state-projection-a.mld` (321 LoC, 44 bucket refs) — projection contracts
-- `tests/rig/state-projection-b.mld` (316 LoC, 34 refs) — writer + planner-cache integration; many tests target deleted primitives directly. Several tests are obsolete (test bucket merge fns); rewrite as per-key cache invalidation tests.
-- `tests/rig/identity-contracts.mld` (438 LoC, 43 refs) — Phase 0.A invariants. The 5 xfail handle-drift cases should flip to xpass at conversion. Per-test rewrite around shelf shape.
-- `tests/rig/named-state-and-collection.mld` (515 LoC, 7 refs) — `@compileExecuteIntent` callsites + `@bucketItems` reads.
-- `tests/rig/worker-dispatch.mld` (577 LoC, 8 refs) — uses `@bucketItems`, `@bucketLength`, `@resolveRefValue` with state-only signatures; likely largest rewrite.
-- `tests/rig/proof-chain-firewall.mld` (536 LoC, 13 refs)
-- `tests/rig/extract-derive-and-execute-compile.mld` (506 LoC, 1 ref)
-- `tests/rig/xfail-and-null-blocked.mld` (165 LoC, 2 refs)
-- `tests/rig/url-refs-b.mld` (369 LoC, 18 refs) — UR-13..24, large bucket fixtures. Some tests are obsolete (test deleted machinery); rewrite via shelf-write through `@dispatchResolve` rigTransform path.
+- Shelf scope expires at exe-body exit. Each test exe declares its own shelf inline.
+- Records used in shelves need `write: { role:worker: { shelves: { upsert: true } } }`.
+- `@shelfRecords()` filters out input-only `*_inputs` shapes (those have `direction != "output"`).
+- Signatures changed across these exes — agent now threads as first arg: `@compileExecuteIntent`, `@compileToolArgs`, `@compileRecordArgs`, `@resolveRefValue`, `@lookupResolvedEntry`.
+- Test exes calling `@shelf.write` need `role:worker`.
+- `let @x = @shelf.write(...)` — bare statement is rejected.
+- `var` not allowed inside block bodies (e.g. `for parallel`). Use `let`.
+- Parameter named `shelf` shadows the `@shelf.*` global API. Use `ps` / `slotRef` / etc.
+- `state.resolved` is gone. Replace with `@agent.plannerShelf.<rt>` slot ref OR `@shelf.read(@agent.plannerShelf.<rt>)` array.
 
-**Scripted-LLM fixture rewrite** (`tests/lib/security-fixtures.mld`): Helper exes that build state with `state.resolved.<rt> = [...]` need to populate a shelf instead. Each helper becomes an exe that takes a shelf slot ref or returns a populated agent. ~5 helpers; affects 5 failing tests across banking/slack/travel.
-
-**Phase 1 deferred items** (low-priority cleanups):
-
-- `rig/orchestration.mld` policy synth read from `write:` declarations (currently still works via `can_authorize` fallback).
-- Phase 1.A.2 comment-header refresh (separate follow-up commit per the comment refresh discipline).
-
-## What's next
-
-**Phase 2 Stage B consumer migration** — the load-bearing commit. Scaffolding (Path A helpers + `@agent.plannerShelf` threading) already in place; next session migrates consumers and deletes bucket.
-
-### Stage B scaffolding landed (this session)
-
-- **Path A wire-format helpers** in `rig/runtime.mld`:
-  - `@stateHandleFromAddress(@recordValue)` — synthesizes `r_<recordType>_<.mx.key>` from a record-coerced value's `.mx.address`. Bridges shelf addresses to the planner LLM's existing wire format. Phase 3.B can flip the planner prompt to consume `.mx.address.string` directly.
-  - `@parseRigHandle(handle)` — JS reverse: parses `r_<rt>_<key>` back to `{ record, key, string }`. Used at intent-compile + selection-lower seams that need to map a planner-supplied handle to a shelf `.byAddress()` lookup.
-- **Shelf decl in `@runPlannerSession` body** (`rig/workers/planner.mld`):
-  ```mlld
-  shelf @plannerShelf from @rawAgent.records with { versioned: true, projection_cache: ["role:planner"] }
-  let @agent = { ...@rawAgent, plannerShelf: @plannerShelf }
-  ```
-  The augmented `@agent` flows through `seed: { agent }` to the planner LLM session and reaches every worker dispatcher via `@toolCtx.agent.plannerShelf`. Object-spread preserves shelf identity (validated by `tests/rig/shelf-integration.mld testShelfSurvivesObjectSpread`).
-- **Bucket remains read-side authority.** No consumers read or write the shelf yet. The threading is passive scaffolding.
-
-### Pre-flight done in this session
-
-- ✅ Output records have `write: { role:worker: { shelves: true } }` declared (commit `50418dc`). Without this, every Phase-2 resolve hits `WRITE_DENIED_NO_DECLARATION` at first MCP boundary crossing.
-- ✅ Bounded-shelf semantics verified: `shelf @x from @recordSet` rejects out-of-scope record-type writes with `MlldSecurity: Record '@X' is not in scope for wildcard shelf '@Y'` (probe at `/tmp/probe-shelf-bounded.mld`).
-- ✅ Field-level merge + versioning verified: same-`.mx.key` writes collapse to one entry; `slot.mx.version` and `shelf.mx.version` increment per content-changing write (probe at `/tmp/probe-shelf-merge.mld`).
-
-### State.resolved consumer inventory (migration map)
-
-**Delete per spec** (defined in `rig/runtime.mld`):
-
-| Function | Replacement |
-|---|---|
-| `@mergeResolvedEntries`, `@mergeEntryFields`, `@mergeFieldDict` | shelf upsert with field-level merge default |
-| `@stateHandle`, `@stateKeyValue`, `@recordIdentityField` | `.mx.key` (m-d49a) |
-| `@isResolvedIndexBucket`, `@bucketObject`, `@bucketItems`, `@bucketLength`, `@indexedBucketEntries` | shelf read API: `@s.<slot>`, `@s.<slot>.length`, `@s.<slot>.byKey(<k>)` |
-| `@cachedPlannerEntries`, `@populatePlannerCache` | shelf `projection_cache:` attribute |
-| `@normalizeResolvedValues` | shelf does this on write |
-| `@updateResolvedState`, `@updateResolvedStateWithDef`, `@batchSpecMergeState` | `@shelf.write(@s.<slot>, @entry)` |
-| `@projectResolvedSummary`, `@projectResolvedEntry`, `@projectResolvedFieldValue` | `@fyi.shelf.<alias>` (bridge projection) |
-
-**Source files materially changed**:
-- `rig/runtime.mld` — bulk of deletions
-- `rig/intent.mld` — bucket walks → shelf reads (lines 239, 263, 950-996)
-- `rig/transforms/url_refs.mld` — `@updateResolvedStateWithDef` callsite + url_refs typed-shelf migration
-- `rig/workers/{resolve,derive,execute,planner}.mld` — entry envelope construction → shelf upsert
-- `rig/session.mld` — shelf decl gains `from @agent.records with { versioned: true, projection_cache: ["role:planner"] }`
-
-**Test files needing update**:
-- `tests/rig/identity-contracts.mld` (Phase 0.A invariants — 5 xfails) — convert fixtures to shelf writes; the 2 handle-drift xfails should flip to xpass at conversion. Remove `xfail: true` flags in the same commit per migration-plan.md §2 gate.
-- `tests/rig/state-projection-a.mld`, `state-projection-b.mld`, `named-state-and-collection.mld`, `thin-arrow-and-display.mld`, `worker-dispatch.mld`, `xfail-and-null-blocked.mld` — direct bucket access → shelf API.
-
-### Phase 2 commit shape
-
-Per the plan: 2.A core + 2.B consumer migration + 2.C identity-heuristic cleanup. Can split or land as one. The synthetic per-key cache invalidation test (Phase 2 gate item) should be added to `tests/rig/identity-contracts.mld` at conversion time — easiest seam since the file already covers shelf-shape entry contracts.
-
-Architecture doc updates land alongside the Phase 2 commit per discipline:
-- `rig/ARCHITECTURE.md` phase model + state model rewritten (bucket → shelf historical)
-- `bench/ARCHITECTURE.md` "What stays / What goes" updated
-- `labels-policies-guards.md` bucket framing → shelf framing
-
-## Notes for next agent
-
-### Phase 2 readiness (added pre-phase-2-recon, 2026-05-07)
-
-This session probed shelf semantics and surveyed all consumers but did NOT
-touch code. Findings the next agent should not re-derive:
-
-**Shelf primitive verified working in v2.0.6**:
-- `shelf @x from @records with { versioned: true, projection_cache: ["role:planner"] }` — declares wildcard shelf bounded to record set.
-- Field-level merge by `.mx.key` collapses same-key writes (verified: two writes for `name="Hotel X"` with different fields merged to one entry with merged fields).
-- `@plannerState.hotel.mx.version` and `@plannerState.mx.version` work (slot + shelf rollup).
-- `@shelf.read(@s.<slot>)` returns plain array of records.
-
-**Shelf gaps vs spec assumptions**:
-- `@s.<slot>.byKey(<k>)` mentioned in `migration-plan.md` §2.A and `mlld howto shelf-slots` is **not implemented in v2.0.6** — calling it produces `Method not found: byKey`. Lookups must be done via filter on `@shelf.read(...)` or via `@shelf.remove(@s.<slot>, <k>)` (which IS implemented per howto). Per-key cache invalidation is internal — the API surface for direct key lookup needs a workaround OR a follow-up against mlld.
-- Probe at `/tmp/probe-shelf-bykey.mld` reproduces the error.
-
-**Wire-format handle question** (UNRESOLVED — needs decision before cutover):
-- Current handle format: `r_<recordType>_<keyValue>` (e.g. `r_hotel_HotelX`). Minted by `@stateHandle()`; serialized into refs as `{ source: "resolved", record: "<type>", handle: "<h>", field: "<f>" }`; planner LLM produces and consumes these strings.
-- Post-shelf: `.mx.key` is a content-derived hash (`367b05bc` etc.) for keyed records, NOT the readable key value.
-- Two paths: (A) keep wire-format `r_<type>_<key>` synthetic and derive it from `.mx.key` at construction time so planner prompt unchanged; (B) switch wire format to `.mx.key` directly and accept the planner prompt drift. Path A is safer for the migration commit; path B is structurally cleaner. Decide before writing any worker/intent code.
-
-### Phase 2 architecture LOCKED (2026-05-08, post-mlld-feature-landing)
-
-The three mlld features (m-box-shelf + m-stable-address + m-shelf-parallel) are
-in v2.0.6. All probed working against rig-shaped records:
-
-- **m-box-shelf**: `shelf @x from @records ...` works inside exe bodies (NOT only `box [...]`). Per-call lifetime confirmed (each call gets fresh shelf, version resets). `from @records` binds at call time. Probed at `/tmp/probe-new-1b.mld`.
-- **m-stable-address**: `.mx.address.{record,key,string}`, `| @parse.address`, `.byKey()`, `.byAddress()` all work. Address format is `<record>:<.mx.key>`. `.mx.key` for keyed records is content-derived hash (e.g. `Hotel X` → `367b05bc`), not the literal key field. Probed at `/tmp/probe-new-2b.mld`.
-- **m-shelf-parallel**: `for parallel(N)` branches see pre-parallel snapshot via `@shelf.read`; writes commit on parallel exit; same-`.mx.key` collisions field-merge across branches. Probed at `/tmp/probe-new-3-parallel.mld`.
-
-**Threading pattern (probed)**:
-- Shelf decl in `@runPlannerSession` body
-- Augment agent: `let @agent = { ...@rawAgent, plannerShelf: @plannerShelf }`
-  (object spread preserves shelf identity — verified at `/tmp/probe-shelf-no-spread.mld`)
-- Pass agent through to LLM bridge via existing `seed: { agent, ... }` pattern
-- Inside dispatchers: `@planner.agent.plannerShelf.<recordType>` is the slot ref
-- Pass slot refs through exe parameters; inner exes can `@shelf.write(@slotRef, @val)` cleanly (verified at `/tmp/probe-shelf-passing.mld`)
-
-**Pitfalls observed**:
-- Parameter named `shelf` shadows the `@shelf.*` global API. Use `ps` / `slotRef` / `plannerShelf` etc.
-- `@shelf.write(...)` rejected as bare statement. Use `let @x = @shelf.write(...)` or assign to throwaway. Matches existing rig style (`let @next = @updateResolvedStateWithDef(...)`).
-- `var` not allowed inside block bodies (e.g. inside `for parallel`). Use `let`.
-
-**mlld indirect-call shelf-scope bug — FIXED in mlld `e35af264b` (in v2.0.6)**: `shelf @s from @recordsVar` inside an exe body invoked via indirection (`@runSuites([@suite])`, wrapper-exe call chains) previously failed with `Record '@hotel' is not defined`. mlld commit `e35af264b "Fix indirect imported executable shelf scope"` resolves it. Verified on the real `tests/index.mld` runner-indirect path: shelf-integration suite (16 tests across all three new mlld features) passes inside the main gate at 286/0/5. The fix covers Stage B's planner-loop tool dispatch path. Probes at `/tmp/probe-wrapper-pattern.mld` etc. now run clean.
-
-### Phase 2 readiness validator (this session)
-
-`tests/rig/shelf-integration.mld` — 16 tests across 4 groups, exercises all three new mlld features against rig-shaped fact-bearing records:
-- `box-shelf-lifetime` (4): shelf-in-exe-body, per-call lifetime, slot-ref threading via params, shelf survives object spread
-- `stable-address` (8): `.mx.address` contract, `@parse.address` round-trip, `.byKey()` / `.byAddress()` lookups, missing-key returns null, Path A wire-format synthesis (`r_<recordType>_<key>` from `.mx.address`)
-- `shelf-parallel` (3): pre-parallel snapshot reads, post-block commit, same-key field-merge across branches
-- `projection-cache-per-key` (1): Phase 2 gate per migration-plan §2 — write A, write B, mutate A, B's content unchanged
-
-All 16 pass inside the main `tests/index.mld` gate (286/0/5 total). Wired in commit `100a343`. The wire-up itself is the verification that the mlld indirect-call fix covers the runner-indirect path Stage B will use.
-
-**Wire-format handle decision LOCKED — Path A**:
-- Phase 2 keeps the `r_<recordType>_<keyValue>` synthetic format that the planner LLM currently produces/consumes. New helper: `@stateHandleFromAddress(@val)` returns `r_@val.mx.address.record_@val.mx.address.key`.
-- The new read-projection auto-emits `.mx.address` fields in projected records. Planner sees address strings in projections but doesn't act on them. Benign.
-- Phase 3.B (planner-prompt revision) flips wire format to `.mx.address.string` directly. Bench-sweep gated.
-
-**Old shelf scope question** (RESOLVED):
-- Probed `shelf` declarations inside exe bodies and box bodies — both rejected by parser ("Expected a directive or content, but found 's'"). v2.0.6 only allows `shelf @x = ...` at module scope.
-- Module-scope shelf with `@shelf.clear` at start of each call works (probed at `/tmp/probe-shelf-clear.mld`): each call sees its own clean slate, slot version increments globally but that's fine.
-- **Caveat**: this conflicts with rig's parallel resolve batch (`@plannerResolveBatch` → `@batchSpecMergeState` per c-eda4). Today, parallel specs run on a snapshot state and return deltas merged sequentially. With a module-scope shelf, parallel specs would race on the same shelf — they can't write concurrently against a snapshot.
-- **Implication**: Stage B must change the parallel batch to either (i) return deltas as plain record arrays and serialize the shelf writes after parallel work completes, or (ii) drop parallelism (regresses c-eda4). Path (i) is the correct fix — preserves c-eda4's parallelism, just moves the shelf write outside the parallel section.
-
-**`from @agent.records` binding question** (NEW UNRESOLVED):
-- Migration plan suggests `shelf @planner_state from @agent.records with { ... }`. But `@agent.records` is per-rig.run() data, not module-scope; the shelf decl in session.mld can't reference it.
-- Options: (A) bare `*` shelf, accept any record type (per spec, allowed but "less safe"); (B) declare the shelf in a per-agent module (e.g. each bench suite's agent.mld imports a `rig/shelf-<suite>.mld` that hardcodes its records — but this introduces N shelf modules); (C) propose a mlld feature for runtime-bound `from <expr>` (out of scope — file an mlld ticket).
-- **Recommended**: (A) bare `*` for v1 of the rig migration; security is still record-bound (write: declarations + read: projections enforce per-record). Add a runtime check that incoming records are members of `@agent.records` to compensate for the lost `from <scope>` boundary — this is a plain mlld check, not shelf machinery.
-
-### Per-function migration table (Stage B playbook)
-
-Pre-built so Stage B is pattern-application, not fresh discovery.
-
-| Old API (delete) | Replacement | Notes |
-|---|---|---|
-| `@stateHandle(recordType, key, idx)` | `@stateHandleFromAddress(@val)` returning `r_<rec>_<.mx.key>` | Path A wire-format preserve |
-| `@stateKeyValue(field, value, idx)` | drop — `.mx.key` is the canonical key | |
-| `@recordIdentityField(recordDef)` | drop — `.mx.address.record` carries the record type | |
-| `@normalizeResolvedValues(rt, rd, raw)` | drop — tool returns are already coerced via `=> @recordDef`; pass directly to `@shelf.write` | bridge already runs coercion |
-| `@mergeFieldDict(existing, incoming)` | drop — shelf field-merge is automatic for keyed `record[]` | |
-| `@mergeEntryFields(existing, incoming)` | drop — same | |
-| `@mergeResolvedEntries(bucket, entries)` | `for @e in @entries [ let @w = @shelf.write(@ps.<rt>, @e) ]` (sequential) or `for parallel` for batch | parallel exercises m-shelf-parallel |
-| `@populatePlannerCache(bucket, rt, rd)` | drop — shelf `projection_cache: ["role:planner"]` attribute does this automatically | |
-| `@cachedPlannerEntries(bucket)` | drop — shelf cache is internal | |
-| `@bucketEntriesForRole(...)` | `for @e in @shelf.read(@ps.<rt>) => @projectResolvedEntry(...)` | bridge applies projection on read |
-| `@bucketObject(value)` | drop — shelf reads already return plain arrays | |
-| `@bucketItems(bucket)` | `@shelf.read(@ps.<rt>)` | |
-| `@bucketLength(bucket)` | `@ps.<rt>.length` | |
-| `@isResolvedIndexBucket(bucket)` | drop | |
-| `@indexedBucketEntries(bucket)` | drop | |
-| `@updateResolvedState(state, rt, entries)` | inline shelf writes | |
-| `@updateResolvedStateWithDef(state, rt, entries, rd)` | inline shelf writes; `recordDef` no longer needed (shelf knows from binding) | |
-| `@batchSpecMergeState(cumulative, phaseResult, agent)` | drop — `for parallel` with shelf writes does this implicitly | exercises m-shelf-parallel |
-| `@phaseResultWithState(...)` | likely drop — phaseResult shape changes (no state.resolved) | |
-| `@projectResolvedSummary(records, state, role)` | rewrite around `for @rt, @rd in @records [ for @e in @shelf.read(@ps.<rt>) => @projectResolvedEntry(...) ]` | keep |
-| `@projectResolvedEntry(rt, rd, entry, role)` | KEEP — record-bound projection still needed for Path A wire format | input is now plain record (not envelope); rewrite to read fields directly |
-| `@projectResolvedFieldValue(entry, fieldName)` | drop — direct field access on records | |
-| `@lookupResolvedEntry(state, rt, handle)` | `let @addr = @handle | @parse.address; @ps.<addr.record>.byAddress(@addr)` | parse Path-A handle to address |
-| `@resolvedEntries(state, rt)` | `@shelf.read(@ps.<rt>)` | |
-| `@resolvedEntryFieldValue(entry, fieldName)` | direct field access on the record value (entry is now the record) | path-traversal helper still needed for nested fields |
-| `@compileRecordArgs(...)` JS helper's `entriesOf(bucket)` | rewrite as `@shelf.read(@ps.<rt>)` from mlld side | the JS helper signature changes |
-| `state.resolved[rt]` | `@agent.plannerShelf.<rt>` slot ref OR `@shelf.read(...)` array | |
-
-### State shape change
+## State shape change
 
 **Before**: `{ resolved: {<rt>: bucket, ...}, extracted, derived, extract_sources, capabilities }`
 **After**: `{ extracted, derived, extract_sources, capabilities }` — shelf is in scope via `@agent.plannerShelf`, not part of state.
 
-The state-passing convention through phases stays; just the resolved-bucket field is gone. Phase results no longer return `state_delta.resolved`; instead they return `entries: @recordValues[]` and the caller writes to shelf.
+Phase results no longer return `state_delta.resolved`. They return `entries: @recordValues[]` and the caller writes to shelf.
 
-### Per-key cache invalidation test (Phase 2 gate)
+---
 
-Add to `tests/rig/identity-contracts.mld`:
+## After tests are converted
 
-```mlld
-exe @testProjectionCachePerKeyInvalidation() = [
-  shelf @s from @records with { versioned: true, projection_cache: ["role:planner"] }
-  let @w1 = @shelf.write(@s.hotel, @mintHotel("Hotel A", "addr-A"))
-  let @w2 = @shelf.write(@s.hotel, @mintHotel("Hotel B", "addr-B"))
-  >> Read both — populates cache for both keys
-  let @r1 = @shelf.read(@s.hotel)
-  >> Mutate ONLY Hotel A (different field)
-  let @w3 = @shelf.write(@s.hotel, @mintHotelPrice("Hotel A", "100"))
-  >> Hotel B's cache slot should still be hit; Hotel A's invalidated.
-  >> Test by reading via role:planner and asserting projection content.
-  let @r2 = @shelf.read(@s.hotel)
-  >> Assert Hotel A reflects merged content; Hotel B unchanged.
-  ...
-]
-```
+1. Re-baseline mutation matrix: `uv run --project bench python3 tests/run-mutation-coverage.py`. Verify Overall: OK. Capture new snapshot in `tests/baselines/mutation-matrix.txt`.
+2. Update `rig/ARCHITECTURE.md` — phase model + state model rewritten (bucket → shelf historical); list deleted-from-rig functions in migration impact paragraph.
+3. Update `bench/ARCHITECTURE.md` — "What stays / What goes" table reflects bucket no longer existing.
+4. Update `labels-policies-guards.md` — any bucket framing → shelf framing; handle-string identity → `.mx.key`.
+5. Phase 1.A.2 comment-header refresh (separate follow-up commit; deferred from Phase 1).
 
-Exact assertion shape needs the projection-cache observability decision — if mlld doesn't expose cache-hit/miss directly, the test is content-based (correct merged output proves correct invalidation).
+After all five steps, Phase 2 is complete. Phase 3 (planner prompt revision + remaining doc rewrites) is one small follow-up session — the planner prompt change requires bench-sweep before/after numbers in commit message per migration-plan §3.B.
 
-### Stage breakdown for Phase 2 (recommended)
+---
 
-Phase 2 is too tightly coupled to ship in one commit safely. Suggested split:
+## Notes carrying forward (Phase 1 lessons still relevant)
 
-**Stage A — shelf scaffolding alongside bucket** (small, low risk, gates green):
-1. Probe shelf-in-box scoping; pick scope answer.
-2. Add shelf decl in chosen location.
-3. Write parallel state primitives in `rig/runtime.mld` that operate on the shelf (`@shelfWriteEntries`, `@shelfReadEntries`, etc.). Mirror bucket API surface.
-4. NO consumer changes. Bucket primitives still active. Gates pass because nothing uses the new API yet.
-5. Commit.
-
-**Stage B — switch consumers + delete bucket** (the load-bearing commit):
-1. Decide wire-format handle question (path A or path B above).
-2. Replace state.resolved bucket reads with shelf reads in `rig/intent.mld`, `rig/workers/{resolve,derive,execute,planner}.mld`, `rig/transforms/url_refs.mld`.
-3. Replace `@updateResolvedStateWithDef` callsites with `@shelf.write(@s.<type>, @recordValue)`. Tool result needs `=> record @recordDef` coercion at the worker boundary (currently it's plain JS-returned data going through `@normalizeResolvedValues`).
-4. Update `tests/rig/identity-contracts.mld` xfails (handle-drift cases flip to xpass — remove markers).
-5. Update `tests/rig/{state-projection-a,state-projection-b,named-state-and-collection,thin-arrow-and-display,worker-dispatch,xfail-and-null-blocked}.mld` to use shelf API.
-6. Delete bucket helpers from `rig/runtime.mld` and `rig/intent.mld` (the ~15 functions listed below).
-7. Verify all gates green; bench security canary; ASR=0; utility within ±2 of baseline.
-8. Commit. ARCHITECTURE.md updates land in this commit per Phase 2 doc discipline.
-
-**Stage C — `state.capabilities.url_refs` typed shelf** (smaller, can ship separately):
-- `state.capabilities.url_refs` → `shelf @url_refs from @url_ref_record` (bounded to single record type per spec).
-- Update `rig/transforms/url_refs.mld` (~270 lines, mostly unchanged but the merge/lookup primitives swap).
-- Update `dispatchFindReferencedUrls` and `dispatchGetWebpageViaRef` callsites in `rig/workers/resolve.mld`.
-
-### Files materially changed at Stage B (canonical inventory)
-
-| File | LoC | Touch |
-|---|---:|---|
-| `rig/session.mld` | 33 | Add shelf decl or wire shelf into session shape |
-| `rig/runtime.mld` | 1280 | Delete ~30 fns; total shrinks to ~700-800 |
-| `rig/intent.mld` | 1163 | Delete bucket walks (lines 63-142, 237-277, 503-538, 943-1015 JS bucket walker); shelf reads replace |
-| `rig/transforms/url_refs.mld` | 268 | Stage C |
-| `rig/workers/resolve.mld` | 233 | `@normalizeResolvedValues` callsites → `@shelf.write` |
-| `rig/workers/derive.mld` | 221 | `@bucketItems(@state.resolved[X])` → `@shelf.read` |
-| `rig/workers/execute.mld` | 230 | Same pattern |
-| `rig/workers/planner.mld` | 1337 | Lines 248-296 `@plannerResolvedRecords`; lines 243-274 `@stateProgressFingerprint` rewrite (read slot.mx.version + entry.mx.hash directly) |
-| `tests/rig/identity-contracts.mld` | 439 | Remove xfails on handle-drift; entry-shape helper handles shelf mode |
-| `tests/rig/state-projection-a.mld` | ? | Bucket → shelf API |
-| `tests/rig/state-projection-b.mld` | ? | Bucket → shelf API |
-| `tests/rig/named-state-and-collection.mld` | ? | Bucket → shelf API |
-| `tests/rig/thin-arrow-and-display.mld` | ? | Bucket → shelf API |
-| `tests/rig/worker-dispatch.mld` | ? | Bucket → shelf API |
-| `tests/rig/xfail-and-null-blocked.mld` | ? | Bucket → shelf API |
-
-### Functions to delete from `rig/runtime.mld` at Stage B
-
-`@recordIdentityField`, `@stateHandle`, `@stateKeyValue`, `@normalizeResolvedValues`, `@cachedPlannerEntries`, `@bucketEntriesForRole`, `@projectResolvedSummary` (rewrite around shelf), `@projectResolvedFieldValue`, `@projectResolvedEntry` (keep — projection still record-bound), `@mergeFieldDict`, `@mergeEntryFields`, `@mergeResolvedEntries`, `@populatePlannerCache`, `@updateResolvedState`, `@updateResolvedStateWithDef`, `@batchSpecMergeState` (rewrite around shelf write API), `@phaseResultWithState` (likely keep), plus exports.
-
-### Functions to delete from `rig/intent.mld` at Stage B
-
-`@bucketObject`, `@isResolvedIndexBucket`, `@indexedBucketEntries`, `@bucketLength`, `@bucketItems`, `@resolvedEntries` (rewrite as shelf read), `@lookupResolvedEntry` (rewrite as shelf-filter or follow-up if mlld lands `byKey`), the JS `@compileRecordArgs`'s `entriesOf` helper (lines 954-963).
-
-### Existing uncommitted files (NOT Phase 2)
-
-`.tickets/c-2ec6.md`, `c-5a08.md`, `c-9c6f.md`, `labels-policies-guards.md`, `rig/workers/planner.mld` (Slice 1 native fingerprint, pre-existing). Plus the COMMENTS-* tracking files. Handle separately.
-
-### Cutover lessons from Phase 1 (still relevant)
-
-- pre-cutover, mlld did not enforce write deny-by-default; post-cutover, every write surface needs explicit `write:` declarations. Test scaffold patterns: tests submitting tools need `exe role:worker @testFoo()` (or `with { read: "role:worker" }` on module-scope vars); tests calling `policy.build` from wrapper exes need `role:planner` to satisfy authorize permission.
-- `rig/workers/execute.mld:151` was `exe role:planner` pre-cutover; changed to `role:worker` because the body invokes `@callToolWithPolicy` (worker-side dispatch).
 - mlld interprets `@var.field` inside string literals as variable access. Avoid writing record-shape examples like `@record.write: {}` inside descriptions.
-- migration-plan.md §1.A documents the third rename axis (role-key prefix); plan adds "Phase 1 is one semantic unit" callout.
+- Test scaffold patterns: tests submitting tools need `exe role:worker @testFoo()`; tests calling `policy.build` from wrapper exes need `role:planner`.
+- `rig/workers/execute.mld` `@dispatchExecute` is `exe role:worker` because the body invokes `@callToolWithPolicy` (worker-side dispatch). Don't change that.
+
+## Pre-existing uncommitted files (NOT migration commits)
+
+`.tickets/c-2ec6.md`, `c-5a08.md`, `c-9c6f.md`, `labels-policies-guards.md` (display→read pre-rename), `rig/workers/planner.mld` (Slice 1 native fingerprint), plus `COMMENTS-*` tracking files. Handle separately from migration commits.
+
+## Tickets
+
+- **m-ed0b** (mlld): resolved by Phase 1. Can close.
+- **m-68b6** (mlld): closed (was clean-side index/interpolation issue).
+
+---
 
 ## Sessions log
 
-| Date | Session | What landed | Commit |
-|---|---|---|---|
-| 2026-05-07 | bench-grind-22 | migration plan + archive of old plan | `5516430` |
-| 2026-05-07 | phase-0-A | Phase 0.A invariant tests | `01698fa` |
-| 2026-05-07 | phase-0-B | Phase 0.B baselines | `f58ddad` |
-| 2026-05-07 | phase-1 | Phase 1 main: rename + write: + role refactor; tickets m-ed0b + m-68b6 filed | `bbf2e7d` |
-| 2026-05-07 | phase-1-closeout | Banking description fix + update_password test error code; m-68b6 closed (not mlld bug); all gates green | `694c9cd` |
-| 2026-05-07 | phase-1-docs | rig/ARCHITECTURE.md role-context section + dispatchExecute load-bearing comment + stranded MUTATION-COVERAGE marker fix | `31992fc` |
-| 2026-05-07 | pre-phase-2 (this session) | Output records' write: shelves blocks (26 records); can_authorize transitional comment; Phase 2 pre-flight probes (bounded-shelf rejection, field-merge, versioning) + state.resolved consumer inventory captured in handoff. Mutation matrix Overall OK, zero-LLM 270/0/5. | `50418dc` |
-| 2026-05-07 | pre-phase-2-recon (this session) | Reconnaissance only, no code change. Probed: shelf field-merge by `.mx.key` works; `.byKey()` lookup is unimplemented in v2.0.6 (filter-on-read instead). Surveyed all consumers; produced per-file change map and Stage A/B/C breakdown in handoff. Surfaced two unresolved questions: wire-format handle (path A vs B) and shelf scope (module vs box vs exe). | (no commit) |
-| 2026-05-08 | phase-2-architecture-lock (this session) | mlld v2.0.6 ships m-box-shelf + m-stable-address + m-shelf-parallel + `.byKey()` / `.byAddress()`. All three probed working against rig-shaped records (probes at `/tmp/probe-new-*.mld`). Architecture LOCKED: shelf in `@runPlannerSession` body, threaded via `@agent.plannerShelf`, Path A wire-format. Per-function migration table written. Stage B execution deferred to next session. | (handoff-only) |
-| 2026-05-08 | phase-2-readiness-validator | Wrote `tests/rig/shelf-integration.mld` — 16 tests across 4 groups validating all three mlld features against rig-shaped records. Wired into `tests/index.mld`; gate 286/0/5. The wire-up is itself the verification that mlld `e35af264b "Fix indirect imported executable shelf scope"` covers the runner-indirect path Stage B will dispatch through. Stage B unblocked. | `100a343` |
-| 2026-05-08 | phase-2-handoff-refresh | Verified mlld indirect-shelf-scope fix (`e35af264b`) is in v2.0.6 binary; gate at 286/0/5; refreshed handoff to reflect Stage B unblocked. No code change. | `9a102c2` |
-| 2026-05-08 | stage-b-scaffolding (this session) | Path A wire-format helpers (`@stateHandleFromAddress`, `@parseRigHandle`) added to `rig/runtime.mld`; shelf decl + agent threading in `@runPlannerSession`. No consumer migration; bucket stays read-side authority. All gates green: 286/0/5, all 4 scripted suites, mutation matrix Overall OK. Threading pattern validated end-to-end through scripted-stub planner runs. | `485bb88` |
+| Date | Session | Commit |
+|---|---|---|
+| 2026-05-07 | bench-grind-22 (plan) | `5516430` |
+| 2026-05-07 | phase-0-A invariants | `01698fa` |
+| 2026-05-07 | phase-0-B baselines | `f58ddad` |
+| 2026-05-07 | phase-1 main | `bbf2e7d` |
+| 2026-05-07 | phase-1-closeout | `694c9cd` |
+| 2026-05-07 | phase-1-docs | `31992fc` |
+| 2026-05-07 | output-records write: blocks | `50418dc` |
+| 2026-05-08 | phase-2-readiness | `100a343` |
+| 2026-05-08 | phase-2-handoff-refresh | `9a102c2` |
+| 2026-05-08 | stage-b-scaffolding | `485bb88` |
+| 2026-05-08 | stage-b-core (430 lines deleted; partial test conversion) | `c7ad4c8` |
+| 2026-05-08 | stage-b-completion (next) | TBD |
