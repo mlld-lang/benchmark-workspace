@@ -36,8 +36,8 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 ## Remaining work, ranked by leverage
 
 **Likely-mechanical (no blocker beyond writing the code):**
-1. **`url-refs-b.mld`** (369 lines, 18 tests) — uses `@dispatchResolve` directly; m-4b6f fix unblocks. Pattern: dispatch + read shelf via `@shelf.read(@agent.plannerShelf[<rt>])` instead of `state.resolved.<rt>` bucket reads.
-2. **`proof-chain-firewall.mld`** (536 lines, 17 tests) — pure compile-test file, no scripted-LLM. 11 module-scope `var` consumers of `@sampleState`. Need to thread agent first arg through `@compileExecuteIntent` / `@resolveRefValue` / `@lowerSelectionRef`. Restructure module-scope vars into per-test exe builds, OR build a shared shelf-bearing `@sampleAgent` exe (need to verify module-scope role:worker calls work — untested).
+1. **`url-refs-b.mld`** — PARTIAL (committed in 7578afc). 7/12 tests landed (Group B + Group C minus UR-19). Group D (UR-21..24, dispatch integration) deferred — `@dispatchResolve` from a role:worker test exe trips "record arg '_mlld' is missing" inside the recordArgs validator (likely the `var tools` declaration injects `_mlld` into the catalog and validation iterates ALL keys). UR-19 (forged-handle rejection) deferred — pre-Stage-B's recordArgs validated handle existence; post-Stage-B that moved to @lookupResolvedEntry, so the test needs reframing as a downstream-resolution test. Test exes preserved in file for fast revival.
+2. **`proof-chain-firewall.mld`** (536 lines, 17 tests) — pure compile-test file, no scripted-LLM. 11 module-scope `var` consumers of `@sampleState`. Pull all module-scope dispatch results into per-test `role:worker` exe bodies that build their own shelf-bound agent (mirror identity-contracts/url-refs-b/named-state-and-collection per-test pattern). Module-scope role:worker calls are untested in mlld and likely don't have role context, so per-test is the safer pattern. **Watch**: don't alias record imports — `as record @alias` bakes alias into `.mx.address.record` and fails shelf-write (caught in url-refs-b conversion).
 3. **3 ARCHITECTURE.md doc updates** (rig, bench, labels-policies-guards) — pure docs. Should describe: shelf as resolved-record store; type:string,kind vs type:handle principle (per audit); planner-shelf threading; removed bucket primitives; m-shelf-wildcard primitive integration.
 
 **Architectural / requires design (not mechanical):**
@@ -126,7 +126,7 @@ If you find yourself wanting to:
 
 | Gate | Result |
 |---|---|
-| Zero-LLM (3 suites still skipped: worker-dispatch, proof-chain-firewall, url-refs-b) | **207/0/1** (was 169/0/1 baseline) |
+| Zero-LLM (2 suites still skipped: worker-dispatch, proof-chain-firewall; url-refs-b PARTIAL) | **214/0/1** (was 169/0/1 baseline) |
 | Mutation matrix | NOT YET RE-BASELINED (3 baseline fails persist; clearing them depends on task #17) |
 | Scripted banking | 7/3 (baseline; B3 + 2 correlate fails — fixture/shelf-seed gap) |
 | Scripted slack | 13/1 + 1 xpass (baseline; 1 selection-ref fail — same gap) |
