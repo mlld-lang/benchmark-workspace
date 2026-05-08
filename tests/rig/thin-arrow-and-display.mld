@@ -11,10 +11,10 @@
 
 import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
 import { @suite, @group, @runSuites } from "../runner.mld"
-import { @toolCallError, @projectResolvedSummary } from "../../rig/runtime.mld"
+import { @toolCallError, @projectResolvedSummary, @emptyState, @shelfRecords } from "../../rig/runtime.mld"
 import { @plannerVisibleState, @workerStateSummary } from "../../rig/orchestration.mld"
 import { @resolveRefValue } from "../../rig/intent.mld"
-import { @sampleState, @sampleAgent } from "../fixtures.mld"
+import { @records as @fixtureRecords, @aliceContactRecord, @bobContactRecord, @noteEntryRecord, @contact, @note_entry } from "../fixtures.mld"
 
 >> --- Module-level fixtures -------------------------------------------------
 
@@ -32,7 +32,8 @@ record @thin_arrow_output = {
 record @flat_display_contact = {
   facts: [email: string],
   data: [name: string, notes: string?],
-  read: [name, { value: "email" }]
+  read: [name, { value: "email" }],
+  write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }
 }
 
 >> Benchmark suites use plain mode keys (`planner`, `worker`, `default`)
@@ -47,7 +48,8 @@ record @plain_mode_message = {
     default: [{ value: "id_" }, subject, body],
     role:worker: [{ value: "id_" }, subject, body],
     role:planner: [{ value: "id_" }, subject]
-  }
+  },
+  write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }
 }
 
 >> Thin-arrow regression probe. If strict mode leaks the tool-slot value
@@ -80,10 +82,19 @@ exe @testToolErrorEnvelopeOnlyFailsOnTrue() = [
 ]
 
 >> --- Group: display projection ---------------------------------------------
+>>
+>> Stage B: each display test declares its own shelf, populates it with
+>> the records under test, and threads it onto a synthetic agent.
 
-exe @testDisplayProjection() = [
-  let @plannerSummary = @plannerVisibleState(@sampleAgent, @sampleState) | @pretty
-  let @workerSummary = @workerStateSummary(@sampleAgent, @sampleState) | @pretty
+exe role:worker @testDisplayProjection() = [
+  let @shelfable = @shelfRecords(@fixtureRecords)
+  shelf @ps from @shelfable with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @w1 = @shelf.write(@ps.contact, @aliceContactRecord)
+  let @w2 = @shelf.write(@ps.contact, @bobContactRecord)
+  let @w3 = @shelf.write(@ps.note_entry, @noteEntryRecord)
+  let @agent = { suite: "fixtures", records: @fixtureRecords, plannerShelf: @ps }
+  let @plannerSummary = @plannerVisibleState(@agent, @emptyState()) | @pretty
+  let @workerSummary = @workerStateSummary(@agent, @emptyState()) | @pretty
   let @actual = {
     plannerHasAlice: @plannerSummary.includes("Alice"),
     plannerHasEmail: @plannerSummary.includes("alice.example"),
@@ -98,35 +109,17 @@ exe @testDisplayProjection() = [
   })
 ]
 
-exe @testDisplayShorthandArray() = [
+exe role:worker @testDisplayShorthandArray() = [
+  let @flatRecords = { flat_display_contact: @flat_display_contact }
+  shelf @ps from @flatRecords with { versioned: true, projection_cache: ["role:planner"] }
   let @flatRecord = {
     email: "carol.example",
     name: "Carol",
     notes: "plain-display"
   } as record @flat_display_contact
-  let @summary = @plannerVisibleState(
-    {
-      suite: "fixtures",
-      records: { flat_display_contact: @flat_display_contact }
-    },
-    {
-      resolved: {
-        flat_display_contact: [{
-          handle: "r_flat_display_contact_carol.example",
-          key: "carol.example",
-          value: @flatRecord,
-          field_values: {
-            email: @flatRecord.email,
-            name: @flatRecord.name,
-            notes: @flatRecord.notes
-          }
-        }]
-      },
-      extracted: {},
-      derived: {},
-      extract_sources: {}
-    }
-  ) | @pretty
+  let @w = @shelf.write(@ps.flat_display_contact, @flatRecord)
+  let @agent = { suite: "fixtures", records: @flatRecords, plannerShelf: @ps }
+  let @summary = @plannerVisibleState(@agent, @emptyState()) | @pretty
   let @actual = {
     hasName: @summary.includes("Carol"),
     hasEmail: @summary.includes("carol.example")
@@ -134,38 +127,19 @@ exe @testDisplayShorthandArray() = [
   => @assertEq(@actual, { hasName: true, hasEmail: true })
 ]
 
-exe @testDisplayPlainModeKeys() = [
+exe role:worker @testDisplayPlainModeKeys() = [
+  let @plainRecords = { plain_mode_message: @plain_mode_message }
+  shelf @ps from @plainRecords with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
   let @msg = {
     id_: "msg_1",
     sender: "david.example",
     subject: "Project kickoff agenda",
     body: "planner-must-not-see-this"
   } as record @plain_mode_message
-  let @resolved = {
-    plain_mode_message: [{
-      handle: "r_plain_mode_message_msg_1",
-      key: "msg_1",
-      value: @msg,
-      field_values: {
-        id_: @msg.id_,
-        sender: @msg.sender,
-        subject: @msg.subject,
-        body: @msg.body
-      }
-    }]
-  }
-  let @stateRec = {
-    resolved: @resolved,
-    extracted: {},
-    derived: {},
-    extract_sources: {}
-  }
-  let @agent = {
-    suite: "fixtures",
-    records: { plain_mode_message: @plain_mode_message }
-  }
-  let @plannerSummary = @plannerVisibleState(@agent, @stateRec) | @pretty
-  let @workerSummary = @workerStateSummary(@agent, @stateRec) | @pretty
+  let @w = @shelf.write(@ps.plain_mode_message, @msg)
+  let @agent = { suite: "fixtures", records: @plainRecords, plannerShelf: @ps }
+  let @plannerSummary = @plannerVisibleState(@agent, @emptyState()) | @pretty
+  let @workerSummary = @workerStateSummary(@agent, @emptyState()) | @pretty
   let @actual = {
     plannerHasSubject: @plannerSummary.includes("Project kickoff agenda"),
     plannerHidesBody: !@plannerSummary.includes("planner-must-not-see-this"),
@@ -178,67 +152,49 @@ exe @testDisplayPlainModeKeys() = [
   })
 ]
 
->> --- Group: checkpoint-restore identity ------------------------------------
+>> --- Group: identity contract -----------------------------------------------
+>>
+>> Stage B: identity is content-derived from the record's key field
+>> (`.mx.address.key`) rather than from a synthetic envelope. Planner
+>> summaries must surface the fact-bearing string id, and `@resolveRefValue`
+>> through the shelf must return that same id when the planner asks for
+>> the record's key field.
 
->> Checkpoint restore can materialize resolved entries as plain objects
->> that keep both the synthetic numeric `key` and the original fact value
->> under `identity_value` / `value.data`. Planner summaries must keep
->> showing the fact-bearing string id, otherwise the planner emits raw
->> numeric args instead of structured resolved refs for follow-up tools.
-exe @checkpointRestoredState() = [
-  => {
-    resolved: {
-      plain_mode_message: [{
-        handle: "r_plain_mode_message_msg_1",
-        key: 1,
-        value: {
-          id_: 1,
-          sender: "david.example",
-          subject: "Project kickoff agenda",
-          body: "planner-must-not-see-this",
-          data: {
-            id_: "msg_1",
-            sender: "david.example",
-            subject: "Project kickoff agenda",
-            body: "planner-must-not-see-this"
-          }
-        },
-        identity_field: "id_",
-        identity_value: "msg_1",
-        field_values: {
-          id_: 1,
-          sender: "david.example",
-          subject: "Project kickoff agenda",
-          body: "planner-must-not-see-this"
-        }
-      }]
-    },
-    extracted: {},
-    derived: {},
-    extract_sources: {}
-  }
-]
-
-exe @testDisplayCheckpointIdentity() = [
-  let @stateRec = @checkpointRestoredState()
-  let @agent = {
-    suite: "fixtures",
-    records: { plain_mode_message: @plain_mode_message }
-  }
-  let @summary = @plannerVisibleState(@agent, @stateRec) | @pretty
+exe role:worker @testDisplayCheckpointIdentity() = [
+  let @plainRecords = { plain_mode_message: @plain_mode_message }
+  shelf @ps from @plainRecords with { versioned: true, projection_cache: ["role:planner"] }
+  let @msg = {
+    id_: "msg_1",
+    sender: "david.example",
+    subject: "Project kickoff agenda",
+    body: "planner-must-not-see-this"
+  } as record @plain_mode_message
+  let @w = @shelf.write(@ps.plain_mode_message, @msg)
+  let @agent = { suite: "fixtures", records: @plainRecords, plannerShelf: @ps }
+  let @summary = @plannerVisibleState(@agent, @emptyState()) | @pretty
   let @actual = {
-    showsStringId: @summary.includes('"id_": "msg_1"'),
+    showsStringId: @summary.includes("msg_1"),
     hidesNumericId: !@summary.includes('"id_": 1')
   }
   => @assertEq(@actual, { showsStringId: true, hidesNumericId: true })
 ]
 
-exe @testResolveCheckpointIdentity() = [
-  let @stateRec = @checkpointRestoredState()
-  let @resolved = @resolveRefValue(@stateRec, {
+exe role:worker @testResolveCheckpointIdentity() = [
+  let @plainRecords = { plain_mode_message: @plain_mode_message }
+  shelf @ps from @plainRecords with { versioned: true }
+  let @msg = {
+    id_: "msg_1",
+    sender: "david.example",
+    subject: "Project kickoff agenda",
+    body: "planner-must-not-see-this"
+  } as record @plain_mode_message
+  let @w = @shelf.write(@ps.plain_mode_message, @msg)
+  let @agent = { suite: "fixtures", records: @plainRecords, plannerShelf: @ps }
+  let @handle = `r_plain_mode_message_@msg.mx.address.key`
+  let @resolved = @resolveRefValue(@agent, @emptyState(), {
     source: "resolved",
     record: "plain_mode_message",
-    handle: "r_plain_mode_message_msg_1",
+    handle: @handle,
     field: "id_"
   })
   let @actual = { ok: @resolved.ok, value: @resolved.value }

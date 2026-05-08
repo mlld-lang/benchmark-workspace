@@ -1,13 +1,14 @@
 import { @recordTypeName, @toolRuntimeMessage, @toolFailureDetail, @toolCallError } from "../runtime.mld"
 import {
   @callTool,
-  @normalizeResolvedValues,
-  @updateResolvedStateWithDef
+  @writeRecordsToShelf,
+  @recordHandles,
+  @shelfLookupByHandle
 } from "../runtime.mld"
 import { @pairsToObject } from "../tooling.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @resolveAttestation } from "../records.mld"
-import { @compileToolArgs, @compileRecordArgs, @lookupResolvedEntry, @resolvedEntryFieldValue } from "../intent.mld"
+import { @compileToolArgs, @compileRecordArgs, @resolvedEntryFieldValue } from "../intent.mld"
 import { @phaseToolEntry, @phaseToolNames, @wrongPhaseToolFailure } from "../tooling.mld"
 import { @validatePlannerArgRefs, @plannerValidationFailure } from "../planner_inputs.mld"
 import {
@@ -41,11 +42,11 @@ exe @resolveDebug(agent, marker) = [
 >> lands in state.capabilities.url_refs keyed by handle.
 exe @dispatchFindReferencedUrls(agent, state, tool, descriptors, decision, query, deltaOnly) = [
   let @msgHandle = @descriptors.message.handle
-  let @msgEntry = @lookupResolvedEntry(@state, "slack_msg", @msgHandle)
+  let @msgEntry = @shelfLookupByHandle(@agent, "slack_msg", @msgHandle)
   if !@msgEntry.isDefined() [
     => {
       error: "rigTransform_lookup_failed",
-      summary: `slack_msg handle '@msgHandle' not in state.resolved.slack_msg. Resolve the message via read_channel_messages or read_inbox first.`
+      summary: `slack_msg handle '@msgHandle' not on planner shelf. Resolve the message via read_channel_messages or read_inbox first.`
     }
   ]
   let @bodyField = @tool.transformConfig.bodyField ?? "body"
@@ -63,24 +64,23 @@ exe @dispatchFindReferencedUrls(agent, state, tool, descriptors, decision, query
   let @capDelta = @pairsToObject(@capPairs)
   let @recordType = "url_ref"
   let @recordDef = @tool.returns
-  let @entries = @normalizeResolvedValues(@recordType, @recordDef, @publicRecords)
-  let @handles = for @e in @entries => @e.handle
-  let @resolvedNext = @updateResolvedStateWithDef(@state, @recordType, @entries, @recordDef)
+  let @records = @writeRecordsToShelf(@agent, @recordType, @recordDef, @publicRecords)
+  let @handles = @recordHandles(@records)
   let @nextState = when [
     @deltaOnly => null
-    * => @withUrlCapabilities(@resolvedNext, @capDelta)
+    * => @withUrlCapabilities(@state, @capDelta)
   ]
   let @okList = for @ref in @parsed.refs when @ref.safety_status == "ok" => @ref
   let @blockedList = for @ref in @parsed.refs when @ref.safety_status == "blocked" => @ref
   => {
     state: @nextState,
-    state_delta: { resolved: { [@recordType]: @entries }, capabilities: { url_refs: @capDelta } },
+    state_delta: { capabilities: { url_refs: @capDelta } },
     result: {
       status: "resolved",
       record_type: @recordType,
-      count: @entries.length,
+      count: @records.length,
       handles: @handles,
-      summary: `minted @entries.length url_ref(s); @okList.length fetchable, @blockedList.length blocked.`
+      summary: `minted @records.length url_ref(s); @okList.length fetchable, @blockedList.length blocked.`
     },
     session_id: null
   }
@@ -120,21 +120,17 @@ exe @dispatchGetWebpageViaRef(agent, state, tool, descriptors, decision, query, 
   ]
   let @recordType = "referenced_webpage_content"
   let @recordDef = @tool.returns
-  let @entries = @normalizeResolvedValues(@recordType, @recordDef, @composed)
-  let @handles = for @e in @entries => @e.handle
-  let @nextState = when [
-    @deltaOnly => null
-    * => @updateResolvedStateWithDef(@state, @recordType, @entries, @recordDef)
-  ]
+  let @records = @writeRecordsToShelf(@agent, @recordType, @recordDef, @composed)
+  let @handles = @recordHandles(@records)
   => {
-    state: @nextState,
-    state_delta: { resolved: { [@recordType]: @entries } },
+    state: when [ @deltaOnly => null * => @state ],
+    state_delta: {},
     result: {
       status: "resolved",
       record_type: @recordType,
-      count: @entries.length,
+      count: @records.length,
       handles: @handles,
-      summary: `fetched @entries.length webpage(s) via url_ref capability.`
+      summary: `fetched @records.length webpage(s) via url_ref capability.`
     },
     session_id: null
   }
@@ -160,7 +156,7 @@ exe @dispatchResolve(agent, state, decision, query, deltaOnly) = [
   >> per-transform handler manages state mutation and capability map writes.
   let @rigTransform = @tool.rigTransform
   if @rigTransform.isDefined() [
-    let @recordArgsCheck = @compileRecordArgs(@state, @tool.recordArgs ?? {}, @decision.args ?? {})
+    let @recordArgsCheck = @compileRecordArgs(@agent, @tool.recordArgs ?? {}, @decision.args ?? {})
     if !@recordArgsCheck.ok [
       => @plannerValidationFailure(
         @recordArgsCheck.error ?? "record_arg_validation_failed",
@@ -176,7 +172,7 @@ exe @dispatchResolve(agent, state, decision, query, deltaOnly) = [
     ]
   ]
   @resolveDebug(@agent, "dispatchResolve:tool")
-  let @argsCheck = @compileToolArgs(@state, @tool, @decision.args ?? {}, @query)
+  let @argsCheck = @compileToolArgs(@agent, @state, @tool, @decision.args ?? {}, @query)
   if !@argsCheck.ok [ => @plannerValidationFailure(@argsCheck.error ?? "tool_arg_validation_failed", @argsCheck, @argsCheck.issues) ]
   @resolveDebug(@agent, "dispatchResolve:args")
   >> Dispatch through the routed entry so runtime metadata such as
@@ -208,21 +204,17 @@ exe @dispatchResolve(agent, state, decision, query, deltaOnly) = [
   ]
   let @recordDef = @tool.returns
   let @recordType = @recordTypeName(@recordDef)
-  let @entries = @normalizeResolvedValues(@recordType, @recordDef, @raw)
-  let @handles = for @entry in @entries => @entry.handle
-  let @summary = `resolved @entries.length @recordType record(s). Check the projected fields — if they already answer the question, call compose now.`
+  let @records = @writeRecordsToShelf(@agent, @recordType, @recordDef, @raw)
+  let @handles = @recordHandles(@records)
+  let @summary = `resolved @records.length @recordType record(s). Check the projected fields — if they already answer the question, call compose now.`
   let @deltaOnlyMode = @deltaOnly ?? false
-  let @nextState = when [
-    @deltaOnlyMode => null
-    * => @updateResolvedStateWithDef(@state, @recordType, @entries, @recordDef)
-  ]
   => {
-    state: @nextState,
-    state_delta: { resolved: { [@recordType]: @entries } },
+    state: when [ @deltaOnlyMode => null * => @state ],
+    state_delta: {},
     result: {
       status: "resolved",
       record_type: @recordType,
-      count: @entries.length,
+      count: @records.length,
       handles: @handles,
       summary: @summary
     },

@@ -8,8 +8,14 @@ import {
 } from "./tooling.mld"
 
 >> Intent compilation is the provenance firewall. Keep it mechanical:
->> look up the native value, validate the source class, and emit the
->> exact builder data `@policy.build` needs.
+>> look up the native value on the planner shelf, validate the source
+>> class, and emit the exact builder data `@policy.build` needs.
+>>
+>> Stage B (records-as-policy + bucket→shelf): all resolved lookups go
+>> through `@agent.plannerShelf` via the runtime helpers. Entries are
+>> plain record-coerced values with `.mx.address.{record, key, string}`
+>> for identity and `.mx.factsources` for provenance. The envelope shape
+>> (handle/value/identity_field/identity_value/field_values) is gone.
 
 exe @name(inputValue) = when [
   !@inputValue.isDefined() => null
@@ -58,87 +64,6 @@ exe @roleForArg(tool, argName) = [
 
 exe @isExactArg(tool, argName) = [
   => @toolArgMeta(@tool, @argName).exact
-]
-
-exe @bucketObject(bucketValue) = when [
-  @bucketValue.mx.data.isDefined() => @bucketValue.mx.data
-  @bucketValue.data.isDefined() => @bucketValue.data
-  * => @bucketValue
-]
-
->> c-63fe Phase 1 (adapter helpers, no shape change yet).
->>
->> The indexed bucket shape that Phase 2 will introduce:
->>   { _rig_bucket: "resolved_index_v1",
->>     order: [handle1, handle2, ...],
->>     by_handle: { [handle1]: entry, ... },
->>     version: number,
->>     planner_cache: { version, entries } }
->>
->> Phase 1 adds detection + read-side adapters so any future code that
->> consumes resolved buckets sees a uniform array of entries regardless
->> of whether the bucket is the legacy array form or the indexed form.
->> @updateResolvedState still produces legacy arrays — the indexed
->> branches are dormant until Phase 2.
->>
->> Per GPT design review: handle index is storage/addressing only.
->> Proof/authorization stays in factsources/source-class machinery.
->> The index makes lookup/projection cheaper without changing trust.
-exe @isResolvedIndexBucket(bucket) = [
-  let @sentinel = @valueField(@bucket, "_rig_bucket")
-  => @name(@sentinel) == "resolved_index_v1"
-]
-
->> Iterate the order array and look each handle up in by_handle. Pure
->> mlld so entry values keep their wrappers/factsources intact. Uses
->> an explicit loop accumulator because nested `for` over a wrapped
->> array surfaces as a `for-result` envelope downstream.
-exe @indexedBucketEntries(bucket) = [
-  let @rawOrder = @valueField(@bucket, "order") ?? []
-  let @byHandle = @valueField(@bucket, "by_handle") ?? {}
-  let @orderLength = when [
-    @typeof(@rawOrder) == "array" => @rawOrder.length
-    @rawOrder.mx.data.length.isDefined() => @rawOrder.mx.data.length
-    @rawOrder.data.length.isDefined() => @rawOrder.data.length
-    * => 0
-  ]
-  let @resolved = loop(1000) [
-    let @ctx = @input ?? { index: 0, entries: [] }
-    if @ctx.index >= @orderLength [ done @ctx.entries ]
-    let @handle = @rawOrder[@ctx.index]
-    let @entry = @valueField(@byHandle, @name(@handle))
-    let @nextEntries = @ctx.entries
-    if @entry.isDefined() && @entry != null [
-      @nextEntries += [@entry]
-    ]
-    continue {
-      index: @ctx.index + 1,
-      entries: @nextEntries
-    }
-  ]
-  => @resolved
-]
-
->> Length of a resolved bucket (handles either shape). Production +
->> tests use this to count entries without touching `.length` on the
->> bucket directly.
-exe @bucketLength(bucket) = when [
-  @isResolvedIndexBucket(@bucket) => [
-    let @order = @valueField(@bucket, "order") ?? []
-    => @order.length
-  ]
-  * => @bucketItems(@bucket).length
-]
-
-exe @bucketItems(values) = when [
-  @isResolvedIndexBucket(@values) => @indexedBucketEntries(@values)
-  @values.items.isDefined() => @values.items
-  @values.data.items.isDefined() => @values.data.items
-  @values.mx.data.items.isDefined() => @values.mx.data.items
-  @values.length.isDefined() => @values
-  @values.data.length.isDefined() => @values.data
-  @values.mx.data.length.isDefined() => @values.mx.data
-  * => []
 ]
 
 exe @namedStateEntry(entryValue) = when [
@@ -234,66 +159,75 @@ exe @refSource(ref) = [
   => @name(@valueField(@ref, "source"))
 ]
 
-exe @resolvedEntries(state, recordName) = [
+>> Read-side adapters over the planner shelf. State.resolved is gone;
+>> all resolved-record lookups thread through @agent.plannerShelf.
+
+exe @resolvedEntries(agent, recordName) = [
+  if !@agent.isDefined() || !@agent.plannerShelf.isDefined() [ => [] ]
   let @recordKey = @name(@recordName)
-  let @resolvedBucket = @bucketObject(@state.resolved)
-  => when [
-    @recordKey.isDefined() && @resolvedBucket[@recordKey].isDefined() => @bucketItems(@resolvedBucket[@recordKey])
-    * => []
-  ]
+  if !@recordKey.isDefined() [ => [] ]
+  let @slot = @agent.plannerShelf[@recordKey]
+  if !@slot.isDefined() [ => [] ]
+  => @shelf.read(@slot)
 ]
 
->> c-63fe Phase 1: direct lookup when bucket is indexed, legacy linear
->> scan when array. The indexed branch becomes the hot path in Phase 2.
 >> c-bd28: canonicalizeDashes maps known Unicode dash variants
 >> (U+2010 HYPHEN, U+2011 NON-BREAKING, U+2012 FIGURE DASH, U+2013 EN DASH,
 >> U+2014 EM DASH, U+2212 MINUS) to ASCII U+002D. Used by the canonical-
->> comparison path in selection_ref validation. Wiring into
->> @lookupResolvedEntry attempted but ran into a wrapper-shape issue
->> (the canonical-fallback returns a value where .isDefined()=true but
->> !x=true, breaking @lowerSelectionRef's `if !@entry` guard). xfail/UH-1
->> in tests/index.mld captures the regression until the proper fix lands.
+>> comparison path in selection_ref validation.
 exe @canonicalizeDashes(value) = js {
   if (typeof value !== 'string') return value;
   return value.replace(/[‐‑‒–—−]/g, '-');
 }
 
-exe @lookupResolvedEntry(state, recordName, handle) = [
+>> Parse a rig wire-format handle (`r_<rt>_<key>`) and look up the matching
+>> record on the planner shelf via .byAddress(). Returns null when handle
+>> is malformed, the slot is missing, or no record matches the address.
+exe @lookupResolvedEntry(agent, recordName, handle) = [
+  if !@agent.isDefined() || !@agent.plannerShelf.isDefined() [ => null ]
   let @recordKey = @name(@recordName)
-  let @resolvedBucket = @bucketObject(@state.resolved)
-  let @bucket = @valueField(@resolvedBucket, @recordKey)
-  if @isResolvedIndexBucket(@bucket) [
-    let @byHandle = @valueField(@bucket, "by_handle") ?? {}
-    => @valueField(@byHandle, @name(@handle))
-  ]
-  let @entries = @resolvedEntries(@state, @recordName)
-  => loop(1000) [
-    let @ctx = @input ?? { index: 0 }
-    if @ctx.index >= @entries.length [ done null ]
-    let @entry = @entries[@ctx.index]
-    if @name(@entry.handle) == @name(@handle) [ done @entry ]
-    continue { index: @ctx.index + 1 }
-  ]
+  if !@recordKey.isDefined() [ => null ]
+  let @slot = @agent.plannerShelf[@recordKey]
+  if !@slot.isDefined() [ => null ]
+  let @h = @name(@handle)
+  if !@h.isDefined() [ => null ]
+  let @addr = @parseRigHandle(@h)
+  if @addr == null [ => null ]
+  if @addr.record != @recordKey [ => null ]
+  => @slot.byAddress(@addr)
 ]
 
-exe @resolvedEntryFieldRootValue(entry, fieldName) = [
-  let @fieldKey = @name(@fieldName)
-  => when [
-    !@fieldKey.isDefined() => @entry.value
-    @entry.identity_field.isDefined() && @fieldKey == @name(@entry.identity_field) && @entry.identity_value.isDefined() => @entry.identity_value
-    @entry.field_values[@fieldKey].isDefined() => @entry.field_values[@fieldKey]
-    * => @valueField(@entry.value, @fieldKey)
-  ]
+exe @parseRigHandle(handle) = js {
+  if (typeof handle !== "string") return null;
+  if (!handle.startsWith("r_")) return null;
+  const rest = handle.slice(2);
+  const keyIdx = rest.lastIndexOf("_");
+  if (keyIdx < 0) return null;
+  const record = rest.slice(0, keyIdx);
+  const key = rest.slice(keyIdx + 1);
+  if (record.length === 0 || key.length === 0) return null;
+  return { record, key, string: `${record}:${key}` };
+}
+
+exe @stateHandleFromAddress(recordValue) = [
+  let @addr = @recordValue.mx.address
+  if !@addr.isDefined() || @addr == null [ => null ]
+  => `r_@addr.record\_@addr.key`
 ]
 
-exe @resolvedEntryFieldValue(entry, fieldName) = [
+>> Direct field access on a plain record. Walks the path using mlld's
+>> native field access so factsources/wrappers survive. Replaces the
+>> envelope-shape @resolvedEntryFieldRootValue + @resolvedEntryFieldValue
+>> from the bucket era; entries are now records, identity_field /
+>> field_values are gone (the record's own .mx.data carries the data).
+exe @resolvedEntryFieldValue(record, fieldName) = [
   let @steps = @fieldPathSteps(@fieldName)
-  if @steps.length == 0 [ => @entry.value ]
+  if @steps.length == 0 [ => @record ]
 
   let @first = @steps[0]
   if @name(@valueField(@first, "kind")) != "field" [ => null ]
 
-  let @rootValue = @resolvedEntryFieldRootValue(@entry, @valueField(@first, "value"))
+  let @rootValue = @valueField(@record, @valueField(@first, "value"))
   if @steps.length == 1 [ => @rootValue ]
 
   => loop(1000) [
@@ -375,103 +309,152 @@ exe @resolvedControlResult(fieldName, fieldValue) = [
   }
 ]
 
+>> Read the record-def's declared key field, when present. Records without
+>> an explicit `key:` return null — fact-field fallback handles those.
+exe @recordDefKeyField(recordDef) = [
+  if !@recordDef.isDefined() [ => null ]
+  let @entries = @recordDef.mx.entries ?? []
+  let @match = for @e in @entries when @e[0] == "key" => @e[1]
+  => when [
+    @match.length == 0 => null
+    @typeof(@match[0]) != "string" => null
+    @match[0] == "" => null
+    * => @match[0]
+  ]
+]
+
+>> Whether the named field on this record is declared `type: handle`.
+>> Handle-typed identifiers are rig-internal opaque tokens (see c-0298 +
+>> c-a8d2). They have no meaningful value to pass to MCP, so a fieldless
+>> resolved control arg whose default field is handle-typed is always a
+>> planner mistake.
+exe @recordDefFieldIsHandleType(recordDef, fieldName) = [
+  if !@fieldName.isDefined() || @typeof(@fieldName) != "string" || @fieldName == "" [ => false ]
+  if !@recordDef.isDefined() [ => false ]
+  let @entries = @recordDef.mx.entries ?? []
+  let @fieldsRaw = for @e in @entries when @e[0] == "fields" => @e[1]
+  let @fields = when [ @fieldsRaw.length > 0 => @fieldsRaw[0] * => [] ]
+  let @match = for @field in @fields when @field.name == @fieldName => @field
+  => when [
+    @match.length == 0 => false
+    @match[0].valueType == "handle" => true
+    * => false
+  ]
+]
+
+>> Fact-classified fields on a record def. Order matches declaration order
+>> so callers that want "the first fact field" get a deterministic answer.
+exe @recordDefFactFields(recordDef) = [
+  if !@recordDef.isDefined() [ => [] ]
+  let @entries = @recordDef.mx.entries ?? []
+  let @fieldsRaw = for @e in @entries when @e[0] == "fields" => @e[1]
+  let @fields = when [ @fieldsRaw.length > 0 => @fieldsRaw[0] * => [] ]
+  => for @f in @fields when @f.classification == "fact" => @f.name
+]
+
+>> Effective identity field for a record, mirroring the legacy
+>> @recordIdentityField semantics: explicit `key:` wins, else the first
+>> fact-classified field. Used by control-arg resolution to pick which
+>> field to dispatch when the planner sends a fieldless resolved ref.
+exe @recordDefIdentityField(recordDef) = [
+  let @keyField = @recordDefKeyField(@recordDef)
+  if @keyField.isDefined() && @keyField != null [ => @keyField ]
+  let @factFields = @recordDefFactFields(@recordDef)
+  => when [
+    @factFields.length > 0 => @factFields[0]
+    * => null
+  ]
+]
+
 >> Fieldless resolved refs are planner shorthand for "that chosen
->> instance". For control args rig still needs one concrete fact-bearing
->> scalar, so prefer the declared identity field and then the unique
->> fact-bearing field if there is only one.
-exe @entryControlValue(entry) = [
-  if @entry.identity_field.isDefined() [
-    let @identityValue = @resolvedEntryFieldValue(@entry, @entry.identity_field)
+>> instance". Pick the declared identity field on the record def, then
+>> fall back to a unique fact-bearing field if exactly one exists.
+exe @entryControlValue(recordDef, recordValue) = [
+  let @identityField = @recordDefIdentityField(@recordDef)
+  if @identityField.isDefined() && @identityField != null [
+    let @identityValue = @resolvedEntryFieldValue(@recordValue, @identityField)
     if @identityValue.isDefined() && @identityValue != null [
-      => { ok: true, field: @entry.identity_field, value: @identityValue }
+      => { ok: true, field: @identityField, value: @identityValue }
     ]
   ]
 
-  if @entry.identity_value.isDefined() && @hasFacts(@entry.identity_value) [
-    => {
-      ok: true,
-      field: @entry.identity_field ?? null,
-      value: @entry.identity_value
-    }
+  let @factFields = @recordDefFactFields(@recordDef)
+  let @candidates = for @f in @factFields [
+    let @v = @resolvedEntryFieldValue(@recordValue, @f)
+    => when [
+      @v != null && @hasFacts(@v) => { field: @f, value: @v }
+      * => null
+    ]
   ]
-
-  let @matchingKeyFields = for @fieldName, @fieldValue in (@entry.field_values ?? {}) when @fieldValue != null && @constraintEqValue(@fieldValue) == @constraintEqValue(@entry.key) => {
-    field: @fieldName,
-    value: @fieldValue
-  }
-  if @matchingKeyFields.length > 0 [
-    => { ok: true, field: @matchingKeyFields[0].field, value: @matchingKeyFields[0].value }
-  ]
-
-  let @factFields = for @fieldName, @fieldValue in (@entry.field_values ?? {}) when @fieldValue != null && @hasFacts(@fieldValue) => {
-    field: @fieldName,
-    value: @fieldValue
-  }
+  let @withFacts = for @c in @candidates when @c => @c
   => when [
-    @factFields.length == 1 => { ok: true, field: @factFields[0].field, value: @factFields[0].value }
+    @withFacts.length == 1 => { ok: true, field: @withFacts[0].field, value: @withFacts[0].value }
     * => { ok: false, error: "control_ref_requires_explicit_field" }
   ]
 ]
 
-exe @lookupResolvedControlValue(state, recordName, handle, fieldName) = [
-  let @entry = @lookupResolvedEntry(@state, @recordName, @handle)
-  if !@entry [ => { ok: false, error: "control_ref_backing_missing" } ]
+exe @lookupResolvedControlValue(agent, recordName, handle, fieldName) = [
+  let @record = @lookupResolvedEntry(@agent, @recordName, @handle)
+  if !@record [ => { ok: false, error: "control_ref_backing_missing" } ]
+  let @recordDef = when [
+    @agent.records.isDefined() => @agent.records[@recordName]
+    * => null
+  ]
 
   if @fieldName.isDefined() [
-    let @fieldValue = @resolvedEntryFieldValue(@entry, @fieldName)
+    let @fieldValue = @resolvedEntryFieldValue(@record, @fieldName)
     => when [
       @fieldValue.isDefined() && @fieldValue != null => @resolvedControlResult(@fieldName, @fieldValue)
       * => [
-        let @availableFields = for @k, @v in (@entry.field_values ?? {}) when @v != null => `@k`
+        let @factFields = @recordDefFactFields(@recordDef)
+        let @availableFields = for @f in @factFields when @resolvedEntryFieldValue(@record, @f) != null => @f
         => { ok: false, error: "resolved_field_missing", field: @fieldName, hint: `Field "@fieldName" not found on this record. Available fields: @availableFields.join(", ")` }
       ]
     ]
   ]
+
+  let @identityField = @recordDefIdentityField(@recordDef)
 
   >> Fieldless-resolved with a handle-typed identity is always a planner
   >> mistake. Records like @slack_channel and @slack_msg use a synthetic
   >> id_:handle as their key (c-0298, c-a8d2) so the framework's auto-
   >> handle string is opaque. The id_ value itself is a rig-internal
   >> token with no meaning to MCP — passing it as a control arg makes
-  >> MCP look up a non-existent identifier and return an empty result,
-  >> which the planner sees as `count: 0` with a generic summary and
-  >> wastes iterations debugging. Error loudly with the handle the
-  >> planner sent and the available fact fields, so the next call adds
-  >> the right `field:` selector.
-  if @entry.identity_is_handle [
-    let @factFields = for @field, @value in (@entry.field_values ?? {}) when @value != null && @field != @entry.identity_field => `@field`
+  >> MCP look up a non-existent identifier and return an empty result.
+  >> Error loudly with the handle the planner sent and the available
+  >> fact fields, so the next call adds the right `field:` selector.
+  let @identityIsHandle = @recordDefFieldIsHandleType(@recordDef, @identityField)
+  if @identityIsHandle [
+    let @factFields = @recordDefFactFields(@recordDef)
+    let @available = for @f in @factFields when @f != @identityField && @resolvedEntryFieldValue(@record, @f) != null => @f
     => {
       ok: false,
       error: "fieldless_resolved_handle_identity",
       record: @recordName,
       handle: @handle,
-      hint: `@recordName.@entry.identity_field is a rig-internal handle, not a meaningful value. Specify field: \"<name>\" — available fact fields: @factFields.join(", ")`
+      hint: `@recordName.@identityField is a rig-internal handle, not a meaningful value. Specify field: \"<name>\" — available fact fields: @available.join(", ")`
     }
   ]
 
-  if @entry.identity_field.isDefined() [
-    let @identityValue = @resolvedEntryFieldValue(@entry, @entry.identity_field)
-    if @identityValue.isDefined() && @identityValue != null [ => @resolvedControlResult(@entry.identity_field, @identityValue) ]
+  if @identityField.isDefined() && @identityField != null [
+    let @identityValue = @resolvedEntryFieldValue(@record, @identityField)
+    if @identityValue.isDefined() && @identityValue != null [ => @resolvedControlResult(@identityField, @identityValue) ]
   ]
 
-  if @entry.identity_value.isDefined() && @hasFacts(@entry.identity_value) [
-    => @resolvedControlResult(@entry.identity_field ?? null, @entry.identity_value)
-  ]
-
-  let @defaultValue = @entryControlValue(@entry)
+  let @defaultValue = @entryControlValue(@recordDef, @record)
   => when [
     @defaultValue.ok => @resolvedControlResult(@defaultValue.field, @defaultValue.value)
     * => @defaultValue
   ]
 ]
 
-exe @lowerSelectionRef(state, ref) = [
+exe @lowerSelectionRef(agent, ref) = [
   if !@ref.isDefined() [ => { ok: false, error: "missing_selection_ref" } ]
   if @refSource(@ref) != "selection" [ => { ok: false, error: "wrong_selection_source" } ]
   if !@ref.backing.isDefined() [ => { ok: false, error: "selection_missing_backing" } ]
-  let @entry = @lookupResolvedEntry(@state, @ref.backing.record, @ref.backing.handle)
-  if !@entry [
-    let @available = for @e in @resolvedEntries(@state, @ref.backing.record) => @name(@e.handle)
+  let @record = @lookupResolvedEntry(@agent, @ref.backing.record, @ref.backing.handle)
+  if !@record [
+    let @available = for @r in @resolvedEntries(@agent, @ref.backing.record) => @stateHandleFromAddress(@r)
     => {
       ok: false,
       error: "selection_backing_missing",
@@ -491,17 +474,21 @@ exe @lowerSelectionRef(state, ref) = [
   }
 ]
 
-exe @resolveControlRefValue(state, ref) = [
+exe @resolveControlRefValue(agent, ref) = [
   => when [
     !@ref.isDefined() => { ok: false, error: "missing_ref" }
-    @refSource(@ref) == "selection" => @lookupResolvedControlValue(@state, @ref.backing.record, @ref.backing.handle, @ref.field)
-    @refSource(@ref) == "resolved" && @ref.handle.isDefined() => @lookupResolvedControlValue(@state, @ref.record, @ref.handle, @ref.field)
+    @refSource(@ref) == "selection" => @lookupResolvedControlValue(@agent, @ref.backing.record, @ref.backing.handle, @ref.field)
+    @refSource(@ref) == "resolved" && @ref.handle.isDefined() => @lookupResolvedControlValue(@agent, @ref.record, @ref.handle, @ref.field)
     * => { ok: false, error: "control_ref_backing_missing" }
   ]
 ]
 
 exe @resolveNamedValue(state, bucketName, ref) = [
-  let @bucket = @bucketObject(@state[@bucketName])
+  let @bucket = when [
+    @state[@bucketName].mx.data.isDefined() => @state[@bucketName].mx.data
+    @state[@bucketName].data.isDefined() => @state[@bucketName].data
+    * => @state[@bucketName]
+  ]
   let @entry = @namedStateEntry(@bucket[@ref.name])
   if !@entry.isDefined() [ => { ok: false, error: `@bucketName\_name_not_found`, name: @ref.name } ]
   let @rootValue = @namedEntryRootValue(@entry)
@@ -539,19 +526,19 @@ exe @resolveNamedValue(state, bucketName, ref) = [
   ]
 ]
 
-exe @resolveRefValue(state, ref) = [
+exe @resolveRefValue(agent, state, ref) = [
   if !@ref.isDefined() [ => { ok: false, error: "missing_ref" } ]
 
   if @refSource(@ref) == "selection" [
-    let @lowered = @lowerSelectionRef(@state, @ref)
+    let @lowered = @lowerSelectionRef(@agent, @ref)
     if !@lowered.ok [ => @lowered ]
-    => @resolveRefValue(@state, @lowered.ref)
+    => @resolveRefValue(@agent, @state, @lowered.ref)
   ]
 
   if @refSource(@ref) == "resolved" [
     if @ref.handle.isDefined() [
-      let @entry = @lookupResolvedEntry(@state, @ref.record, @ref.handle)
-      if !@entry [
+      let @record = @lookupResolvedEntry(@agent, @ref.record, @ref.handle)
+      if !@record [
         => {
           ok: false,
           error: "resolved_handle_not_found",
@@ -560,8 +547,8 @@ exe @resolveRefValue(state, ref) = [
         }
       ]
       let @value = when [
-        @ref.field.isDefined() => @resolvedEntryFieldValue(@entry, @ref.field)
-        * => @entry.value
+        @ref.field.isDefined() => @resolvedEntryFieldValue(@record, @ref.field)
+        * => @record
       ]
       => when [
         @value.isDefined() => {
@@ -572,25 +559,23 @@ exe @resolveRefValue(state, ref) = [
           value: @value
         }
         * => [
-          let @refEntry = @lookupResolvedEntry(@state, @ref.record, @ref.handle)
-          let @refFields = when [
-            @refEntry.isDefined() => for @k, @v in (@refEntry.field_values ?? {}) when @v != null => `@k`
-            * => []
-          ]
+          let @recordDef = when [ @agent.records.isDefined() => @agent.records[@ref.record] * => null ]
+          let @factFields = @recordDefFactFields(@recordDef)
+          let @available = for @f in @factFields when @resolvedEntryFieldValue(@record, @f) != null => @f
           => {
             ok: false,
             error: "resolved_field_missing",
             record: @ref.record,
             handle: @ref.handle,
             field: @ref.field,
-            hint: `Field "@ref.field" not found. Available fields: @refFields.join(", ")`
+            hint: `Field "@ref.field" not found. Available fields: @available.join(", ")`
           }
         ]
       ]
     ]
 
-    let @entries = @resolvedEntries(@state, @ref.record)
-    let @values = for @entry in @entries => @entry.value
+    let @entries = @resolvedEntries(@agent, @ref.record)
+    let @values = for @r in @entries => @r
     => {
       ok: true,
       source: "resolved",
@@ -649,12 +634,12 @@ exe @knownInTask(query, literalValue) = js {
   return patterns.some((pattern) => normalizedQuery.includes(pattern));
 }
 
-exe @compileScalarRef(state, tool, argName, ref, query) = [
+exe @compileScalarRef(agent, state, tool, argName, ref, query) = [
   let @argMeta = @toolArgMeta(@tool, @argName)
-  => @compileScalarRefWithMeta(@state, @tool, @argMeta, @ref, @query)
+  => @compileScalarRefWithMeta(@agent, @state, @tool, @argMeta, @ref, @query)
 ]
 
-exe @compileScalarRefWithMeta(state, tool, argMeta, ref, query) = [
+exe @compileScalarRefWithMeta(agent, state, tool, argMeta, ref, query) = [
   let @arg = @argMeta.arg
   let @role = @argMeta.role
   if @role == "unknown" [ => { ok: false, arg: @arg, error: "unknown_tool_arg" } ]
@@ -662,13 +647,13 @@ exe @compileScalarRefWithMeta(state, tool, argMeta, ref, query) = [
   let @exactArg = @argMeta.exact
   let @controlResolved = when [
     @role != "control" => null
-    @refSource(@ref) == "selection" => @resolveControlRefValue(@state, @ref)
-    @refSource(@ref) == "resolved" && @ref.handle.isDefined() => @resolveControlRefValue(@state, @ref)
+    @refSource(@ref) == "selection" => @resolveControlRefValue(@agent, @ref)
+    @refSource(@ref) == "resolved" && @ref.handle.isDefined() => @resolveControlRefValue(@agent, @ref)
     * => null
   ]
   let @resolved = when [
     @controlResolved.isDefined() => @controlResolved
-    * => @resolveRefValue(@state, @ref)
+    * => @resolveRefValue(@agent, @state, @ref)
   ]
   if !@resolved.ok [ => { ...@resolved, arg: @arg } ]
 
@@ -740,7 +725,7 @@ exe @compileScalarRefWithMeta(state, tool, argMeta, ref, query) = [
 
   if @resolved.source == "resolved" [
     if @role == "control" && !@ref.handle.isDefined() && @ref.source != "selection" [
-      let @available = for @e in @resolvedEntries(@state, @ref.record) => @name(@e.handle)
+      let @available = for @r in @resolvedEntries(@agent, @ref.record) => @stateHandleFromAddress(@r)
       let @exampleHandle = @available[0] ?? "<handle>"
       => {
         ok: false,
@@ -839,31 +824,31 @@ exe @compileScalarRefWithMeta(state, tool, argMeta, ref, query) = [
 >> `get_rating_reviews_for_hotels(hotel_names: array)` after a family
 >> resolve like `get_all_hotels_in_city`. Pre-expansion (vs. recursive call
 >> from inside @compileArgRef) avoids mlld's self-recursion guard.
-exe @expandFamilyRef(state, ref) = [
-  let @entries = @resolvedEntries(@state, @ref.record)
+exe @expandFamilyRef(agent, ref) = [
+  let @entries = @resolvedEntries(@agent, @ref.record)
   if @entries.length == 0 [
     => { ok: false, error: "resolved_family_empty", record: @ref.record }
   ]
-  let @expanded = for @e in @entries => {
+  let @expanded = for @r in @entries => {
     source: "resolved",
     record: @ref.record,
-    handle: @e.handle,
+    handle: @stateHandleFromAddress(@r),
     field: @ref.field
   }
   => { ok: true, expanded: @expanded }
 ]
 
-exe @maybeExpandFamilyRef(state, ref) = when [
-  @typeof(@ref) == "object" && @ref.source == "resolved_family" => @expandFamilyRef(@state, @ref)
+exe @maybeExpandFamilyRef(agent, ref) = when [
+  @typeof(@ref) == "object" && @ref.source == "resolved_family" => @expandFamilyRef(@agent, @ref)
   * => { ok: true, expanded: @ref }
 ]
 
-exe @compileArgRef(state, tool, argName, ref, query) = [
+exe @compileArgRef(agent, state, tool, argName, ref, query) = [
   let @arg = @name(@argName)
 
   if @typeof(@ref) == "array" [
     let @argMeta = @toolArgMeta(@tool, @arg)
-    let @compiled = for @item in @ref => @compileScalarRefWithMeta(@state, @tool, @argMeta, @item, @query)
+    let @compiled = for @item in @ref => @compileScalarRefWithMeta(@agent, @state, @tool, @argMeta, @item, @query)
     let @errors = for @entry in @compiled when !@entry.ok => @entry
     if @errors.length > 0 [
       => { ok: false, arg: @arg, error: "array_arg_element_invalid", issues: @errors }
@@ -923,7 +908,7 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
     }
   ]
 
-  => @compileScalarRef(@state, @tool, @arg, @ref, @query)
+  => @compileScalarRef(@agent, @state, @tool, @arg, @ref, @query)
 ]
 
 >> Validate record-handle arguments for resolve-phase rigTransform tools.
@@ -933,92 +918,65 @@ exe @compileArgRef(state, tool, argName, ref, query) = [
 >> a fieldless `{ source: "resolved", record: <expected>, handle: <h> }`
 >> ref (or array of same). Source-class firewall: extracted, derived,
 >> known, allow, family, and selection refs are rejected. Field refs are
->> rejected — record args carry handles, not field values, because the
->> transform reads the record from state and the URL/payload material
->> lives in private capability state, not in the public record.
+>> rejected — record args carry handles, not field values.
 >>
 >> Returns:
 >>   { ok: true, descriptors: { argName: { record, handle } | [{ record, handle }, ...] } }
 >>   { ok: false, error, arg }
-exe @compileRecordArgs(state, recordArgsSpec, args) = js {
-  if (!recordArgsSpec || typeof recordArgsSpec !== "object") {
-    return { ok: false, error: "recordArgsSpec must be object" };
-  }
-  if (!args || typeof args !== "object") {
-    return { ok: false, error: "args must be object" };
-  }
-  if (!state || typeof state !== "object" || !state.resolved || typeof state.resolved !== "object") {
-    return { ok: false, error: "state.resolved missing" };
-  }
+exe @compileRecordArgs(agent, recordArgsSpec, args) = [
+  if @typeof(@recordArgsSpec) != "object" [
+    => { ok: false, error: "recordArgsSpec must be object" }
+  ]
+  if @typeof(@args) != "object" [
+    => { ok: false, error: "args must be object" }
+  ]
 
-  // Bucket-shape tolerant entry collector.
-  function entriesOf(bucket) {
-    if (Array.isArray(bucket)) return bucket;
-    if (!bucket || typeof bucket !== "object") return [];
-    if (bucket._rig_bucket === "resolved_index_v1") {
-      const byHandle = bucket.by_handle || {};
-      return Object.values(byHandle);
-    }
-    return Object.values(bucket);
-  }
+  let @specKeys = for @k, @v in @recordArgsSpec => @k
+  let @perArg = for @argName in @specKeys [
+    let @expectedRecord = @recordArgsSpec[@argName]
+    let @argValue = @args[@argName]
+    if !@argValue.isDefined() [
+      => { ok: false, error: `record arg '@argName' is missing`, arg: @argName }
+    ]
+    let @items = when [
+      @typeof(@argValue) == "array" => @argValue
+      * => [@argValue]
+    ]
+    let @validations = for @ref in @items [
+      let @i = @mx.for.index
+      let @label = when [ @typeof(@argValue) == "array" => `@argName[@i]` * => @argName ]
+      => when [
+        !@ref.isDefined() || @typeof(@ref) != "object" => { ok: false, error: `@label: ref must be object`, arg: @argName }
+        @ref.source != "resolved" => { ok: false, error: `@label: source must be 'resolved' for record args, got '@ref.source'`, arg: @argName }
+        @ref.record != @expectedRecord => { ok: false, error: `@label: record must be '@expectedRecord', got '@ref.record'`, arg: @argName }
+        @ref.field.isDefined() && @ref.field != null => { ok: false, error: `@label: field refs are not allowed for record args (got field='@ref.field')`, arg: @argName }
+        @typeof(@ref.handle) != "string" || @ref.handle.length == 0 => { ok: false, error: `@label: handle must be non-empty string`, arg: @argName }
+        @lookupResolvedEntry(@agent, @expectedRecord, @ref.handle) == null => { ok: false, error: `@label: handle '@ref.handle' not found on planner shelf for '@expectedRecord'`, arg: @argName }
+        * => { ok: true, descriptor: { record: @expectedRecord, handle: @ref.handle } }
+      ]
+    ]
+    let @errors = for @v in @validations when !@v.ok => @v
+    if @errors.length > 0 [ => @errors[0] ]
+    let @descriptors = for @v in @validations => @v.descriptor
+    let @value = when [
+      @typeof(@argValue) == "array" => @descriptors
+      * => @descriptors[0]
+    ]
+    => { ok: true, arg: @argName, value: @value }
+  ]
 
-  const descriptors = {};
-  for (const argName of Object.keys(recordArgsSpec)) {
-    const expectedRecord = recordArgsSpec[argName];
-    if (!(argName in args)) {
-      return { ok: false, error: `record arg '${argName}' is missing`, arg: argName };
-    }
-    const argValue = args[argName];
-    const isArray = Array.isArray(argValue);
-    const items = isArray ? argValue : [argValue];
+  let @errors = for @e in @perArg when !@e.ok => @e
+  if @errors.length > 0 [ => @errors[0] ]
 
-    const validated = [];
-    for (let i = 0; i < items.length; i++) {
-      const ref = items[i];
-      const itemLabel = isArray ? `${argName}[${i}]` : argName;
-
-      if (!ref || typeof ref !== "object") {
-        return { ok: false, error: `${itemLabel}: ref must be object`, arg: argName };
-      }
-      if (ref.source !== "resolved") {
-        return { ok: false, error: `${itemLabel}: source must be 'resolved' for record args, got '${ref.source}'`, arg: argName };
-      }
-      if (ref.record !== expectedRecord) {
-        return { ok: false, error: `${itemLabel}: record must be '${expectedRecord}', got '${ref.record}'`, arg: argName };
-      }
-      if (ref.field !== undefined && ref.field !== null) {
-        return { ok: false, error: `${itemLabel}: field refs are not allowed for record args (got field='${ref.field}')`, arg: argName };
-      }
-      if (typeof ref.handle !== "string" || ref.handle.length === 0) {
-        return { ok: false, error: `${itemLabel}: handle must be non-empty string`, arg: argName };
-      }
-
-      const bucket = state.resolved[expectedRecord];
-      if (!bucket) {
-        return { ok: false, error: `${itemLabel}: no resolved bucket for record '${expectedRecord}'`, arg: argName };
-      }
-      let found = false;
-      for (const entry of entriesOf(bucket)) {
-        if (entry && entry.handle === ref.handle) { found = true; break; }
-      }
-      if (!found) {
-        return { ok: false, error: `${itemLabel}: handle '${ref.handle}' not found in resolved bucket '${expectedRecord}'`, arg: argName };
-      }
-
-      validated.push({ record: expectedRecord, handle: ref.handle });
-    }
-
-    descriptors[argName] = isArray ? validated : validated[0];
-  }
-
-  return { ok: true, descriptors };
-}
+  let @pairs = for @e in @perArg => { key: @e.arg, value: @e.value }
+  => { ok: true, descriptors: @pairsToObject(@pairs) }
+]
 
 >> Read-phase tool args still cross the same provenance boundary as write
 >> control args. Compile them through the shared ref checker, then hand
 >> the original native values to the runtime dispatch layer.
-exe @compileToolArgs(state, tool, args, query) = [
-  let @compiledEntries = for @argName, @argValue in (@args ?? {}) => @compileFamilyOrArg(@state, @tool, @argName, @argValue, @query)
+exe @compileToolArgs(agent, state, tool, args, query) = [
+  let @compiledEntries = for @argName, @argValue in (@args ?? {}) => @compileFamilyOrArg(@agent, @state, @tool, @argName, @argValue, @query)
   let @errors = for @entry in @compiledEntries when !@entry.ok => @entry
   if @errors.length > 0 [
     => { ok: false, error: "intent_compile_failed", issues: @errors }
@@ -1034,9 +992,9 @@ exe @compileToolArgs(state, tool, args, query) = [
 >> @compileArgRef. Expansion lives here (not inside @compileArgRef) because
 >> mlld's self-recursion guard rejects @compileArgRef calling itself with
 >> the expanded array.
-exe @compileFamilyOrArg(state, tool, argName, ref, query) = [
+exe @compileFamilyOrArg(agent, state, tool, argName, ref, query) = [
   if @typeof(@ref) == "object" && @ref.source == "resolved_family" [
-    let @expansion = @expandFamilyRef(@state, @ref)
+    let @expansion = @expandFamilyRef(@agent, @ref)
     if !@expansion.ok [
       => {
         ok: false,
@@ -1046,9 +1004,9 @@ exe @compileFamilyOrArg(state, tool, argName, ref, query) = [
         hint: `No resolved entries of record "@expansion.record" yet. Resolve the family first (e.g. a get_all_* tool) before using { source: "resolved_family", ... }.`
       }
     ]
-    => @compileArgRef(@state, @tool, @argName, @expansion.expanded, @query)
+    => @compileArgRef(@agent, @state, @tool, @argName, @expansion.expanded, @query)
   ]
-  => @compileArgRef(@state, @tool, @argName, @ref, @query)
+  => @compileArgRef(@agent, @state, @tool, @argName, @ref, @query)
 ]
 
 exe @bucketEntries(operationName, compiledArgs, bucketName) = [
@@ -1107,13 +1065,13 @@ exe @flatPolicyIntent(operationName, compiledEntries, updateArgs) = [
   ]
 ]
 
-exe @compileExecuteIntent(state, tools, decision, query) = [
+exe @compileExecuteIntent(agent, state, tools, decision, query) = [
   let @lookup = @lookupWriteTool(@tools, @decision.operation)
   if !@lookup.ok [ => @lookup ]
 
   let @tool = @lookup.tool
   let @args = @decision.args ?? {}
-  let @compiledEntries = for @argName, @argValue in @args => @compileFamilyOrArg(@state, @tool, @argName, @argValue, @query)
+  let @compiledEntries = for @argName, @argValue in @args => @compileFamilyOrArg(@agent, @state, @tool, @argName, @argValue, @query)
   let @errors = for @entry in @compiledEntries when !@entry.ok => @entry
   if @errors.length > 0 [
     => { ok: false, error: "intent_compile_failed", issues: @errors }
@@ -1150,14 +1108,14 @@ export {
   @compileRecordArgs,
   @compileExecuteIntent,
   @resolvedEntryFieldValue,
-  @isResolvedIndexBucket,
-  @indexedBucketEntries,
-  @bucketItems,
-  @bucketLength,
-  @bucketObject,
   @valueField,
   @canonicalizeDashes,
   @lookupResolvedEntry,
+  @stateHandleFromAddress,
+  @parseRigHandle,
   @hasFacts,
-  @factAttestations
+  @factAttestations,
+  @recordDefIdentityField,
+  @recordDefFactFields,
+  @recordDefFieldIsHandleType
 }

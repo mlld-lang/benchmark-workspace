@@ -12,12 +12,13 @@ import {
   @appendLlmDebug,
   @updateExtractSources,
   @projectResolvedEntry,
-  @cachedPlannerEntries,
-  @bucketItems,
-  @isResolvedIndexBucket,
   @valueField,
-  @batchSpecMergeState
+  @stateHandleFromAddress,
+  @shelfRecords,
+  @shelfReadAll,
+  @shelfLookupByHandle
 } from "../runtime.mld"
+import { @withUrlCapabilities } from "../transforms/url_refs.mld"
 import {
   @serializeLifecycleJson,
   @appendPhaseEvent,
@@ -240,21 +241,30 @@ exe @entryHash(entry) = [
   ]
 ]
 
-exe @stateProgressFingerprint(state) = [
+>> Stage B: progress fingerprint reads the planner shelf instead of
+>> walking state.resolved buckets. Each record's stable .mx.address.key
+>> fills the slot of the old handle; .mx.hash captures content drift.
+>> Slot version (slot.mx.version) replaces bucket.version. The
+>> R:<rt>:v<n>:<addrKey>^<hash> format is preserved so progress
+>> comparison stays string-equality.
+exe @stateProgressFingerprint(agent, state) = [
   if !@state.isDefined() || @typeof(@state) != "object" [ => "" ]
-  let @resolved = @state.resolved ?? {}
-  let @resolvedTypes = @sortedObjectKeys(@resolved)
-  let @resolvedParts = for @recordType in @resolvedTypes [
-    let @bucket = @resolved[@recordType] ?? {}
-    let @version = @bucket.version ?? 0
-    let @byHandle = @bucket.by_handle ?? {}
-    let @handles = @sortedObjectKeys(@byHandle)
-    let @handleSigs = for @h in @handles [
-      let @entry = @byHandle[@h]
-      let @hash = @entryHash(@entry)
-      => `@h^@hash`
+  let @records = @agent.records ?? {}
+  let @recordTypes = @sortedObjectKeys(@records)
+  let @resolvedParts = for @recordType in @recordTypes [
+    if !@agent.plannerShelf.isDefined() [ => `R:@recordType:v0:` ]
+    let @slot = @agent.plannerShelf[@recordType]
+    if !@slot.isDefined() [ => `R:@recordType:v0:` ]
+    let @version = @slot.mx.version ?? 0
+    let @entries = @shelf.read(@slot)
+    let @sigs = for @r in @entries [
+      let @addr = @r.mx.address
+      let @key = when [ @addr.isDefined() && @addr.key.isDefined() => @addr.key * => "?" ]
+      let @hash = when [ @r.mx.hash.isDefined() && @r.mx.hash != null => @r.mx.hash * => @entryFallbackHash(@r) ]
+      => `@key^@hash`
     ]
-    let @joined = @handleSigs.join("|")
+    let @sortedSigs = @sigs.sort()
+    let @joined = @sortedSigs.join("|")
     => `R:@recordType:v@version:@joined`
   ]
   let @extracted = @state.extracted ?? {}
@@ -274,26 +284,15 @@ exe @stateProgressFingerprint(state) = [
 ]
 
 
-exe @plannerResolvedRecords(records, state, recordType, handles) = [
+exe @plannerResolvedRecords(agent, recordType, handles) = [
+  let @records = @agent.records ?? {}
   let @recordDef = @records[@recordType]
   if !@recordDef.isDefined() [ => [] ]
   let @handleList = for @handle in @arrayItems(@handles ?? []) => @stringValue(@handle)
-  let @bucket = @state.resolved[@recordType]
-  => when [
-    @isResolvedIndexBucket(@bucket) => [
-      let @cached = @cachedPlannerEntries(@bucket)
-      if @cached != null [
-        => for @entry in @arrayItems(@cached) when @handleList.includes(@stringValue(@entry.handle)) => @entry
-      ]
-      let @order = @valueField(@bucket, "order") ?? []
-      let @byHandle = @valueField(@bucket, "by_handle") ?? {}
-      => for @handle in @order when @handleList.includes(@stringValue(@handle)) [
-        let @entry = @valueField(@byHandle, @stringValue(@handle))
-        if @entry == null [ => null ]
-        => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
-      ]
-    ]
-    * => for @entry in @bucketItems(@bucket) when @handleList.includes(@stringValue(@entry.handle)) => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
+  => for @h in @handleList [
+    let @r = @shelfLookupByHandle(@agent, @recordType, @h)
+    if @r == null [ => null ]
+    => @projectResolvedEntry(@recordType, @recordDef, @r, "role:planner")
   ]
 ]
 
@@ -451,7 +450,7 @@ exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
   >> c-3438 (B): compute progress fingerprint, compare to prior,
   >> update calls_since_progress. Errors and successful calls both
   >> count toward "no progress" if state didn't actually change.
-  let @newFingerprint = @stateProgressFingerprint(@nextState)
+  let @newFingerprint = @stateProgressFingerprint(@toolCtx.agent, @nextState)
   let @priorFingerprint = @toolCtx.runtime.progress_fingerprint ?? ""
   let @priorCallsSinceProgress = @toolCtx.runtime.calls_since_progress ?? 0
   let @nextCallsSinceProgress = when [
@@ -527,7 +526,7 @@ exe @plannerResolve(input) = [
       record_type: @phaseResult.result.record_type,
       count: @phaseResult.result.count,
       handles: @resolvedHandles,
-      records: @plannerResolvedRecords(@toolCtx.agent.records ?? {}, @settled.finished.state, @phaseResult.result.record_type, @resolvedHandles),
+      records: @plannerResolvedRecords(@toolCtx.agent, @phaseResult.result.record_type, @resolvedHandles),
       summary: @phaseResult.result.summary,
       budget_warning: @settled.budget_warning,
       progress_warning: @settled.progress_warning
@@ -553,6 +552,9 @@ exe @plannerResolveBatch(input) = [
   let @initialToolCalls = @initialCtx.runtime.tool_calls
   let @initialInvalidCalls = @initialCtx.runtime.invalid_calls
 
+  >> Phase A — parallel dispatch. shelf-parallel buffers @shelf.write
+>> calls per branch and field-merges them on parallel exit, so resolved
+>> records merge automatically without an explicit Phase B step.
   let @dispatched = for parallel(8) @spec in @resolves [
     let @decision = { phase: "resolve", tool: @spec.tool, args: @spec.args ?? {}, purpose: @spec.purpose ?? @batchPurpose }
     let @phaseResult = @dispatchResolve(@initialCtx.agent, @initialCtx.state, @decision, @initialCtx.query, true)
@@ -573,21 +575,19 @@ exe @plannerResolveBatch(input) = [
     => @debugCombined
   ]
 
-  >> Phase B — merge all spec deltas in memory. c-eda4 established that
-  >> each spec returns initial+thatSpecWrites, so the batch must merge
-  >> each spec's delta atop the cumulative state. c-63fe: do that without
-  >> calling @settlePhaseDispatch per spec; each settle writes planner
-  >> state/runtime and recomputes progress, which creates the long
-  >> resolve_batch tail on travel.
+  >> Phase B — merge url_refs deltas sequentially. Resolved records were
+  >> already field-merged into the shelf by shelf-parallel; only
+  >> state.capabilities.url_refs needs a sequential walk because it lives
+  >> outside the shelf machinery (Stage C will type-shelf this too).
   let @mergedState = loop(1000) [
     let @ctx = @input ?? { index: 0, state: @initialCtx.state }
     if @ctx.index >= @dispatched.length [ done @ctx.state ]
     let @item = @dispatched[@ctx.index]
-    let @nextState = @batchSpecMergeState(
-      @ctx.state,
-      @item.phaseResult,
-      @initialCtx.agent
-    )
+    let @capDelta = @item.phaseResult.state_delta.capabilities.url_refs ?? null
+    let @nextState = when [
+      @capDelta.isDefined() && @capDelta != null => @withUrlCapabilities(@ctx.state, @capDelta)
+      * => @ctx.state
+    ]
     continue {
       index: @ctx.index + 1,
       state: @nextState
@@ -597,7 +597,6 @@ exe @plannerResolveBatch(input) = [
   if @debugStop == "merge" [
     let @debugCombined = {
       status: "debug_merge",
-      resolved_keys: @mergedState.resolved.mx.keys ?? [],
       dispatched: @dispatched.length
     }
     -> @debugCombined
@@ -641,7 +640,7 @@ exe @plannerResolveBatch(input) = [
         record_type: @item.phaseResult.result.record_type,
         count: @item.phaseResult.result.count,
         handles: @resolvedHandles,
-        records: @plannerResolvedRecords(@initialCtx.agent.records ?? {}, @mergedState, @item.phaseResult.result.record_type, @resolvedHandles),
+        records: @plannerResolvedRecords(@initialCtx.agent, @item.phaseResult.result.record_type, @resolvedHandles),
         summary: @item.phaseResult.result.summary
       }
     ]
@@ -659,7 +658,7 @@ exe @plannerResolveBatch(input) = [
   let @anyError = @errorResults.length > 0
   let @correctedToolCalls = @initialToolCalls + 1
   let @correctedInvalidCalls = @initialInvalidCalls + (@anyError ? 1 : 0)
-  let @newFingerprint = @stateProgressFingerprint(@mergedState)
+  let @newFingerprint = @stateProgressFingerprint(@initialCtx.agent, @mergedState)
   let @priorFingerprint = @initialCtx.runtime.progress_fingerprint ?? ""
   let @priorCallsSinceProgress = @initialCtx.runtime.calls_since_progress ?? 0
   let @nextCallsSinceProgress = when [
@@ -1285,7 +1284,8 @@ exe @runPlannerSession(rawAgent, query) = [
   >>
   >> Reads/writes through this shelf are not yet wired — bucket remains
   >> the read-side authority. The next Stage B commit migrates consumers.
-  shelf @plannerShelf from @rawAgent.records with { versioned: true, projection_cache: ["role:planner"] }
+  let @shelfableRecords = @shelfRecords(@rawAgent.records ?? {})
+  shelf @plannerShelf from @shelfableRecords with { versioned: true, projection_cache: ["role:planner"] }
   let @agent = { ...@rawAgent, plannerShelf: @plannerShelf }
   let @resolveDocs = @phaseToolDocs(@agent, "resolve")
   let @extractDocs = @phaseToolDocs(@agent, "extract")

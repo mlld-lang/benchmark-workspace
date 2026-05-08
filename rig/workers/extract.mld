@@ -7,7 +7,6 @@ import {
   @callTool,
   @toolCallError,
   @toolRuntimeMessage,
-  @extractToolResultValue,
   @previewFields,
   @nullFields,
   @updateNamedState,
@@ -186,7 +185,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
     ]
     let @shapeCheck = @validatePlannerArgRefs(@decision.args ?? {})
     if !@shapeCheck.ok [ => @plannerValidationFailure("planner_ref_validation_failed", @shapeCheck, @shapeCheck.issues) ]
-    let @argsCheck = @compileToolArgs(@state, @tool, @decision.args ?? {}, @query)
+    let @argsCheck = @compileToolArgs(@agent, @state, @tool, @decision.args ?? {}, @query)
     if !@argsCheck.ok [ => @plannerValidationFailure(@argsCheck.error ?? "intent_compile_failed", @argsCheck, @argsCheck.issues) ]
     >> Keep the routed entry intact so dispatch sees the runtime arg docs
     >> instead of a planner-only catalog object that may have shed them.
@@ -199,7 +198,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
     if @toolMessage != null [ => { error: "tool_runtime_error", summary: @toolMessage } ]
     let @recordDef = @tool.returns
     let @recordType = @recordTypeName(@recordDef)
-    let @typed = @extractToolResultValue(@recordType, @recordDef, @raw)
+    let @typed = @raw as record @recordDef
     let @summary = `fetched @decision.tool into @decision.name`
     let @toolNullFields = @nullFields(@typed)
     let @nextState = @updateNamedState(@state, "extracted", @decision.name, {
@@ -238,7 +237,7 @@ exe @dispatchExtract(agent, state, decision, query) = [
       }
     ]
   ]
-  let @resolvedSource = @resolveRefValue(@state, @decision.source)
+  let @resolvedSource = @resolveRefValue(@agent, @state, @decision.source)
   if !@resolvedSource.ok [ => @plannerValidationFailure(@resolvedSource.error ?? "extract_source_resolution_failed", @resolvedSource, @resolvedSource.issues ?? null) ]
   let @schemaCheck = @validateExtractSchema(@agent.records ?? {}, @decision.schema)
   if !@schemaCheck.ok [ => @plannerValidationFailure(@schemaCheck.error, @schemaCheck, @schemaCheck.issues) ]

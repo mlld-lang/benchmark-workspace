@@ -13,8 +13,8 @@ import {
   @toolRuntimeMessage,
   @correlatedControlArgsCheck,
   @recordTypeName,
-  @normalizeResolvedValues,
-  @updateResolvedStateWithDef
+  @writeRecordsToShelf,
+  @recordHandles
 } from "../runtime.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @compileExecuteIntent } from "../intent.mld"
@@ -84,7 +84,7 @@ exe role:planner @compileForDispatch(agent, state, decision, query) = [
   if !@shapeCheck.ok [
     => { ok: false, stage: "shape", failure: { error: "planner_ref_validation_failed", payload: @shapeCheck, issues: @shapeCheck.issues } }
   ]
-  let @compiled = @compileExecuteIntent(@state, @agent.tools, @decision, @query)
+  let @compiled = @compileExecuteIntent(@agent, @state, @agent.tools, @decision, @query)
   if !@compiled.ok [
     => { ok: false, stage: "compile", failure: { error: @compiled.error ?? "intent_compile_failed", payload: @compiled, issues: @compiled.issues ?? null } }
   ]
@@ -196,18 +196,15 @@ exe role:worker @dispatchExecute(agent, state, decision, query) = [
   let @toolMessage = @toolRuntimeMessage(@operationName, @raw)
   if @toolMessage != null [ => { error: "tool_runtime_error", summary: @toolMessage } ]
   let @returnsRecord = @tool.returns
-  let @executeResultState = when [
+  let @resultHandles = when [
     @returnsRecord.isDefined() && @raw.isDefined() && @typeof(@raw) != "string" => [
       let @recordType = @recordTypeName(@returnsRecord)
-      let @coerced = @raw as record @returnsRecord
-      let @entries = @normalizeResolvedValues(@recordType, @returnsRecord, @coerced)
-      let @handles = for @entry in @entries => @entry.handle
-      => { handles: @handles, state: @updateResolvedStateWithDef(@state, @recordType, @entries, @returnsRecord) }
+      let @records = @writeRecordsToShelf(@agent, @recordType, @returnsRecord, @raw)
+      => @recordHandles(@records)
     ]
-    * => { handles: [], state: @state }
+    * => []
   ]
-  let @resultHandles = @executeResultState.handles
-  let @nextState = @executeResultState.state
+  let @nextState = @state
   let @summary = `executed @operationName`
   @appendExecutionLogEntry(@agent.executionLogFile, @serializeLifecycleJson({
     phase: "execute",

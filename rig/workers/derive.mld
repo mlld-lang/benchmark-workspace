@@ -3,10 +3,10 @@ import {
   @llmCallEntry,
   @llmSessionId,
   @arrayItems,
-  @bucketItems,
   @previewFields,
   @nullFields,
-  @updateNamedState
+  @updateNamedState,
+  @stateHandleFromAddress
 } from "../runtime.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
 import { @lowerSelectionRef, @resolveRefValue, @resolvedEntries } from "../intent.mld"
@@ -74,12 +74,12 @@ exe @coerceDeriveAttestation(raw) = [
   => @coerceDeriveEnvelope(@parsed)
 ]
 
-exe @allowedSelectionKeys(state, sources) = [
+exe @allowedSelectionKeys(agent, sources) = [
   let @pairs = for @source in (@sources ?? []) [
     => when [
       @source.source == "resolved" && @source.handle.isDefined() => [{ key: `@source.record:@source.handle`, value: true }]
-      @source.source == "resolved" => for @entry in @bucketItems(@state.resolved[@source.record] ?? []) => {
-        key: `@source.record:@entry.handle`,
+      @source.source == "resolved" => for @r in @resolvedEntries(@agent, @source.record) => {
+        key: `@source.record:@stateHandleFromAddress(@r)`,
         value: true
       }
       @source.source == "selection" => [{
@@ -101,10 +101,10 @@ exe @allowedSelectionKeys(state, sources) = [
   => @keys
 ]
 
-exe @validateSelectionRefs(state, sources, refs) = [
-  let @allowed = @allowedSelectionKeys(@state, @sources)
+exe @validateSelectionRefs(agent, sources, refs) = [
+  let @allowed = @allowedSelectionKeys(@agent, @sources)
   let @validated = for @ref in (@refs ?? []) [
-    let @lowered = @lowerSelectionRef(@state, @ref)
+    let @lowered = @lowerSelectionRef(@agent, @ref)
     => when [
       !@lowered.ok => { ok: false, error: @lowered.error, ref: @ref, available_handles: @lowered.available_handles ?? null }
       !@allowed.includes(`@lowered.ref.record:@lowered.ref.handle`) => {
@@ -126,13 +126,13 @@ exe @validateSelectionRefs(state, sources, refs) = [
 exe @dispatchDerive(agent, state, decision, query) = [
   let @sourceCheck = @validatePlannerSourcesArray(@decision.sources ?? [], ["resolved", "selection", "extracted", "derived"])
   if !@sourceCheck.ok [ => @plannerValidationFailure("planner_source_validation_failed", @sourceCheck, @sourceCheck.issues) ]
-  let @resolved = for @source in (@decision.sources ?? []) => @resolveRefValue(@state, @source)
+  let @resolved = for @source in (@decision.sources ?? []) => @resolveRefValue(@agent, @state, @source)
   let @errors = for @entry in @resolved when !@entry.ok => @entry
   if @errors.length > 0 [ => @plannerValidationFailure("derive_source_resolution_failed", { issues: @errors }, @errors) ]
   let @sources = for @entry in @resolved => @entry.value
   let @handleMap = for @source in (@decision.sources ?? []) when @source.source == "resolved" [
-    let @entries = @resolvedEntries(@state, @source.record)
-    => for @e in @entries => { record: @source.record, handle: @e.handle }
+    let @records = @resolvedEntries(@agent, @source.record)
+    => for @r in @records => { record: @source.record, handle: @stateHandleFromAddress(@r) }
   ]
   let @flatHandles = @handleMap.flat()
   let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision, @flatHandles, @agent.deriveAddendum ?? "")
@@ -172,7 +172,7 @@ exe @dispatchDerive(agent, state, decision, query) = [
       llm_log: @logEntry
     }
   ]
-  let @selectionCheck = @validateSelectionRefs(@state, @decision.sources ?? [], @attestation.selection_refs ?? [])
+  let @selectionCheck = @validateSelectionRefs(@agent, @decision.sources ?? [], @attestation.selection_refs ?? [])
   if !@selectionCheck.ok [
     let @failure = @plannerValidationFailure(@selectionCheck.error ?? "selection_ref_validation_failed", @selectionCheck, @selectionCheck.issues)
     => {

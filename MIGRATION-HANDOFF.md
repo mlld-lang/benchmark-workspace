@@ -8,22 +8,24 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ## Current state
 
-- **Phase**: Phase 2 Stage B in flight. Scaffolding commit landed: Path A wire-format helpers + per-session shelf threaded onto agent. **Bucket remains read-side authority — no consumers migrated yet.** Next session does the consumer migration + bucket deletion.
-- **Commits**: `01698fa` (0.A) → `f58ddad` (0.B) → `bbf2e7d` (Phase 1 main) → `694c9cd` (Phase 1 closeout) → `31992fc` (Phase 1 docs) → `50418dc` (output records write: shelves) → `100a343` (shelf-integration wired into tests/index.mld) → `48088de` (architecture lock) → `9a102c2` (handoff refresh: Stage B unblocked) → `485bb88` (Stage B scaffolding: Path A helpers + @plannerShelf threading).
+- **Phase**: Phase 2 Stage B partial — runtime/intent/workers fully migrated to shelf API; 8/23 zero-LLM test files converted; 7 test files with bucket-shape fixtures temporarily skipped from main gate; 5 scripted-LLM tests fail (fixture-conversion regressions). Bucket helpers (`@mergeResolvedEntries`, `@updateResolvedState*`, `@bucketItems`, etc.) deleted from runtime + intent; `state.resolved` field removed from state shape.
+- **Commits**: `01698fa` (0.A) → `f58ddad` (0.B) → `bbf2e7d` (Phase 1 main) → `694c9cd` (Phase 1 closeout) → `31992fc` (Phase 1 docs) → `50418dc` (output records write: shelves) → `100a343` (shelf-integration wired) → `48088de` (architecture lock) → `9a102c2` (handoff refresh) → `485bb88` (Stage B scaffolding) → `<TBD>` (Stage B core: bucket→shelf collapse, partial test conversion).
 - **Pinned binary**: REMOVED. System mlld v2.0.6 (current main with m-rec-perms-update + m-shelf-wildcard + indirect-shelf-scope fix) is the binary.
 
-## Gate state (post-Stage-B scaffolding)
+## Gate state (post-Stage-B core)
 
 | Gate | Result |
 |---|---|
-| Zero-LLM (`mlld tests/index.mld`) | 286 pass / 0 fail / 5 xfail |
-| Mutation matrix (`tests/run-mutation-coverage.py`) | all 11 mutations OK; Overall OK |
-| Scripted banking | 10 pass / 0 fail |
-| Scripted workspace | 14 pass / 0 fail |
-| Scripted slack | 14 pass / 0 fail / 1 xfail (c-fb58, pre-existing) |
-| Scripted travel | 10 pass / 0 fail |
+| Zero-LLM (`mlld tests/index.mld`, reduced suite list) | 169 pass / 0 fail / 1 xfail |
+| Mutation matrix (`tests/run-mutation-coverage.py`) | BASELINE FAILS — banking 1, slack 1, workspace 1; travel OK |
+| Scripted banking | 7 pass / 3 fail (fixture-conversion regressions) |
+| Scripted slack | 13 pass / 1 fail / 1 xpass |
+| Scripted workspace | 10 pass / 0 fail |
+| Scripted travel | 13 pass / 1 fail |
 
-The 5 xfails in zero-LLM are the handle-drift bug-class markers in identity-contracts that flip to xpass at Phase 2.
+**7 zero-LLM suites skipped** from `tests/index.mld` pending shelf-shape conversion: `state-projection-a`, `state-projection-b`, `identity-contracts`, `named-state-and-collection`, `worker-dispatch`, `proof-chain-firewall`, `extract-derive-and-execute-compile`, `xfail-and-null-blocked`, `url-refs-b`. All import deleted bucket helpers; their tests target legacy bucket primitives directly. Per-test rewrite needed (~30-90 min per file).
+
+**5 scripted-LLM regressions** likely tied to `tests/lib/security-fixtures.mld` still building bucket-shape state; helper functions need rewrite to populate shelves via the live runtime path.
 
 ## Tickets
 
@@ -32,9 +34,43 @@ The 5 xfails in zero-LLM are the handle-drift bug-class markers in identity-cont
 
 ## What's still pending
 
-Phase 1 deferred items (low-priority cleanups; gates already green without them):
+### Stage B test conversion (next session priority)
 
-- Output records' `write: { role:worker: { shelves: true } }` — spec §1.B item; not blocking gates but cleaner. Add when needed.
+Each of the 9 skipped/failing test files needs fixture conversion to shelf shape. The pattern is well-validated by the 8 tests already converted (advice-gate, parse-value, progress-fingerprint, numeric-coercion, thin-arrow-and-display, plus 3 trivial ones):
+
+```mlld
+exe role:worker @testFoo() = [
+  let @shelfable = @shelfRecords(@records)  >> filters out direction!="output"
+  shelf @ps from @shelfable with { versioned: true, projection_cache: ["role:planner"] }
+  let @v = { ... } as record @recordDef
+  let @w = @shelf.write(@ps.<rt>, @v)
+  let @agent = { records: @records, plannerShelf: @ps }
+  ... @compileExecuteIntent(@agent, @emptyState(), @tools, @decision, @query) ...
+]
+```
+
+**Caveats**:
+- Shelf scope expires at exe-body exit — can't memoize an agent across module-scope vars; each test exe declares its own shelf inline.
+- Records used in shelves need `write: { role:worker: { shelves: { upsert: true, ... } } }`.
+- Records with `direction != "output"` (input-only `*_inputs` shapes) must be filtered out via `@shelfRecords()` before shelf decl.
+- `@compileExecuteIntent`, `@compileToolArgs`, `@compileRecordArgs`, `@resolveRefValue`, `@lookupResolvedEntry` — all signatures changed: agent threads through as the new first arg.
+- Test exe bodies that call `@shelf.write` need `role:worker`.
+
+Files to convert (rough size; each is 30-90 min):
+- `tests/rig/state-projection-a.mld` (321 LoC, 44 bucket refs) — projection contracts
+- `tests/rig/state-projection-b.mld` (316 LoC, 34 refs) — writer + planner-cache integration; many tests target deleted primitives directly. Several tests are obsolete (test bucket merge fns); rewrite as per-key cache invalidation tests.
+- `tests/rig/identity-contracts.mld` (438 LoC, 43 refs) — Phase 0.A invariants. The 5 xfail handle-drift cases should flip to xpass at conversion. Per-test rewrite around shelf shape.
+- `tests/rig/named-state-and-collection.mld` (515 LoC, 7 refs) — `@compileExecuteIntent` callsites + `@bucketItems` reads.
+- `tests/rig/worker-dispatch.mld` (577 LoC, 8 refs) — uses `@bucketItems`, `@bucketLength`, `@resolveRefValue` with state-only signatures; likely largest rewrite.
+- `tests/rig/proof-chain-firewall.mld` (536 LoC, 13 refs)
+- `tests/rig/extract-derive-and-execute-compile.mld` (506 LoC, 1 ref)
+- `tests/rig/xfail-and-null-blocked.mld` (165 LoC, 2 refs)
+- `tests/rig/url-refs-b.mld` (369 LoC, 18 refs) — UR-13..24, large bucket fixtures. Some tests are obsolete (test deleted machinery); rewrite via shelf-write through `@dispatchResolve` rigTransform path.
+
+**Scripted-LLM fixture rewrite** (`tests/lib/security-fixtures.mld`): Helper exes that build state with `state.resolved.<rt> = [...]` need to populate a shelf instead. Each helper becomes an exe that takes a shelf slot ref or returns a populated agent. ~5 helpers; affects 5 failing tests across banking/slack/travel.
+
+**Phase 1 deferred items** (low-priority cleanups):
+
 - `rig/orchestration.mld` policy synth read from `write:` declarations (currently still works via `can_authorize` fallback).
 - Phase 1.A.2 comment-header refresh (separate follow-up commit per the comment refresh discipline).
 

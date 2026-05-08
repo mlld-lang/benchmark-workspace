@@ -16,6 +16,7 @@ import { @suite, @group, @runSuites } from "../runner.mld"
 import { @callTool } from "../../rig/runtime.mld"
 import { @compileExecuteIntent } from "../../rig/intent.mld"
 import { @rigBuild } from "../../rig/index.mld"
+import { @emptyState, @shelfRecords } from "../../rig/runtime.mld"
 
 import { @records, @note_entry } from "../fixtures.mld"
 import {
@@ -129,44 +130,38 @@ var tools @ut8CollectionTools = {
   }
 }
 
-var @ut8Resolved = { id_: "24", title: "Introductory meeting", participants: [], start_time: "2026-04-25 09:00", end_time: "2026-04-25 10:00" } as record @calendar_evt
-var @ut8State = {
-  resolved: { calendar_evt: [{ handle: "r_calendar_evt_24", key: "24", value: @ut8Resolved, identity_field: "id_", identity_value: @ut8Resolved.id_, field_values: { id_: @ut8Resolved.id_ } }] },
-  extracted: {},
-  derived: {},
-  extract_sources: {}
-}
+var @ut8Records = { calendar_evt: @calendar_evt }
 
->> Substring-only match should be rejected (24 inside 2026-04-24).
-var @c0a6bSubstringCompile = @compileExecuteIntent(
-  @ut8State,
-  @ut8CollectionTools,
-  {
+>> Stage B: shelf scopes expire at exe-body exit, so we can't memoize an
+>> agent across module-scope vars. Each test exe declares its own shelf
+>> and runs the compile inline. Token-match tests use only known sources,
+>> so the shelf can stay empty.
+
+exe role:worker @c0a6bSubstringCompile() = [
+  shelf @ps from @ut8Records with { versioned: true }
+  let @agent = { records: @ut8Records, plannerShelf: @ps }
+  => @compileExecuteIntent(@agent, @emptyState(), @ut8CollectionTools, {
     phase: "execute",
     operation: "add_calendar_event_participants",
     args: {
       event_id: { source: "known", value: "24" },
       participants: [{ source: "known", value: "bob@test.com" }]
     }
-  },
-  "Please add bob@test.com to the 'Introductory meeting' event on 2026-04-24."
-)
-var @c0a6bSubstringIssue = for @issue in (@c0a6bSubstringCompile.issues ?? []) when @issue.error == "known_value_not_in_task_text" && @issue.value == "24" => @issue
+  }, "Please add bob@test.com to the 'Introductory meeting' event on 2026-04-24.")
+]
 
->> Standalone token match should pass.
-var @c0a6bTokenCompile = @compileExecuteIntent(
-  @ut8State,
-  @ut8CollectionTools,
-  {
+exe role:worker @c0a6bTokenCompile() = [
+  shelf @ps from @ut8Records with { versioned: true }
+  let @agent = { records: @ut8Records, plannerShelf: @ps }
+  => @compileExecuteIntent(@agent, @emptyState(), @ut8CollectionTools, {
     phase: "execute",
     operation: "add_calendar_event_participants",
     args: {
       event_id: { source: "known", value: "24" },
       participants: [{ source: "known", value: "bob@test.com" }]
     }
-  },
-  "Add bob@test.com to event 24 please."
-)
+  }, "Add bob@test.com to event 24 please.")
+]
 
 >> --- Test exes -----------------------------------------------------------
 
@@ -182,13 +177,16 @@ exe @testWrappedToolNameBuiltAgentDispatchKeepsStringIds() = [
   => @assertEq(@wrappedToolNameDispatchResult.id_, "33")
 ]
 
-exe @testKnownNumericLiteralRequiresTokenMatch() = [
-  let @ok = @c0a6bSubstringCompile.ok == false && @c0a6bSubstringIssue.length == 1
-  => @assertOk(@ok, `ok=@c0a6bSubstringCompile.ok issues=@c0a6bSubstringCompile.issues.length rejected_count=@c0a6bSubstringIssue.length`)
+exe role:worker @testKnownNumericLiteralRequiresTokenMatch() = [
+  let @compile = @c0a6bSubstringCompile()
+  let @issue = for @i in (@compile.issues ?? []) when @i.error == "known_value_not_in_task_text" && @i.value == "24" => @i
+  let @ok = @compile.ok == false && @issue.length == 1
+  => @assertOk(@ok, `ok=@compile.ok issues=@compile.issues.length rejected_count=@issue.length`)
 ]
 
-exe @testKnownNumericLiteralAcceptsStandaloneToken() = [
-  => @assertEq(@c0a6bTokenCompile.ok, true)
+exe role:worker @testKnownNumericLiteralAcceptsStandaloneToken() = [
+  let @compile = @c0a6bTokenCompile()
+  => @assertEq(@compile.ok, true)
 ]
 
 exe @testIdUnderscoreSurvivesCoercion() = [

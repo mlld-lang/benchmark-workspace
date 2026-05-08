@@ -9,13 +9,25 @@ import {
   @toolPayloadArgs,
   @phaseToolNames
 } from "./tooling.mld"
-import { @resolveRefValue, @isResolvedIndexBucket, @bucketItems, @bucketLength, @valueField, @bucketObject } from "./intent.mld"
+import {
+  @resolveRefValue,
+  @valueField,
+  @stateHandleFromAddress,
+  @parseRigHandle,
+  @recordDefIdentityField,
+  @recordDefFactFields,
+  @recordDefFieldIsHandleType,
+  @resolvedEntries,
+  @resolvedEntryFieldValue
+} from "./intent.mld"
 import { @appendLlmCall, @serializeLifecycleJson } from "./lifecycle.mld"
 import { @withUrlCapabilities } from "./transforms/url_refs.mld"
 
 >> Shared runtime helpers for the rig loop and per-phase workers.
->> These helpers stay on native mlld values so resolved factsources and
->> record wrappers survive across phase boundaries.
+>> Stage B (records-as-policy + bucket→shelf): state.resolved is gone;
+>> resolved records live on @agent.plannerShelf as plain record-coerced
+>> values with .mx.address.{record, key, string} for identity. State
+>> still carries extracted/derived/extract_sources/capabilities.
 
 exe llm @llmCall(harness, prompt, config) = when [
   @harness == "stub" => @stubLlmResponse(@config)
@@ -247,36 +259,6 @@ exe @recordFieldNames(recordDef) = [
   => for @field in @recordFieldDefs(@recordDef) => @field.name
 ]
 
-exe @recordIdentityField(recordDef) = [
-  let @keyField = @recordKeyField(@recordDef)
-  >> Records without an explicit `key:` still return a null-ish slot from
-  >> the metadata lookup. Treat only a real non-empty string as an explicit
-  >> key so fact-field fallback works for records like `@contact`.
-  if @typeof(@keyField) == "string" && @keyField != "" [ => @keyField ]
-  let @factFields = for @field in @recordFieldDefs(@recordDef) when @field.classification == "fact" => @field.name
-  => when [
-    @factFields.length > 0 => @factFields[0]
-    * => null
-  ]
-]
-
->> Whether the named field on this record is declared `type: handle`.
->> Handle-typed identifiers are rig-internal opaque tokens (see c-0298 +
->> c-a8d2 — slack_channel and slack_msg both mint a synthetic id_:handle
->> as their key). They have no meaningful value to pass to MCP, so a
->> fieldless-resolved control arg whose default field is handle-typed is
->> always a planner mistake — they meant to specify field: "name" (or
->> whatever fact field carries the value MCP actually needs).
-exe @recordFieldIsHandleType(recordDef, fieldName) = [
-  if !@fieldName.isDefined() || @typeof(@fieldName) != "string" || @fieldName == "" [ => false ]
-  let @match = for @field in @recordFieldDefs(@recordDef) when @field.name == @fieldName => @field
-  => when [
-    @match.length == 0 => false
-    @match[0].valueType == "handle" => true
-    * => false
-  ]
-]
-
 exe @nativeRecordFieldValue(recordValue, fieldName) = [
   let @fieldKey = `@fieldName`
   => when [
@@ -287,91 +269,80 @@ exe @nativeRecordFieldValue(recordValue, fieldName) = [
   ]
 ]
 
-exe @stateKeyValue(fieldName, fieldValue, index) = when [
-  !@fieldName.isDefined() => @index
-  (@fieldName == "id" || @fieldName == "id_" || @fieldName.endsWith("_id")) && (@typeof(@fieldValue) == "number" || @typeof(@fieldValue) == "boolean") => `@fieldValue`
-  @fieldValue.isDefined() => @fieldValue
-  * => @index
-]
-
-exe @stateHandle(recordType, keyValue, index) = [
-  let @keyPart = when [
-    @keyValue.isDefined() && `@keyValue` != "" => `@keyValue`
-    * => `@index`
-  ]
-  => `r_@recordType\_@keyPart`
-]
-
->> Path A wire-format synthesizer for the Stage B bucket→shelf migration.
->> Returns `r_<recordType>_<.mx.key>` from a record-coerced value's stable
->> address. The planner LLM's wire format stays unchanged through the
->> migration: handles look like `r_hotel_<key>` either way, so prompts and
->> resume paths don't drift mid-migration. Phase 3.B may flip the planner
->> prompt to consume `.mx.address.string` (`hotel:<key>`) directly; until
->> then this helper bridges shelf-shape addresses to the rig wire format.
-exe @stateHandleFromAddress(recordValue) = [
-  let @addr = @recordValue.mx.address
-  if !@addr.isDefined() || @addr == null [ => null ]
-  => `r_@addr.record\_@addr.key`
-]
-
->> Reverse of @stateHandleFromAddress. Parses an `r_<rt>_<key>` wire-format
->> string to its address shape. Returns null on malformed input. Used at
->> intent-compile and selection-lower seams that need to map a planner-
->> supplied handle to a shelf .byAddress() lookup.
-exe @parseRigHandle(handle) = js {
-  if (typeof handle !== "string") return null;
-  if (!handle.startsWith("r_")) return null;
-  const rest = handle.slice(2);
-  const keyIdx = rest.lastIndexOf("_");
-  if (keyIdx < 0) return null;
-  const record = rest.slice(0, keyIdx);
-  const key = rest.slice(keyIdx + 1);
-  if (record.length === 0 || key.length === 0) return null;
-  return { record, key, string: `${record}:${key}` };
-}
-
-exe @normalizeResolvedValues(recordType, recordDef, rawValue) = [
-  let @items = when [
-    @typeof(@rawValue) == "array" => @rawValue
-    @rawValue.isDefined() => [@rawValue]
-    * => []
-  ]
-  let @identityField = @recordIdentityField(@recordDef)
-  let @identityIsHandle = @recordFieldIsHandleType(@recordDef, @identityField)
-  let @fieldNames = @recordFieldNames(@recordDef)
-  => for @value in @items [
-    let @index = @mx.for.index
-    let @identityValue = when [
-      @identityField.isDefined() => @value[@identityField]
+>> Records bundle filtered to entries the planner shelf can store. Tool
+>> input records (direction="hybrid") are validate-only schemas for write
+>> tool dispatch — the shelf primitive rejects them at decl time. Output
+>> records (direction="output") are the write/store surface.
+exe @shelfRecords(records) = [
+  let @keys = for @rt, @rd in (@records ?? {}) [
+    let @entries = @rd.mx.entries ?? []
+    let @dir = for @e in @entries when @e[0] == "direction" => @e[1]
+    => when [
+      @dir.length > 0 && @dir[0] == "output" => { key: @rt, value: @rd }
       * => null
     ]
-    let @fieldPairs = for @fieldName in @fieldNames => {
-      key: @fieldName,
-      value: @value[@fieldName]
-    }
-    let @fieldValues = @pairsToObject(@fieldPairs)
-    let @entryKey = @stateKeyValue(@identityField, @identityValue, @index)
-    => {
-      handle: @stateHandle(@recordType, @entryKey, @index),
-      key: @entryKey,
-      value: @value,
-      identity_field: @identityField,
-      identity_value: @identityValue,
-      identity_is_handle: @identityIsHandle,
-      field_values: @fieldValues
-    }
   ]
+  let @valid = for @entry in @keys when @entry => @entry
+  => @pairsToObject(@valid)
 ]
 
-exe @extractToolResultValue(recordType, recordDef, rawValue) = [
-  let @entries = @normalizeResolvedValues(@recordType, @recordDef, @rawValue)
-  let @values = for @entry in @entries => @entry.value
-  => when [
-    @typeof(@rawValue) == "array" => @values
-    @values.length == 1 => @values[0]
-    * => @values
+>> Look up a resolved record on the planner shelf by handle. The handle is
+>> the rig wire-format (`r_<rt>_<key>`); we parse it back to the shelf's
+>> stable address and use `.byAddress()` for O(1) lookup. Returns null when
+>> the handle is malformed, the slot does not exist, or no record matches.
+exe @shelfLookupByHandle(agent, recordName, handle) = [
+  if !@agent.plannerShelf.isDefined() [ => null ]
+  let @slot = @agent.plannerShelf[@recordName]
+  if !@slot.isDefined() [ => null ]
+  let @addr = @parseRigHandle(@handle)
+  if @addr == null [ => null ]
+  if @addr.record != @recordName [ => null ]
+  => @slot.byAddress(@addr)
+]
+
+>> Read all records of a given type from the planner shelf. Returns an
+>> empty array when the slot does not exist or has no entries.
+exe @shelfReadAll(agent, recordName) = [
+  if !@agent.plannerShelf.isDefined() [ => [] ]
+  let @slot = @agent.plannerShelf[@recordName]
+  if !@slot.isDefined() [ => [] ]
+  => @shelf.read(@slot)
+]
+
+>> Coerce raw tool output into an array of record-coerced values, write
+>> each to the planner shelf, and return them. The shelf's field-level
+>> merge by .mx.key collapses same-key writes (m-shelf-wildcard); callers
+>> see the coerced records back so they can mint Path-A handles and build
+>> result summaries without a second shelf read.
+>>
+>> @rawValue may be a single record-shape object or an array. Coercion
+>> happens via `as record @recordDef` per item.
+exe @writeRecordsToShelf(agent, recordType, recordDef, rawValue) = [
+  let @items = when [
+    @typeof(@rawValue) == "array" => @rawValue
+    @rawValue.isDefined() && @rawValue != null => [@rawValue]
+    * => []
   ]
+  if @items.length == 0 [ => [] ]
+  if !@agent.plannerShelf.isDefined() [ => [] ]
+  let @slot = @agent.plannerShelf[@recordType]
+  if !@slot.isDefined() [ => [] ]
+  let @coercedItems = for @v in @items [
+    let @c = @v as record @recordDef
+    => @c
+  ]
+  let @written = for @c in @coercedItems [
+    let @w = @shelf.write(@slot, @c)
+    => @c
+  ]
+  => @written
+]
+
+>> Synthesize the rig wire-format handles for a list of shelf-coerced
+>> records.
+exe @recordHandles(records) = [
+  let @items = @arrayItems(@records)
+  => for @r in @items => @stateHandleFromAddress(@r)
 ]
 
 exe @previewFields(inputValue) = when [
@@ -469,26 +440,18 @@ exe @maskPreview(maskedValue) = [
   => "[masked]"
 ]
 
-exe @projectResolvedFieldValue(entry, fieldName) = [
-  let @fieldKey = `@fieldName`
-  => when [
-    @entry.identity_field.isDefined() && @fieldKey == `@entry.identity_field` && @entry.identity_value.isDefined() => @entry.identity_value
-    @entry.value.mx.data[@fieldKey].isDefined() => @entry.value.mx.data[@fieldKey]
-    @entry.value.data[@fieldKey].isDefined() => @entry.value.data[@fieldKey]
-    @entry.field_values[@fieldKey].isDefined() => @entry.field_values[@fieldKey]
-    @entry.value[@fieldKey].isDefined() => @entry.value[@fieldKey]
-    * => null
-  ]
-]
-
-exe @projectResolvedEntry(recordType, recordDef, entry, role) = [
+>> Project a single resolved record through its read mode for the given
+>> role. Stage B: entry is the plain record (with .mx.address), not an
+>> envelope. Field access goes through @valueField which preserves
+>> wrappers.
+exe @projectResolvedEntry(recordType, recordDef, recordValue, role) = [
   let @mode = @recordDisplayMode(@recordDef, @role)
-  let @plainHandle = @stringValue(@entry.handle)
+  let @plainHandle = @stateHandleFromAddress(@recordValue)
   let @pairs = for @modeEntry in @mode [
     let @display = @displayEntry(@modeEntry)
     if !@display [ => null ]
-    let @value = @projectResolvedFieldValue(@entry, @display.field)
-    if !@value.isDefined() [ => null ]
+    let @value = @valueField(@recordValue, @display.field)
+    if !@value.isDefined() || @value == null [ => null ]
     let @projectedValue = when [
       @display.kind == "mask" => @maskPreview(@value)
       @display.kind == "handle" => @plainHandle
@@ -508,48 +471,18 @@ exe @projectResolvedEntry(recordType, recordDef, entry, role) = [
   }
 ]
 
->> c-63fe Phase 2.5: when projecting role:planner over an indexed
->> bucket whose planner_cache.version matches bucket.version, return
->> the cached projection. Worker projections always compute fresh —
->> per GPT decision D, worker projections include raw tainted content
->> and shouldn't be cached.
-exe @cachedPlannerEntries(bucket) = [
-  if !@isResolvedIndexBucket(@bucket) [ => null ]
-  let @cache = @valueField(@bucket, "planner_cache")
-  if !@cache.isDefined() [ => null ]
-  let @cacheVersion = @valueField(@cache, "version")
-  let @bucketVersion = @valueField(@bucket, "version")
-  if !@cacheVersion.isDefined() [ => null ]
-  if !@bucketVersion.isDefined() [ => null ]
-  if @cacheVersion != @bucketVersion [ => null ]
-  let @cached = @valueField(@cache, "entries") ?? []
-  if @cached.length == 0 [ => null ]
-  => @cached
-]
-
->> Phase 2.5: cache hit when role:planner + bucket has matching
->> planner_cache. Otherwise compute fresh — bucket may be legacy
->> array (no cache), indexed-no-cache (cacheVersion=0,bucketVersion>=1),
->> or worker role (never cached).
-exe @bucketEntriesForRole(records, recordType, recordDef, bucket, role) = [
-  let @cached = when [
-    @role == "role:planner" => @cachedPlannerEntries(@bucket)
-    * => null
-  ]
-  >> Use `== null` not `.isDefined()`: exe-returned null is a wrapper
-  >> whose .isDefined() reports true, masking the cache-miss path.
-  >> Same family as c-aed5 / c-4a08 — see CLAUDE.md.
-  if @cached != null [ => @cached ]
-  => for @entry in @bucketItems(@bucket) => @projectResolvedEntry(@recordType, @recordDef, @entry, @role)
-]
-
-exe @projectResolvedSummary(records, state, role) = [
-  let @resolved = @structuredData(@state.resolved)
-  let @pairs = for @recordType, @recordDef in @records [
-    let @entries = @bucketEntriesForRole(@records, @recordType, @recordDef, @resolved[@recordType], @role)
+>> Project all resolved records of every declared type from the planner
+>> shelf into role-scoped summaries. Replaces the bucket-walk version.
+>> Per-key projection caching is handled by the shelf's
+>> projection_cache: ["role:planner"] attribute.
+exe @projectResolvedSummary(agent, role) = [
+  if !@agent.records.isDefined() [ => {} ]
+  let @pairs = for @recordType, @recordDef in @agent.records [
+    let @records = @shelfReadAll(@agent, @recordType)
+    let @projected = for @r in @records => @projectResolvedEntry(@recordType, @recordDef, @r, @role)
     => {
       key: @recordType,
-      value: @entries
+      value: @projected
     }
   ]
   => @pairsToObject(@pairs)
@@ -633,7 +566,7 @@ exe @projectNamedState(records, stateMap, role) = [
 
 exe @plannerVisibleState(agent, state) = [
   => {
-    resolved: @projectResolvedSummary(@agent.records ?? {}, @state, "role:planner"),
+    resolved: @projectResolvedSummary(@agent, "role:planner"),
     extracted: @projectNamedState(@agent.records ?? {}, @state.extracted, "role:planner"),
     derived: @projectNamedState(@agent.records ?? {}, @state.derived, "role:planner")
   }
@@ -641,7 +574,7 @@ exe @plannerVisibleState(agent, state) = [
 
 exe @workerStateSummary(agent, state) = [
   => {
-    resolved: @projectResolvedSummary(@agent.records ?? {}, @state, "role:worker"),
+    resolved: @projectResolvedSummary(@agent, "role:worker"),
     extracted: @projectNamedState(@agent.records ?? {}, @state.extracted, "role:worker"),
     derived: @projectNamedState(@agent.records ?? {}, @state.derived, "role:worker")
   }
@@ -656,7 +589,7 @@ exe @workerStateSummary(agent, state) = [
 >> cannot be planted by an attacker.
 exe @adviceVisibleState(agent, state) = [
   => {
-    resolved: @projectResolvedSummary(@agent.records ?? {}, @state, "role:advice"),
+    resolved: @projectResolvedSummary(@agent, "role:advice"),
     extracted: @projectNamedState(@agent.records ?? {}, @state.extracted, "role:advice"),
     derived: @projectNamedState(@agent.records ?? {}, @state.derived, "role:advice")
   }
@@ -667,9 +600,8 @@ exe @adviceVisibleState(agent, state) = [
 >> only `url_refs` (URL-promotion, c-be06), keyed by url_ref handle.
 >> Future capabilities (typed-instruction binders, file-read authority)
 >> live alongside under sibling keys.
-exe @rigState(resolved, extracted, derived, extractSources, capabilities) = [
+exe @rigState(extracted, derived, extractSources, capabilities) = [
   => {
-    resolved: @resolved,
     extracted: @extracted,
     derived: @derived,
     extract_sources: @extractSources,
@@ -679,7 +611,6 @@ exe @rigState(resolved, extracted, derived, extractSources, capabilities) = [
 
 exe @emptyState() = [
   => {
-    resolved: {},
     extracted: {},
     derived: {},
     extract_sources: {},
@@ -687,325 +618,17 @@ exe @emptyState() = [
   }
 ]
 
->> c-5a24: per-field merge for handle collisions.
->>
->> Travel resolves return partial records — get_hotels_address returns
->> `{name, address}`, get_hotels_prices returns `{name, price_range}`,
->> etc. Records key by name, so the same handle (`r_hotel_<name>`)
->> collides across calls. Pre-fix behavior was whole-entry replacement,
->> which clobbered earlier fields and left compose unable to read them.
->>
->> Semantics: non-null incoming wins per-field; null/undefined incoming
->> preserves existing. Use @pairsToObject (NOT object spread) so
->> StructuredValue wrapper metadata (factsources) survives — same
->> reasoning as the bucket-level merge below.
-exe @mergeFieldDict(existing, incoming) = [
-  let @existingObj = @bucketObject(@existing ?? {})
-  let @incomingObj = @bucketObject(@incoming ?? {})
-  let @existingKeys = @plainObjectKeys(@existingObj)
-  let @incomingKeys = @plainObjectKeys(@incomingObj)
-  >> Inline `.includes()` inside `when` clauses inside .concat(...) hits
-  >> a parse error at the closing `)`. Extract to a let.
-  let @existingOnly = for @k in @existingKeys when !@incomingKeys.includes(@k) => @k
-  let @allKeys = @incomingKeys.concat(@existingOnly)
-  let @pairs = for @k in @allKeys [
-    let @incomingV = @valueField(@incomingObj, @k)
-    let @existingV = @valueField(@existingObj, @k)
-    let @chosen = when [
-      @incomingV.isDefined() && @incomingV != null => @incomingV
-      * => @existingV
-    ]
-    => { key: @k, value: @chosen }
-  ]
-  => @pairsToObject(@pairs)
-]
-
-exe @mergeEntryFields(existing, incoming) = [
-  if !@existing.isDefined() [ => @incoming ]
-  if !@incoming.isDefined() [ => @existing ]
-  let @incomingIdValue = @incoming.identity_value
-  let @existingIdValue = @existing.identity_value
-  let @mergedIdValue = when [
-    @incomingIdValue.isDefined() && @incomingIdValue != null => @incomingIdValue
-    * => @existingIdValue
-  ]
-  => {
-    handle: @incoming.handle,
-    key: @incoming.key ?? @existing.key,
-    identity_field: @incoming.identity_field ?? @existing.identity_field,
-    identity_value: @mergedIdValue,
-    value: @mergeFieldDict(@existing.value, @incoming.value),
-    field_values: @mergeFieldDict(@existing.field_values, @incoming.field_values)
-  }
-]
-
->> c-63fe Phase 2.0: handle-keyed merge that produces indexed bucket.
->>
->> Bucket shape: { _rig_bucket: "resolved_index_v1", order, by_handle,
->> version, planner_cache }. Reads tolerate either shape via Phase 1
->> adapters (@bucketItems, @lookupResolvedEntry). Writes always
->> produce the indexed shape after this lands.
->>
->> Algorithm: for indexed buckets, reuse the existing by_handle object and
->> order array, then apply one native computed-key update per incoming
->> entry. This avoids materializing the existing bucket before every merge.
->> The OOM agent's prototype showed 10x time + 50%+ memory win on
->> travel-shaped workloads.
->>
->> planner_cache carries the previous cache plus changed_handles. The
->> withDef path updates only those projected handles when possible.
->>
->> c-5a24: handle collisions now field-merge via @mergeEntryFields rather
->> than whole-entry replace. Travel partial-record resolves accumulate.
-exe @mergeResolvedEntries(existingBucket, newEntries) = [
-  let @existingIndexed = @isResolvedIndexBucket(@existingBucket)
-  let @existingItems = when [
-    @existingIndexed => []
-    * => @bucketItems(@existingBucket)
-  ]
-  let @existingHandles = when [
-    @existingIndexed => @valueField(@existingBucket, "order") ?? []
-    * => for @e in @existingItems => `@e.handle`
-  ]
-  let @existingPairs = when [
-    @existingIndexed => []
-    * => for @e in @existingItems => { key: `@e.handle`, value: @e }
-  ]
-  let @existingByHandle = when [
-    @existingIndexed => @valueField(@existingBucket, "by_handle") ?? {}
-    * => @pairsToObject(@existingPairs)
-  ]
-  let @existingVersion = when [
-    @existingIndexed => @valueField(@existingBucket, "version") ?? 0
-    * => 0
-  ]
-  let @existingCache = when [
-    @existingIndexed => @valueField(@existingBucket, "planner_cache") ?? { version: 0, entries: [] }
-    * => { version: 0, entries: [] }
-  ]
-  let @incoming = @arrayItems(@newEntries)
-  let @merged = loop(1000) [
-    let @ctx = @input ?? {
-        index: 0,
-        order: @existingHandles,
-        by_handle: @existingByHandle,
-        changed_handles: []
-      }
-    if @ctx.index >= @incoming.length [ done @ctx ]
-    let @entry = @incoming[@ctx.index]
-    let @handleKey = `@entry.handle`
-    let @existingEntry = @valueField(@ctx.by_handle, @handleKey)
-    let @hasExisting = @existingEntry != null
-    let @nextEntry = when [
-      @hasExisting => @mergeEntryFields(@existingEntry, @entry)
-      * => @entry
-    ]
-    let @nextByHandle = @ctx.by_handle
-    @nextByHandle += { [@handleKey]: @nextEntry }
-    let @nextOrder = @ctx.order
-    if !@hasExisting [
-      @nextOrder += [@handleKey]
-    ]
-    let @nextChanged = @ctx.changed_handles
-    if !@nextChanged.includes(@handleKey) [
-      @nextChanged += [@handleKey]
-    ]
-    continue {
-      index: @ctx.index + 1,
-      order: @nextOrder,
-      by_handle: @nextByHandle,
-      changed_handles: @nextChanged
-    }
-  ]
-  let @cacheVersion = @valueField(@existingCache, "version") ?? 0
-  let @cacheEntries = @valueField(@existingCache, "entries") ?? []
-  => {
-    _rig_bucket: "resolved_index_v1",
-    order: @merged.order,
-    by_handle: @merged.by_handle,
-    version: @existingVersion + 1,
-    planner_cache: {
-      version: @cacheVersion,
-      entries: @cacheEntries,
-      changed_handles: @merged.changed_handles
-    }
-  }
-]
-
->> c-63fe Phase 2.5/3.5: populate planner_cache at merge time so
->> @projectResolvedSummary can reuse it when bucket version unchanged.
->> When an existing cache is one version behind, update projections only
->> for changed handles and rebuild the ordered visible array from cache.
->> If no compatible cache exists, fall back to a full planner projection.
-exe @populatePlannerCache(bucket, recordType, recordDef) = [
-  if !@recordDef.isDefined() [ => @bucket ]
-  if !@isResolvedIndexBucket(@bucket) [ => @bucket ]
-  let @version = @valueField(@bucket, "version") ?? 0
-  let @order = @valueField(@bucket, "order") ?? []
-  let @byHandle = @valueField(@bucket, "by_handle") ?? {}
-  let @priorCache = @valueField(@bucket, "planner_cache") ?? {}
-  let @priorVersion = @valueField(@priorCache, "version") ?? 0
-  let @priorEntriesRaw = @valueField(@priorCache, "entries") ?? []
-  let @priorEntries = @arrayItems(@priorEntriesRaw)
-  let @changedHandlesRaw = @valueField(@priorCache, "changed_handles") ?? []
-  let @changedHandles = @arrayItems(@changedHandlesRaw)
-  let @canIncremental = @priorEntries.length > 0 && @priorVersion + 1 == @version
-  let @projected = when [
-    @canIncremental => [
-      let @priorPairs = for @entry in @priorEntries => { key: `@entry.handle`, value: @entry }
-      let @priorByHandle = @pairsToObject(@priorPairs)
-      let @updated = loop(1000) [
-        let @ctx = @input ?? { index: 0, by_handle: @priorByHandle }
-        if @ctx.index >= @changedHandles.length [ done @ctx.by_handle ]
-        let @handleKey = `@changedHandles[@ctx.index]`
-        let @entry = @valueField(@byHandle, @handleKey)
-        let @nextByHandle = @ctx.by_handle
-        if @entry != null [
-          @nextByHandle += { [@handleKey]: @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner") }
-        ]
-        continue {
-          index: @ctx.index + 1,
-          by_handle: @nextByHandle
-        }
-      ]
-      let @ordered = loop(1000) [
-        let @ctx = @input ?? { index: 0, entries: [] }
-        if @ctx.index >= @order.length [ done @ctx.entries ]
-        let @handleKey = `@order[@ctx.index]`
-        let @entry = @valueField(@updated, @handleKey)
-        let @nextEntries = @ctx.entries
-        if @entry != null [
-          @nextEntries += [@entry]
-        ]
-        continue {
-          index: @ctx.index + 1,
-          entries: @nextEntries
-        }
-      ]
-      => @ordered
-    ]
-    * => [
-      let @entries = @bucketItems(@bucket)
-      => for @entry in @entries => @projectResolvedEntry(@recordType, @recordDef, @entry, "role:planner")
-    ]
-  ]
-  let @cache = { version: @version, entries: @projected }
-  => {
-    _rig_bucket: "resolved_index_v1",
-    order: @order,
-    by_handle: @byHandle,
-    version: @version,
-    planner_cache: @cache
-  }
-]
-
-exe @updateResolvedState(state, recordName, entries) = [
-  let @resolved = @structuredData(@state.resolved)
-  let @mergedBucket = @mergeResolvedEntries(@resolved[@recordName], @entries)
-  let @nextResolved = @replaceObjectField(@resolved, @recordName, @mergedBucket)
-  => @rigState(
-    @nextResolved,
-    @structuredData(@state.extracted),
-    @structuredData(@state.derived),
-    @structuredData(@state.extract_sources),
-    @structuredData(@state.capabilities)
-  )
-]
-
->> c-eda4: batch-spec state-merge helper.
->>
->> @plannerResolveBatch dispatches all specs in parallel against a shared
->> @initialCtx.state (snapshot from before the batch). Each spec returns
->> phaseResult.state = initial + thatSpecsWrites. If Phase B settle just
->> @planner.set({state: phaseResult.state}) per spec, the second settle
->> wipes the first's writes — verified in tmp/c-eda4-batch-clobber/probe.mld.
->>
->> Fix: for each spec, take its phaseResult bucket for the record_type it
->> wrote and merge that bucket's entries (via @updateResolvedStateWithDef
->> → @mergeResolvedEntries → c-5a24 field-level merge) atop the running
->> cumulative @planner.state. Initial entries pass through unchanged
->> because field-merge is identity on shared values; new entries get
->> added.
-exe @batchSpecMergeState(cumulative, phaseResult, agent) = [
-  if @phaseResult.error.isDefined() [ => @cumulative ]
-  let @recordType = @phaseResult.result.record_type
-  if !@recordType.isDefined() [ => @cumulative ]
-  let @deltaResolved = @bucketObject(@phaseResult.state_delta.resolved ?? {})
-  let @deltaBucket = @valueField(@deltaResolved, @recordType)
-  let @hasDelta = @deltaBucket != null
-  let @specEntries = when [
-    @hasDelta => @arrayItems(@deltaBucket)
-    * => [
-      let @specResolved = @bucketObject(@phaseResult.state.resolved ?? {})
-      let @specBucket = @valueField(@specResolved, @recordType)
-      if !@specBucket.isDefined() [ => [] ]
-      => @bucketItems(@specBucket)
-    ]
-  ]
-  let @recordDef = @valueField(@agent.records ?? {}, @recordType)
-  let @resolvedNext = when [
-    @specEntries.length == 0 => @cumulative
-    @recordDef.isDefined() => @updateResolvedStateWithDef(@cumulative, @recordType, @specEntries, @recordDef)
-    * => @updateResolvedState(@cumulative, @recordType, @specEntries)
-  ]
-  >> URL-promotion (c-be06): a parallel rigTransform spec may also
-  >> produce a state.capabilities.url_refs delta. Merge it into the
-  >> cumulative state so a subsequent batched get_webpage_via_ref can
-  >> see the URLs minted by an earlier batched find_referenced_urls.
-  let @capDelta = @phaseResult.state_delta.capabilities.url_refs ?? null
-  => when [
-    @capDelta.isDefined() && @capDelta != null => @withUrlCapabilities(@resolvedNext, @capDelta)
-    * => @resolvedNext
-  ]
-]
-
->> c-eda4: rebuild a phaseResult with state replaced. Used to feed the
->> cumulative-merged state back into @settlePhaseDispatch so its existing
->> log/runtime/phase-event side effects continue to work unchanged.
-exe @phaseResultWithState(phaseResult, state) = [
-  => {
-    state: @state,
-    error: @phaseResult.error,
-    summary: @phaseResult.summary,
-    issues: @phaseResult.issues,
-    raw_error: @phaseResult.raw_error,
-    result: @phaseResult.result,
-    session_id: @phaseResult.session_id,
-    llm_log: @phaseResult.llm_log,
-    state_delta: @phaseResult.state_delta ?? null
-  }
-]
-
->> Phase 2.5: callers that have the recordDef pass it through this
->> variant so planner_cache is populated eagerly. @projectResolvedSummary
->> reuses the cache on subsequent reads when bucket.version is unchanged.
-exe @updateResolvedStateWithDef(state, recordName, entries, recordDef) = [
-  let @resolved = @structuredData(@state.resolved)
-  let @mergedBucket = @mergeResolvedEntries(@resolved[@recordName], @entries)
-  let @cachedBucket = @populatePlannerCache(@mergedBucket, @recordName, @recordDef)
-  let @nextResolved = @replaceObjectField(@resolved, @recordName, @cachedBucket)
-  => @rigState(
-    @nextResolved,
-    @structuredData(@state.extracted),
-    @structuredData(@state.derived),
-    @structuredData(@state.extract_sources),
-    @structuredData(@state.capabilities)
-  )
-]
-
 exe @updateNamedState(state, bucket, name, entry) = [
   let @currentBucket = @structuredData(@state[@bucket])
   let @nextBucket = @replaceObjectField(@currentBucket, @name, @entry)
   => when [
     @bucket == "extracted" => @rigState(
-      @structuredData(@state.resolved),
       @nextBucket,
       @structuredData(@state.derived),
       @structuredData(@state.extract_sources),
       @structuredData(@state.capabilities)
     )
     @bucket == "derived" => @rigState(
-      @structuredData(@state.resolved),
       @structuredData(@state.extracted),
       @nextBucket,
       @structuredData(@state.extract_sources),
@@ -1019,7 +642,6 @@ exe @updateExtractSources(state, sourceKey, extractName) = [
   let @sources = @structuredData(@state.extract_sources)
   let @nextSources = @replaceObjectField(@sources, @sourceKey, @extractName)
   => @rigState(
-    @structuredData(@state.resolved),
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
     @nextSources,
@@ -1064,24 +686,24 @@ exe @nonComposeDecisionArgIssues(decision) = [
   => @issues.concat(@extractIssue).concat(@deriveIssue)
 ]
 
-exe @resolveDispatchArgValue(state, argValue) = [
+exe @resolveDispatchArgValue(agent, state, argValue) = [
   => when [
     @typeof(@argValue) == "array" => [
-      let @items = for @item in @argValue => @resolveDispatchArgValue(@state, @item)
+      let @items = for @item in @argValue => @resolveDispatchArgValue(@agent, @state, @item)
       let @errors = for @entry in @items when !@entry.ok => @entry
       if @errors.length > 0 [ => { ok: false, error: "resolve_arg_ref_failed", issues: @errors } ]
       let @values = for @entry in @items => @entry.value
       => { ok: true, value: @values }
     ]
-    @isStructuredRef(@argValue) => @resolveRefValue(@state, @argValue)
+    @isStructuredRef(@argValue) => @resolveRefValue(@agent, @state, @argValue)
     * => { ok: true, value: @argValue }
   ]
 ]
 
-exe @resolveDispatchArgs(state, args) = [
+exe @resolveDispatchArgs(agent, state, args) = [
   let @results = for @argName, @argValue in (@args ?? {}) => {
     key: @argName,
-    result: @resolveDispatchArgValue(@state, @argValue)
+    result: @resolveDispatchArgValue(@agent, @state, @argValue)
   }
   let @errors = for @entry in @results when !@entry.result.ok => {
     arg: @entry.key,
@@ -1252,13 +874,14 @@ export {
   @structuredData,
   @stringValue,
   @arrayItems,
-  @bucketItems,
-  @bucketLength,
-  @isResolvedIndexBucket,
   @valueField,
-  @populatePlannerCache,
-  @updateResolvedStateWithDef,
-  @cachedPlannerEntries,
+  @stateHandleFromAddress,
+  @parseRigHandle,
+  @shelfRecords,
+  @shelfLookupByHandle,
+  @shelfReadAll,
+  @writeRecordsToShelf,
+  @recordHandles,
   @plainObjectKeys,
   @replaceObjectField,
   @recordMeta,
@@ -1266,20 +889,12 @@ export {
   @recordKeyField,
   @recordFieldDefs,
   @recordFieldNames,
-  @recordIdentityField,
-  @recordFieldIsHandleType,
   @nativeRecordFieldValue,
-  @stateHandle,
-  @stateHandleFromAddress,
-  @parseRigHandle,
-  @normalizeResolvedValues,
-  @extractToolResultValue,
   @previewFields,
   @nullFields,
   @recordDisplayMode,
   @displayEntry,
   @maskPreview,
-  @projectResolvedFieldValue,
   @projectResolvedEntry,
   @projectResolvedSummary,
   @projectNamedRecordFields,
@@ -1290,10 +905,6 @@ export {
   @adviceVisibleState,
   @rigState,
   @emptyState,
-  @mergeResolvedEntries,
-  @batchSpecMergeState,
-  @phaseResultWithState,
-  @updateResolvedState,
   @updateNamedState,
   @updateExtractSources,
   @isStructuredRef,

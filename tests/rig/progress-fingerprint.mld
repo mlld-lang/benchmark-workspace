@@ -2,14 +2,14 @@
 >>
 >> c-3438 (B): @stateProgressFingerprint regression tests.
 >>
->> The fingerprint detects no-progress loops by computing a stable hash of
->> the meaningful state. Two fingerprints are equal iff the planner has not
->> made any of these changes: new resolved handle, new field on existing
->> handle, new bucket version, new extract/derive name with payload, or
->> empty->non-empty extract/derive flip.
+>> Stage B: state.resolved is gone; the fingerprint reads
+>> @agent.plannerShelf — slot.mx.version replaces bucket.version, each
+>> record's .mx.address.key replaces handle, .mx.hash captures content
+>> drift. The R:<rt>:v<n>:<key>^<hash> wire format is preserved so
+>> string-equality progress comparison still works.
 >>
->> Also verifies @plannerRuntimeStateWithProgress preserves progress fields
->> through the schema round-trip.
+>> Each test exe declares its own shelf, populates it, and threads the
+>> shelf onto a synthetic agent before calling the fingerprint helper.
 
 import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
 import { @suite, @group, @runSuites } from "../runner.mld"
@@ -18,179 +18,155 @@ import {
   @plannerNoProgressThreshold,
   @plannerRuntimeStateWithProgress
 } from "../../rig/workers/planner.mld"
+import { @emptyState } from "../../rig/runtime.mld"
 
->> --- Shared fixtures -----------------------------------------------------
->> @detState is the determinism baseline. Several tests compare their
->> fingerprint against the fingerprint of @detState to assert "differs".
-
-var @detState = {
-  resolved: {
-    hotel: {
-      version: 1,
-      by_handle: {
-        "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
-      }
-    }
-  },
-  extracted: {},
-  derived: {}
+>> Test record analogous to bench domain hotels.
+record @hotel = {
+  key: name,
+  facts: [name: string],
+  data: [price: number?, rating: number?],
+  read: [name, { value: "price" }, { value: "rating" }],
+  write: { role:worker: { shelves: { upsert: true } } }
 }
 
-var @detFingerprint = @stateProgressFingerprint(@detState)
+var @fpRecords = { hotel: @hotel }
+
+exe @mintHotel(name, price) = js {
+  return { name, price };
+} => hotel
+
+exe @mintHotelWithRating(name, price, rating) = js {
+  return { name, price, rating };
+} => hotel
+
+>> Build an agent with one hotel A on the shelf — the determinism baseline.
+exe role:worker @detAgent() = [
+  shelf @ps from @fpRecords with { versioned: true }
+  let @w = @shelf.write(@ps.hotel, @mintHotel("A", 100))
+  => { records: @fpRecords, plannerShelf: @ps }
+]
 
 >> --- Test exes ------------------------------------------------------------
 
->> FP-1: empty state produces empty fingerprint
-exe @testFp1EmptyState() = [
-  let @s = { resolved: {}, extracted: {}, derived: {} }
-  let @fp = @stateProgressFingerprint(@s)
-  => @assertEq(@fp, "")
+>> FP-1: empty state produces empty fingerprint (no records of any type)
+exe role:worker @testFp1EmptyState() = [
+  shelf @ps from @fpRecords with { versioned: true }
+  let @agent = { records: @fpRecords, plannerShelf: @ps }
+  let @fp = @stateProgressFingerprint(@agent, @emptyState())
+  >> Empty shelf still emits the per-record-type marker (R:hotel:v0:),
+  >> matching the bucket-era contract that names the declared types.
+  => @assertEq(@fp, "R:hotel:v0:")
 ]
 
->> FP-2: deterministic — same state, same fingerprint
-exe @testFp2Deterministic() = [
-  let @fp1 = @stateProgressFingerprint(@detState)
-  let @fp2 = @stateProgressFingerprint(@detState)
+>> FP-2: deterministic — same shelf state, same fingerprint
+exe role:worker @testFp2Deterministic() = [
+  let @agentA = @detAgent()
+  let @agentB = @detAgent()
+  let @fp1 = @stateProgressFingerprint(@agentA, @emptyState())
+  let @fp2 = @stateProgressFingerprint(@agentB, @emptyState())
   => @assertOk(@fp1 == @fp2 && @fp1 != "", `'@fp1' == '@fp2'`)
 ]
 
->> FP-3: new resolved handle changes fingerprint
-exe @testFp3NewHandleChangesFp() = [
-  let @s = {
-    resolved: {
-      hotel: {
-        version: 1,
-        by_handle: {
-          "r_hotel_A": { value: { data: { name: "A", price: 100 } } },
-          "r_hotel_B": { value: { data: { name: "B", price: 200 } } }
-        }
-      }
-    },
-    extracted: {},
-    derived: {}
-  }
-  let @fp = @stateProgressFingerprint(@s)
-  => @assertOk(@fp != @detFingerprint, `before='@detFingerprint' after='@fp'`)
+>> FP-3: new resolved record changes fingerprint
+exe role:worker @testFp3NewHandleChangesFp() = [
+  let @baseline = @stateProgressFingerprint(@detAgent(), @emptyState())
+  shelf @ps from @fpRecords with { versioned: true }
+  let @w1 = @shelf.write(@ps.hotel, @mintHotel("A", 100))
+  let @w2 = @shelf.write(@ps.hotel, @mintHotel("B", 200))
+  let @agent = { records: @fpRecords, plannerShelf: @ps }
+  let @fp = @stateProgressFingerprint(@agent, @emptyState())
+  => @assertOk(@fp != @baseline, `before='@baseline' after='@fp'`)
 ]
 
 >> FP-4: new field on existing handle changes fingerprint
 >> (the dominant travel pattern — prices/ratings landing on already-resolved
->> records)
-exe @testFp4NewFieldOnExistingHandleChangesFp() = [
-  let @s = {
-    resolved: {
-      hotel: {
-        version: 1,
-        by_handle: {
-          "r_hotel_A": { value: { data: { name: "A", price: 100, rating: 4.5 } } }
-        }
-      }
-    },
-    extracted: {},
-    derived: {}
-  }
-  let @fp = @stateProgressFingerprint(@s)
-  => @assertOk(@fp != @detFingerprint, `before='@detFingerprint' after='@fp'`)
+>> records). With shelf field-merge, the second write to the same key field
+>> updates the record content; .mx.hash changes accordingly.
+exe role:worker @testFp4NewFieldOnExistingHandleChangesFp() = [
+  let @baseline = @stateProgressFingerprint(@detAgent(), @emptyState())
+  shelf @ps from @fpRecords with { versioned: true }
+  let @w1 = @shelf.write(@ps.hotel, @mintHotel("A", 100))
+  let @w2 = @shelf.write(@ps.hotel, @mintHotelWithRating("A", 100, 4.5))
+  let @agent = { records: @fpRecords, plannerShelf: @ps }
+  let @fp = @stateProgressFingerprint(@agent, @emptyState())
+  => @assertOk(@fp != @baseline, `before='@baseline' after='@fp'`)
 ]
 
->> FP-5: bucket version bump changes fingerprint
-exe @testFp5BucketVersionBumpChangesFp() = [
-  let @s = {
-    resolved: {
-      hotel: {
-        version: 2,
-        by_handle: {
-          "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
-        }
-      }
-    },
-    extracted: {},
-    derived: {}
-  }
-  let @fp = @stateProgressFingerprint(@s)
-  => @assertOk(@fp != @detFingerprint, `before='@detFingerprint' after='@fp'`)
+>> FP-5: slot version bump changes fingerprint. With shelf, content-changing
+>> writes increment slot.mx.version; same-content writes do not. Verify
+>> the version is reflected in the fingerprint.
+exe role:worker @testFp5SlotVersionBumpChangesFp() = [
+  let @baseline = @stateProgressFingerprint(@detAgent(), @emptyState())
+  shelf @ps from @fpRecords with { versioned: true }
+  let @w1 = @shelf.write(@ps.hotel, @mintHotel("A", 100))
+  let @w2 = @shelf.write(@ps.hotel, @mintHotelWithRating("A", 100, 4.5))
+  let @agent = { records: @fpRecords, plannerShelf: @ps }
+  let @fp = @stateProgressFingerprint(@agent, @emptyState())
+  >> Two writes for the same key field-merge → slot version increments.
+  => @assertOk(@fp.includes("R:hotel:v2:") && @fp != @baseline, `fp='@fp' baseline='@baseline'`)
 ]
 
 >> FP-6: derive with selection_refs counts as progress
-exe @testFp6DeriveWithSelectionRefCountsAsProgress() = [
-  let @s = {
-    resolved: {
-      hotel: {
-        version: 1,
-        by_handle: {
-          "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
-        }
-      }
-    },
+exe role:worker @testFp6DeriveWithSelectionRefCountsAsProgress() = [
+  let @agent = @detAgent()
+  let @baseline = @stateProgressFingerprint(@agent, @emptyState())
+  let @state = {
     extracted: {},
     derived: {
       "best_hotel": {
         preview_fields: ["name", "rating"],
         selection_refs: [{ source: "selection", backing: { record: "hotel", handle: "r_hotel_A" } }]
       }
-    }
+    },
+    extract_sources: {},
+    capabilities: { url_refs: {} }
   }
-  let @fp = @stateProgressFingerprint(@s)
-  => @assertOk(@fp != @detFingerprint, `before='@detFingerprint' after='@fp'`)
+  let @fp = @stateProgressFingerprint(@agent, @state)
+  => @assertOk(@fp != @baseline, `before='@baseline' after='@fp'`)
 ]
 
 >> FP-7 (regression for UT10): a derive that returned empty (preview_fields
->> = ["items"] only, no selection_refs) must NOT count as progress. The
->> planner re-deriving an empty result repeatedly is precisely the no-progress
->> loop the warning is supposed to detect. Earlier fingerprint logic treated
->> ["items"] as non-empty preview, suppressing the warning.
-exe @testFp7DeriveItemsOnlyPreviewIsNotProgress() = [
-  let @s = {
-    resolved: {
-      hotel: {
-        version: 1,
-        by_handle: {
-          "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
-        }
-      }
-    },
+>> = ["items"] only, no selection_refs) must NOT count as progress.
+exe role:worker @testFp7DeriveItemsOnlyPreviewIsNotProgress() = [
+  let @agent = @detAgent()
+  let @state = {
     extracted: {},
     derived: {
       "empty_derive": {
         preview_fields: ["items"],
         selection_refs: []
       }
-    }
+    },
+    extract_sources: {},
+    capabilities: { url_refs: {} }
   }
-  let @fp = @stateProgressFingerprint(@s)
+  let @fp = @stateProgressFingerprint(@agent, @state)
   => @assertContains(@fp, "D:empty_derive:0")
 ]
 
 >> FP-8: extract with non-empty payload counts as progress
-exe @testFp8ExtractWithPayloadCountsAsProgress() = [
-  let @s = {
-    resolved: {
-      hotel: {
-        version: 1,
-        by_handle: {
-          "r_hotel_A": { value: { data: { name: "A", price: 100 } } }
-        }
-      }
-    },
+exe role:worker @testFp8ExtractWithPayloadCountsAsProgress() = [
+  let @agent = @detAgent()
+  let @baseline = @stateProgressFingerprint(@agent, @emptyState())
+  let @state = {
     extracted: {
       "hotel_address": {
         preview_fields: ["street", "city"],
         selection_refs: []
       }
     },
-    derived: {}
+    derived: {},
+    extract_sources: {},
+    capabilities: { url_refs: {} }
   }
-  let @fp = @stateProgressFingerprint(@s)
-  let @differs = @fp != @detFingerprint
+  let @fp = @stateProgressFingerprint(@agent, @state)
+  let @differs = @fp != @baseline
   let @hasMarker = @fp.includes("E:hotel_address:1")
   => @assertOk(@differs && @hasMarker, `differs=@differs hasMarker=@hasMarker fp='@fp'`)
 ]
 
 >> --- Schema round-trip ---------------------------------------------------
->> @plannerRuntime schema round-trip — c-3438 (B) schema fix. Earlier the
->> @plannerRuntime record didn't declare progress_fingerprint or
->> calls_since_progress; the fields were silently stripped on session
->> writes. This test asserts the schema round-trip preserves the fields.
+>> @plannerRuntime schema round-trip — c-3438 (B) schema fix.
 
 exe @testPr1RuntimeSchemaRoundtripPreservesProgressFields() = [
   let @rt = @plannerRuntimeStateWithProgress(5, 1, null, { phase: "resolve" }, "FP_TEST_VALUE", 3)
@@ -210,7 +186,7 @@ var @progressFingerprintSuite = @suite("progress-fingerprint", [
     @testFp2Deterministic,
     @testFp3NewHandleChangesFp,
     @testFp4NewFieldOnExistingHandleChangesFp,
-    @testFp5BucketVersionBumpChangesFp,
+    @testFp5SlotVersionBumpChangesFp,
     @testFp6DeriveWithSelectionRefCountsAsProgress,
     @testFp7DeriveItemsOnlyPreviewIsNotProgress,
     @testFp8ExtractWithPayloadCountsAsProgress

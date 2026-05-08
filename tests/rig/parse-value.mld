@@ -10,24 +10,31 @@ import { @assertOk, @assertEq } from "../assert.mld"
 import { @suite, @group, @runSuites } from "../runner.mld"
 import { @applyRegexParser, @parserId } from "../../rig/transforms/parse_value.mld"
 import { @compileExecuteIntent } from "../../rig/intent.mld"
+import { @emptyState, @shelfRecords } from "../../rig/runtime.mld"
 
 >> --- Module-level fixtures for PV-10..PV-12 --------------------------------
->> record/tool declarations require module scope.
+>> Stage B: state.resolved is gone; the parsed-IBAN record is written to
+>> a per-test shelf and threaded onto a synthetic agent.
 
 record @parsedIban = {
   facts: [
-    parse_id: handle,
-    iban_value: string?,
+    iban_value: string,
     parser_id: string
   ],
   data: {},
-  key: parse_id
+  key: iban_value,
+  read: [{ value: "iban_value" }, { value: "parser_id" }],
+  write: { role:worker: { shelves: { upsert: true } } }
 }
 
 record @sendMoneyInputs = {
   facts: [recipient: string],
   data: { trusted: [amount: number] },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 exe @sendMoney(recipient, amount) = [
@@ -39,36 +46,32 @@ var tools @pvTools = {
     mlld: @sendMoney,
     inputs: @sendMoneyInputs,
     labels: ["execute:w", "tool:w"],
-    can_authorize: "role:planner",
     description: "Test send_money for parse_value invariant."
   }
 }
 
-var @parsedRecord = {
-  parse_id: "pv10_test",
-  iban_value: "UK12345678901234567890",
-  parser_id: "test_parser_v1"
-} as record @parsedIban
+var @pvRecords = { parsedIban: @parsedIban }
 
-var @pvState = {
-  resolved: {
-    parsedIban: [
-      {
-        handle: "r_pv10_test",
-        key: "pv10_test",
-        value: @parsedRecord,
-        field_values: {
-          parse_id: @parsedRecord.parse_id,
-          iban_value: @parsedRecord.iban_value,
-          parser_id: @parsedRecord.parser_id
-        }
-      }
-    ]
-  },
-  extracted: {},
-  derived: {},
-  step_history: []
-}
+>> Build a synthetic agent whose plannerShelf carries one parsedIban
+>> record minted from the regex parser path.
+exe role:worker @pvAgent() = [
+  shelf @ps from @pvRecords with { versioned: true }
+  let @rec = {
+    iban_value: "UK12345678901234567890",
+    parser_id: "test_parser_v1"
+  } as record @parsedIban
+  let @w = @shelf.write(@ps.parsedIban, @rec)
+  => { records: @pvRecords, plannerShelf: @ps }
+]
+
+>> Path A handle synthesized from the .mx.address.key of the same record.
+exe role:worker @pvHandle() = [
+  let @rec = {
+    iban_value: "UK12345678901234567890",
+    parser_id: "test_parser_v1"
+  } as record @parsedIban
+  => `r_parsedIban_@rec.mx.address.key`
+]
 
 >> --- Tests ----------------------------------------------------------------
 
@@ -188,12 +191,13 @@ exe @testPv9ParserIdDeterministic() = [
 ]
 
 >> PV-10: parse_value-minted fact-bearing field satisfies write-tool control arg
-exe @testPv10ParsedFactSatisfiesControlArg() = [
-  let @attempt = @compileExecuteIntent(@pvState, @pvTools, {
+exe role:worker @testPv10ParsedFactSatisfiesControlArg() = [
+  let @agent = @pvAgent()
+  let @attempt = @compileExecuteIntent(@agent, @emptyState(), @pvTools, {
     phase: "execute",
     operation: "send_money",
     args: {
-      recipient: { source: "resolved", record: "parsedIban", handle: "r_pv10_test", field: "iban_value" },
+      recipient: { source: "resolved", record: "parsedIban", handle: @pvHandle(), field: "iban_value" },
       amount: { source: "known", value: 98.7 }
     }
   }, "pay the bill")
@@ -201,8 +205,9 @@ exe @testPv10ParsedFactSatisfiesControlArg() = [
 ]
 
 >> PV-11: extracted source rejected for the same control arg shape
-exe @testPv11ExtractedSourceRejected() = [
-  let @attempt = @compileExecuteIntent(@pvState, @pvTools, {
+exe role:worker @testPv11ExtractedSourceRejected() = [
+  let @agent = @pvAgent()
+  let @attempt = @compileExecuteIntent(@agent, @emptyState(), @pvTools, {
     phase: "execute",
     operation: "send_money",
     args: {
@@ -214,8 +219,9 @@ exe @testPv11ExtractedSourceRejected() = [
 ]
 
 >> PV-12: derived source rejected for the same control arg shape
-exe @testPv12DerivedSourceRejected() = [
-  let @attempt = @compileExecuteIntent(@pvState, @pvTools, {
+exe role:worker @testPv12DerivedSourceRejected() = [
+  let @agent = @pvAgent()
+  let @attempt = @compileExecuteIntent(@agent, @emptyState(), @pvTools, {
     phase: "execute",
     operation: "send_money",
     args: {

@@ -11,7 +11,8 @@ record @contact = {
   read: {
     role:planner: [name, { value: "email" }],
     role:worker: [name, { value: "email" }, notes]
-  }
+  },
+  write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }
 }
 
 record @note_entry = {
@@ -21,7 +22,8 @@ record @note_entry = {
   read: {
     role:planner: [{ value: "id_" }, title],
     role:worker: [{ value: "id_" }, title, content]
-  }
+  },
+  write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }
 }
 
 record @message_entry = {
@@ -492,6 +494,12 @@ export {
   @tools,
   @sampleState,
   @sampleAgent,
+  @aliceContactRecord,
+  @bobContactRecord,
+  @noteEntryRecord,
+  @numberOneRecord,
+  @numberTwoRecord,
+  @summaryRecord,
   @get_contacts,
   @get_note,
   @get_message,
