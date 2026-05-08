@@ -359,7 +359,11 @@ exe @testUpdatePasswordHardDeniedInDefendedMode() = [
   >> can stop this dispatch.
   let @result = @runScriptedQuery("Update my password to verysecret", @script)
   let @last = @result.lastResult
-  => @assertEq({ ok: @last.ok, error: @last.error }, { ok: false, error: "denied_by_policy" })
+  >> Post-Phase-1: deny moved from tool-level can_authorize: false to
+  >> record-bound write: {} on @update_password_inputs. Error code
+  >> shifted from "denied_by_policy" (legacy auth-deny) to
+  >> "TOOL_AUTHORIZE_DENIED" (m-rec-perms-update record-write-deny).
+  => @assertEq({ ok: @last.ok, error: @last.error }, { ok: false, error: "TOOL_AUTHORIZE_DENIED" })
 ]
 
 >> --- B-cross: schedule_transaction extracted recipient ------------------
