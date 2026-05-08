@@ -30,10 +30,10 @@ record @slack_msg = {
   data: {
     untrusted: [body: string?]
   },
-  display: {
+  read: {
     default: [{ mask: "sender" }, { mask: "recipient" }, body],
-    worker: [{ mask: "sender" }, { mask: "recipient" }, body],
-    planner: [{ ref: "sender" }, { ref: "recipient" }, { ref: "body_has_url" }]
+    role:worker: [{ mask: "sender" }, { mask: "recipient" }, body],
+    role:planner: [{ value: "sender" }, { value: "recipient" }, { value: "body_has_url" }]
   }
 }
 
@@ -66,7 +66,7 @@ record @slack_msg = {
 >> "add user X" tasks, costing ~2-3x wall on user-resolution paths.
 record @slack_user = {
   facts: [name: { type: string, kind: "slack_user_name" }],
-  display: [{ ref: "name" }]
+  read: [{ value: "name" }]
 }
 
 >> ── Slack channels ──
@@ -91,10 +91,10 @@ record @slack_channel = {
   facts: [
     name: { type: string, kind: "slack_channel_name" }
   ],
-  display: {
-    default: [{ ref: "name" }],
-    worker: [{ ref: "name" }],
-    planner: []
+  read: {
+    default: [{ value: "name" }],
+    role:worker: [{ value: "name" }],
+    role:planner: []
   }
 }
 
@@ -107,10 +107,10 @@ record @webpage_content = {
   data: {
     untrusted: [content: string?]
   },
-  display: {
-    default: [{ ref: "url" }, content],
-    worker: [{ ref: "url" }, content],
-    planner: [{ ref: "url" }]
+  read: {
+    default: [{ value: "url" }, content],
+    role:worker: [{ value: "url" }, content],
+    role:planner: [{ value: "url" }]
   }
 }
 
@@ -136,10 +136,10 @@ record @url_ref = {
   ],
   data: [],
   key: id_,
-  display: {
-    default: [{ ref: "id_" }, { ref: "source_msg" }, { ref: "ordinal_in_message" }, { ref: "canonical_url_hash" }, { ref: "has_query" }, { ref: "has_fragment" }, { ref: "safety_status" }],
-    worker: [{ ref: "id_" }, { ref: "source_msg" }, { ref: "ordinal_in_message" }, { ref: "canonical_url_hash" }, { ref: "has_query" }, { ref: "has_fragment" }, { ref: "safety_status" }],
-    planner: [{ ref: "id_" }, { ref: "source_msg" }, { ref: "ordinal_in_message" }, { ref: "canonical_url_hash" }, { ref: "has_query" }, { ref: "has_fragment" }, { ref: "safety_status" }]
+  read: {
+    default: [{ value: "id_" }, { value: "source_msg" }, { value: "ordinal_in_message" }, { value: "canonical_url_hash" }, { value: "has_query" }, { value: "has_fragment" }, { value: "safety_status" }],
+    role:worker: [{ value: "id_" }, { value: "source_msg" }, { value: "ordinal_in_message" }, { value: "canonical_url_hash" }, { value: "has_query" }, { value: "has_fragment" }, { value: "safety_status" }],
+    role:planner: [{ value: "id_" }, { value: "source_msg" }, { value: "ordinal_in_message" }, { value: "canonical_url_hash" }, { value: "has_query" }, { value: "has_fragment" }, { value: "safety_status" }]
   }
 }
 
@@ -156,10 +156,10 @@ record @referenced_webpage_content = {
     untrusted: [content: string?]
   },
   key: id_,
-  display: {
-    default: [{ ref: "id_" }, { ref: "source_url_ref" }, content],
-    worker: [{ ref: "id_" }, { ref: "source_url_ref" }, content],
-    planner: [{ ref: "id_" }, { ref: "source_url_ref" }, { ref: "fetch_status" }]
+  read: {
+    default: [{ value: "id_" }, { value: "source_url_ref" }, content],
+    role:worker: [{ value: "id_" }, { value: "source_url_ref" }, content],
+    role:planner: [{ value: "id_" }, { value: "source_url_ref" }, { value: "fetch_status" }]
   }
 }
 
@@ -170,7 +170,11 @@ record @send_channel_message_inputs = {
   data: {
     untrusted: [body: string]
   },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @send_direct_message_inputs = {
@@ -178,7 +182,11 @@ record @send_direct_message_inputs = {
   data: {
     untrusted: [body: string]
   },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @invite_user_to_slack_inputs = {
@@ -188,7 +196,11 @@ record @invite_user_to_slack_inputs = {
   ],
   data: [],
   correlate: false,
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @add_user_to_channel_inputs = {
@@ -198,13 +210,21 @@ record @add_user_to_channel_inputs = {
   ],
   data: [],
   correlate: false,
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @remove_user_from_slack_inputs = {
   facts: [user: { type: string, kind: "slack_user_name" }],
   data: [],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @post_webpage_inputs = {
@@ -212,7 +232,11 @@ record @post_webpage_inputs = {
   data: {
     untrusted: [content: string]
   },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 var @records = {

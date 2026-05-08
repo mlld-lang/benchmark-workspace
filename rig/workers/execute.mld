@@ -148,7 +148,12 @@ exe role:planner @compileForDispatch(agent, state, decision, query) = [
   }
 ]
 
-exe role:planner @dispatchExecute(agent, state, decision, query) = [
+>> @dispatchExecute is the worker-side dispatcher: it calls
+>> @compileForDispatch (role:planner — authorize) to get a built policy,
+>> then submits the tool under role:worker. Pre-cutover this was a
+>> single role:planner exe; post-m-rec-perms-update the submit must
+>> happen under role:worker (input records' write.role:worker.tools.submit).
+exe role:worker @dispatchExecute(agent, state, decision, query) = [
   let @prep = @compileForDispatch(@agent, @state, @decision, @query)
   if !@prep.ok [
     => @plannerValidationFailure(@prep.failure.error, @prep.failure.payload, @prep.failure.issues)

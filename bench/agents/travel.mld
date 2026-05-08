@@ -24,7 +24,7 @@ import { @query, @model } from @payload
 
 var @cls = @rig.classify(@query, {
   tools: @travelToolRouter,
-  advice: @travelAdviceClassifier
+  role:advice: @travelAdviceClassifier
 })
 
 exe @flattenSets(setNames, sets) = js {

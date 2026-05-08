@@ -226,7 +226,11 @@ record @share_note_with_contact_inputs = {
   facts: [note_id: string, recipient: string],
   data: [],
   correlate: true,
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 var tools @correlateTools = {

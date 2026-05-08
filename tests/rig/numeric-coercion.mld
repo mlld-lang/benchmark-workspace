@@ -94,7 +94,7 @@ record @ut7_evt = {
   facts: [id_: handle],
   data: { trusted: [title: string?] },
   key: id_,
-  display: [{ ref: "id_" }, title]
+  read: [{ value: "id_" }, title]
 }
 
 exe @ut7FakeSearch() = [

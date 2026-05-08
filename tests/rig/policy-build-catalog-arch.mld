@@ -86,25 +86,41 @@ record @allowlisted_send_email_inputs = {
   facts: [recipient: string],
   data: [subject: string],
   allowlist: { recipient: @approvedRecipients },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 record @blocked_subject_send_inputs = {
   facts: [],
   data: [subject: string],
   blocklist: { subject: @blockedSubjects },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 record @profile_update_inputs = {
   facts: [],
   data: [city: string?, street: string?],
   update: [city, street],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 record @password_change_inputs = {
   facts: [],
   data: [password: string],
   exact: [password],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 var tools @policySectionTools = {

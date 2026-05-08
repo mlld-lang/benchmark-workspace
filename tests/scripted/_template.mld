@@ -56,7 +56,7 @@ var @agent = @rig.build({
 >> not enough). Authors writing scripted tests will copy this pattern.
 exe @runScriptedQuery(query, script) =
   @mockOpencode(@query, { toolScript: @script }) with {
-    display: "role:planner",
+    read: "role:planner",
     session: @planner,
     seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() }
   }

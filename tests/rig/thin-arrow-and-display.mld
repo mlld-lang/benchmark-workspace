@@ -27,12 +27,12 @@ record @thin_arrow_output = {
 }
 
 >> Workspace contact records use unnamed display arrays such as
->> `[name, { ref: "email" }]`. Keep one fixture inline so this suite
+>> `[name, { value: "email" }]`. Keep one fixture inline so this suite
 >> exercises the exact shorthand the live benchmark depends on.
 record @flat_display_contact = {
   facts: [email: string],
   data: [name: string, notes: string?],
-  display: [name, { ref: "email" }]
+  read: [name, { value: "email" }]
 }
 
 >> Benchmark suites use plain mode keys (`planner`, `worker`, `default`)
@@ -43,10 +43,10 @@ record @plain_mode_message = {
   facts: [id_: string, sender: string?],
   data: [subject: string?, body: string?],
   key: id_,
-  display: {
-    default: [{ ref: "id_" }, subject, body],
-    worker: [{ ref: "id_" }, subject, body],
-    planner: [{ ref: "id_" }, subject]
+  read: {
+    default: [{ value: "id_" }, subject, body],
+    role:worker: [{ value: "id_" }, subject, body],
+    role:planner: [{ value: "id_" }, subject]
   }
 }
 

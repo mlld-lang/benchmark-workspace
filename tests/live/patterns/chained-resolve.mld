@@ -11,9 +11,9 @@ record @channel = {
   facts: [name: string],
   data: [topic: string?, member_count: number?],
   key: name,
-  display: {
-    role:planner: [{ ref: "name" }, topic, member_count],
-    role:worker: [{ ref: "name" }, topic, member_count]
+  read: {
+    role:planner: [{ value: "name" }, topic, member_count],
+    role:worker: [{ value: "name" }, topic, member_count]
   }
 }
 
@@ -21,9 +21,9 @@ record @channel_message = {
   facts: [id_: string, channel: string?],
   data: [author: string?, text: string?],
   key: id_,
-  display: {
-    role:planner: [{ ref: "id_" }, { ref: "channel" }, author],
-    role:worker: [{ ref: "id_" }, { ref: "channel" }, author, text]
+  read: {
+    role:planner: [{ value: "id_" }, { value: "channel" }, author],
+    role:worker: [{ value: "id_" }, { value: "channel" }, author, text]
   }
 }
 

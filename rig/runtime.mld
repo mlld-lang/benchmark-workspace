@@ -406,7 +406,7 @@ exe @displayModeKeys(role) = [
 ]
 
 exe @recordDisplayMode(recordDef, role) = [
-  let @display = @recordMeta(@recordDef, "display")
+  let @display = @recordMeta(@recordDef, "read")
   let @modeKeys = @displayModeKeys(@role)
   => when [
     !@display.isDefined() => []

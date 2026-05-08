@@ -68,7 +68,11 @@ record @local_meeting_request_inputs = {
   facts: [participants: array?],
   data: [title: string, start_time: string, end_time: string],
   optional_benign: [participants],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 var tools @localExecuteRuntimeTools = {
@@ -217,28 +221,44 @@ record @ewp_allowlisted_send_email_inputs = {
   facts: [recipient: string],
   data: [subject: string],
   allowlist: { recipient: @ewpApprovedRecipients },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @ewp_blocked_subject_send_inputs = {
   facts: [],
   data: [subject: string],
   blocklist: { subject: @ewpBlockedSubjects },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @ewp_profile_update_inputs = {
   facts: [],
   data: [city: string?, street: string?],
   update: [city, street],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @ewp_password_change_inputs = {
   facts: [],
   data: [password: string],
   exact: [password],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 exe @ewp_runtime_allowlisted_send_email(recipient, subject) = [
@@ -383,7 +403,7 @@ var @ewpDispatchAllowlistAllowedResult = when [
     error: "policy_build_invalid",
     summary: @ewpAllowlistBuiltPolicy.issues | @pretty
   }
-  * => @ewpPolicySectionTools.allowlisted_send_email(@ewpApprovedRecipient, "hello") with { policy: @ewpAllowlistBuiltPolicy.policy }
+  * => @ewpPolicySectionTools.allowlisted_send_email(@ewpApprovedRecipient, "hello") with { read: "role:worker", policy: @ewpAllowlistBuiltPolicy.policy }
 ]
 
 >> The exact-rejected case is best exercised by running the dedicated
@@ -399,7 +419,7 @@ var @dispatchExactRejectedRendered = `@dispatchExactRejectedResult`
 
 >> Zero control-arg dispatch: a known-payload create_note must compile and
 >> dispatch cleanly with status: "sent" and no error.
-exe @testExecuteWorkerZeroControlArgPolicy() = [
+exe role:worker @testExecuteWorkerZeroControlArgPolicy() = [
   let @actual = {
     errorBlank: @isBlank(@field(@dispatchCreateNoteResult, "error")),
     status: @field(@field(@dispatchCreateNoteResult, "result"), "status")
@@ -409,7 +429,7 @@ exe @testExecuteWorkerZeroControlArgPolicy() = [
 
 >> Optional control-arg omission: schedule_meeting omits the optional
 >> participants control-arg entirely. Compile + dispatch must still succeed.
-exe @testExecuteWorkerOptionalFactOmission() = [
+exe role:worker @testExecuteWorkerOptionalFactOmission() = [
   let @actual = {
     errorBlank: @isBlank(@field(@dispatchOptionalMeetingResult, "error")),
     status: @field(@field(@dispatchOptionalMeetingResult, "result"), "status")
@@ -419,7 +439,7 @@ exe @testExecuteWorkerOptionalFactOmission() = [
 
 >> Natural-language datetime task wording must canonicalize cleanly
 >> through compileExecuteIntent so dispatch still succeeds.
-exe @testKnownDatetimeCanonicalization() = [
+exe role:worker @testKnownDatetimeCanonicalization() = [
   let @actual = {
     errorBlank: @isBlank(@field(@dispatchNaturalDatetimeMeetingResult, "error")),
     status: @field(@field(@dispatchNaturalDatetimeMeetingResult, "result"), "status")
@@ -429,7 +449,7 @@ exe @testKnownDatetimeCanonicalization() = [
 
 >> Known-value control-arg policy: a known participant address passes
 >> through schedule_meeting compile + dispatch without rejection.
-exe @testExecuteWorkerKnownControlArgPolicy() = [
+exe role:worker @testExecuteWorkerKnownControlArgPolicy() = [
   let @actual = {
     errorBlank: @isBlank(@field(@dispatchKnownParticipantMeetingResult, "error")),
     status: @field(@field(@dispatchKnownParticipantMeetingResult, "result"), "status")
@@ -442,7 +462,7 @@ exe @testExecuteWorkerKnownControlArgPolicy() = [
 >> Tool-collection input-record policy: same call as the known-control-arg
 >> case but routed through the policy-bearing `tools` collection. Verifies
 >> the tool collection's input-record metadata doesn't reject a clean call.
-exe @testExecuteWorkerCollectionInputRecordPolicy() = [
+exe role:worker @testExecuteWorkerCollectionInputRecordPolicy() = [
   let @actual = {
     errorBlank: @isBlank(@field(@dispatchKnownParticipantMeetingCollectionResult, "error")),
     status: @field(@field(@dispatchKnownParticipantMeetingCollectionResult, "result"), "status")
@@ -453,7 +473,7 @@ exe @testExecuteWorkerCollectionInputRecordPolicy() = [
 >> Derived-payload arg into a tool with input-record metadata: end_time
 >> reads from a derived availability_check; the policy must accept the
 >> derived ref as a payload arg.
-exe @testExecuteWorkerCollectionDerivedPayloadPolicy() = [
+exe role:worker @testExecuteWorkerCollectionDerivedPayloadPolicy() = [
   let @actual = {
     errorBlank: @isBlank(@field(@dispatchKnownParticipantMeetingCollectionDerivedPayloadResult, "error")),
     status: @field(@field(@dispatchKnownParticipantMeetingCollectionDerivedPayloadResult, "result"), "status")
@@ -465,7 +485,7 @@ exe @testExecuteWorkerCollectionDerivedPayloadPolicy() = [
 
 >> Allowlist pass: ada@example.com is on the approved list, so the call
 >> succeeds and returns the structured tool payload.
-exe @testInputRecordAllowlistPass() = [
+exe role:worker @testInputRecordAllowlistPass() = [
   let @actual = {
     errorBlank: @isBlank(@field(@ewpDispatchAllowlistAllowedResult, "error")),
     recipient: @field(@ewpDispatchAllowlistAllowedResult, "recipient"),
@@ -486,7 +506,7 @@ exe @testInputRecordAllowlistPass() = [
 >>   - "cold" path: thrown as a `denied` event with @mx.guard.{code,phase}
 >>   - "hot" path: returned as an error envelope with .ok=false, .code, .phase
 >> Both are valid denial surfaces (same security contract, same fields). Accept either.
-exe @testInputRecordAllowlistReject() = when [
+exe role:worker @testInputRecordAllowlistReject() = when [
   denied => when [
     @field(@mx.guard, "code") == "allowlist_mismatch" && @field(@mx.guard, "phase") == "dispatch" => {
       ok: true,
@@ -515,7 +535,7 @@ exe @testInputRecordAllowlistReject() = when [
 
 >> Blocklist reject: subject "blocked subject" matches the blocklist,
 >> so the call must deny with code blocklist_match in phase dispatch.
-exe @testInputRecordBlocklistReject() = when [
+exe role:worker @testInputRecordBlocklistReject() = when [
   denied => when [
     @field(@mx.guard, "code") == "blocklist_match" && @field(@mx.guard, "phase") == "dispatch" => {
       ok: true,
@@ -541,7 +561,7 @@ exe @testInputRecordBlocklistReject() = when [
 >> Update with no fields: update_profile() called with no arguments must
 >> deny with code no_update_fields in phase dispatch — update tools require
 >> at least one changed field beyond the control args.
-exe @testInputRecordUpdateRejectsEmptyDispatch() = when [
+exe role:worker @testInputRecordUpdateRejectsEmptyDispatch() = when [
   denied => when [
     @field(@mx.guard, "code") == "no_update_fields" && @field(@mx.guard, "phase") == "dispatch" => {
       ok: true,
@@ -568,7 +588,7 @@ exe @testInputRecordUpdateRejectsEmptyDispatch() = when [
 >> a known-mode value if the literal is not present in the task. Verified
 >> by running the dedicated mlld policy fixture and asserting on its
 >> stdout — `false`, `exact_not_in_task`, and `subject` must all appear.
-exe @testInputRecordExactRequiresTaskLiteral() = [
+exe role:worker @testInputRecordExactRequiresTaskLiteral() = [
   let @actual = {
     hasFalse: @dispatchExactRejectedRendered.includes("false"),
     hasReason: @dispatchExactRejectedRendered.includes("exact_not_in_task"),

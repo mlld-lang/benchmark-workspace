@@ -8,9 +8,9 @@
 record @contact = {
   facts: [email: string],
   data: [name: string, notes: string?],
-  display: {
-    role:planner: [name, { ref: "email" }],
-    role:worker: [name, { ref: "email" }, notes]
+  read: {
+    role:planner: [name, { value: "email" }],
+    role:worker: [name, { value: "email" }, notes]
   }
 }
 
@@ -18,9 +18,9 @@ record @note_entry = {
   facts: [id_: string],
   data: [title: string, content: string?],
   key: id_,
-  display: {
-    role:planner: [{ ref: "id_" }, title],
-    role:worker: [{ ref: "id_" }, title, content]
+  read: {
+    role:planner: [{ value: "id_" }, title],
+    role:worker: [{ value: "id_" }, title, content]
   }
 }
 
@@ -28,9 +28,9 @@ record @message_entry = {
   facts: [id_: string, sender: string?],
   data: [body: string?, subject: string?],
   key: id_,
-  display: {
-    role:planner: [{ ref: "id_" }, { ref: "sender" }],
-    role:worker: [{ ref: "id_" }, { ref: "sender" }, subject, body]
+  read: {
+    role:planner: [{ value: "id_" }, { value: "sender" }],
+    role:worker: [{ value: "id_" }, { value: "sender" }, subject, body]
   }
 }
 
@@ -48,25 +48,41 @@ record @meeting_request_inputs = {
   facts: [participants: array?],
   data: [title: string, start_time: string, end_time: string],
   optional_benign: [participants],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @append_note_inputs = {
   facts: [note_id: string],
   data: [content: string],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @create_note_inputs = {
   facts: [],
   data: [content: string],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @send_email_inputs = {
   facts: [recipients: array],
   data: [subject: string, body: string],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @password_update_inputs = {
@@ -74,7 +90,11 @@ record @password_update_inputs = {
   data: [password: string],
   exact: [password],
   update: [password],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @note_payload = {
@@ -93,9 +113,9 @@ record @webpage_content = {
   facts: [url: string],
   data: [content: string?],
   key: url,
-  display: {
-    role:planner: [{ ref: "url" }],
-    role:worker: [{ ref: "url" }, content]
+  read: {
+    role:planner: [{ value: "url" }],
+    role:worker: [{ value: "url" }, content]
   }
 }
 
@@ -103,9 +123,9 @@ record @number_row = {
   facts: [id_: string],
   data: [value: number],
   key: id_,
-  display: {
-    role:planner: [{ ref: "id_" }, value],
-    role:worker: [{ ref: "id_" }, value]
+  read: {
+    role:planner: [{ value: "id_" }, value],
+    role:worker: [{ value: "id_" }, value]
   }
 }
 
@@ -117,9 +137,9 @@ record @datetime_context = {
   facts: [value: string],
   data: [kind: string?],
   key: value,
-  display: {
-    role:planner: [{ ref: "value" }, kind],
-    role:worker: [{ ref: "value" }, kind]
+  read: {
+    role:planner: [{ value: "value" }, kind],
+    role:worker: [{ value: "value" }, kind]
   }
 }
 
@@ -130,9 +150,9 @@ record @shared_file_entry = {
   facts: [id_: string],
   data: [filename: string, shared_with: array],
   key: id_,
-  display: {
-    role:planner: [{ ref: "id_" }, filename],
-    role:worker: [{ ref: "id_" }, filename, shared_with]
+  read: {
+    role:planner: [{ value: "id_" }, filename],
+    role:worker: [{ value: "id_" }, filename, shared_with]
   }
 }
 

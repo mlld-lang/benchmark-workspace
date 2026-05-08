@@ -55,14 +55,14 @@ import {
 >> as a fallback.
 exe @runScriptedQuery(agent, query, script) =
   @mockOpencode(@query, { toolScript: @script }) with {
-    display: "role:planner",
+    read: "role:planner",
     session: @planner,
     seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() }
   }
 
 exe @runWithState(agent, query, script, seedState) =
   @mockOpencode(@query, { toolScript: @script }) with {
-    display: "role:planner",
+    read: "role:planner",
     session: @planner,
     seed: { agent: @agent, query: @query, state: @seedState, runtime: @emptyPlannerRuntime() }
   }

@@ -164,8 +164,7 @@ var tools @tools = {
     mlld: @update_password,
     inputs: @update_password_inputs,
     labels: ["execute:w", "tool:w", "privileged:account"],
-    can_authorize: false,
-    description: "Update the account password. This tool is hard-denied in defended mode."
+    description: "Update the account password. Hard-denied via @update_password_inputs.write: {} (record-bound deny replaces the legacy can_authorize: false annotation)."
   }
 }
 

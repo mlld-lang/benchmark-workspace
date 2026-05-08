@@ -32,10 +32,20 @@ Net effect once landed:
 | Block | Sessions | Commits per session |
 |---|---|---|
 | **0.A + 0.B** — invariant tests + baselines | **1** | Two commits in one session: tests, then baselines |
-| **1.A + 1.B** — vocabulary rename + write: declarations + policy synth | **1-2** | Rename commit, then write: + policy synth commit; matrix reclassification folded in |
-| **2.A + 2.B + 2.C** — bucket→shelf core + consumer migration + verification | **1-2** | Largest single chunk; can split into "core + consumers" then "verification + closeout" if a gate goes red |
-| **3** — docs + planner prompt | **1** | One commit with bench-sweep before/after numbers in message |
+| **1 (1.A + 1.A.2 + 1.B as one semantic unit)** — vocabulary rename + comment refresh + write: declarations + policy synth | **1-2** | Rename + write/policy ship together (gates can't go green between them — m-ed0b finding); 1.A.2 comment refresh as follow-up commit only after Phase 1 unit is green. Optionally split rename and write/policy into two staged commits IF gates run only after both land. |
+| **2.A + 2.B + 2.C** — bucket→shelf core + consumer migration + verification | **1-2** | Largest single chunk; comment cleanup travels in-commit with deletions; can split into "core + consumers" then "verification + closeout" if a gate goes red |
+| **3** — planner prompt + remaining doc pass + surviving-half comment merge | **1** | One commit with bench-sweep before/after numbers; comment merge for files not touched in 1-2 |
 | **Total migration-core** | **4-6 sessions** | |
+
+**Comment refresh adds essentially no session count.** Phase 1.A.2 is one
+small follow-up commit (after Phase 1 unit is green). Phase 1.B and
+Phase 2.A-C carry comment edits in-commit alongside structural changes
+(deletion of a function takes its comment with it; rewriting a section
+rewrites its narrative at the same time). Phase 3 was always going to
+do a doc pass; folding the surviving-half comment merge into it stays
+within scope.
+
+**Note on Phase 1 commit structure**: the 1.A/1.B split was a review-hygiene preference, not a runtime invariant. Cutover activates m-rec-perms-update's full runtime contract at once (deny-by-default writes, schema-visible-by-default fields, role-key prefix, etc.). Implementer can split commits for review IF gates are run only after the full Phase 1 unit lands. Cannot ship 1.A alone with green gates. See Phase 1 section for detail.
 
 c-0458 Days 2-5 (slack/workspace/travel layer assertions, tier-2 loop tests) is parallel quality work, ~2-3 additional sessions if pursued — pays off as migration safety net but not migration-blocking.
 
@@ -109,16 +119,18 @@ The migration is **phased by mlld feature dependency**. Each phase has clear gat
 
 #### 0.A — Invariant tests (`tests/rig/`)
 
-Tests that encode contracts the migration must preserve. Each passes today; each must pass post-migration.
+Tests that encode contracts the migration must preserve. Each passes today (or xfails today as the migration target); each must pass uniformly post-migration.
+
+**xfail discipline for tests 1 and 2**: write both the natural-id case AND the handle-drift case (slack messages) for each. Mark the handle-drift case `xfail` today with a comment pointing at Phase 2. The xfail→pass transition is the observable migration milestone. Match the existing repo pattern (e.g., `c-fb58 testInstructionChannelLabelNotPromoted` in `security-slack.mld`). Phase 2 gate explicitly requires removing the xfail markers in the same commit as the bucket→shelf collapse.
 
 1. **Cross-resolve identity stability** (per record class)
    - Synthetic state, two identical resolves, assert: bucket entry count unchanged, primary identity stable across calls, bucket version increments by 1.
-   - Today: passes for natural-id records (banking, workspace email, travel hotel); FAILS for slack messages (handle drift). After cutover: passes uniformly.
+   - Today: natural-id case (banking, workspace email, travel hotel) PASSES; handle-drift case (slack messages) is XFAIL — bridge mints `Date.now()`-randomized id_ per call, identity drifts. After cutover: both PASS, xfail marker removed in Phase 2 commit.
    - Documents the bug class the migration eliminates.
 
 2. **Selection-ref-survives-reresolve**
    - Two-phase scripted test: derive selects entry, planner re-resolves, execute uses selection ref. Assert ok.
-   - Today: fails for handle-drift records. After cutover: passes uniformly.
+   - Today: natural-id case PASSES; handle-drift case (slack) is XFAIL. After cutover: both PASS, xfail marker removed in Phase 2 commit.
    - The motivating contract from the m-shelf-wildcard spec.
 
 3. **No-progress detector probe** (synthetic)
@@ -165,6 +177,7 @@ Continue per the plan. Layer assertions encode the security contract at maximum 
 - [ ] Phase 0.B baselines captured as checked-in artifacts
 - [ ] c-0458 Days 2-3 landed (slack + workspace + travel layer assertions)
 - [ ] Mutation matrix Overall: OK against baseline
+- [ ] No comment work in Phase 0 — shadow drafts (`*-comments.txt`) stay parked. Phase 0 does not touch the source files those drafts shadow; nothing to merge yet.
 
 ---
 
@@ -176,11 +189,17 @@ Continue per the plan. Layer assertions encode the security contract at maximum 
 
 This is the larger migration work. m-rec-perms-update v0.3 ships **without** a deprecation alias for `display:` — the rename is mandatory at cutover. Plan must treat all renames as required-in-the-same-commit-as-the-mlld-cutover.
 
-Three sub-phases.
+> **Phase 1 is one semantic unit** (added 2026-05-07 mid-execution). An earlier draft of this plan separated 1.A (rename) from 1.B (`write:` declarations + policy synth) on the assumption that a rename-only intermediate could ship green. **It can't.** The cutover from pinned binary to system mlld activates m-rec-perms-update's full runtime contract at once: deny-by-default for writes (per `core/records/write-permissions.ts:126` — records without `write:` block return `WRITE_DENIED_NO_DECLARATION`), schema-visible-by-default for unlisted fields, role-key prefix requirement, and possibly more. There is no clean rename-only intermediate state where pre-cutover semantics still apply.
+>
+> **Implication**: 1.A and 1.B land together as one logical unit. They MAY split across two commits if review hygiene benefits outweigh ship-green discipline (e.g., the rename commit is huge but mechanical; the write/policy commit is smaller but semantically loaded — both pre-staged, run gates green only after BOTH land), but they cannot land sequentially with gates green between them. Treat them as a single migration session producing 1-2 related commits that ship together.
+>
+> **Surfaced via**: m-ed0b investigation (mlld-dev confirmed clean-side migration fix, not a mlld bug). The agent's `tests/rig/policy-build-catalog-arch.mld:85` and `tests/fixtures.mld:60` failures (and any test exercising a write tool) were `policy.build` denying tool dispatch on records without `write:` declarations.
+
+Three sub-phases (one semantic unit, possibly split for review):
 
 #### 1.A — Vocabulary rename pass (mechanical)
 
-Per m-rec-perms-update v0.3, no deprecation aliases exist. The rename pass is the **only** change in this commit (no `write:` work mixed in) so a clean revert is possible if anything breaks.
+The rename surface. Lands as part of the Phase 1 unit (NOT shippable alone — see callout above). If split into a separate commit from 1.B, that commit's gates remain red until 1.B also lands; the split is review-hygiene only.
 
 Renames to apply across the codebase:
 
@@ -188,9 +207,16 @@ Renames to apply across the codebase:
 |---|---|---|
 | `display: { ... }` (record block) | `read: { ... }` | ~25 records (bench) + ~7 records (rig) |
 | `{ref: "fieldname"}` (mode entry) | `{value: "fieldname"}` | ~50-100 mode entries |
+| Bare role keys `worker:` / `planner:` / `advice:` (inside record `read:` block) | `role:worker:` / `role:planner:` / `role:advice:` | ~25 records × ~2-3 role keys each |
 | `with { display: "role:X" }` (on `@claude(...)` calls and similar) | `with { read: "role:X" }` | All worker invocations + classifier calls |
 | `display: "role:X"` (in `box { ... }` configs) | `read: "role:X"` | All box-scope display declarations |
 | `display.<role>` (string references in comments, docs, error strings) | `read.<role>` | Audit pass |
+
+**Role-key prefix is required** in `read:` blocks per m-rec-perms-update spec ("Role keys use the canonical `role:planner` / `role:worker` / `role:advice` form ... `role:planner` is NOT an alias for `planner`"). The pre-rename form had bare role keys (`worker: [...]`, `planner: [...]`); the post-rename form requires the `role:` prefix. System mlld rejects the bare form with `Record '@msg' read block uses bare role key 'planner'. Use canonical 'role:planner'.`
+
+**`default:` stays bare.** Verified by parse probe against system mlld: `read: { default: [...], role:planner: [...] }` parses cleanly. The `default:` mode is "preserved as a generic-fallback projection for non-role-specific consumers" per spec.
+
+The `with { display: "role:X" }` and `display: "role:X"` (box config) call sites already use the `role:X` prefix today — those are string-form references, not block keys; only the `display` → `read` rename applies to them.
 
 Files touched:
 - `bench/domains/{banking,slack,workspace,travel}/records.mld`
@@ -264,6 +290,10 @@ This sub-phase is the bigger semantic change. It's the migration site where rig'
 - [ ] Layer assertions still pass (error code strings may have updated)
 - [ ] Bench security ASR baseline holds (run slack direct + important_instructions canary; expect 0/0)
 - [ ] Bench utility baseline holds within stochastic noise
+- [ ] **`rig/ARCHITECTURE.md` updated**: records-as-policy section reflects new `read:`/`write:` declarations, `can_authorize` removed from tool-catalog narrative, policy synthesis paragraph updated. Lands in same commit (or immediate follow-up) as the Phase 1.B semantic change.
+- [ ] **`bench/ARCHITECTURE.md` updated**: records section reflects per-record `read:`/`write:` blocks, tools section reflects loss of `can_authorize` annotation, "What stays / What goes" table updated.
+- [ ] **Phase 1.A.2 follow-up commit landed**: comment header refresh + history strip on files renamed in Phase 1.A. Consult `*-comments.txt` shadow drafts for proposed text. Independent revert from the rename commit.
+- [ ] **Phase 1.B comment refresh in-commit**: `bench/domains/*/records.mld` records-as-security-contract framing replaces facts/data+can_authorize narrative; `bench/domains/banking/tools.mld` drops can_authorize references; `rig/orchestration.mld` policy-synth comment rewritten to read from write: declarations; `bench/domains/banking/records.mld` gains the kind: vocabulary glossary (per `COMMENTS-EVAL-FOLLOWUPS.md` §1).
 
 ---
 
@@ -329,11 +359,16 @@ Domain records that still declare `id_: handle` + `key: id_` (workspace `email`,
 **Gate**:
 - [ ] All gates green
 - [ ] Phase 0.A invariants pass (cross-resolve identity now passes uniformly across suites — was the migration goal)
+- [ ] **xfail markers removed from `tests/rig/identity-contracts.mld`** for migration-bug-class tests that now pass uniformly (handle-drift cases on slack messages — tests 1 and 2 from §0.A). Removal lands in the same commit as the Phase 2 collapse. The xfail→pass transition is the observable migration milestone; not removing the markers means an XPASS event in the runner, which itself fires red and surfaces the discipline gap.
 - [ ] Mutation matrix Overall: OK
 - [ ] Bench security canary (slack direct + important_instructions) stays at 0 ASR
 - [ ] Bench utility full sweep within ±2 of baseline (78/97)
 - [ ] Code reduction target met (~250-300 lines)
 - [ ] **Per-key cache invalidation verified**: synthetic test writes entry A, reads entry B and observes a cache hit, writes entry B, reads entry A and observes its cache STILL hit. Without this gate, an implementer could ship per-slot invalidation (matching today's bucket behavior) and lose the per-key cache benefit silently while passing all other tests.
+- [ ] **`rig/ARCHITECTURE.md` updated**: phase model, state model, and "shelf vs bucket" framing rewritten — bucket terminology is now historical. State surface section describes wildcard shelf. Lines deleted from rig listed in the migration impact paragraph. Lands in same commit (or immediate follow-up) as the Phase 2 collapse.
+- [ ] **`bench/ARCHITECTURE.md` updated**: directory layout still accurate; "What stays / What goes" table reflects bucket no longer existing.
+- [ ] **`labels-policies-guards.md` updated**: any bucket framing rewritten as shelf; any references to handle-string identity rewritten as `.mx.key`.
+- [ ] **Phase 2 comment refresh in-commit**: deleted helpers' comments delete with them. Surviving helpers in `rig/runtime.mld`, `rig/intent.mld`, `rig/workers/{resolve,derive,planner}.mld` get header + per-section refresh from their `*-comments.txt` shadow drafts. `rig/session.mld` gains shelf-decl explanation. Phase 2.C: `bench/domains/slack/{records,bridge,tools}.mld` drop synthetic-id narrative — bridge collapses to MCP-error guards only.
 
 ---
 
@@ -347,9 +382,11 @@ Per m-shelf-wildcard A8, these stay as plain typed maps. If name-keyed slot mode
 
 Track as a follow-up; don't block Phase 2 closeout.
 
-#### 3.B — Documentation + planner prompt pass
+#### 3.B — Planner prompt + remaining docs
 
-The planner prompt rewording is broader than just "handles → record identities." Per m-rec-perms-update vocabulary changes and m-shelf-wildcard naming, the planner prompt likely needs revisions across:
+**ARCHITECTURE.md docs land alongside their phase commits, not here.** `rig/ARCHITECTURE.md` and `bench/ARCHITECTURE.md` should be updated in the same commit (or immediate follow-up) as Phase 1.B and Phase 2 — see those phase gates. By the time you reach Phase 3, ARCHITECTURE.md is already current. Phase 3.B handles only:
+
+**Planner prompt rewording** (the LLM-behavior change in the migration):
 
 - "you have made progress when new resolved handles appear" → "...new or changed record identities"
 - Any "display projection" references → "read projection"
@@ -358,19 +395,15 @@ The planner prompt rewording is broader than just "handles → record identities
 
 **Discipline**: all wording changes land in ONE commit, with before/after bench-sweep numbers in the commit message (per m-shelf-wildcard A12). If utility regresses beyond ±2 of baseline, the commit gets reverted. Don't split the prompt revision across commits — interleaving structural and wording changes makes the bench-sweep signal noisy.
 
-Other files needing rewrite (low-risk doc work, can land after the prompt commit):
-- `rig/SECURITY.md` — replace bucket/handle-string framing with shelf/`.mx.key` framing; update load-bearing examples
+**Remaining prose docs** (lowest-risk; land after prompt):
+- `rig/SECURITY.md` — bucket/handle-string framing → shelf/`.mx.key` framing; update load-bearing examples
 - `rig/PHASES.md` — phase descriptions reference shelf state
-- `rig/ARCHITECTURE.md` — separation-of-concerns paragraph references shelf as the state primitive
 - `rig/EXAMPLE.mld` — update shelf decl
-- `bench/ARCHITECTURE.md` — bucket references rewritten
 - `clean/CLAUDE.md` — bucket references rewritten
 - `clean/STATUS.md`, `HANDOFF.md` — references updated
 - `bench/domains/*/records-comments.txt` — pre-migration narrative comments updated to post-migration state
 
-Doc pass is the lowest-risk, highest-paper-trail-value work. Land last so docs reflect implementation.
-
-**Planner prompt change verification**: per m-shelf-wildcard, the prompt rewording from "handles" to "record identities" is a behavior surface. Run one bench sweep before and one after to confirm utility doesn't regress.
+If ARCHITECTURE.md updates were missed at their phase boundaries (Phase 1.B, Phase 2), catch them here as a fallback. They should not have been missed; if they were, document the slip in `MIGRATION-HANDOFF.md`.
 
 #### Gate to close migration
 
@@ -382,6 +415,191 @@ Doc pass is the lowest-risk, highest-paper-trail-value work. Land last so docs r
 - [ ] Mutation matrix expected_fails reflects new architecture
 - [ ] Doc pass merged
 - [ ] Update STATUS.md "Sweep history" with closeout run IDs
+- [ ] **Phase 3.B comment refresh complete**: every `*-comments.txt` shadow draft has been merged into its source file (or explicitly archived). The `clean/*-comments.txt` directory is empty or moved to `archive/comments-drafts/`. `COMMENT-PROCESS.md` and `COMMENTS-EVAL-FOLLOWUPS.md` retain as the methodology + decisions record.
+
+---
+
+## Comment refresh discipline
+
+Comment work piggybacks on code change rather than staging at the end. Three
+reasons:
+
+1. Files touched during migration are the natural moment to refresh — the
+   diff already shows what changed and the context is in head.
+2. Comments describing deleted code are easiest to delete in the same commit
+   that deletes the code.
+3. Treating Phase 3.B as a one-shot comment pass is fragile: density changes
+   can shift planner-LLM behavior at the addendum/instruction layer, and a
+   single comment-only commit gives no signal about which file's
+   density change broke utility.
+
+### Working drafts as input
+
+Validated comment proposals live as `*-comments.txt` shadow files alongside
+each source file. They were produced via the three-cold-read-eval workflow
+documented in `COMMENT-PROCESS.md`. Use them as the input to comment edits
+during the migration — don't rewrite from scratch. The drafts are graded
+"about right" on density by 2 of 3 reviewers; corrections from reviewer
+errors are already absorbed.
+
+The shadow drafts that **survive concept-intact through the migration**
+(roughly half — file headers, role projection, source-class vocabulary,
+worker dispatch shape, threat-model framing, lifecycle, classify,
+transforms, policies, validators, agents, addendums) merge with light
+edits.
+
+The shadow drafts that **describe mechanisms about to be deleted** (the
+other half — bucket helpers, `@stateHandle`/`@recordIdentityField`, the
+`can_authorize` framing on tool catalogs, `display:`/`{ref:}` vocabulary,
+slack synthetic-id narrative) need section-level rewrites against the
+post-migration shape. Apply during the phase that deletes the code, not
+before.
+
+### Per-phase comment discipline
+
+**Phase 1.A — rename pass (mechanical commit)**
+
+- IN this commit: rename `display:` → `read:` and `{ref:}` → `{value:}`
+  inside both code AND comment text. Inline comment references to those
+  vocabulary items rename together with code references — they're part of
+  the same mechanical sweep.
+- NOT in this commit: header refresh, ticket-ref strip, narrative
+  rewrites. Preserves the clean-revert property the rename relies on.
+
+**Phase 1.A.2 — comment-refresh follow-up commit**
+
+- Touch only files renamed in 1.A.
+- Strip ticket refs (`c-*`, `m-*`, `b-*`), "previously", "phase 1/2",
+  pre-fix narratives in those files.
+- Apply file-header orientation block from the corresponding
+  `*-comments.txt` shadow draft.
+- Independent revert from 1.A; if a header introduces noise, roll back
+  this commit alone.
+
+**Phase 1.B — `write:` declarations + policy synth**
+
+Comment refresh travels in-commit with the structural change, since the
+mental model itself shifts:
+
+- All `bench/domains/*/records.mld`: replace facts/data + can_authorize
+  framing in comments with the records-as-security-contract framing
+  from the shadow drafts. Banking is canonical; the other three suites
+  reference banking's glossary.
+- `bench/domains/banking/tools.mld`: drop comments referencing
+  `can_authorize`. Tool catalog comments now describe a pure operation
+  registry.
+- `rig/orchestration.mld`: rewrite the policy-synthesis comment to
+  describe reading `write:` from input records (not `can_authorize:
+  false` from tools).
+- The kind: vocabulary glossary (extracted to
+  `COMMENTS-EVAL-FOLLOWUPS.md` §1) lands in
+  `bench/domains/banking/records.mld` as a header section. Other suites
+  reference back.
+
+**Phase 2.A/B/C — bucket → shelf collapse**
+
+The bulk of comment cleanup. Each deleted function takes its comment with
+it. Surviving helpers get comment refresh in-commit with the simplification.
+
+- `rig/runtime.mld`: huge comment shrink. The shadow draft's per-section
+  organization roughly mirrors what gets deleted (state mutation, bucket
+  walks, indexed bucket adapters, planner cache, projection helpers).
+  After Phase 2 the shadow draft for runtime.mld is half its current
+  length — which matches the file shrinkage.
+- `rig/intent.mld`: "indexed resolved buckets" section in the shadow
+  draft deletes wholesale. Source-class table survives. Error-code
+  glossary survives (extracted to followups §2).
+- `rig/workers/{resolve,derive,planner}.mld`: comment narrative shifts
+  from "construct entry envelope, mint handle, merge into bucket" to
+  "shelf upsert."
+- `rig/session.mld`: shelf decl gets a header explaining the shelf
+  primitive vs the prior `var session` storage approach.
+
+**Phase 2.C — identity heuristic cleanup**
+
+- `bench/domains/slack/{records,bridge}.mld`: synthetic-id narrative
+  disappears. The shadow draft for `slack/bridge-comments.txt`
+  collapses to MCP-error guards only — the file becomes ~30% of its
+  current length.
+- `rig/runtime.mld`: any remaining `@stateHandle` / `@recordIdentityField`
+  rationale comments delete with the functions.
+
+**Phase 3.A — deferred**
+
+If `state.extracted` / `state.derived` later collapse into shelf, their
+comment narrative collapses the same way. Tracked but not in scope.
+
+**Phase 3.B — surviving-intact half + planner prompt**
+
+Files NOT touched in phases 1-2 get their first comment refresh here.
+This is the bulk of:
+
+- `rig/workers/{advice,compose}.mld` (concepts intact; light header refresh)
+- `rig/{classify,diagnostics,lifecycle}.mld` (concepts intact; mechanical)
+- `rig/transforms/{url_refs,parse_value}.mld` (concepts intact)
+- `rig/policies/url_output.mld` (concepts intact)
+- `rig/validators/output_checks.mld` (concepts intact; status note may
+  flip from "reference primitive, not wired" to "wired by default" if
+  recurring-question #2 from the eval is acted on)
+- `bench/agents/*.mld` (per AGENTS-COMMENTS.txt)
+- `bench/domains/*/prompts/planner-addendum.mld` (per
+  PROMPTS-ADDENDUMS-COMMENTS.txt)
+- `bench/domains/*/bridge.mld` (per per-suite bridge-comments)
+- `bench/domains/travel/classifiers/*.mld` and `classifier-labels.mld`
+  (per CLASSIFIERS-COMMENTS.txt)
+
+Planner prompt rewording (the LLM-behavior change) is a separate
+in-this-phase commit — see existing §3.B. Comment work is the
+follow-up that catches the surviving-intact half.
+
+### Per-phase gates
+
+Add to each phase's gate list:
+
+- [ ] Comments refreshed for files materially touched in this phase
+      (consult `<file>-comments.txt` for proposed text; mark shadow
+      draft as merged once the source file's comments are live).
+
+By Phase 3.B closeout: the `*-comments.txt` directory is empty (every
+draft has been merged) or archived under `archive/comments-drafts/` if
+useful for reference. The eval transcripts and `COMMENT-PROCESS.md`
+methodology stay as the discoverable record of how the comments were
+graded.
+
+### What survives without rewrite vs. what gets section-deleted
+
+For sizing, in case Phase 1.B / Phase 2 sessions want to estimate scope:
+
+| Shadow draft | Survives intact | Section-deletes | Notes |
+|---|---|---|---|
+| rig/index | yes | — | public surface stable |
+| rig/session | mostly | — | header gains shelf decl explanation |
+| rig/lifecycle | yes | — | |
+| rig/classify | yes | — | |
+| rig/diagnostics | yes | — | |
+| rig/orchestration | mostly | policy synth para rewrites at Phase 1.B | |
+| rig/tooling | partial | `can_authorize` arg classification rewrites at Phase 1.B | |
+| rig/intent | partial | "indexed resolved buckets" entire section at Phase 2 | source-class table + error-code glossary survive |
+| rig/runtime | partial | state mutation, bucket walks, projection cache helpers all delete at Phase 2 | header survives; helpers shrink to half |
+| rig/planner_inputs | yes | — | rename touches `{ref:}` → `{value:}` reference |
+| rig/workers/{advice,compose,classify} | yes | — | |
+| rig/workers/{resolve,extract,derive,execute,planner} | partial | per-section refresh during Phase 2 | shape stays; helpers shift |
+| rig/workers/WORKERS-SHARED | yes | — | step-6 lifecycle split unchanged |
+| rig/transforms/* | yes | — | |
+| rig/policies/url_output | yes | — | |
+| rig/validators/output_checks | yes | — | wire-by-default flip in header is a status edit, not structural |
+| bench/domains/banking/records | partial | facts/data+can_authorize framing rewrites at Phase 1.B | new write: section ships in same edit |
+| bench/domains/banking/tools | partial | `can_authorize` content drops at Phase 1.B | |
+| bench/domains/workspace/records | partial | per-suite write: blocks add at Phase 1.B | |
+| bench/domains/workspace/tools | partial | as above | |
+| bench/domains/slack/records | substantial | synthetic-id narrative drops at Phase 2.C | |
+| bench/domains/slack/bridge | substantial | bridge collapses to MCP-error guards only | |
+| bench/domains/slack/tools | partial | as records | |
+| bench/domains/travel/* | partial | as banking | |
+| bench/agents/* | yes | — | travel delta stays as written; ASR-numbers move to threat model per shadow |
+| bench/domains/*/prompts/* | yes | — | one-line orientation only |
+| bench/domains/travel/classifiers/* | yes | — | |
+| rig/NON-PRODUCTION-FILES | yes | — | |
 
 ---
 
@@ -414,8 +632,8 @@ While in Phase 0:
 
 **Cutover**: when Phase 0 lands and we're ready for Phase 1:
 - Swap `./.bin/mlld` symlink target to system `mlld` (or simply remove the pin and use system PATH)
-- Run all gates against system mlld; expect many to fail until Phase 1.A rename completes (display: blocks, {ref:} modes etc. don't parse against new mlld)
-- Phase 1.A rename is a single mechanical commit; gates green again immediately after
+- Run all gates against system mlld; expect many to fail until the **full Phase 1 unit lands** — display: blocks won't parse, write tools won't dispatch (deny-by-default), etc.
+- **Phase 1 lands as one semantic unit** (rename + write: declarations + policy synth + can_authorize migration). Gates do not return to green between 1.A and 1.B. See Phase 1 section for detail; the rename-only intermediate can't ship green.
 
 Stay on system mlld from cutover through Phase 3 closeout.
 
@@ -447,9 +665,12 @@ Baselines                  ┃ .bin/   ┃   {ref:} → {value:} mode rename    
 c-0458 Days 2-5            ┃ mlld →  ┃   with { display } → { read }      consumers migrated               final sweep
 Mutation snapshot          ┃ system  ┃   add write: declarations          url_refs → typed shelf           gate: closeout
                            ┃ mlld    ┃   drop can_authorize               gate: invariants pass uniformly
-                           ┃         ┃   simplify policy synth            gate: per-key cache verified
+(no comments yet)          ┃         ┃   simplify policy synth            gate: per-key cache verified
                            ┃         ┃   mutation reclassify              gate: ASR holds
-                           ┃         ┃   gate: ASR holds
+                           ┃         ┃   1.A.2: header refresh follow-up  comment cleanup in-commit       3.B: surviving-half
+                           ┃         ┃   1.B: records-as-policy comment   (slack bridge collapses,        comment merge
+                           ┃         ┃   refresh in-commit                 deleted-helper comments
+                           ┃         ┃   gate: ASR holds                   delete with code)
 Pinned binary              ┃         ┃   System mlld (both features)      System mlld                      System mlld
 ```
 
@@ -477,4 +698,5 @@ The work in (1)-(3) is independently valuable — layer assertions and invariant
 
 - mlld tickets: m-d49a (`.mx.key`, landed), m-f947 (`.mx.hash`, landed), m-fe08 (visibility decoupling — **subsumed by m-rec-perms-update v0.2**, no separate ship event), m-rec-perms-update (read/write declarations + visibility decoupling — **in mlld main**), m-shelf-wildcard (shelf wildcard — **in mlld main**)
 - Local: `archive/key-hash-improvements.md` (superseded), `STATUS.md` (current bench results), `HANDOFF.md` (session context), `CLAUDE.md` (running benchmarks operational guide)
+- Comment work: `COMMENT-PROCESS.md` (cold-read methodology), `COMMENTS-INDEX.md` (shadow-draft index), `COMMENTS-EVAL-FOLLOWUPS.md` (eval decisions + canonical glossaries), `*-comments.txt` (per-source-file shadow drafts; merge during phases per "Comment refresh discipline" above)
 - Pinned binary: `~/mlld/mlld-records-baseline/bin/mlld-wrapper.cjs` via `./.bin/mlld`

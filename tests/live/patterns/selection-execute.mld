@@ -17,9 +17,9 @@ record @product = {
     untrusted: [customer_rating: number?, review_text: string?]
   },
   key: sku,
-  display: {
-    role:planner: [{ ref: "sku" }, name, price],
-    role:worker: [{ ref: "sku" }, name, price, customer_rating, review_text]
+  read: {
+    role:planner: [{ value: "sku" }, name, price],
+    role:worker: [{ value: "sku" }, name, price, customer_rating, review_text]
   }
 }
 

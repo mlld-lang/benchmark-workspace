@@ -33,7 +33,7 @@ show ""
 var @startTs = run cmd { date +%s%3N }
 
 var @final = @mockOpencode(@fixture.prompt, { toolScript: @fixture.script }) with {
-  display: "role:planner",
+  read: "role:planner",
   session: @planner,
   seed: { agent: @agent, query: @fixture.prompt, state: @emptyState(), runtime: @emptyPlannerRuntime() }
 }

@@ -69,7 +69,7 @@ exe llm @mockOpencode(prompt, config) = [
 >> seeding pattern. Use this from a test program.
 exe @mockPlannerRun(agent, query, script) =
   @mockOpencode(@query, { toolScript: @script }) with {
-    display: "role:planner",
+    read: "role:planner",
     session: @planner,
     seed: { agent: @agent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() }
   }

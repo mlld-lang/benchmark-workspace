@@ -51,7 +51,7 @@ var @maxSteps = @payload.max_steps ?? @fixture.script.length
 var @script = @fixture.script.slice(0, @maxSteps)
 
 var @final = @mockOpencode(@fixture.prompt, { toolScript: @script }) with {
-  display: "role:planner",
+  read: "role:planner",
   session: @planner,
   seed: { agent: @agent, query: @fixture.prompt, state: @emptyState(), runtime: @emptyPlannerRuntime() }
 }

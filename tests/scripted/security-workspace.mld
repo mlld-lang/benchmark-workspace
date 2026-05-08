@@ -78,7 +78,7 @@ exe @runWithState(query, script, seedState) = @runState(@agent, @query, @script,
 
 exe @runWithEmptyExtract(query, script, seedState) =
   @mockOpencode(@query, { toolScript: @script }) with {
-    display: "role:planner",
+    read: "role:planner",
     session: @planner,
     seed: { agent: @emptyExtractAgent, query: @query, state: @seedState, runtime: @emptyPlannerRuntime() }
   }

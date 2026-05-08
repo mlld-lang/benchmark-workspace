@@ -27,10 +27,10 @@ record @transaction = {
     untrusted: [subject: string?]
   },
   key: id,
-  display: {
-    default: [{ ref: "id" }, { ref: "sender" }, { ref: "recipient" }, amount, subject, date, recurring],
-    worker: [{ mask: "id" }, { mask: "sender" }, { mask: "recipient" }, amount, subject, date, recurring],
-    planner: [{ ref: "id" }, { ref: "sender" }, { ref: "recipient" }, amount, date, recurring]
+  read: {
+    default: [{ value: "id" }, { value: "sender" }, { value: "recipient" }, amount, subject, date, recurring],
+    role:worker: [{ mask: "id" }, { mask: "sender" }, { mask: "recipient" }, amount, subject, date, recurring],
+    role:planner: [{ value: "id" }, { value: "sender" }, { value: "recipient" }, amount, date, recurring]
   }
 }
 
@@ -48,10 +48,10 @@ record @scheduled_transaction = {
     untrusted: [subject: string?]
   },
   key: id,
-  display: {
-    default: [{ ref: "id" }, { ref: "sender" }, { ref: "recipient" }, amount, subject, date, recurring],
-    worker: [{ mask: "id" }, { mask: "sender" }, { mask: "recipient" }, amount, subject, date, recurring],
-    planner: [{ ref: "id" }, { ref: "sender" }, { ref: "recipient" }, amount, subject, date, recurring]
+  read: {
+    default: [{ value: "id" }, { value: "sender" }, { value: "recipient" }, amount, subject, date, recurring],
+    role:worker: [{ mask: "id" }, { mask: "sender" }, { mask: "recipient" }, amount, subject, date, recurring],
+    role:planner: [{ value: "id" }, { value: "sender" }, { value: "recipient" }, amount, subject, date, recurring]
   }
 }
 
@@ -65,10 +65,10 @@ record @user_account = {
   data: {
     trusted: [street: string?, city: string?]
   },
-  display: {
-    default: [{ ref: "first_name" }, { ref: "last_name" }, street, city],
-    worker: [first_name, last_name, street, city],
-    planner: [{ ref: "first_name" }, { ref: "last_name" }, street, city]
+  read: {
+    default: [{ value: "first_name" }, { value: "last_name" }, street, city],
+    role:worker: [first_name, last_name, street, city],
+    role:planner: [{ value: "first_name" }, { value: "last_name" }, street, city]
   }
 }
 
@@ -80,7 +80,7 @@ record @user_account = {
 record @iban_value = {
   facts: [value: { type: string, kind: "iban" }],
   key: value,
-  display: [{ ref: "value" }]
+  read: [{ value: "value" }]
 }
 
 record @balance_value = {
@@ -88,7 +88,7 @@ record @balance_value = {
   data: {
     trusted: [amount: number?]
   },
-  display: [amount]
+  read: [amount]
 }
 
 record @file_text = {
@@ -97,10 +97,10 @@ record @file_text = {
     untrusted: [content: string?]
   },
   key: file_path,
-  display: {
-    default: [{ ref: "file_path" }, content],
-    worker: [{ ref: "file_path" }, content],
-    planner: [{ ref: "file_path" }]
+  read: {
+    default: [{ value: "file_path" }, content],
+    role:worker: [{ value: "file_path" }, content],
+    role:planner: [{ value: "file_path" }]
   }
 }
 
@@ -115,7 +115,11 @@ record @send_money_inputs = {
     trusted: [amount: number, date: string],
     untrusted: [subject: string]
   },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @schedule_transaction_inputs = {
@@ -124,7 +128,11 @@ record @schedule_transaction_inputs = {
     trusted: [amount: number, date: string, recurring: boolean],
     untrusted: [subject: string]
   },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @update_scheduled_transaction_inputs = {
@@ -138,7 +146,11 @@ record @update_scheduled_transaction_inputs = {
   },
   correlate: true,
   update: [amount, subject, date, recurring],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @update_user_info_inputs = {
@@ -147,7 +159,11 @@ record @update_user_info_inputs = {
     trusted: [first_name: string?, last_name: string?, street: string?, city: string?]
   },
   update: [first_name, last_name, street, city],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @update_password_inputs = {

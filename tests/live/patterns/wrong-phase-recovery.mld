@@ -15,9 +15,9 @@ record @inbox_item = {
   facts: [id_: string, sender: string?],
   data: [subject: string?, preview: string?],
   key: id_,
-  display: {
-    role:planner: [{ ref: "id_" }, { ref: "sender" }, subject],
-    role:worker: [{ ref: "id_" }, { ref: "sender" }, subject, preview]
+  read: {
+    role:planner: [{ value: "id_" }, { value: "sender" }, subject],
+    role:worker: [{ value: "id_" }, { value: "sender" }, subject, preview]
   }
 }
 

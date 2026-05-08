@@ -50,7 +50,7 @@ record @contact = {
     untrusted: [notes: string?, job_title: string?, company: string?, address: string?]
   },
   key: email,
-  display: [name, { ref: "email" }, phone]
+  read: [name, { value: "email" }, phone]
 }
 
 >> ── Email messages ──
@@ -78,10 +78,10 @@ record @email_msg = {
     untrusted: [subject: string?, body: string?, attachments: array?]
   },
   key: id_,
-  display: {
-    default: [{ handle: "id_" }, { ref: "sender" }, { mask: "recipients" }, subject, body, { mask: "cc" }, { mask: "bcc" }, attachments, timestamp, read],
-    worker: [{ handle: "id_" }, { ref: "sender" }, { mask: "recipients" }, subject, body, { mask: "cc" }, { mask: "bcc" }, attachments, timestamp, read],
-    planner: [{ ref: "id_" }, { ref: "sender" }, { mask: "recipients" }, { mask: "cc" }, { mask: "bcc" }, timestamp, read]
+  read: {
+    default: [{ handle: "id_" }, { value: "sender" }, { mask: "recipients" }, subject, body, { mask: "cc" }, { mask: "bcc" }, attachments, timestamp, read],
+    role:worker: [{ handle: "id_" }, { value: "sender" }, { mask: "recipients" }, subject, body, { mask: "cc" }, { mask: "bcc" }, attachments, timestamp, read],
+    role:planner: [{ value: "id_" }, { value: "sender" }, { mask: "recipients" }, { mask: "cc" }, { mask: "bcc" }, timestamp, read]
   }
 }
 
@@ -107,10 +107,10 @@ record @calendar_evt = {
     untrusted: [title: string?, description: string?, location: string?]
   },
   key: id_,
-  display: {
-    default: [{ handle: "id_" }, { ref: "participants" }, title, description, start_time, end_time, location, all_day, status],
-    worker: [{ handle: "id_" }, { ref: "participants" }, title, description, start_time, end_time, location, all_day, status],
-    planner: [{ ref: "id_" }, { ref: "participants" }, start_time, end_time, all_day, status]
+  read: {
+    default: [{ handle: "id_" }, { value: "participants" }, title, description, start_time, end_time, location, all_day, status],
+    role:worker: [{ handle: "id_" }, { value: "participants" }, title, description, start_time, end_time, location, all_day, status],
+    role:planner: [{ value: "id_" }, { value: "participants" }, start_time, end_time, all_day, status]
   }
 }
 
@@ -140,10 +140,10 @@ record @file_entry = {
     untrusted: [content: string?]
   },
   key: id_,
-  display: {
-    default: [{ handle: "id_" }, filename, owner, content, size, { ref: "shared_with" }, last_modified],
-    worker: [{ handle: "id_" }, filename, owner, content, size, { ref: "shared_with" }, last_modified],
-    planner: [{ ref: "id_" }, filename, owner, size, { ref: "shared_with" }, last_modified]
+  read: {
+    default: [{ handle: "id_" }, filename, owner, content, size, { value: "shared_with" }, last_modified],
+    role:worker: [{ handle: "id_" }, filename, owner, content, size, { value: "shared_with" }, last_modified],
+    role:planner: [{ value: "id_" }, filename, owner, size, { value: "shared_with" }, last_modified]
   }
 }
 
@@ -153,7 +153,7 @@ record @datetime_context = {
     trusted: [kind: string?]
   },
   key: value,
-  display: [{ ref: "value" }, kind]
+  read: [{ value: "value" }, kind]
 }
 
 >> Planner/runtime input schema for outbound email. Recipient-style
@@ -171,7 +171,11 @@ record @send_email_inputs = {
   },
   correlate: false,
   optional_benign: [cc, bcc],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 >> Planner-facing create-calendar inputs in the new catalog shape.
@@ -185,19 +189,31 @@ record @create_calendar_event_inputs = {
     untrusted: [description: string?]
   },
   optional_benign: [participants],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @delete_email_inputs = {
   facts: [email_id: { type: handle, kind: "email_id" }],
   data: [],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @cancel_calendar_event_inputs = {
   facts: [event_id: { type: handle, kind: "calendar_event_id" }],
   data: [],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @calendar_reschedule_inputs = {
@@ -206,7 +222,11 @@ record @calendar_reschedule_inputs = {
     trusted: [new_start_time: string, new_end_time: string?]
   },
   update: [new_start_time, new_end_time],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @add_calendar_event_participants_inputs = {
@@ -216,7 +236,11 @@ record @add_calendar_event_participants_inputs = {
   ],
   data: [],
   correlate: false,
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @file_append_inputs = {
@@ -224,7 +248,11 @@ record @file_append_inputs = {
   data: {
     untrusted: [content: string]
   },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 >> File creation has no control args, but a dedicated strict input record
@@ -236,13 +264,21 @@ record @file_create_inputs = {
     trusted: [filename: string],
     untrusted: [content: string]
   },
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @delete_file_inputs = {
   facts: [file_id: { type: handle, kind: "file_id" }],
   data: [],
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 record @share_file_inputs = {
@@ -254,7 +290,11 @@ record @share_file_inputs = {
     trusted: [permission: string]
   },
   correlate: false,
-  validate: "strict"
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
 }
 
 var @records = {

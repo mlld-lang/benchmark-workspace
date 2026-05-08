@@ -17,14 +17,14 @@ record @transaction = {
     untrusted: [subject: string?]
   },
   key: id,
-  display: [{ ref: "id" }, { ref: "recipient" }, amount, subject, date]
+  read: [{ value: "id" }, { value: "recipient" }, amount, subject, date]
 }
 
 >> The user's IBAN. Singleton fact-bearing value.
 record @iban_value = {
   facts: [value: string],
   key: value,
-  display: [{ ref: "value" }]
+  read: [{ value: "value" }]
 }
 
 >> ── Write input records ──

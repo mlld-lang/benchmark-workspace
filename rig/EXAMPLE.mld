@@ -17,9 +17,9 @@ record @file_entry = {
     untrusted: [content: string]
   },
   key: id_,
-  display: {
-    role:planner: [{ ref: "id_" }, filename, size, owner],
-    role:worker: [{ ref: "id_" }, filename, content]
+  read: {
+    role:planner: [{ value: "id_" }, filename, size, owner],
+    role:worker: [{ value: "id_" }, filename, content]
   }
 }
 

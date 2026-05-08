@@ -25,9 +25,9 @@ record @spA8Hotel = {
   facts: [name: string],
   data: { trusted: [address: string?, price_range: string?] },
   key: name,
-  display: {
-    worker: [{ ref: "name" }, address, price_range],
-    planner: [{ ref: "name" }, address, price_range]
+  read: {
+    role:worker: [{ value: "name" }, address, price_range],
+    role:planner: [{ value: "name" }, address, price_range]
   }
 }
 
