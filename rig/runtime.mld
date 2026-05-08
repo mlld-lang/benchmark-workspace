@@ -302,6 +302,35 @@ exe @stateHandle(recordType, keyValue, index) = [
   => `r_@recordType\_@keyPart`
 ]
 
+>> Path A wire-format synthesizer for the Stage B bucket→shelf migration.
+>> Returns `r_<recordType>_<.mx.key>` from a record-coerced value's stable
+>> address. The planner LLM's wire format stays unchanged through the
+>> migration: handles look like `r_hotel_<key>` either way, so prompts and
+>> resume paths don't drift mid-migration. Phase 3.B may flip the planner
+>> prompt to consume `.mx.address.string` (`hotel:<key>`) directly; until
+>> then this helper bridges shelf-shape addresses to the rig wire format.
+exe @stateHandleFromAddress(recordValue) = [
+  let @addr = @recordValue.mx.address
+  if !@addr.isDefined() || @addr == null [ => null ]
+  => `r_@addr.record\_@addr.key`
+]
+
+>> Reverse of @stateHandleFromAddress. Parses an `r_<rt>_<key>` wire-format
+>> string to its address shape. Returns null on malformed input. Used at
+>> intent-compile and selection-lower seams that need to map a planner-
+>> supplied handle to a shelf .byAddress() lookup.
+exe @parseRigHandle(handle) = js {
+  if (typeof handle !== "string") return null;
+  if (!handle.startsWith("r_")) return null;
+  const rest = handle.slice(2);
+  const keyIdx = rest.lastIndexOf("_");
+  if (keyIdx < 0) return null;
+  const record = rest.slice(0, keyIdx);
+  const key = rest.slice(keyIdx + 1);
+  if (record.length === 0 || key.length === 0) return null;
+  return { record, key, string: `${record}:${key}` };
+}
+
 exe @normalizeResolvedValues(recordType, recordDef, rawValue) = [
   let @items = when [
     @typeof(@rawValue) == "array" => @rawValue
@@ -1241,6 +1270,8 @@ export {
   @recordFieldIsHandleType,
   @nativeRecordFieldValue,
   @stateHandle,
+  @stateHandleFromAddress,
+  @parseRigHandle,
   @normalizeResolvedValues,
   @extractToolResultValue,
   @previewFields,

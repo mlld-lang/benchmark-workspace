@@ -1273,7 +1273,20 @@ guard after @composeRetryClaude for op:named:plannerLlmCallClaude = when [
   * => allow
 ]
 
-exe @runPlannerSession(agent, query) = [
+exe @runPlannerSession(rawAgent, query) = [
+  >> Phase 2 Stage B scaffolding: declare a per-session wildcard shelf
+  >> bounded to this agent's record set, then thread it onto the agent
+  >> as @agent.plannerShelf. The shelf has session lifetime (one shelf
+  >> per @runPlannerSession call) and is the migration target for
+  >> state.resolved buckets. Worker dispatchers read this off
+  >> @toolCtx.agent.plannerShelf via the existing seed: { agent } pattern;
+  >> object-spread preserves shelf identity (validated by
+  >> tests/rig/shelf-integration.mld testShelfSurvivesObjectSpread).
+  >>
+  >> Reads/writes through this shelf are not yet wired — bucket remains
+  >> the read-side authority. The next Stage B commit migrates consumers.
+  shelf @plannerShelf from @rawAgent.records with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = { ...@rawAgent, plannerShelf: @plannerShelf }
   let @resolveDocs = @phaseToolDocs(@agent, "resolve")
   let @extractDocs = @phaseToolDocs(@agent, "extract")
   let @executeDocs = @phaseToolDocs(@agent, "execute")
