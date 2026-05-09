@@ -113,9 +113,9 @@ exe @testFactsourceRoundtrip() = [
   => @assertOk(@factValue.mx.factsources.isDefined(), `factsources=@factValue.mx.factsources`)
 ]
 
->> m-60ff regression: correlate is opt-in. Three cases must produce
+>> c-60ff regression: correlate is opt-in. Three cases must produce
 >> three results — explicit `correlate: true` ON, explicit `correlate:
->> false` OFF, omitted correlate OFF (was implicitly ON pre-m-60ff
+>> false` OFF, omitted correlate OFF (was implicitly ON pre-c-60ff
 >> for any input record with >1 control args).
 
 exe @opTrue(a, b) = [ => "ok" ]
@@ -161,7 +161,7 @@ exe @testCorrelateExplicitFalseDisables() = [
   => @assertEq(@r, false)
 ]
 
->> m-60ff: omitted correlate must produce SAME behavior as correlate:false
+>> c-60ff: omitted correlate must produce SAME behavior as correlate:false
 >> (was implicitly true for >1 fact-control-args before the spec fix).
 exe @testCorrelateOmittedDisables() = [
   let @r = @toolCorrelateControlArgs(@correlateProbeTools.op_omitted)
@@ -202,7 +202,7 @@ var @toolMetadataSuite = @suite("tool-metadata", [
     @testCorrelateExplicitTrueEnables,
     @testCorrelateExplicitFalseDisables,
     @testCorrelateOmittedDisables
-  ], { ticket: "m-60ff" })
+  ], { ticket: "c-60ff" })
 ], {})
 
 export { @toolMetadataSuite }

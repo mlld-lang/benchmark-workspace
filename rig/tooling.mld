@@ -292,7 +292,7 @@ exe @toolOptionalBenign(toolEntry) = [
   => @stringArray(@inputPolicy.optionalBenign ?? [])
 ]
 
->> Per m-60ff: correlate is opt-in. Input records only enable
+>> Per c-60ff: correlate is opt-in. Input records only enable
 >> @correlatedControlArgsCheck when they declare `correlate: true`
 >> explicitly; omitted correlate (and `correlate: false`) both produce
 >> the same behavior — no correlate check. The previous implicit

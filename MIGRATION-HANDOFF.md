@@ -55,7 +55,7 @@ These don't depend on each other. The two test conversions don't change rig, so 
 
 ### Phase 3 (separate work, after Stage B closes)
 
-9. **m-8ffd (mixed authority — synthesizedAuthorizations reads catalog can_authorize while policy.build enforces record write:)** should LEAD Phase 3 per advisor. It's a security-posture fix: currently bench tools' two surfaces happen to agree by hand; nothing prevents future drift. **Lands as its own commit, separate from item 10** — bundling means the planner-prompt bench sweep can't attribute which change moved which numbers.
+9. **c-8ffd (mixed authority — synthesizedAuthorizations reads catalog can_authorize while policy.build enforces record write:)** should LEAD Phase 3 per advisor. It's a security-posture fix: currently bench tools' two surfaces happen to agree by hand; nothing prevents future drift. **Lands as its own commit, separate from item 10** — bundling means the planner-prompt bench sweep can't attribute which change moved which numbers.
 
 10. Planner prompt revision (per migration-plan §3.B). Bench-sweep before/after numbers in commit message; revert if utility regresses beyond ±2 of baseline.
 
@@ -164,7 +164,7 @@ Phase results no longer return `state_delta.resolved`. They return `entries: @re
 
 ## Closeout sequence (after Session B)
 
-After mutation matrix re-baseline, Phase 2 is complete. Phase 3 (planner prompt revision + remaining doc rewrites) is one small follow-up session, with **m-8ffd leading** per advisor. Planner prompt change requires bench-sweep before/after numbers in commit message per migration-plan §3.B.
+After mutation matrix re-baseline, Phase 2 is complete. Phase 3 (planner prompt revision + remaining doc rewrites) is one small follow-up session, with **c-8ffd leading** per advisor. Planner prompt change requires bench-sweep before/after numbers in commit message per migration-plan §3.B.
 
 ---
 
@@ -203,7 +203,7 @@ Earlier session referenced `.tickets/c-2ec6.md`, `c-5a08.md`, `c-9c6f.md`, `labe
 | 2026-05-08 | migrator-2 (records audit + 4 file conversions + 2 deletes) | `744ba93` | gate 169→194 |
 | 2026-05-08 | migrator-2 (identity-contracts + JS audit + writeback test revive) | `5c229ad` | gate 194→207 |
 | 2026-05-09 | migrator-2 (url-refs-b PARTIAL Groups B+C) | `7578afc` | gate 207→214 |
-| 2026-05-09 | migrator-2 (m-60ff correlate opt-in + m-3116 doc) | `71c369c` | gate 214→217 |
+| 2026-05-09 | migrator-2 (c-60ff correlate opt-in + m-3116 doc) | `71c369c` | gate 214→217 |
 | 2026-05-09 | migrator-2 (advisor-gap closure: handoff updates) | `844ea82` | docs |
 | 2026-05-09 | migrator-2 (null-conformance regression suite) | `6196ed0` | gate 217→229 |
 | 2026-05-09 | migrator-2 (handoff restructure for execution focus) | `f7ab37c` | docs |
