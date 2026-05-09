@@ -8,7 +8,7 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ## Current state (2026-05-09)
 
-**Gate**: 229/0/1 (started at 169/0/1 — +60 tests landed across 2 sessions). Scripted suites at baseline (banking 7/3, slack 13/1+1xpass, workspace 13/1, travel 10/0).
+**Gate**: 229/0/1 (started at 169/0/1 — +60 tests landed across 2 sessions). The "1" xfail is `template/known-broken/intentionallyFails` (ticket c-9999) — the test framework's own placeholder demonstrating xfailGroup mechanics, not a deferred migration test. Scripted suites at baseline (banking 7/3, slack 13/1+1xpass, workspace 13/1, travel 10/0).
 
 **Committed at 6196ed0**. All previously-uncommitted work from sessions migrator-1 and migrator-2 is now in main. Working tree clean except for the documented pre-existing uncommitted files at the bottom of this doc.
 
@@ -22,7 +22,7 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 These don't depend on each other. The two test conversions don't change rig, so the docs are stable; the docs describe production shape that's settled.
 
-1. **`proof-chain-firewall.mld`** (~30-60 min) — pure compile-test rewrite. 17 test exes, 11 module-scope `var` consumers of `@sampleState`. Pull all module-scope dispatch results into per-test `role:worker` exe bodies that build their own shelf-bound agent (mirror identity-contracts/url-refs-b/named-state-and-collection per-test pattern). Watch: don't alias record imports per F3 below.
+1. **`proof-chain-firewall.mld`** (~60-90 min — structurally similar to named-state-and-collection.mld which migrator-2 took longer than 60 min on; 11 module-scope restructures into per-test `role:worker` exes isn't trivially mechanical even with the template proven). Pure compile-test rewrite. 17 test exes, 11 module-scope `var` consumers of `@sampleState`. Pull all module-scope dispatch results into per-test `role:worker` exe bodies that build their own shelf-bound agent (mirror identity-contracts/url-refs-b/named-state-and-collection per-test pattern). Watch: don't alias record imports per F3 below. Hitting friction is normal; not a sign to stop.
 
 2. **`rig/ARCHITECTURE.md`** (~30 min) — phase model + state model rewritten (bucket → shelf historical); list deleted-from-rig functions in migration impact paragraph. **Lift findings F1-F6 below into a permanent "Records primitives" or "Working with shelves" section** — these are records-as-policy principles, not session notes.
 
@@ -32,7 +32,14 @@ These don't depend on each other. The two test conversions don't change rig, so 
 
 ### Session B — architectural unblock + cleanup, ~3-4 hours
 
-5. **Task #17: shelf-aware seed for scripted-LLM tests (`tests/lib/mock-llm.mld`).** ~1 hour. The fix: `@runWithState` (and `@runScriptedQuery`) declare a shelf inline mirroring `@runPlannerSession`'s body, thread it onto the agent before the `@mockOpencode` call. ~20 lines per consumer mirroring planner.mld:1256.
+5. **Task #17: shelf-aware seed for scripted-LLM tests (`tests/lib/mock-llm.mld`).** ~1 hour.
+
+   **Files + lines**:
+   - Source-of-truth pattern: `rig/workers/planner.mld:1242-1315` (`@runPlannerSession` full body — shelf decl + thread onto agent + session bind)
+   - Edit target #1: `tests/lib/mock-llm.mld:63 @runWithState(agent, query, script, seedState)` — currently passes `agent` straight into `@mockOpencode`'s `seed:`; needs the shelf decl + agent threading inline before the `@mockOpencode` call
+   - Edit target #2: `tests/lib/mock-llm.mld:56 @runScriptedQuery(agent, query, script)` — same shape, no `seedState`
+
+   **The fix**: ~20 lines per consumer mirroring planner.mld:1256. Declare `shelf @plannerShelf from @shelfRecords(@rawAgent.records ?? {}) with { versioned: true, projection_cache: ["role:planner"] }`, then `let @agent = { ...@rawAgent, plannerShelf: @plannerShelf }`, then call `@mockOpencode` with the shelf-bearing agent in the seed.
 
    For fixture preload of records that USED to live in `state.resolved`: lead with running real `@dispatchResolve` setup steps from the test's script (production path; records enter shelf with proper factsource minting). A direct `@shelf.write` helper IS acceptable as escape hatch for narrow tests where dispatch is not the subject — must use the same `=> record @def + @shelf.write` path production uses, and must label in source as a fixture primitive with a comment naming what production path it bypasses. Don't revive bucket-shaped state.
 
@@ -48,7 +55,7 @@ These don't depend on each other. The two test conversions don't change rig, so 
 
 ### Phase 3 (separate work, after Stage B closes)
 
-9. **m-8ffd (mixed authority — synthesizedAuthorizations reads catalog can_authorize while policy.build enforces record write:)** should LEAD Phase 3 per advisor. It's a security-posture fix: currently bench tools' two surfaces happen to agree by hand; nothing prevents future drift. Land before the planner-prompt revision.
+9. **m-8ffd (mixed authority — synthesizedAuthorizations reads catalog can_authorize while policy.build enforces record write:)** should LEAD Phase 3 per advisor. It's a security-posture fix: currently bench tools' two surfaces happen to agree by hand; nothing prevents future drift. **Lands as its own commit, separate from item 10** — bundling means the planner-prompt bench sweep can't attribute which change moved which numbers.
 
 10. Planner prompt revision (per migration-plan §3.B). Bench-sweep before/after numbers in commit message; revert if utility regresses beyond ±2 of baseline.
 
@@ -57,6 +64,15 @@ These don't depend on each other. The two test conversions don't change rig, so 
 ## Open external dependencies (low priority — don't block on)
 
 - **mlld m-3116 (try expression)** → clean **c-cdf5** (task #19). When mlld lands `try`, upgrade `@xfailGroup` to wrap test invocations and classify catchable errors as XFAIL instead of bail. Replaces the current delete-and-comment xfail workaround for the recoverable subset. Hard-security errors (WRITE_DENIED_*, TOOL_AUTHORIZE_*) stay delete-and-comment per m-3116's NOT-catchable matrix. Minor quality-of-life; not blocking the migration.
+
+  **Revival audit grep target when m-3116 lands**: `grep -nE "Stage B follow-up.*deleted|deleted.*conversion" tests/rig/*.mld`. Currently flags:
+  - `tests/rig/named-state-and-collection.mld:404` testRescheduleDispatchSucceeds (WRITE_DENIED — stays deleted per F5)
+  - `tests/rig/named-state-and-collection.mld:455` testCollectionDispatchPolicyBuild (WRITE_DENIED — stays deleted per F5)
+  - `tests/rig/named-state-and-collection.mld:463` testCollectionDispatchCrossModuleM5178 (WRITE_DENIED — stays deleted per F5)
+  - `tests/rig/identity-contracts.mld:26` 3 entry-shape-bucket tests (obsolete bucket sentinel, NOT m-3116 territory — already covered by shelf-integration)
+  - `tests/rig/identity-contracts.mld:151` no-progress fingerprint anchor (covered by FP-2 in progress-fingerprint.mld)
+
+  The named-state-and-collection deletions are all hard-security (WRITE_DENIED_*), so per m-3116's NOT-catchable matrix they STAY deleted. Identity-contracts deletions are concept-obsolete, also stay. So the actual revival yield from m-3116 is 0 currently-deleted tests — but new tests can use try going forward.
 
 - **mlld m-e5e0 follow-up** (low priority): `@parse.address` wrapped-null comparison ergonomics. Currently using `.isDefined()` workaround; not blocking.
 
@@ -154,7 +170,18 @@ After mutation matrix re-baseline, Phase 2 is complete. Phase 3 (planner prompt 
 
 ## Pre-existing uncommitted files (NOT migration commits)
 
-`.tickets/c-2ec6.md`, `c-5a08.md`, `c-9c6f.md` (orphan ticket files); `comment-audit/`, various spec drafts under `spec-*.md`. Handle separately from migration commits.
+Reconciled at session 2026-05-09 freeze — `git status` shows these untracked items, none migration-relevant. Don't accidentally stage during normal migration commits:
+
+- `.claude/skills/migrate/` — local skill directory
+- `.mlld-sdk` — local SDK marker
+- `comment-audit/` — earlier audit output
+- `mlld-bugs.md`, `mlld-security-fundamentals.md`, `plan-tests-framework.md`, `planner-dirty.md` — drafts/notes
+- `opencode/` — local opencode state
+- `rig/policies/` — early policy spike directory
+- `SECURITY-DISCIPLINE.md` — local discipline notes
+- `spec-control-arg-validators.md`, `spec-extended-attacks-benchmark.md`, `spec-perf-regression.md`, `spec-url-summary.md` — spec drafts
+
+Earlier session referenced `.tickets/c-2ec6.md`, `c-5a08.md`, `c-9c6f.md`, `labels-policies-guards.md` (display→read pre-rename), `rig/workers/planner.mld` (Slice 1 native fingerprint), `COMMENTS-*` tracking files — those have been resolved in subsequent commits and are no longer untracked. Use `git status` at the start of next session to reconcile if any of the above have been resolved or if new pre-existing items appear.
 
 ---
 
@@ -179,5 +206,7 @@ After mutation matrix re-baseline, Phase 2 is complete. Phase 3 (planner prompt 
 | 2026-05-09 | migrator-2 (m-60ff correlate opt-in + m-3116 doc) | `71c369c` | gate 214→217 |
 | 2026-05-09 | migrator-2 (advisor-gap closure: handoff updates) | `844ea82` | docs |
 | 2026-05-09 | migrator-2 (null-conformance regression suite) | `6196ed0` | gate 217→229 |
+| 2026-05-09 | migrator-2 (handoff restructure for execution focus) | `f7ab37c` | docs |
+| 2026-05-09 | migrator-2 (c-cdf5 ticket filed) | `b1b92ac` | ticket |
 | next | Session A: proof-chain-firewall + 3 docs | TBD | gate 229→~244 + docs |
 | next+1 | Session B: task #17 + worker-dispatch + fixtures + mutation re-baseline | TBD | full closeout |
