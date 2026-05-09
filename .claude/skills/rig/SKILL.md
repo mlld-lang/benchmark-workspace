@@ -24,7 +24,7 @@ This gives you the basics of mlld syntax (variables, exes, records, templates, i
 
 ### Step 2: Read the security model
 
-Read: `labels-policies-guards.md`
+Read: `mlld-security-fundamentals.md`
 
 This is the security model narrative. It explains labels, policies, guards, records, facts, handles, display projections, and the planner-worker authorization pattern. The entire rig architecture is built on these primitives. If you don't understand how `resolved` vs `known` vs `extracted` source classes work, or what display projection does, you will make wrong decisions about where to put things.
 
@@ -71,7 +71,7 @@ Reference these documents when making decisions:
 - **"Is this a runtime bug or a rig bug?"** → Follow the debugging order in `DEBUG.md`
 - **"What's the current state of this task?"** → Check `STATUS.md` per-suite groups
 - **"Has this failure been investigated before?"** → Check the linked ticket on the STATUS.md per-task note, or `archive/SCIENCE.md` for historical notes
-- **"How does this security primitive work?"** → Check `labels-policies-guards.md`
+- **"How does this security primitive work?"** → Check `mlld-security-fundamentals.md`
 
 ## Validation gates
 

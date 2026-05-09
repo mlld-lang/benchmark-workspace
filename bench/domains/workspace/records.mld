@@ -36,7 +36,7 @@
 >> their address fact-grade authority. The framework can't fix this
 >> without inbox-model changes; documented here so the agent layer
 >> knows the limitation.
->> Per labels-policies-guards.md: only fields that flow into a write
+>> Per mlld-security-fundamentals.md: only fields that flow into a write
 >> tool's controlArgs need to be facts. For @contact, only `email` is
 >> ever a control arg (recipients for send_email, email for share_file).
 >> name and phone are content for the worker to read but never used as

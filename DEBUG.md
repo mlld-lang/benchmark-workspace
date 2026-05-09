@@ -1109,7 +1109,7 @@ Travel's Pattern C (resolve loop) was the dominant failure mode. Adding a suite 
 - `CLAUDE.md` for the cardinal rules and project layout
 - `SINGLE-PLANNER.md` for the persistent planner architecture and remaining work
 - `STATUS.md` for current project status and what's verified green
-- `~/mlld/benchmarks/labels-policies-guards.md` for the security model narrative
+- `mlld-security-fundamentals.md` for the security model narrative
 - `~/mlld/mlld/spec-input-records-and-tool-catalog.md` for the input-record / tool-catalog spec
 - `~/mlld/mlld/docs/dev/DATA.md` for the structured-value boundary helpers and serialization rules
 - `~/mlld/mlld/.tickets/` for active and recent mlld runtime tickets via `tk` CLI

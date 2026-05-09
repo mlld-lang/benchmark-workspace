@@ -195,16 +195,17 @@ Example (schematic):
 
 ```mlld
 record @email_msg = {
-  facts: [id_: string, sender: string, message_id: string],
+  facts: [id_: { type: string, kind: "email_id" }, sender: { type: string, kind: "email_address" }, message_id: string],
   data: {
     trusted: [subject: string, timestamp: string, read: boolean],
     untrusted: [body: string, recipients: string, cc: string, bcc: string]
   },
   key: id_,
-  display: {
-    role:planner: [{ ref: "id_" }, { ref: "sender" }, subject, timestamp, read],
-    role:worker: [{ ref: "id_" }, { mask: "sender" }, subject, body, recipients]
-  }
+  read: {
+    role:planner: [{ value: "id_" }, { value: "sender" }, subject, timestamp, read],
+    role:worker: [{ value: "id_" }, { mask: "sender" }, subject, body, recipients]
+  },
+  write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }
 }
 
 record @email_payload = {
@@ -262,7 +263,7 @@ Everything rig needs to compile state, auth, display projection, and phase routi
 ## What Stays, What Goes
 
 **Stays (carry over from v1):**
-- Record declarations — verify display modes use `role:planner` / `role:worker` and add `role:advice` if the suite has an advice classifier
+- Record declarations — verify read modes use `role:planner` / `role:worker` and add `role:advice` if the suite has an advice classifier; declare `write:` per-role for shelf upserts and tool authorize/submit
 - Tool `exe` definitions — unchanged
 - Input records for writes — live in `records.mld`, referenced from tool `inputs:`
 
@@ -273,6 +274,48 @@ Everything rig needs to compile state, auth, display projection, and phase routi
 - `policy.mld` — deleted unless genuine suite-specific overrides remain (likely none)
 - `toolsCollection` — merged into the single tool catalog
 - Per-suite shelf aliases, slot read/write declarations — rig-managed
+- **Resolved-record bucket** — collapsed into the rig-managed wildcard shelf in Stage B (May 2026). The `_rig_bucket: "resolved_index_v1"` sentinel and ~250 lines of bucket helper code in `rig/runtime.mld` are gone. State now flows through `@shelf.write(@plannerShelf.<recordType>, @recordValue)` after each resolve. Bucket terminology is historical; suites do not author shelf code.
+
+## Records authoring principles
+
+Records are the single source of truth for shape-level security: schema, identity, fact proof, role-scoped reads, and role-scoped writes (including tool authorize/submit and shelf upsert). Suites declare records in `records.mld`; rig consumes them.
+
+The mlld primitives are documented in `mlld-security-fundamentals.md` — don't restate them here. The relevant sections:
+
+- **§4.4 Identity** (`.mx.key` opacity, `key:` declaration semantics, `.mx.address` cross-call wire form)
+- **§4.5 Input records** (`facts:` / `data:` / `allowlist:` / `correlate:` / `validate:` / `write:` block; sections table)
+- **§4.6 Fact kinds** (cross-record kind tags for positive checks)
+- **§4.7 Dispatch validation order** (the structural permission gate vs value-level checks)
+- **§6.6 Merge semantics** (key-driven upsert vs append default; field-level merge null semantics)
+- **§7 Per-call session containers** (sessions vs shelves — they share lifetime in the planner case but are otherwise unrelated)
+
+What suite authors should keep in mind when writing or porting a suite:
+
+1. **`type: handle` vs `type: string, kind: "X"` is the load-bearing distinction.** Input records (`*_inputs`, write-tool inputs that the LLM emits handles for) declare `type: handle` on fact fields — that's a session-local authorization proof minted by the bridge. Output records (tool `returns:`, shelf-bound, projected to the planner) declare `type: string, kind: "X"` on identity fields — that's an authoritative ID with cross-call identity, kind-tagged for downstream fact correlation. Conflating these is the migration pitfall that surfaced as the Stage B records audit (commit `744ba93`).
+
+2. **Sessions and shelves are separate primitives.** Don't bolt shelf hooks onto session schemas. `var session @planner` is per-call planner context; `shelf @x = ...` is record-typed state. They co-occur in the planner case but are unrelated otherwise.
+
+3. **Records used in shelves need `write:` blocks.** Without a `write:` declaration, runtime denies `@shelf.write` with `WRITE_DENIED_NO_DECLARATION`. The standard suite shape is `write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }` on output records. Input records add `write: { role:planner: { tools: { authorize: true } }, role:worker: { tools: { submit: true } } }` instead.
+
+4. **Without a `key:` declaration, shelf defaults to `merge: append`.** Two writes of the same canonical content produce two slot entries. Either declare `key:` on records that need merge collapse, or accept append semantics.
+
+5. **Don't alias record imports.** `import { @url_ref as @slack_url_ref }` followed by `let @r = {...} as record @slack_url_ref` bakes the alias into `.mx.address.record`, and the corresponding `@shelf.write(@ps.url_ref, @r)` rejects because the slot expects `record == "url_ref"`. Use the original record name. (Filed and fixed as mlld-side `m-0904`.)
+
+These are clean-side authoring principles. The mlld primitives they rely on are §4–7 of `mlld-security-fundamentals.md`.
+
+## Test tier boundaries
+
+The test surface is layered. Each layer catches a different class of regression and incurs different cost. Match the test to the layer; don't try to land cross-tier work in the wrong one.
+
+| Tier | Cost | Catches | Common mistake |
+|---|---|---|---|
+| **Tier 1: Zero-LLM invariant gate** (`tests/index.mld`) | $0, ~10s | Structural regressions, runtime contract violations, intent-compile shape, shelf invariants, source-class firewall | Trying to test cross-tool dispatch composition (e.g., resolved id_ → handle-typed input) without running real `@dispatchResolve` to mint the handle. The handle field validates at write-tool dispatch time; you can't fake it without bucket-shape bypass. |
+| **Tier 2: Scripted-LLM security tests** (`tests/run-scripted.py`) | $0, ~30s | Security-layer regressions, defense-by-defense coverage, cross-tool composition with deterministic LLM script | Conflating with Tier 1 — if the assertion needs an LLM-shaped tool sequence, it's Tier 2. |
+| **Tier 3: Live-LLM gates** (`tests/live/workers/run.mld`, bench sweeps) | seconds-minutes per task | End-to-end behavior, prompt regression, real-LLM judgment | Claiming victory from one passing run; live-LLM is stochastic and needs sweep evidence. |
+
+**Cross-tool dispatch composition belongs in Tier 2 or Tier 3, not Tier 1.** Production mints `type: handle` proofs via real `@dispatchResolve`; zero-LLM tests cannot reproduce that path without deep dispatch stubbing that would be more code than the test exercises. Three tests deleted from `tests/rig/named-state-and-collection.mld` during Stage B per this principle (`testRescheduleDispatchSucceeds`, `testCollectionDispatchPolicyBuild`, `testCollectionDispatchCrossModuleM5178`) — they're now exercised end-to-end by scripted suites. The deletion comments in that file are the canonical record of what shape belongs where.
+
+When a Tier 1 conversion surfaces "I need a real handle," that's the signal to defer to Tier 2, not to fake a handle inline.
 
 ## The Four Suites
 

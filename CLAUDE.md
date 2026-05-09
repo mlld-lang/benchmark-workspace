@@ -42,7 +42,7 @@ clean/
   DEBUG.md                Investigation methodology
   archive/*.taskdata.txt  Per-suite tool/model/task reference (from AgentDojo, archived)
   *.threatmodel.txt       Per-suite attack trees and defense specs
-  labels-policies-guards.md  Security model narrative (symlink to benchmarks/)
+  mlld-security-fundamentals.md  Security model narrative
   src/                    Python host (minimal — run.py, host.py, mcp_server.py)
 ```
 
@@ -416,7 +416,7 @@ Not scheduled. Raise it when any of the following bite: chasing per-worker timin
 
 Use `/rig` at session start to load these with instructions to read them all. See `.claude/skills/rig.md` for the full onboarding sequence.
 
-1. `labels-policies-guards.md` — security model narrative
+1. `mlld-security-fundamentals.md` — security model narrative
 2. `rig/ARCHITECTURE.md` — framework architecture and separation of concerns
 3. `bench/ARCHITECTURE.md` — how bench consumes rig
 4. `DEBUG.md` — investigation methodology

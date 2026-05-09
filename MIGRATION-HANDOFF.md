@@ -8,9 +8,9 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ## Current state (2026-05-09)
 
-**Gate**: 229/0/1 (started at 169/0/1 — +60 tests landed across 2 sessions). The "1" xfail is `template/known-broken/intentionallyFails` (ticket c-9999) — the test framework's own placeholder demonstrating xfailGroup mechanics, not a deferred migration test. Scripted suites at baseline (banking 7/3, slack 13/1+1xpass, workspace 13/1, travel 10/0).
+**Gate**: 241/0/2 (proof-chain-firewall conversion landed +12 tests; commit `e5d3c21`). Started at 169/0/1; +72 tests across the migration. The 2 xfails are `template/known-broken/intentionallyFails` and `template/known-broken/intentionallyThrows` (ticket c-9999) — test framework placeholders, not deferred migration tests. Scripted suites at baseline (banking 7/3, slack 13/1+1xpass, workspace 13/1, travel 10/0).
 
-**Committed at 6196ed0**. All previously-uncommitted work from sessions migrator-1 and migrator-2 is now in main. Working tree clean except for the documented pre-existing uncommitted files at the bottom of this doc.
+**Session A in progress**: items #1 (proof-chain-firewall, gate 229→241) and #2 (rig/ARCHITECTURE.md) landed; #3 (bench/ARCHITECTURE.md) and #4 (security-doc archive) staged but not yet committed at this writing.
 
 **Architecture**: Stage B core landed; `state.resolved` is gone, shelf is the resolved-record store via `@agent.plannerShelf`; output records use `id_: { type: string, kind: ... }` post-audit; input records keep `type: handle`. m-shelf-wildcard + m-rec-perms-update both fully consumed.
 
@@ -18,17 +18,15 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ## Next priorities (ordered)
 
-### Session A — parallel work, ~3-4 hours total
+### Session A — DONE except for the closeout commit
 
-These don't depend on each other. The two test conversions don't change rig, so the docs are stable; the docs describe production shape that's settled.
+1. ~~**`proof-chain-firewall.mld`**~~ — DONE, commit `e5d3c21`. 12 tests added; gate 229→241.
 
-1. **`proof-chain-firewall.mld`** (~60-90 min — structurally similar to named-state-and-collection.mld which migrator-2 took longer than 60 min on; 11 module-scope restructures into per-test `role:worker` exes isn't trivially mechanical even with the template proven). Pure compile-test rewrite. 17 test exes, 11 module-scope `var` consumers of `@sampleState`. Pull all module-scope dispatch results into per-test `role:worker` exe bodies that build their own shelf-bound agent (mirror identity-contracts/url-refs-b/named-state-and-collection per-test pattern). Watch: don't alias record imports per F3 below. Hitting friction is normal; not a sign to stop.
+2. ~~**`rig/ARCHITECTURE.md`**~~ — DONE (uncommitted). Added a "State Surface" section cross-referencing `mlld-security-fundamentals.md` §6 (shelves) + §7 (sessions) + §4.4 (identity). Updated "Separation of Concerns" to mention shelf-backed state. Updated the References section to point at `mlld-security-fundamentals.md`. **No F1–F6 promotion** here — content lives in mlld-security-fundamentals.md (cross-reference only), not in rig/ARCHITECTURE.md.
 
-2. **`rig/ARCHITECTURE.md`** (~30 min) — phase model + state model rewritten (bucket → shelf historical); list deleted-from-rig functions in migration impact paragraph. **Lift findings F1-F6 below into a permanent "Records primitives" or "Working with shelves" section** — these are records-as-policy principles, not session notes.
+3. ~~**`bench/ARCHITECTURE.md`**~~ — DONE (uncommitted). Fixed stale `display:` / `{ref:}` syntax in the example record. Updated "What Stays / What Goes" to reflect bucket→shelf collapse. Added a new "Records authoring principles" section that cross-references mlld-security-fundamentals.md §4.4–4.7, §6.6, §7 and lists 5 clean-side authoring principles (the F1/F2/F4 content in cross-reference form, plus F3 alias warning). Added a new "Test tier boundaries" section promoting F5 (cross-tool dispatch composition belongs in scripted/live, not zero-LLM) as a permanent principle. Cites the named-state-and-collection.mld deletions as canonical examples.
 
-3. **`bench/ARCHITECTURE.md`** (~20 min) — "What stays / What goes" table reflects bucket no longer existing. Same F1-F6 promotion target.
-
-4. **`labels-policies-guards.md`** (~30 min) — bucket framing → shelf framing; handle-string identity → `.mx.key`.
+4. ~~**`mlld-security-fundamentals.md`**~~ — Scope changed (per advisor). The new doc already covers F1/F2/F4 in §4.4–4.7, §6.6–6.9, §7. Session A #4 became `git mv labels-policies-guards.md archive/` + grep stragglers + update them. DONE (uncommitted): `DEBUG.md`, `bench/domains/workspace/records.mld`, `rig/workers/advice.mld`, `migration-plan.md`, `.claude/skills/migrate/SKILL.md` updated.
 
 ### Session B — architectural unblock + cleanup, ~3-4 hours
 
@@ -67,31 +65,15 @@ These don't depend on each other. The two test conversions don't change rig, so 
 
 ---
 
-## Findings — promote to permanent bench/ARCHITECTURE.md in Session A docs pass
+## Where the F-findings landed
 
-Records-as-policy / shelf-architecture principles, not session notes. Lift to a permanent "Records primitives" or "Working with shelves" section as part of #2/#3 above. **DO NOT leave them as session-log text.**
+The records-as-policy / shelf-architecture principles that were holding here as session notes have all been promoted or retired. For future reference:
 
-**F1. `type: handle` vs `type: string, kind: "X"` is the load-bearing distinction.**
-- `type: handle` = session-local authorization proof (bridge-minted, validated at write-tool input boundary).
-- `type: string, kind: "X"` = authoritative ID with cross-call identity, kind-tagged for downstream fact correlation.
-- `.mx.address.key` = stable lookup address (content-derived hash, separate from both).
-- **Output records** (tool returns:, projected to LLM, shelved) use `type: string, kind: "X"`.
-- **Input records** (`*_inputs`, write-tool inputs that LLM emits handles for) use `type: handle`.
-- Conflating these was the original Stage B blocker; the audit (commit 744ba93) reshaped 8 records to align.
-
-**F2. Sessions and shelves are separate primitives that happen to share lifetime in the planner case.**
-- `var session @planner` stores call-local planner state (agent, query, runtime, state).
-- `shelf @x = ...` stores typed records with permission/merge semantics, scope-local lifetime.
-- They co-occur in `@runPlannerSession` (declare shelf inline, thread onto agent, then bind `@planner` session) — but they're distinct concerns.
-- **DO NOT** add shelf hooks to the `@planner` session schema. Coupling them on the session primitive makes future non-shelf agents harder.
-
-**F3. `as record @alias` bakes the import alias into `.mx.address.record`.** If you `import { @url_ref as @slack_url_ref }` and write `let @r = {...} as record @slack_url_ref`, then `@r.mx.address.record == "slack_url_ref"`, not `"url_ref"`. Then `@shelf.write(@ps.url_ref, @r)` rejects. **Don't alias record imports.** (Filed and fixed as m-0904.)
-
-**F4. Without `key:` declaration, shelf defaults to `merge: append` — even if `.mx.address.key` is identical between writes.** Two writes of the same canonical content produce two slot entries, not one. Either declare an explicit `key:` on records that need merge, or accept append semantics. (Filed at m-f4a0, closed with discoverability notes.)
-
-**F5. Cross-tool dispatch composition (resolved id_ → handle-typed input) belongs in scripted/live tier.** Production mints handles via real `@dispatchResolve`; zero-LLM tests can't reproduce that path without deep dispatch stubbing. Three tests deleted from `named-state-and-collection.mld` per this principle.
-
-**F6. Three mlld bug families fixed during this migration share the same root: frame-boundary metadata leaking into the callee.** m-5b7d (bare-statement role leak), m-4b6f (function-call frame role leak via stale exe labels), m-e730 (function-call frame `_mlld` leak via mx.labels). Pattern: when a sub-call returns, certain wrapper-attached fields propagate into the caller's evaluation context. The wider invariant — "syntactically null = semantically null at every runtime surface" — is now locked by `tests/rig/null-conformance.mld` (12 tests covering wrapper-null, JS-return null, literal-arg null).
+- **F1 / F2 / F4** (handle vs string-with-kind, sessions vs shelves, key-driven merge semantics) → `mlld-security-fundamentals.md` §4.4–4.7, §6.6, §7. Cross-referenced from `bench/ARCHITECTURE.md` "Records authoring principles".
+- **F3** (don't alias record imports) → `bench/ARCHITECTURE.md` "Records authoring principles" §5. Closed mlld bug `m-0904`.
+- **F5** (cross-tool dispatch composition belongs in scripted/live tier) → `bench/ARCHITECTURE.md` "Test tier boundaries" section.
+- **F6a** (frame-boundary metadata leak class — `m-5b7d`, `m-4b6f`, `m-e730`) → closed mlld bugs; no clean-side doc real estate needed.
+- **F6b** (null-conformance invariant) → `tests/rig/null-conformance.mld` is the load-bearing artifact. mlld primitives doc already covers the invariant. No further action.
 
 ---
 
@@ -196,6 +178,7 @@ Earlier session referenced `.tickets/c-2ec6.md`, `c-5a08.md`, `c-9c6f.md`, `labe
 | 2026-05-09 | migrator-2 (advisor-gap closure: handoff updates) | `844ea82` | docs |
 | 2026-05-09 | migrator-2 (null-conformance regression suite) | `6196ed0` | gate 217→229 |
 | 2026-05-09 | migrator-2 (handoff restructure for execution focus) | `f7ab37c` | docs |
-| 2026-05-09 | migrator-2 (c-cdf5 filed → closed; runner.mld try-wrap) | `b1b92ac` + pending | gate 229/0/1→229/0/2 |
-| next | Session A: proof-chain-firewall + 3 docs | TBD | gate 229→~244 + docs |
-| next+1 | Session B: task #17 + worker-dispatch + fixtures + mutation re-baseline | TBD | full closeout |
+| 2026-05-09 | migrator-2 (c-cdf5 filed → closed; runner.mld try-wrap) | `b1b92ac` + `84a5cd9` | gate 229/0/1→229/0/2 |
+| 2026-05-09 | migrator-3 (Session A: proof-chain-firewall conversion) | `e5d3c21` | gate 229→241 |
+| 2026-05-09 | migrator-3 (Session A: docs + security-doc archive) | TBD | doc closeout |
+| next | Session B: task #17 + worker-dispatch + fixtures + mutation re-baseline | TBD | full closeout |

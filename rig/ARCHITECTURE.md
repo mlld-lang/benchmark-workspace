@@ -46,6 +46,16 @@ Every value referenced in planner intent carries an explicit source class. This 
 
 The planner cannot "upgrade" an extracted or derived value into resolved proof by relabeling the source class. Rig validates source class against the provenance stored with the value. The full whitelist lives at `planner_inputs.mld`.
 
+## State Surface
+
+Rig's state surface is a **shelf** declared from the agent's record map (`shelf @plannerShelf from @shelfRecords(@agent.records)` in `rig/workers/planner.mld`). The shelf's slot map is auto-discovered: every output record (`direction != "output"` filters out `*_inputs` shapes) becomes a typed slot, and entries land via `@shelf.write(@plannerShelf.<recordType>, @recordValue)` after each resolve.
+
+Shelf semantics — wildcard slot mode, scope-local lifetime, per-key cache invalidation, `byKey` / `byAddress` lookups, `from <slot>` cross-slot constraints — are mlld primitives documented in `mlld-security-fundamentals.md` §6 ("Shelf Slots"). Identity (`.mx.key`, `.mx.address`) and merge semantics (key-driven upsert vs append-default) are §4.4 and §6.6 of the same doc. **Don't duplicate that material here**; cross-reference it.
+
+The shelf and the planner session (`var session @planner`) are distinct primitives that share lifetime in the planner case but are otherwise unrelated. Session state is per-call planner context (agent, query, runtime); shelf state is record-typed and lives across phases inside the agent box. Cross-reference `mlld-security-fundamentals.md` §7 for sessions.
+
+`state.extracted`, `state.derived`, and `state.extract_sources` remain plain typed maps on the state object — they're name-keyed singletons, not record-keyed collections, and not in scope for the shelf collapse. If mlld lands name-keyed slot mode they collapse too; tracked as a future deferred follow-up.
+
 ## The Clean Planner Invariant
 
 The planner is a long-running planner LLM session that coordinates work. It never sees raw tainted content. It sees:
@@ -67,7 +77,7 @@ That's the core app-to-rig contract. A suite may also supply: per-worker prompt 
 
 **Rig owns the mechanics:**
 - planner-facing tool wrappers and worker dispatch (resolve, resolve_batch, extract, derive, rehearse, execute, compose, advice, blocked)
-- state storage (derived from record declarations)
+- shelf-backed state surface (slot map auto-discovered from records; resolve writes through `@shelf.write`; lookups via `byKey`/`byAddress`)
 - display projection at LLM boundaries (`role:planner`, `role:worker`, `role:advice`)
 - handle exposure and resolution
 - compiled authorization via `@policy.build`
@@ -224,8 +234,8 @@ The planner and workers are LLM calls. The specific LLM backend is pluggable (Cl
 
 ## References
 
+- **Security narrative**: `mlld-security-fundamentals.md` (canonical). Records primitives — facts vs data, identity (`type: handle` vs `type: string, kind:`), `.mx.key` opacity, key/merge semantics, sessions vs shelves — are documented in §4.4–4.7, §6.6–6.9, §7. The pre-Stage-B `labels-policies-guards.md` is archived under `archive/` for historical reference.
 - mlld primitives: `~/mlld/mlld/spec-thin-arrow-llm-return.md`, `~/mlld/mlld/spec-display-labels-and-handle-accessors.md`, `~/mlld/mlld/spec-agent-authorization-permissions.md`
-- Security narrative: `clean/labels-policies-guards.md`
 - Phase / lifecycle / policy contract: `PHASES.md`
 - Security invariants: `SECURITY.md`
 - Advice gate: `ADVICE_GATE.md`

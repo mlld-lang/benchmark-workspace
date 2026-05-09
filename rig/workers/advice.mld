@@ -31,7 +31,7 @@ import { @composeAttestation } from "../records.mld"
 >>
 >> The `no-influenced-advice` rule fires on this module's
 >> `advice`-labeled exes when their inputs carry the `influenced`
->> label. Per spike 23 / labels-policies-guards.md §3, declaring the
+>> label. Per mlld-security-fundamentals.md §3, declaring the
 >> policy in the same module as the wrapper is the canonical pattern
 >> for catching denials reliably across module boundaries.
 
