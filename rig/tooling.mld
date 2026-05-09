@@ -292,14 +292,16 @@ exe @toolOptionalBenign(toolEntry) = [
   => @stringArray(@inputPolicy.optionalBenign ?? [])
 ]
 
+>> Per m-60ff: correlate is opt-in. Input records only enable
+>> @correlatedControlArgsCheck when they declare `correlate: true`
+>> explicitly; omitted correlate (and `correlate: false`) both produce
+>> the same behavior — no correlate check. The previous implicit
+>> "default true when control args > 1" was stricter than the records-
+>> as-policy spec called for and created inconsistent posture between
+>> omitted and `correlate: false`.
 exe @toolCorrelateControlArgs(toolEntry) = [
   let @inputCorrelate = @toolInputRecordMeta(@toolEntry, "correlate")
-  let @inputControlArgs = @toolControlArgs(@toolEntry)
-  => when [
-    @toolInputFields(@toolEntry).length > 0 && @inputCorrelate == true => true
-    @toolInputFields(@toolEntry).length > 0 && !@inputCorrelate.isDefined() && @inputControlArgs.length > 1 => true
-    * => false
-  ]
+  => @toolInputFields(@toolEntry).length > 0 && @inputCorrelate == true
 ]
 
 exe @toolRisk(toolEntry) = [

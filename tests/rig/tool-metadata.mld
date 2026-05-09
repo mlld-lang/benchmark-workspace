@@ -27,7 +27,8 @@ import {
   @toolOptionalArgs,
   @toolOptionalBenign,
   @toolRisk,
-  @toolCanAuthorizeRoles
+  @toolCanAuthorizeRoles,
+  @toolCorrelateControlArgs
 } from "../../rig/tooling.mld"
 import { @roleForArg } from "../../rig/intent.mld"
 import { @tools, @get_contacts } from "../fixtures.mld"
@@ -112,6 +113,61 @@ exe @testFactsourceRoundtrip() = [
   => @assertOk(@factValue.mx.factsources.isDefined(), `factsources=@factValue.mx.factsources`)
 ]
 
+>> m-60ff regression: correlate is opt-in. Three cases must produce
+>> three results — explicit `correlate: true` ON, explicit `correlate:
+>> false` OFF, omitted correlate OFF (was implicitly ON pre-m-60ff
+>> for any input record with >1 control args).
+
+exe @opTrue(a, b) = [ => "ok" ]
+exe @opFalseExplicit(a, b) = [ => "ok" ]
+exe @opOmitted(a, b) = [ => "ok" ]
+
+record @correlateTrueInputs = {
+  facts: [a: string, b: string],
+  data: [],
+  correlate: true,
+  validate: "strict",
+  write: { role:planner: { tools: { authorize: true } }, role:worker: { tools: { submit: true } } }
+}
+
+record @correlateFalseInputs = {
+  facts: [a: string, b: string],
+  data: [],
+  correlate: false,
+  validate: "strict",
+  write: { role:planner: { tools: { authorize: true } }, role:worker: { tools: { submit: true } } }
+}
+
+record @correlateOmittedInputs = {
+  facts: [a: string, b: string],
+  data: [],
+  validate: "strict",
+  write: { role:planner: { tools: { authorize: true } }, role:worker: { tools: { submit: true } } }
+}
+
+var tools @correlateProbeTools = {
+  op_true: { mlld: @opTrue, inputs: @correlateTrueInputs, labels: ["execute:w", "tool:w"], description: "." },
+  op_false: { mlld: @opFalseExplicit, inputs: @correlateFalseInputs, labels: ["execute:w", "tool:w"], description: "." },
+  op_omitted: { mlld: @opOmitted, inputs: @correlateOmittedInputs, labels: ["execute:w", "tool:w"], description: "." }
+}
+
+exe @testCorrelateExplicitTrueEnables() = [
+  let @r = @toolCorrelateControlArgs(@correlateProbeTools.op_true)
+  => @assertEq(@r, true)
+]
+
+exe @testCorrelateExplicitFalseDisables() = [
+  let @r = @toolCorrelateControlArgs(@correlateProbeTools.op_false)
+  => @assertEq(@r, false)
+]
+
+>> m-60ff: omitted correlate must produce SAME behavior as correlate:false
+>> (was implicitly true for >1 fact-control-args before the spec fix).
+exe @testCorrelateOmittedDisables() = [
+  let @r = @toolCorrelateControlArgs(@correlateProbeTools.op_omitted)
+  => @assertEq(@r, false)
+]
+
 exe @testToolDocsControlArgs() = [
   let @ok = @sendDoc.controlArgs.includes("recipients") &&
     @sendDoc.payloadArgs.includes("subject") &&
@@ -141,7 +197,12 @@ var @toolMetadataSuite = @suite("tool-metadata", [
   @group("docs-rendering", [
     @testToolDocsControlArgs,
     @testInputRecordToolDocs
-  ], {})
+  ], {}),
+  @group("correlate-opt-in", [
+    @testCorrelateExplicitTrueEnables,
+    @testCorrelateExplicitFalseDisables,
+    @testCorrelateOmittedDisables
+  ], { ticket: "m-60ff" })
 ], {})
 
 export { @toolMetadataSuite }

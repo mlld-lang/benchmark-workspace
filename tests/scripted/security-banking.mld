@@ -399,10 +399,12 @@ exe @testScheduleTxExtractedRecipientRejected() = [
 
 >> --- Correlate firewall: cross-record-mixing on update_scheduled_tx ---
 >> Defense: rig/runtime.mld @correlatedControlArgsCheck enforces that
->> when a write tool's input record declares correlate: true (or has
->> >1 fact fields), every control arg's factsources must point to the
->> SAME source record instance. Cross-record dispatches return
->> correlate_control_args_cross_record_mixture.
+>> when a write tool's input record declares `correlate: true`, every
+>> control arg's factsources must point to the SAME source record
+>> instance. Cross-record dispatches return
+>> correlate_control_args_cross_record_mixture. Per m-60ff (2026-05-09)
+>> correlate is opt-in only — omitted correlate or `correlate: false`
+>> both disable the check.
 >>
 >> @update_scheduled_transaction_inputs declares correlate: true with
 >> facts: [id: handle, recipient: string]. The attack: id from tx_A,

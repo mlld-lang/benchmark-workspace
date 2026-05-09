@@ -42,7 +42,22 @@ exe @group(name, tests, opts) = [
   => { kind: "group", name: @name, tests: @tests, opts: @opts }
 ]
 
->> @xfailGroup — sugar: same as @group with xfail: true merged into opts
+>> @xfailGroup — sugar: same as @group with xfail: true merged into opts.
+>>
+>> KNOWN LIMITATION (m-3116): xfail only catches FAILED ASSERTIONS — i.e.,
+>> tests that complete and return { ok: false }. Tests that throw an
+>> interpreter error (MlldSecurityError, MlldInterpreter undefined access,
+>> Command not found, etc.) propagate up through @runGroup's bare
+>> `@testExe()` invocation and abort the whole script before xfail can
+>> classify the result. mlld doesn't currently expose a try/catch
+>> primitive (`denied =>` only catches guard/policy/dispatch denials, not
+>> WRITE_DENIED_NO_ROLE etc.; `for parallel`'s @mx.errors capture is
+>> similarly scoped). For tests known to throw — typically blocked-on-
+>> mlld-fix plumbing tests — DELETE the test exe with a comment pointing
+>> at the upstream ticket, then revive once the upstream fix lands.
+>> Pattern is documented in named-state-and-collection.mld where
+>> testExecuteResultHandlesFromReturnsRecord was deleted pre-m-4b6f and
+>> revived post-fix.
 exe @xfailGroup(name, tests, opts) = [
   let @mergedOpts = { ...@opts, xfail: true }
   => @group(@name, @tests, @mergedOpts)
