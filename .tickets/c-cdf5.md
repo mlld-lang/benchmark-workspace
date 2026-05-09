@@ -1,6 +1,6 @@
 ---
 id: c-cdf5
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-09T20:56:05Z
@@ -9,6 +9,7 @@ priority: 2
 assignee: Adam
 external-ref: mlld:m-3116
 tags: [testing, xfail, mlld-upstream]
+updated: 2026-05-09T21:39:56Z
 ---
 # Adopt mlld try expression in test runner once m-3116 lands
 
@@ -68,3 +69,28 @@ Auditing rig's null-conformance behavior and surfacing the xfail interpreter-err
 
 xfailGroup wraps via try; limitation doc distinguishes catchable vs hard-security; deleted-test audit identifies revivable cases.
 
+
+## Notes
+
+**2026-05-09T21:39:47Z** ## Closed at <pending commit>
+
+Implemented in tests/runner.mld@runGroup — wraps `@testExe()` in `try`, classifies thrown errors as test failures with `thrown: true` flag and `detail: "thrown: <code>: <message>"`. xfailGroup picks them up as XFAIL.
+
+Updated @xfailGroup doc to describe the catchable-vs-hard-security split per m-3116's NOT-catchable matrix. Added @testIntentionallyThrows to tests/_template.mld's known-broken xfailGroup as a regression demonstrating the try-wrap behavior.
+
+**Verified end-to-end**:
+- Recoverable thrown error inside xfailGroup → classified as XFAIL (gate now 229/0/2 — was 229/0/1)
+- Hard-security thrown error (WRITE_DENIED_NO_ROLE probe) inside xfailGroup → still bails the suite per m-3116's NOT-catchable matrix; error trace shows `nodeType: TryExpression` confirming mlld's try correctly re-throws
+
+**Audit per acceptance criterion #4**: walked through delete-and-comment notes in named-state-and-collection.mld + url-refs-b.mld + identity-contracts.mld:
+- testRescheduleDispatchSucceeds, testCollectionDispatchPolicyBuild, testCollectionDispatchCrossModuleM5178: all WRITE_DENIED_* — stays deleted per F5 (still in NOT-catchable matrix)
+- testUr19RecordArgsRejectsForgedHandle: not error-class issue — recordArgs validator stopped checking handle existence, needs reframe as @lookupResolvedEntry test (independent of m-3116)
+- testCrossResolveIdentitySlackHandleDrift / testSelectionRefSurvivesHandleDriftSlack: not error class — needs slack_msg `key:` declaration (bench-side records change, F4)
+- identity-contracts entry-shape-bucket tests: concept-obsolete (deleted bucket sentinel), unrelated to m-3116
+- no-progress fingerprint anchor: covered by FP-2 generic, unrelated
+
+Net revival yield from m-3116: 0 currently-deleted tests. But going forward, new tests can use try cleanly and failed casts/parses/JS-block-exceptions are now xfail-able.
+
+**Friction reported to mlld-dev**: IDE/LSP lint emits "Parse error: Expected end of input but ' ' found" diagnostic on `try @testExe()` even though the runtime parser accepts the syntax. Stale grammar in the highlighter not caught up to m-3116; runtime works.
+
+Closing.

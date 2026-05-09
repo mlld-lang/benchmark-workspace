@@ -78,6 +78,19 @@ exe @testIntentionallyFails() = [
   => @assertOk(false, "placeholder for a tracked bug — remove from xfailGroup when fixed")
 ]
 
+>> A test marked as known-broken via THROWN error (per c-cdf5 / m-3116:
+>> @runGroup wraps each test invocation in `try`, so recoverable thrown
+>> errors are caught and classified as XFAIL inside @xfailGroup). This
+>> placeholder triggers an undefined-function error to verify the
+>> try-catch path. Hard-security errors (WRITE_DENIED_*, TOOL_AUTHORIZE_*,
+>> capability-policy denials per m-3116's NOT-catchable matrix) STILL
+>> bail the suite — for those, delete the test with a comment pointing
+>> at the upstream ticket instead of marking xfail.
+exe @testIntentionallyThrows() = [
+  let @x = @undefinedFunction()
+  => @assertOk(true, "should not reach")
+]
+
 >> Guard/policy denial test pattern (recipe — the denied operation is
 >> application-specific, so this is a commented template, not a runnable
 >> example).
@@ -123,7 +136,8 @@ var @templateSuite = @suite("template", [
     @testExampleEquality
   ], { ticket: "c-1234", notes: "example ticket + notes" }),
   @xfailGroup("known-broken", [
-    @testIntentionallyFails
+    @testIntentionallyFails,
+    @testIntentionallyThrows
   ], { ticket: "c-9999" })
 ], {})
 

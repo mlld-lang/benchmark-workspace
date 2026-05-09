@@ -63,17 +63,6 @@ These don't depend on each other. The two test conversions don't change rig, so 
 
 ## Open external dependencies (low priority — don't block on)
 
-- **mlld m-3116 (try expression)** → clean **c-cdf5** (task #19). When mlld lands `try`, upgrade `@xfailGroup` to wrap test invocations and classify catchable errors as XFAIL instead of bail. Replaces the current delete-and-comment xfail workaround for the recoverable subset. Hard-security errors (WRITE_DENIED_*, TOOL_AUTHORIZE_*) stay delete-and-comment per m-3116's NOT-catchable matrix. Minor quality-of-life; not blocking the migration.
-
-  **Revival audit grep target when m-3116 lands**: `grep -nE "Stage B follow-up.*deleted|deleted.*conversion" tests/rig/*.mld`. Currently flags:
-  - `tests/rig/named-state-and-collection.mld:404` testRescheduleDispatchSucceeds (WRITE_DENIED — stays deleted per F5)
-  - `tests/rig/named-state-and-collection.mld:455` testCollectionDispatchPolicyBuild (WRITE_DENIED — stays deleted per F5)
-  - `tests/rig/named-state-and-collection.mld:463` testCollectionDispatchCrossModuleM5178 (WRITE_DENIED — stays deleted per F5)
-  - `tests/rig/identity-contracts.mld:26` 3 entry-shape-bucket tests (obsolete bucket sentinel, NOT m-3116 territory — already covered by shelf-integration)
-  - `tests/rig/identity-contracts.mld:151` no-progress fingerprint anchor (covered by FP-2 in progress-fingerprint.mld)
-
-  The named-state-and-collection deletions are all hard-security (WRITE_DENIED_*), so per m-3116's NOT-catchable matrix they STAY deleted. Identity-contracts deletions are concept-obsolete, also stay. So the actual revival yield from m-3116 is 0 currently-deleted tests — but new tests can use try going forward.
-
 - **mlld m-e5e0 follow-up** (low priority): `@parse.address` wrapped-null comparison ergonomics. Currently using `.isDefined()` workaround; not blocking.
 
 ---
@@ -203,10 +192,10 @@ Earlier session referenced `.tickets/c-2ec6.md`, `c-5a08.md`, `c-9c6f.md`, `labe
 | 2026-05-08 | migrator-2 (records audit + 4 file conversions + 2 deletes) | `744ba93` | gate 169→194 |
 | 2026-05-08 | migrator-2 (identity-contracts + JS audit + writeback test revive) | `5c229ad` | gate 194→207 |
 | 2026-05-09 | migrator-2 (url-refs-b PARTIAL Groups B+C) | `7578afc` | gate 207→214 |
-| 2026-05-09 | migrator-2 (c-60ff correlate opt-in + m-3116 doc) | `71c369c` | gate 214→217 |
+| 2026-05-09 | migrator-2 (c-60ff correlate opt-in + xfail limitation doc) | `71c369c` | gate 214→217 |
 | 2026-05-09 | migrator-2 (advisor-gap closure: handoff updates) | `844ea82` | docs |
 | 2026-05-09 | migrator-2 (null-conformance regression suite) | `6196ed0` | gate 217→229 |
 | 2026-05-09 | migrator-2 (handoff restructure for execution focus) | `f7ab37c` | docs |
-| 2026-05-09 | migrator-2 (c-cdf5 ticket filed) | `b1b92ac` | ticket |
+| 2026-05-09 | migrator-2 (c-cdf5 filed → closed; runner.mld try-wrap) | `b1b92ac` + pending | gate 229/0/1→229/0/2 |
 | next | Session A: proof-chain-firewall + 3 docs | TBD | gate 229→~244 + docs |
 | next+1 | Session B: task #17 + worker-dispatch + fixtures + mutation re-baseline | TBD | full closeout |

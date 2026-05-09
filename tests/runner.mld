@@ -44,20 +44,26 @@ exe @group(name, tests, opts) = [
 
 >> @xfailGroup — sugar: same as @group with xfail: true merged into opts.
 >>
->> KNOWN LIMITATION (m-3116): xfail only catches FAILED ASSERTIONS — i.e.,
->> tests that complete and return { ok: false }. Tests that throw an
->> interpreter error (MlldSecurityError, MlldInterpreter undefined access,
->> Command not found, etc.) propagate up through @runGroup's bare
->> `@testExe()` invocation and abort the whole script before xfail can
->> classify the result. mlld doesn't currently expose a try/catch
->> primitive (`denied =>` only catches guard/policy/dispatch denials, not
->> WRITE_DENIED_NO_ROLE etc.; `for parallel`'s @mx.errors capture is
->> similarly scoped). For tests known to throw — typically blocked-on-
->> mlld-fix plumbing tests — DELETE the test exe with a comment pointing
->> at the upstream ticket, then revive once the upstream fix lands.
->> Pattern is documented in named-state-and-collection.mld where
->> testExecuteResultHandlesFromReturnsRecord was deleted pre-m-4b6f and
->> revived post-fix.
+>> CATCHABLE vs HARD-SECURITY: @runGroup wraps each test invocation in
+>> mlld's `try` expression (mlld m-3116, lands ~2026-05-09). Recoverable
+>> interpreter failures — failed casts/parses, undefined-ref evaluation,
+>> JS/Node-block exceptions, managed policy/guard label-flow denials —
+>> are caught and surfaced as `{ ok: false, detail: "thrown: <code>:
+>> <message>", thrown: true }` so xfailGroup can classify them as XFAIL.
+>>
+>> HARD-SECURITY failures stay uncatchable per m-3116's NOT-catchable
+>> matrix: WRITE_DENIED_NO_DECLARATION / NO_ROLE / NO_TARGET /
+>> NO_CAPABILITY / SCOPE_MISMATCH / NO_ACTIVE_ROLE / OUT_OF_SCOPE_-
+>> RECORD_TYPE, wildcard_shelf_record_out_of_scope, TOOL_AUTHORIZE_-
+>> DENIED, TOOL_SUBMIT_DENIED, LEGACY_TOOL_CAN_AUTHORIZE_DENIED,
+>> POLICY_CAPABILITY_DENIED, dependency/profile/environment constraints,
+>> parser/load failures, control-flow sentinels (bail/retry/done/loop),
+>> runtime cancellation. For tests that hit any of those — typically
+>> blocked-on-mlld-fix plumbing tests — DELETE the test exe with a
+>> comment pointing at the upstream ticket, then revive once the
+>> upstream fix lands. Pattern documented in named-state-and-collection
+>> .mld where testExecuteResultHandlesFromReturnsRecord was deleted
+>> pre-m-4b6f and revived post-fix.
 exe @xfailGroup(name, tests, opts) = [
   let @mergedOpts = { ...@opts, xfail: true }
   => @group(@name, @tests, @mergedOpts)
@@ -83,8 +89,15 @@ exe @resolveOpts(suiteOpts, groupOpts) = [
   }
 ]
 
->> @runGroup — invoke each test exe in a group, collect results
->> Returns array of { id, ok, detail, xfail, ticket, notes, slow } records.
+>> @runGroup — invoke each test exe in a group, collect results.
+>> Returns array of { id, ok, detail, xfail, ticket, notes, slow, thrown } records.
+>>
+>> Each test invocation is wrapped in `try` (mlld m-3116). Successful
+>> evaluations surface their { ok, detail } directly; recoverable
+>> failures (interpreter errors caught by try) surface as
+>> { ok: false, detail: "thrown: <code>: <message>", thrown: true }.
+>> Hard-security failures still bail the suite per m-3116's NOT-catchable
+>> matrix — see @xfailGroup doc for the list.
 exe @runGroup(suiteName, groupRec, resolvedOpts) = [
   let @groupName = @groupRec.name
   let @groupXfail = @resolvedOpts.xfail
@@ -95,16 +108,29 @@ exe @runGroup(suiteName, groupRec, resolvedOpts) = [
   for @testExe in @groupRec.tests [
     let @testName = @deriveTestName(@testExe)
     let @id = `@suiteName/@groupName/@testName`
-    let @assertion = @testExe()
-    let @entry = {
-      id: @id,
-      ok: @assertion.ok,
-      detail: @assertion.detail,
-      xfail: @groupXfail,
-      ticket: @groupTicket,
-      notes: @groupNotes,
-      slow: @groupSlow
-    }
+    let @attempt = try @testExe()
+    let @entry = when [
+      @attempt.ok => {
+        id: @id,
+        ok: @attempt.value.ok,
+        detail: @attempt.value.detail,
+        xfail: @groupXfail,
+        ticket: @groupTicket,
+        notes: @groupNotes,
+        slow: @groupSlow,
+        thrown: false
+      }
+      * => {
+        id: @id,
+        ok: false,
+        detail: `thrown: @attempt.error.code: @attempt.error.message`,
+        xfail: @groupXfail,
+        ticket: @groupTicket,
+        notes: @groupNotes,
+        slow: @groupSlow,
+        thrown: true
+      }
+    ]
     let @results += [@entry]
   ]
   => @results
