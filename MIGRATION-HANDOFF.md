@@ -18,20 +18,45 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 - Gate at **207/0/1** (up from 169/0/1 baseline)
 - m-4b6f filed and fixed by mlld-dev (function-call frame role-leak via stale exe labels)
 
-**Real findings worth keeping in head**:
+## Findings — promote to permanent bench/ARCHITECTURE.md in next doc pass
 
-1. **type:handle is for INPUT records (LLM-emitted, bridge-validated). Output records (tool returns:, projected to LLM, shelved) declare authoritative IDs as type:string, kind:"X".** Conflating these was the original audit blocker. The principle is now load-bearing — applies to any future record-shape changes.
+These are records-as-policy / shelf-architecture principles, not session notes. They will trip future record/test authors. Lift to a permanent "Records primitives" or "Working with shelves" section in `bench/ARCHITECTURE.md` as part of the doc updates next session — DO NOT leave them as session-log text.
 
-2. **Stage B left a scripted-LLM architectural gap.** Scripted-LLM tests bypass `@runPlannerSession` (they invoke `@mockOpencode` with `with { session: @planner, seed: {...} }` directly). The shelf is created inside `@runPlannerSession`, so scripted tests have no shelf at session start. This means:
-   - 3 mutation-matrix baseline-fails (banking B3, slack handle test, workspace extract-empty) — fixture helpers need to populate a shelf that doesn't exist for scripted
-   - 5 scripted-LLM regression tests in worker-dispatch.mld likely affected
-   - `@stateWithResolved` in security-fixtures.mld can't be straightforwardly converted
+**F1. `type: handle` vs `type: string, kind: "X"` is the load-bearing distinction.**
+- `type: handle` = session-local authorization proof (bridge-minted, validated at write-tool input boundary).
+- `type: string, kind: "X"` = authoritative ID with cross-call identity, kind-tagged for downstream fact correlation.
+- `.mx.address.key` = stable lookup address (content-derived hash, separate from both).
+- **Output records** (tool returns:, projected to LLM, shelved) use `type: string, kind: "X"`.
+- **Input records** (`*_inputs`, write-tool inputs that LLM emits handles for) use `type: handle`.
+- Conflating these was the original Stage B blocker; the audit (commit 744ba93) reshaped 8 records to align.
 
-   Tracked as task #17. Real fix: add shelf-aware seed mechanism to mock-llm.mld's @runWithState path. NOT a fixture-helper conversion — it's mlld + mock-llm architecture work.
+**F2. Sessions and shelves are separate primitives that happen to share lifetime in the planner case.**
+- `var session @planner` stores call-local planner state (agent, query, runtime, state).
+- `shelf @x = ...` stores typed records with permission/merge semantics, scope-local lifetime.
+- They co-occur in `@runPlannerSession` (declare shelf inline, thread onto agent, then bind `@planner` session) — but they're distinct concerns.
+- **DO NOT** add shelf hooks to the `@planner` session schema. Coupling them on the session primitive makes future non-shelf agents harder. (Surfaced from the scripted-LLM seed gap; see task #17.)
 
-3. **m-4b6f fix unblocks function-call dispatch in zero-LLM tests.** `@dispatchExecute` from a test exe now respects role context. `@dispatchResolve` likely the same. This is what made testExecuteResultHandlesFromReturnsRecord revival possible.
+**F3. `as record @alias` bakes the import alias into `.mx.address.record`.** If you `import { @url_ref as @slack_url_ref }` and write `let @r = {...} as record @slack_url_ref`, then `@r.mx.address.record == "slack_url_ref"` (alias name), not `"url_ref"`. Then `@shelf.write(@ps.url_ref, @r)` rejects with "first @shelf.write argument must be a shelf slot reference" because the slot's record type doesn't match. **Don't alias record imports.** (Filed and fixed as m-0904; keep the principle in head for any future records that get aliased.)
 
-4. **Three deleted dispatch tests remain blocked**, but for a different reason: cross-tool dispatch threads resolved-record id_ (now type:string post-audit) to handle-typed input records. Production mints handles via real resolve dispatch; zero-LLM can't reproduce that path. Keep deleted; covered by scripted/live tier.
+**F4. Without `key:` declaration, shelf `merge: append` by default — even if `.mx.address.key` is identical between writes.** Two writes of the same canonical content produce two slot entries, not one. The slack handle-drift xfail flip is blocked on this: `slack_msg` has no `key:` field, so even content-identical messages don't field-merge through the shelf. Keyless append is documented behavior in mlld; either declare an explicit `key:` on records that need merge, or accept the append semantics. (Filed at m-f4a0, closed with discoverability notes.)
+
+**F5. Cross-tool dispatch composition (resolved id_ → handle-typed input) belongs in scripted/live tier.** Production mints handles via real `@dispatchResolve`; zero-LLM tests can't reproduce that path without deep dispatch stubbing. Three tests deleted from `named-state-and-collection.mld` (testRescheduleDispatchSucceeds, testCollectionDispatchPolicyBuild, testCollectionDispatchCrossModuleM5178) per this principle. Documented in-place; covered by scripted/live tier instead.
+
+**F6. m-4b6f fix unblocks function-call dispatch in zero-LLM tests.** `@dispatchExecute` from a `role:worker` test exe now respects role context. `@dispatchResolve` similar. This is what made `testExecuteResultHandlesFromReturnsRecord` revival possible. (Same family as m-5b7d's bare-statement role leak.)
+
+---
+
+## Deferred test root-causes (per advisor — surface here, not just in-file)
+
+**testExecuteResultHandlesFromReturnsRecord** (named-state-and-collection.mld, dispatch writeback): pre-m-4b6f the `@dispatchExecute → @compileForDispatch (role:planner) → returns → @writeRecordsToShelf` chain leaked role:planner forward into the shelf-write call, tripping `WRITE_DENIED_NO_ROLE`. **REVIVED post-m-4b6f fix** (commit 5c229ad). Currently passing.
+
+**testRescheduleDispatchSucceeds, testCollectionDispatchPolicyBuild, testCollectionDispatchCrossModuleM5178** (named-state-and-collection.mld, cross-tool composition): pass `event_id: { source: "resolved", record: "calendar_evt", handle: "r_calendar_evt_X", field: "id_" }` to `add_calendar_event_participants`/`reschedule_calendar_event` whose input records require `event_id: { type: handle }`. Post-records-audit, `calendar_evt.id_` is `type: string` (correctly — output records); the resolved-ref returns a string, and input-handle validation rejects. Production mints actual handle wrappers via real resolve dispatch (the bridge boundary); zero-LLM tests can't reproduce that without re-introducing bucket-shaped fixtures. **DEFER PERMANENTLY** — this test class belongs in scripted/live tier, not zero-LLM. Per F5 above.
+
+**testUr19RecordArgsRejectsForgedHandle** (url-refs-b.mld, recordArgs validator): asserts that `@compileRecordArgs` rejects a "forged" resolved-handle that doesn't exist on any shelf. Pre-Stage-B, the validator (then operating on bucket-shape state) checked handle existence in `state.resolved.<rt>` as part of recordArgs validation. Post-Stage-B, that check moved out of `@compileRecordArgs` into `@lookupResolvedEntry` — recordArgs validation is now strictly shape-checking (record name + no field). **DEFER, REFRAME** — this is intentional rig refactor, not regression. Reframe as a downstream-resolution test that exercises `@lookupResolvedEntry` against a forged handle, then re-add. Test exe preserved in url-refs-b.mld for revival.
+
+**Group D: testUr21..testUr24 (url-refs-b.mld, dispatch integration)**: invoking `@dispatchResolve` from a `role:worker` test exe with a `var tools` catalog tool that has `recordArgs: { message: "slack_msg" }` trips `record arg '_mlld' is missing` inside `@compileRecordArgs`. Sharp repro: when `@compileRecordArgs` is called via the `@dispatchResolve` function-call frame, `@recordArgsSpec.mx.keys` returns `["message", "_mlld"]`; when the same body is inlined in a test exe, it returns `["message"]`. Same code path, only the function-call frame differs. **MLLD-SIDE REGRESSION** — same family as m-4b6f (frame-boundary metadata leaking into the callee). Tracked as **m-e730** (open, with sharp repro). Tests stay deferred until m-e730 lands.
+
+**Slack handle-drift xfail flips** (identity-contracts.mld, `testCrossResolveIdentitySlackHandleDrift` + `testSelectionRefSurvivesHandleDriftSlack`): per F4, slack_msg has no `key:` declaration and shelf defaults to `merge: append`, so identical `.mx.address.key` doesn't collapse. The migration's "central observable milestone" (per migration-plan.md §0.A) needs slack_msg to gain a content-derived `key:` from canonical fact composition (sender, recipient, body) before the xfail flips become observable. **DEFER** — bench-side records change, separate work item. Both test exes preserved in identity-contracts.mld for revival when slack_msg gets a `key:`.
 
 ## Remaining work, ranked by leverage
 
