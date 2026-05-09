@@ -155,7 +155,8 @@ record @shared_file_entry = {
   read: {
     role:planner: [{ value: "id_" }, filename],
     role:worker: [{ value: "id_" }, filename, shared_with]
-  }
+  },
+  write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }
 }
 
 >> Read tools return static fixtures so the phase loop tests can focus

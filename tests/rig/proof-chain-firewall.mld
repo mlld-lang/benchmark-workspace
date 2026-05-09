@@ -1,20 +1,29 @@
 >> tests/suites/rig/proof-chain-firewall.mld
 >>
 >> Plain-assertion port of the proof-chain-firewall cluster from
->> rig/tests/index.mld (12 tests). Verifies the security firewall:
+>> rig/tests/index.mld. Verifies the security firewall:
 >> derived/extracted values can't be used as control args, selection
 >> refs lower correctly, resolved fact attestations propagate through
 >> the execute compiler, and dispatch-time correlate-control-args
 >> rejects mixed resolved records.
+>>
+>> Stage B Phase 2: tests build per-test shelf-bound agents inline
+>> (instead of consuming the legacy bucket-shape @sampleState). Tests
+>> that exercise resolved/selection sources are role:worker so they
+>> can write to the shelf. Stateless tests use a stub agent.
 
 import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
 import { @suite, @group, @runSuites } from "../runner.mld"
 
 import {
+  @contact,
+  @note_entry,
+  @summary_payload,
+  @shared_file_entry,
   @records,
   @tools,
-  @sampleState,
-  @shared_file_entry
+  @aliceContactRecord,
+  @noteEntryRecord
 } from "../fixtures.mld"
 
 import {
@@ -28,7 +37,9 @@ import {
 import {
   @nonComposeDecisionArgIssues,
   @correlatedControlArgsCheck
-} from "../../rig/orchestration.mld"
+} from "../../rig/runtime.mld"
+
+import { @shelfRecords, @emptyState } from "../../rig/runtime.mld"
 
 >> --- Helpers ---------------------------------------------------------------
 
@@ -47,173 +58,43 @@ exe @nestedFirstIssue(result) = [
   => @issues[0] ?? null
 ]
 
->> --- Module-level fixtures (intent compiler / source-class coverage) ------
+>> Stub agent for tests that don't need resolved entries. resolveRefValue
+>> only consults @agent.plannerShelf when the source class is "resolved"
+>> or "selection"; tests that exercise allow/derived/extracted/known
+>> source classes can bind a records-only agent without a shelf.
+var @stubAgent = { suite: "fixtures", records: @records }
 
-var @selectionLowered = @lowerSelectionRef(@sampleState, {
-  source: "selection",
-  backing: { record: "contact", handle: "r_contact_alice.example" }
-})
-
-var @firewallAttempt = @compileExecuteIntent(
-  @sampleState,
-  @tools,
-  {
-    phase: "execute",
-    operation: "send_email",
-    args: {
-      recipients: [{ source: "derived", name: "top_contact", field: "body" }],
-      subject: { source: "known", value: "hello" },
-      body: { source: "known", value: "hello" }
-    }
-  },
-  "send hello"
-)
-
-var @resolveControlFirewallAttempt = @compileToolArgs(
-  @sampleState,
-  @tools.get_note,
-  {
-    note_id: { source: "derived", name: "top_contact", field: "body" }
-  },
-  "load note_1"
-)
-
-var @allowAttempt = @compileExecuteIntent(
-  @sampleState,
-  @tools,
-  {
-    phase: "execute",
-    operation: "send_email",
-    args: {
-      recipients: { source: "allow" },
-      subject: { source: "known", value: "hello" },
-      body: { source: "known", value: "hello" }
-    }
-  },
-  "send hello"
-)
-
-var @wrongSourceAttempt = @resolveRefValue(@sampleState, {
-  source: "resolved",
-  record: "summary",
-  handle: "summary_1",
-  field: "summary"
-})
-
-var @perElementAttempt = @compileExecuteIntent(
-  @sampleState,
-  @tools,
-  {
-    phase: "execute",
-    operation: "send_email",
-    args: {
-      recipients: [
-        { source: "resolved", record: "contact", handle: "r_contact_alice.example", field: "email" },
-        { source: "resolved", record: "contact", handle: "missing", field: "email" }
-      ],
-      subject: { source: "known", value: "hello" },
-      body: { source: "known", value: "hello" }
-    }
-  },
-  "send hello"
-)
-
-var @selectionKeyedAttempt = @compileExecuteIntent(
-  @sampleState,
-  @tools,
-  {
-    phase: "execute",
-    operation: "append_note",
-    args: {
-      note_id: {
-        source: "selection",
-        backing: {
-          record: "note_entry",
-          handle: "r_note_entry_note_1"
-        }
-      },
-      content: { source: "known", value: "append a status line" }
-    }
-  },
-  "append a status line"
-)
-
->> --- planner-arg-shape fixtures -------------------------------------------
-
-var @rawScalarDecisionIssues = @nonComposeDecisionArgIssues({
-  phase: "extract",
-  tool: "get_message_body",
-  args: {
-    message_id: "msg_1"
-  }
-})
-var @structuredDecisionIssues = @nonComposeDecisionArgIssues({
-  phase: "extract",
-  tool: "get_message_body",
-  args: {
-    message_id: { source: "known", value: "msg_1" }
-  }
-})
-var @wrappedDataDecisionIssues = @nonComposeDecisionArgIssues({
-  phase: "extract",
-  tool: "get_message_body",
-  args: {
-    message_id: { data: { source: "known", value: "msg_1" } }
-  }
-})
-var @wrappedMxDecisionIssues = @nonComposeDecisionArgIssues({
-  phase: "extract",
-  tool: "get_message_body",
-  args: {
-    message_id: { mx: { data: { source: "known", value: "msg_1" } } }
-  }
-})
-
->> --- Proof-chain fixtures (resolved -> execute attestation propagation) ---
-
-var @proofChainRef = {
-  source: "resolved",
-  record: "note_entry",
-  handle: "r_note_entry_note_1",
-  field: "id_"
-}
-var @proofResolvedControl = @resolveControlRefValue(@sampleState, @proofChainRef)
-var @proofResolvedAttestations = @field(@proofResolvedControl, "policy_attestations") ?? []
-var @weakenedState = {
-  resolved: {
-    note_entry: [{
-      handle: "r_note_entry_note_1",
-      key: "note_1",
-      value: { id_: "note_1", title: "Todo", content: "Existing note body" },
-      field_values: { id_: "note_1", title: "Todo", content: "Existing note body" }
-    }]
-  },
+>> A state shape that carries a derived top_contact entry (matches the
+>> shape @sampleState used to inject for the firewall tests).
+var @derivedState = {
   extracted: {},
+  derived: {
+    top_contact: {
+      provenance: "derived",
+      value: { choice: "Alice", body: "Derived body text" },
+      selection_refs: [{
+        source: "selection",
+        backing: { record: "contact", handle: "r_contact_anyhandle" }
+      }]
+    }
+  },
+  extract_sources: {}
+}
+
+>> Extracted state for the wrong-source-class test. The summary entry
+>> carries a record-typed value so resolveRefValue would find it ONLY
+>> if the ref's source matched. The test passes source: "resolved" with
+>> a missing handle so this entry is irrelevant — the shelf miss is
+>> what fails the lookup.
+var @extractedSummaryState = {
+  extracted: {
+    summary: { provenance: "extracted", value: { summary: "Existing summary" } }
+  },
   derived: {},
   extract_sources: {}
 }
-var @proofWeakenedControl = @resolveControlRefValue(@weakenedState, @proofChainRef)
-var @proofWeakenedAttestations = @field(@proofWeakenedControl, "policy_attestations") ?? []
-var @proofChainAttempt = @compileExecuteIntent(
-  @sampleState,
-  @tools,
-  {
-    phase: "execute",
-    operation: "append_note",
-    args: {
-      note_id: @proofChainRef,
-      content: { source: "known", value: "append a status line" }
-    }
-  },
-  "append a status line"
-)
-var @proofChainEntries = @field(@proofChainAttempt, "compiled_entries") ?? []
-var @proofChainMatches = for @entry in @proofChainEntries when @field(@entry, "arg") == "note_id" => @entry
-var @proofChainEntry = @proofChainMatches[0]
-var @proofChainAttestations = @field(@proofChainEntry, "flat_attestations") ?? []
-var @proofChainFactRef = "fact:@@note_entry.id_[0]"
 
->> --- correlate-control-args fixtures --------------------------------------
+>> --- correlate-control-args fixtures (used by testCorrelateControlArgs) ---
 
 exe execute:w, comm:w, tool:w @share_note_with_contact(note_id, recipient) = [
   => {
@@ -222,7 +103,7 @@ exe execute:w, comm:w, tool:w @share_note_with_contact(note_id, recipient) = [
   }
 ]
 
-record @share_note_with_contact_inputs = {
+record @shareNoteInputs = {
   facts: [note_id: string, recipient: string],
   data: [],
   correlate: true,
@@ -236,126 +117,104 @@ record @share_note_with_contact_inputs = {
 var tools @correlateTools = {
   share_note_with_contact: {
     mlld: @share_note_with_contact,
-    inputs: @share_note_with_contact_inputs,
+    inputs: @shareNoteInputs,
     labels: ["execute:w", "tool:w", "comm:w"],
     can_authorize: "role:planner",
     description: "Share one note with one recipient."
   }
 }
 
-var @correlateIntent = @compileExecuteIntent(
-  @sampleState,
-  @correlateTools,
-  {
-    phase: "execute",
-    operation: "share_note_with_contact",
-    args: {
-      note_id: {
-        source: "resolved",
-        record: "note_entry",
-        handle: "r_note_entry_note_1",
-        field: "id_"
-      },
-      recipient: {
-        source: "resolved",
-        record: "contact",
-        handle: "r_contact_alice.example",
-        field: "email"
-      }
-    }
-  },
-  "Share note_1 with alice.example."
-)
-var @correlateEntries = @field(@correlateIntent, "compiled_entries") ?? []
-var @correlateControlArgs = ["note_id", "recipient"]
-var @correlateCheck = @correlatedControlArgsCheck(@correlateEntries, @correlateControlArgs)
-
->> --- indexed-array-selection fixtures -------------------------------------
->> @shared_file_entry imported from canonical fixtures (was redeclared here
->> per c-5a08; moved to tests/fixtures.mld so other suites can share it).
-
-var @sharedFileRecord = {
-  id_: "24",
-  filename: "team-meeting-minutes.docx",
-  shared_with: [
-    "emma.johnson@bluesparrowtech.com",
-    "linda.jameson@bluesparrowtech.com"
-  ]
-} as record @shared_file_entry
-var @sharedFileId = @sharedFileRecord.id_
-var @sharedFileName = @sharedFileRecord.filename
-var @sharedFileSharedWith = @sharedFileRecord.shared_with
-var @sharedFileArrayState = {
-  resolved: {
-    shared_file_entry: [{
-      handle: "r_shared_file_entry_24",
-      key: "24",
-      value: @sharedFileRecord,
-      identity_field: "id_",
-      identity_value: @sharedFileId,
-      field_values: {
-        id_: @sharedFileId,
-        filename: @sharedFileName,
-        shared_with: @sharedFileSharedWith
-      }
-    }]
-  },
-  extracted: {},
-  derived: {},
-  extract_sources: {}
-}
-var @indexedArraySelectionAttempt = @compileExecuteIntent(
-  @sharedFileArrayState,
-  @tools,
-  {
-    phase: "execute",
-    operation: "send_email",
-    args: {
-      recipients: [{
-        source: "selection",
-        backing: {
-          record: "shared_file_entry",
-          handle: "r_shared_file_entry_24"
-        },
-        field: "shared_with[0]"
-      }],
-      subject: { source: "known", value: "hello" },
-      body: { source: "known", value: "hello" }
-    }
-  },
-  "send hello"
-)
-var @indexedArraySelectionEntries = @field(@indexedArraySelectionAttempt, "compiled_entries") ?? []
-var @indexedArraySelectionEntry = @indexedArraySelectionEntries[0] ?? null
-var @indexedArraySelectionFlatEq = @field(@indexedArraySelectionEntry, "flat_eq") ?? []
-var @indexedArraySelectionAttestations = @field(@indexedArraySelectionEntry, "flat_attestations") ?? []
-
 >> --- Test exes ------------------------------------------------------------
 
-exe @testExecuteProofChain() = [
+>> Strong path of the proof-chain test. Verifies that resolved-control
+>> attestations carry through the execute compiler when the underlying
+>> shelf entry is record-typed (which Stage B makes invariant — every
+>> shelf write goes through `as record @<rt>` so attestations are
+>> always minted).
+>>
+>> Stage B follow-up: the original test had a "weakened" half that
+>> seeded a bucket entry with raw {id_: ..., title: ..., content: ...}
+>> values (no `as record @note_entry`) and asserted weakened.ok=true,
+>> weakened_attestations.length=0 — i.e. the entry resolves but carries
+>> no fact attestations because the fields had no .mx labels. Post-
+>> Stage-B, @shelf.write requires a record-typed value, so this code
+>> path is unreachable through the production API. The bucket bypass
+>> that synthesized the weakened state is not portable to the shelf
+>> world. The "absence of attestations" property is now structurally
+>> guaranteed by the shelf invariant rather than asserted by this test.
+exe role:worker @testExecuteProofChain() = [
+  let @recs = { note_entry: @note_entry, append_note_inputs: @records.append_note_inputs }
+  let @sh = @shelfRecords(@recs)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @noteRec = @noteEntryRecord
+  let @noteWrite = @shelf.write(@ps.note_entry, @noteRec)
+  let @noteHandle = `r_note_entry_@noteRec.mx.address.key`
+  let @agent = { suite: "fixtures", records: @recs, plannerShelf: @ps }
+  let @proofChainRef = {
+    source: "resolved",
+    record: "note_entry",
+    handle: @noteHandle,
+    field: "id_"
+  }
+  let @resolvedControl = @resolveControlRefValue(@agent, @proofChainRef)
+  let @resolvedAttestations = @field(@resolvedControl, "policy_attestations") ?? []
+  let @intentRes = @compileExecuteIntent(@agent, @emptyState(), @tools, {
+    phase: "execute",
+    operation: "append_note",
+    args: {
+      note_id: @proofChainRef,
+      content: { source: "known", value: "append a status line" }
+    }
+  }, "append a status line")
+  let @entries = @field(@intentRes, "compiled_entries") ?? []
+  let @matched = for @entry in @entries when @field(@entry, "arg") == "note_id" => @entry
+  let @entry = @matched[0]
+  let @attestations = @field(@entry, "flat_attestations") ?? []
+  let @factRef = "fact:@@note_entry.id_[0]"
   let @actual = {
-    resolvedOk: @proofResolvedControl.ok,
-    resolvedHasFact: @proofResolvedAttestations.includes(@proofChainFactRef),
-    weakenedOk: @proofWeakenedControl.ok,
-    weakenedAttestations: @proofWeakenedAttestations.length,
-    intentOk: @proofChainAttempt.ok,
-    flatHasFact: @proofChainAttestations.includes(@proofChainFactRef)
+    resolvedOk: @resolvedControl.ok,
+    resolvedHasFact: @resolvedAttestations.includes(@factRef),
+    intentOk: @intentRes.ok,
+    flatHasFact: @attestations.includes(@factRef)
   }
   => @assertEq(@actual, {
     resolvedOk: true,
     resolvedHasFact: true,
-    weakenedOk: true,
-    weakenedAttestations: 0,
     intentOk: true,
     flatHasFact: true
   })
 ]
 
-exe @testCorrelateControlArgs() = [
+>> Cross-record fact mixture rejected by correlatedControlArgsCheck.
+>> Both note_id and recipient are resolved fact refs — but they come
+>> from different record classes, which the check should flag.
+exe role:worker @testCorrelateControlArgs() = [
+  let @recs = {
+    contact: @contact,
+    note_entry: @note_entry,
+    share_note_with_contact_inputs: @shareNoteInputs
+  }
+  let @sh = @shelfRecords(@recs)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @aliceWrite = @shelf.write(@ps.contact, @aliceContactRecord)
+  let @noteWrite = @shelf.write(@ps.note_entry, @noteEntryRecord)
+  let @aliceHandle = `r_contact_@aliceContactRecord.mx.address.key`
+  let @noteHandle = `r_note_entry_@noteEntryRecord.mx.address.key`
+  let @agent = { suite: "fixtures", records: @recs, plannerShelf: @ps }
+  let @intentRes = @compileExecuteIntent(@agent, @emptyState(), @correlateTools, {
+    phase: "execute",
+    operation: "share_note_with_contact",
+    args: {
+      note_id: { source: "resolved", record: "note_entry", handle: @noteHandle, field: "id_" },
+      recipient: { source: "resolved", record: "contact", handle: @aliceHandle, field: "email" }
+    }
+  }, "Share note_1 with alice.example.")
+  let @entries = @field(@intentRes, "compiled_entries") ?? []
+  let @check = @correlatedControlArgsCheck(@entries, ["note_id", "recipient"])
   let @actual = {
-    intentOk: @correlateIntent.ok,
-    checkOk: @field(@correlateCheck, "ok"),
-    error: @field(@correlateCheck, "error")
+    intentOk: @intentRes.ok,
+    checkOk: @field(@check, "ok"),
+    error: @field(@check, "error")
   }
   => @assertEq(@actual, {
     intentOk: true,
@@ -364,28 +223,40 @@ exe @testCorrelateControlArgs() = [
   })
 ]
 
-exe @testLoweringSelectionRef() = [
-  let @ref = @field(@selectionLowered, "ref")
+>> Selection-ref lowering: a selection backed by a resolved contact
+>> handle should lower to a "resolved" source whose handle matches.
+exe role:worker @testLoweringSelectionRef() = [
+  let @recs = { contact: @contact }
+  let @sh = @shelfRecords(@recs)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @aliceWrite = @shelf.write(@ps.contact, @aliceContactRecord)
+  let @aliceHandle = `r_contact_@aliceContactRecord.mx.address.key`
+  let @agent = { suite: "fixtures", records: @recs, plannerShelf: @ps }
+  let @lowered = @lowerSelectionRef(@agent, {
+    source: "selection",
+    backing: { record: "contact", handle: @aliceHandle }
+  })
+  let @ref = @field(@lowered, "ref")
   let @actual = {
-    ok: @selectionLowered.ok,
+    ok: @lowered.ok,
     source: @field(@ref, "source"),
     handle: @field(@ref, "handle")
   }
   => @assertEq(@actual, {
     ok: true,
     source: "resolved",
-    handle: "r_contact_alice.example"
+    handle: @aliceHandle
   })
 ]
 
->> Shared body for derived-control-arg-rejected and firewall-derived-to-control:
->> the original tests share @firewallOk under two different ids.
-exe @firewallSharedAssertion() = [
-  let @first = @firstIssue(@firewallAttempt)
-  let @nested = @nestedFirstIssue(@firewallAttempt)
+>> Shared body: derived-control-arg-rejected and firewall-derived-to-control
+>> assert the same compile rejection under different test ids.
+exe @firewallSharedAssertion(attempt) = [
+  let @first = @firstIssue(@attempt)
+  let @nested = @nestedFirstIssue(@attempt)
   let @actual = {
-    ok: @firewallAttempt.ok,
-    error: @field(@firewallAttempt, "error"),
+    ok: @attempt.ok,
+    error: @field(@attempt, "error"),
     firstError: @field(@first, "error"),
     nestedError: @field(@nested, "error")
   }
@@ -398,18 +269,41 @@ exe @firewallSharedAssertion() = [
 ]
 
 exe @testDerivedControlArgRejected() = [
-  => @firewallSharedAssertion()
+  let @attempt = @compileExecuteIntent(@stubAgent, @derivedState, @tools, {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [{ source: "derived", name: "top_contact", field: "body" }],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  }, "send hello")
+  => @firewallSharedAssertion(@attempt)
 ]
 
 exe @testFirewallDerivedToControl() = [
-  => @firewallSharedAssertion()
+  let @attempt = @compileExecuteIntent(@stubAgent, @derivedState, @tools, {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [{ source: "derived", name: "top_contact", field: "body" }],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  }, "send hello")
+  => @firewallSharedAssertion(@attempt)
 ]
 
+>> compileToolArgs path (resolve-phase tool args) — same firewall but
+>> driven through a different compile entry point.
 exe @testDerivedResolveControlArgRejected() = [
-  let @first = @firstIssue(@resolveControlFirewallAttempt)
+  let @attempt = @compileToolArgs(@stubAgent, @derivedState, @tools.get_note, {
+    note_id: { source: "derived", name: "top_contact", field: "body" }
+  }, "load note_1")
+  let @first = @firstIssue(@attempt)
   let @actual = {
-    ok: @resolveControlFirewallAttempt.ok,
-    error: @field(@resolveControlFirewallAttempt, "error"),
+    ok: @attempt.ok,
+    error: @field(@attempt, "error"),
     firstError: @field(@first, "error")
   }
   => @assertEq(@actual, {
@@ -419,11 +313,23 @@ exe @testDerivedResolveControlArgRejected() = [
   })
 ]
 
+>> The "allow" source class declines to resolve a value, leaving control
+>> args bare — that's a structural impossibility and the compiler must
+>> reject it with allow_requires_no_control_args.
 exe @testAllowWithControlArgs() = [
-  let @first = @firstIssue(@allowAttempt)
+  let @attempt = @compileExecuteIntent(@stubAgent, @emptyState(), @tools, {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: { source: "allow" },
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  }, "send hello")
+  let @first = @firstIssue(@attempt)
   let @actual = {
-    ok: @allowAttempt.ok,
-    error: @field(@allowAttempt, "error"),
+    ok: @attempt.ok,
+    error: @field(@attempt, "error"),
     firstError: @field(@first, "error")
   }
   => @assertEq(@actual, {
@@ -433,10 +339,18 @@ exe @testAllowWithControlArgs() = [
   })
 ]
 
+>> Source-class mismatch: passing source: "resolved" with a handle that
+>> doesn't exist on any shelf slot should fail with resolved_handle_not_found.
 exe @testSourceClassMismatch() = [
+  let @attempt = @resolveRefValue(@stubAgent, @extractedSummaryState, {
+    source: "resolved",
+    record: "summary_payload",
+    handle: "r_summary_payload_doesnotexist",
+    field: "summary"
+  })
   let @actual = {
-    ok: @wrongSourceAttempt.ok,
-    error: @field(@wrongSourceAttempt, "error")
+    ok: @attempt.ok,
+    error: @field(@attempt, "error")
   }
   => @assertEq(@actual, {
     ok: false,
@@ -444,12 +358,33 @@ exe @testSourceClassMismatch() = [
   })
 ]
 
-exe @testArrayControlProof() = [
-  let @first = @firstIssue(@perElementAttempt)
-  let @nested = @nestedFirstIssue(@perElementAttempt)
+>> Per-element control proof: an array of resolved refs where one entry
+>> is missing on the shelf should reject with control_ref_backing_missing
+>> at the array-element grain.
+exe role:worker @testArrayControlProof() = [
+  let @recs = { contact: @contact }
+  let @sh = @shelfRecords(@recs)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @aliceWrite = @shelf.write(@ps.contact, @aliceContactRecord)
+  let @aliceHandle = `r_contact_@aliceContactRecord.mx.address.key`
+  let @agent = { suite: "fixtures", records: @recs, plannerShelf: @ps }
+  let @attempt = @compileExecuteIntent(@agent, @emptyState(), @tools, {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [
+        { source: "resolved", record: "contact", handle: @aliceHandle, field: "email" },
+        { source: "resolved", record: "contact", handle: "r_contact_missing", field: "email" }
+      ],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  }, "send hello")
+  let @first = @firstIssue(@attempt)
+  let @nested = @nestedFirstIssue(@attempt)
   let @actual = {
-    ok: @perElementAttempt.ok,
-    error: @field(@perElementAttempt, "error"),
+    ok: @attempt.ok,
+    error: @field(@attempt, "error"),
     firstError: @field(@first, "error"),
     nestedError: @field(@nested, "error")
   }
@@ -461,11 +396,46 @@ exe @testArrayControlProof() = [
   })
 ]
 
-exe @testIndexedArraySelectionProof() = [
+>> Indexed-array selection ref: select shared_with[0] from a resolved
+>> shared_file_entry. Compile must succeed, the chosen value flat-equals
+>> the seed array's first element, and policy attestations must include
+>> the indexed factref.
+exe role:worker @testIndexedArraySelectionProof() = [
+  let @recs = { shared_file_entry: @shared_file_entry, send_email_inputs: @records.send_email_inputs }
+  let @sh = @shelfRecords(@recs)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @sharedRec = {
+    id_: "24",
+    filename: "team-meeting-minutes.docx",
+    shared_with: [
+      "emma.johnson@bluesparrowtech.com",
+      "linda.jameson@bluesparrowtech.com"
+    ]
+  } as record @shared_file_entry
+  let @sharedWrite = @shelf.write(@ps.shared_file_entry, @sharedRec)
+  let @sharedHandle = `r_shared_file_entry_@sharedRec.mx.address.key`
+  let @agent = { suite: "fixtures", records: @recs, plannerShelf: @ps }
+  let @attempt = @compileExecuteIntent(@agent, @emptyState(), @tools, {
+    phase: "execute",
+    operation: "send_email",
+    args: {
+      recipients: [{
+        source: "selection",
+        backing: { record: "shared_file_entry", handle: @sharedHandle },
+        field: "shared_with[0]"
+      }],
+      subject: { source: "known", value: "hello" },
+      body: { source: "known", value: "hello" }
+    }
+  }, "send hello")
+  let @entries = @field(@attempt, "compiled_entries") ?? []
+  let @entry = @entries[0] ?? null
+  let @flatEq = @field(@entry, "flat_eq") ?? []
+  let @attestations = @field(@entry, "flat_attestations") ?? []
   let @actual = {
-    ok: @indexedArraySelectionAttempt.ok,
-    firstFlat: @indexedArraySelectionFlatEq[0],
-    hasAttestation: @indexedArraySelectionAttestations.includes("fact:@@shared_file_entry.shared_with[0]")
+    ok: @attempt.ok,
+    firstFlat: @flatEq[0],
+    hasAttestation: @attestations.includes("fact:@@shared_file_entry.shared_with[0]")
   }
   => @assertEq(@actual, {
     ok: true,
@@ -474,17 +444,59 @@ exe @testIndexedArraySelectionProof() = [
   })
 ]
 
-exe @testSelectionKeyedControl() = [
-  => @assertEq(@selectionKeyedAttempt.ok, true)
+>> Selection-keyed control arg: resolves a note_entry handle via selection
+>> backing. Compile must succeed.
+exe role:worker @testSelectionKeyedControl() = [
+  let @recs = { note_entry: @note_entry, append_note_inputs: @records.append_note_inputs }
+  let @sh = @shelfRecords(@recs)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @noteWrite = @shelf.write(@ps.note_entry, @noteEntryRecord)
+  let @noteHandle = `r_note_entry_@noteEntryRecord.mx.address.key`
+  let @agent = { suite: "fixtures", records: @recs, plannerShelf: @ps }
+  let @attempt = @compileExecuteIntent(@agent, @emptyState(), @tools, {
+    phase: "execute",
+    operation: "append_note",
+    args: {
+      note_id: {
+        source: "selection",
+        backing: { record: "note_entry", handle: @noteHandle }
+      },
+      content: { source: "known", value: "append a status line" }
+    }
+  }, "append a status line")
+  => @assertEq(@attempt.ok, true)
 ]
 
+>> Planner-arg-shape diagnostic: nonComposeDecisionArgIssues catches
+>> raw scalars in a non-compose phase but accepts wrapped/structured
+>> source-class arg shapes.
 exe @testPlannerArgShape() = [
+  let @raw = @nonComposeDecisionArgIssues({
+    phase: "extract",
+    tool: "get_message_body",
+    args: { message_id: "msg_1" }
+  })
+  let @structured = @nonComposeDecisionArgIssues({
+    phase: "extract",
+    tool: "get_message_body",
+    args: { message_id: { source: "known", value: "msg_1" } }
+  })
+  let @wrappedData = @nonComposeDecisionArgIssues({
+    phase: "extract",
+    tool: "get_message_body",
+    args: { message_id: { data: { source: "known", value: "msg_1" } } }
+  })
+  let @wrappedMx = @nonComposeDecisionArgIssues({
+    phase: "extract",
+    tool: "get_message_body",
+    args: { message_id: { mx: { data: { source: "known", value: "msg_1" } } } }
+  })
   let @actual = {
-    rawCount: @rawScalarDecisionIssues.length,
-    rawField: @field(@rawScalarDecisionIssues[0], "field"),
-    structuredCount: @structuredDecisionIssues.length,
-    wrappedDataCount: @wrappedDataDecisionIssues.length,
-    wrappedMxCount: @wrappedMxDecisionIssues.length
+    rawCount: @raw.length,
+    rawField: @field(@raw[0], "field"),
+    structuredCount: @structured.length,
+    wrappedDataCount: @wrappedData.length,
+    wrappedMxCount: @wrappedMx.length
   }
   => @assertEq(@actual, {
     rawCount: 1,

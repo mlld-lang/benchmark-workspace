@@ -25,11 +25,10 @@ import { @urlRefsASuite } from "./rig/url-refs-a.mld"
 >> handle existence; that moved to @lookupResolvedEntry).
 import { @urlRefsBSuite } from "./rig/url-refs-b.mld"
 import { @outputValidatorsSuite } from "./rig/output-validators.mld"
->> Stage B follow-up: worker-dispatch, proof-chain-firewall need
->> shelf-shape rewrites (worker-dispatch is mostly scripted-LLM and
->> blocks on task #17; proof-chain-firewall is pure compile-test
->> rewrite). Tracked in MIGRATION-HANDOFF.md. Skipped from the main
->> gate until converted.
+import { @proofChainFirewallSuite } from "./rig/proof-chain-firewall.mld"
+>> Stage B follow-up: worker-dispatch needs shelf-shape rewrite (mostly
+>> scripted-LLM and blocks on task #17). Tracked in MIGRATION-HANDOFF.md.
+>> Skipped from the main gate until converted.
 >>
 >> state-projection-{a,b}.mld DELETED in Stage B Phase 2 conversion: their
 >> entire test surface targeted bucket helpers that no longer exist
@@ -81,7 +80,8 @@ var @suites = [
   @xfailAndNullBlockedSuite,
   @extractDeriveAndExecuteCompileSuite,
   @namedStateAndCollectionSuite,
-  @identityContractsSuite
+  @identityContractsSuite,
+  @proofChainFirewallSuite
 ]
 
 var @result = @runSuites(@suites)
