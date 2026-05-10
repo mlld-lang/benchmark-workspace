@@ -8,11 +8,11 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ## Current state (2026-05-09)
 
-**Gate**: 241/0/2 (proof-chain-firewall conversion landed +12 tests; commit `e5d3c21`). Started at 169/0/1; +72 tests across the migration. The 2 xfails are `template/known-broken/intentionallyFails` and `template/known-broken/intentionallyThrows` (ticket c-9999) — test framework placeholders, not deferred migration tests. **Scripted suites all at baseline** post-Session B partial: banking 7/3, slack 13/1+1xpass, workspace 13/1, travel 10/0. **Zero net regressions across the entire test surface from Session B work.**
+**Gate**: 241/0/2. The 2 xfails are `template/known-broken/intentionallyFails` and `template/known-broken/intentionallyThrows` (ticket c-9999) — test framework placeholders, not deferred migration tests. Scripted suites at baseline: banking 7/3, slack 13/1+1xpass, workspace 13/1, travel 10/0.
 
-**Session A**: DONE (commits `e5d3c21` + `3151e88`). proof-chain-firewall converted, security doc archived, ARCH docs updated.
+**Session A**: DONE. proof-chain-firewall converted, security doc archived, ARCH docs updated.
 
-**Session B (Task #17)**: DONE (commits `d78dc3d` + `10bfc7e`). Mock-llm shelf-aware seed shipped; `@dispatchResolve` and the rigTransform dispatchers tagged `role:worker`; security-fixtures bucket-era cleanup. Two latent mlld bugs surfaced and fixed during this work: **m-b61d** (session-seeded shelf bridge writes; shelf reference dying across boundary) and **m-a582** (object/session cloning paths dropping hidden runtime metadata on imported var tools collections). Both fixed in mlld working tree by mlld-dev, then verified clean-side.
+**Session B (Task #17)**: DONE. Mock-llm shelf-aware seed shipped; `@dispatchResolve` and the rigTransform dispatchers tagged `role:worker`; security-fixtures bucket-era cleanup.
 
 **Architecture**: Stage B core landed; `state.resolved` is gone, shelf is the resolved-record store via `@agent.plannerShelf`; output records use `id_: { type: string, kind: ... }` post-audit; input records keep `type: handle`. m-shelf-wildcard + m-rec-perms-update both fully consumed.
 
@@ -32,7 +32,7 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ### Session B — Task #17 DONE; #6 / #7-migration / #8 remain
 
-5. ~~**Task #17: shelf-aware seed for scripted-LLM tests**~~ DONE (`d78dc3d`). `tests/lib/mock-llm.mld` `@runScriptedQuery` and `@runWithState` declare a per-call shelf inline mirroring `@runPlannerSession`. Plus `rig/workers/resolve.mld` tagged `@dispatchResolve` / `@dispatchFindReferencedUrls` / `@dispatchGetWebpageViaRef` as `role:worker`, parallel to `@dispatchExecute`. Surfaced and unblocked by mlld-dev's m-b61d fix (commit `7d7399dbc`) and m-a582 fix (commits in mlld working tree).
+5. ~~**Task #17: shelf-aware seed for scripted-LLM tests**~~ DONE (`d78dc3d`). `tests/lib/mock-llm.mld` `@runScriptedQuery` and `@runWithState` declare a per-call shelf inline mirroring `@runPlannerSession`. Plus `rig/workers/resolve.mld` tagged `@dispatchResolve` / `@dispatchFindReferencedUrls` / `@dispatchGetWebpageViaRef` as `role:worker`, parallel to `@dispatchExecute`.
 
    **Files + lines**:
    - Source-of-truth pattern: `rig/workers/planner.mld:1242-1315` (`@runPlannerSession` full body — shelf decl + thread onto agent + session bind)
