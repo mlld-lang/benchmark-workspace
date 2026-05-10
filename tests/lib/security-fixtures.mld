@@ -1,17 +1,34 @@
 >> clean/tests/lib/security-fixtures.mld
 >>
 >> Helpers for seeding planner-session state in scripted-LLM security tests.
->> The default `@emptyState()` returns empty buckets, which means
->> rehearse failures bottom out at "extracted_field_missing" /
->> "derived_field_missing" / "resolved_handle_not_found" — i.e. the
->> firewall never gets a chance to fire because the lookup short-circuits.
+>> The default `@emptyState()` returns empty extracted/derived/extract_sources
+>> maps, which means rehearse failures bottom out at "extracted_field_missing"
+>> / "derived_field_missing" — the firewall never gets a chance to fire
+>> because the lookup short-circuits.
 >>
->> Real firewall tests need state with the referenced extract/derive/
->> resolved entries actually present, so `@resolveRefValue` succeeds
->> and the source-class firewall has to do its job.
+>> Real firewall tests need state with the referenced extract/derive
+>> entries actually present, so `@resolveRefValue` succeeds and the
+>> source-class firewall has to do its job.
 >>
 >> Each helper returns a state object compatible with the rig planner
 >> session schema. Pass it into the `seed:` block of your scripted query.
+>>
+>> Stage B: `state.resolved` is gone (collapsed into shelf — see
+>> rig/ARCHITECTURE.md "State Surface"). Pre-seeding shelf-resolved
+>> records cannot be done through this state-builder API because shelves
+>> are scope-local primitives that can't be returned across exe boundaries.
+>> Tests that need pre-seeded resolved records should:
+>>   - drive a real @dispatchResolve from the test's @script (production
+>>     path; records enter shelf with proper factsource minting), OR
+>>   - declare the shelf inline in a `role:worker` test exe and call
+>>     @shelf.write directly (escape hatch for narrow tests where
+>>     dispatch isn't the subject — match the production
+>>     `as record @def + @shelf.write` shape and label what you're
+>>     bypassing).
+>>
+>> The `@stateWithResolved` and `@stateResolvedAndExtracted` helpers were
+>> bucket-era; they don't have a shelf-shape replacement and have been
+>> removed. Their consumers must migrate per the two patterns above.
 
 >> Build a state with one named `extracted` entry. The entry shape mirrors
 >> what the real extract worker writes (rig/workers/extract.mld:203):
@@ -23,7 +40,6 @@
 exe @stateWithExtracted(name, schemaName, payload) = [
   let @previewFields = @payload.mx.keys ?? []
   => {
-    resolved: {},
     extracted: {
       "@name": {
         provenance: "extracted",
@@ -33,16 +49,14 @@ exe @stateWithExtracted(name, schemaName, payload) = [
       }
     },
     derived: {},
-    extract_sources: {},
-    capabilities: { url_refs: {} }
+    extract_sources: {}
   }
 ]
 
->> Same as above but for the `derived` bucket.
+>> Same as above but for `derived`.
 exe @stateWithDerived(name, schemaName, payload) = [
   let @previewFields = @payload.mx.keys ?? []
   => {
-    resolved: {},
     extracted: {},
     derived: {
       "@name": {
@@ -52,50 +66,35 @@ exe @stateWithDerived(name, schemaName, payload) = [
         value: @payload
       }
     },
-    extract_sources: {},
-    capabilities: { url_refs: {} }
+    extract_sources: {}
   }
 ]
 
->> Build a state with one resolved entry (handle + value). The shape mirrors
->> what real resolve workers write into state.resolved[record][handle]
->> per rig/runtime.mld merge logic (indexed bucket with version).
+>> DEPRECATED — Stage B retired the bucket-shape `state.resolved`. The rig
+>> pipeline no longer reads bucket entries; resolved records live on the
+>> shelf via @agent.plannerShelf. This stub returns an empty state so
+>> existing imports don't break the suite at parse time, but test bodies
+>> that depend on the seeded resolved entry will fail at lookup time with
+>> "resolved_handle_not_found".
 >>
->> Use this for tests that need a concrete resolved instance to point
->> selection refs at, or to exercise resolved.field firewall paths.
+>> Migration path for callers (per Task #7):
+>>   - Drive a real @dispatchResolve from the test's @script (production
+>>     path; records enter shelf with proper factsource minting).
+>>   - OR declare a shelf inline in a `role:worker` test exe and call
+>>     @shelf.write directly (escape-hatch for tests where dispatch
+>>     isn't the subject — match the production
+>>     `as record @def + @shelf.write` shape and label the bypass).
+>>
+>> Removing this stub is gated on all four scripted suites (banking,
+>> slack, workspace, travel) migrating off bucket-shape pre-seeding.
 exe @stateWithResolved(record, handle, payload) = [
-  => {
-    resolved: {
-      "@record": {
-        version: 1,
-        by_handle: {
-          "@handle": { value: @payload }
-        }
-      }
-    },
-    extracted: {},
-    derived: {},
-    extract_sources: {},
-    capabilities: { url_refs: {} }
-  }
+  => @emptyStateShape()
 ]
 
->> Build a state with both a resolved instance and an extracted entry —
->> the shape needed for UT16-style tests where the planner has fetched
->> a webpage (resolved.referenced_webpage_content) and also extracted
->> something (extracted.<name>). For more complex compositions, build
->> the state object directly in your test.
+>> DEPRECATED — see @stateWithResolved.
 exe @stateResolvedAndExtracted(record, handle, recordValue, extractName, extractSchema, extractValue) = [
   let @previewFields = @extractValue.mx.keys ?? []
   => {
-    resolved: {
-      "@record": {
-        version: 1,
-        by_handle: {
-          "@handle": { value: @recordValue }
-        }
-      }
-    },
     extracted: {
       "@extractName": {
         provenance: "extracted",
@@ -105,9 +104,14 @@ exe @stateResolvedAndExtracted(record, handle, recordValue, extractName, extract
       }
     },
     derived: {},
-    extract_sources: {},
-    capabilities: { url_refs: {} }
+    extract_sources: {}
   }
+]
+
+>> Internal helper — returns the post-Stage-B empty state shape (no
+>> `resolved`, no `capabilities`).
+exe @emptyStateShape() = [
+  => { extracted: {}, derived: {}, extract_sources: {} }
 ]
 
 export {
