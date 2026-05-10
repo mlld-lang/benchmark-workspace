@@ -3,10 +3,14 @@
 >> Worker-dispatch invariants. Covers how the resolve/extract/derive workers
 >> dispatch and how planner-tool wrappers thread session state.
 >>
->> Tests that require `with { session: @planner, seed: {...} }` are evaluated
->> at module load (the with clause must be statically visible at the call
->> site — closure resolution does not work for the session schema). Test exes
->> then read from the module-level vars.
+>> Stage B shelf-shape: every test exe is `role:worker` and declares its
+>> own shelf inline (shelves expire at exe-body exit per m-box-shelf).
+>> The `with { session: @planner, seed: {...} }` activation lives inside
+>> each test exe — c-a873 showed module-load activation contaminates
+>> sibling suites' policy-build runtime.
+>>
+>> Reads of resolved records go through `@shelf.read(@ps.<recordType>)`
+>> on the test-built shelf, not `state.resolved` (gone post-Stage-B).
 
 import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
 import { @suite, @group, @runSuites } from "../runner.mld"
@@ -22,8 +26,7 @@ import {
   @callTool,
   @emptyState,
   @llmCallEntry,
-  @bucketItems,
-  @bucketLength
+  @shelfRecords
 } from "../../rig/runtime.mld"
 import { @resolveRefValue } from "../../rig/intent.mld"
 import { @phaseCatalog, @phaseToolEntry, @renderToolDocs } from "../../rig/tooling.mld"
@@ -50,98 +53,6 @@ var @builtFixtureAgent = @rigBuild({
   tools: @tools
 })
 
->> Direct callTool against the catalog (no agent build).
-var @fixtureReadDispatchResult = @callTool(
-  @tools.get_contacts,
-  @tools,
-  "get_contacts",
-  {}
-)
-
->> Direct callTool through a built agent's toolsCollection.
-var @builtFixtureReadDispatchResult = @callTool(
-  @builtFixtureAgent.tools.get_contacts,
-  @builtFixtureAgent.toolsCollection,
-  "get_contacts",
-  {}
-)
-
->> Phase catalog round-trip.
-var @resolvePhaseCatalog = @phaseCatalog(@builtFixtureAgent, "resolve")
-var @phaseCatalogDispatchResult = @callTool(
-  @resolvePhaseCatalog.get_contacts,
-  @builtFixtureAgent.toolsCollection,
-  "get_contacts",
-  {}
-)
-var @phaseToolEntryValue = @phaseToolEntry(@builtFixtureAgent, "resolve", "get_contacts")
-var @phaseToolEntryDispatchResult = @callTool(
-  @phaseToolEntryValue,
-  @builtFixtureAgent.toolsCollection,
-  "get_contacts",
-  {}
-)
-
->> Resolve-worker dispatches.
-var @dispatchResolveResult = @dispatchResolve(
-  @builtFixtureAgent,
-  @emptyState(),
-  {
-    phase: "resolve",
-    tool: "get_contacts",
-    args: {},
-    purpose: "ground the contact list"
-  },
-  "Find Alice in my contacts."
-)
-var @dispatchScalarResolveResult = @dispatchResolve(
-  @builtFixtureAgent,
-  @emptyState(),
-  {
-    phase: "resolve",
-    tool: "get_today",
-    args: {},
-    purpose: "ground one synthetic day context"
-  },
-  "What day is it?"
-)
-
->> Planner-tool dispatch (single resolve).
-exe llm @testPlannerResolve(prompt, config) = [
-  => @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.args)
-]
-var @plannerResolveDispatchResult = @testPlannerResolve("test", {
-  args: { tool: "get_today", args: {}, purpose: "ground one synthetic day context" }
-}) with {
-  session: @planner,
-  seed: { agent: @builtFixtureAgent, query: "What day is it?", state: @emptyState(), runtime: @emptyPlannerRuntime() }
-}
-
->> Planner-tool resolve_batch.
-exe llm @testPlannerResolveBatch(prompt, config) = [
-  let @batchResult = @callTool(@plannerTools.resolve_batch, @plannerTools, "resolve_batch", @config.args)
-  let @stateAfter = @planner.state
-  let @runtimeAfter = @planner.runtime
-  => {
-    result: @batchResult,
-    state: @stateAfter,
-    runtime: @runtimeAfter
-  }
-]
-var @plannerResolveBatchDispatch = @testPlannerResolveBatch("test", {
-  args: {
-    resolves: [
-      { tool: "get_contacts", args: {}, purpose: "ground contacts" },
-      { tool: "get_today", args: {}, purpose: "ground today" }
-    ],
-    purpose: "ground two independent record families"
-  }
-}) with {
-  session: @planner,
-  seed: { agent: @builtFixtureAgent, query: "Find Alice and today's date.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
-}
-
->> Planner extract chain (resolve + ref + extract).
 var @plannerExtractFixtureAgent = @rigBuild({
   suite: "fixture-planner-extract",
   defense: "defended",
@@ -165,66 +76,7 @@ var @plannerExtractFixtureAgent = @rigBuild({
     }
   }
 })
-exe llm @testPlannerExtractChain(prompt, config) = [
-  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.resolveArgs)
-  let @stateAfterResolve = @planner.state
-  let @resolvedEmail = @resolveRefValue(@stateAfterResolve, @config.refValue)
-  let @extractResult = @callTool(@plannerTools.extract, @plannerTools, "extract", @config.extractArgs)
-  let @stateAfterExtract = @planner.state
-  => {
-    resolveResult: @resolveResult,
-    stateAfterResolve: @stateAfterResolve,
-    resolvedEmail: @resolvedEmail,
-    extractResult: @extractResult,
-    stateAfterExtract: @stateAfterExtract
-  }
-]
-var @extractChainResult = @testPlannerExtractChain("test", {
-  resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
-  refValue: { source: "resolved", record: "contact", handle: "r_contact_alice.example", field: "email" },
-  extractArgs: {
-    source: { source: "resolved", record: "contact", handle: "r_contact_alice.example" },
-    schema: { email: "string", name: "string" },
-    name: "contact_details",
-    purpose: "inspect one resolved contact"
-  }
-}) with {
-  session: @planner,
-  seed: { agent: @plannerExtractFixtureAgent, query: "Find Alice in my contacts.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
-}
-var @plannerResolveContactsResult = @extractChainResult.resolveResult
-var @plannerStateAfterContactResolve = @extractChainResult.stateAfterResolve
-var @plannerResolvedContactEmail = @extractChainResult.resolvedEmail
-var @plannerExtractDispatchResult = @extractChainResult.extractResult
-var @sessionFinalState = @extractChainResult.mx.sessions.planner
 
->> Planner text-only call (for llmCallEntry session-snapshot omission test).
-exe llm @testPlannerTextResult(prompt, config) = [
-  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.args)
-  => "planner final text"
-]
-var @plannerTextResult = @testPlannerTextResult("test", {
-  args: { tool: "get_today", args: {}, purpose: "ground one synthetic day context" }
-}) with {
-  session: @planner,
-  seed: { agent: @builtFixtureAgent, query: "What day is it?", state: @emptyState(), runtime: @emptyPlannerRuntime() }
-}
-var @llmCallEntrySessionLog = @llmCallEntry("planner", "prompt", @plannerTextResult, null, "ses_debug", {
-  call_kind: "outer_planner",
-  outer_planner_session_id: "ses_debug"
-})
-var @llmCallEntrySessionLogPretty = @llmCallEntrySessionLog | @pretty
-
->> Session factsource probes.
-var @sessionContactEntries = @bucketItems(@sessionFinalState.state.resolved.contact)
-var @sessionResolvedEntry = @sessionContactEntries[0]
-var @sessionContactCount = @bucketLength(@sessionFinalState.state.resolved.contact)
-var @sessionIdentityFs = @sessionResolvedEntry.identity_value.mx.factsources ?? []
-var @sessionFieldFs = @sessionResolvedEntry.field_values.email.mx.factsources ?? []
-var @sessionValueFs = @sessionResolvedEntry.value.email.mx.factsources ?? []
-var @sessionResolvedEmailFs = @plannerResolvedContactEmail.value.mx.factsources ?? []
-
->> Planner derive chain.
 var @plannerDeriveFixtureAgent = @rigBuild({
   suite: "fixture-planner-derive",
   defense: "defended",
@@ -263,38 +115,6 @@ var @plannerDeriveFixtureAgent = @rigBuild({
     }
   }
 })
-exe llm @testPlannerDeriveChain(prompt, config) = [
-  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.resolveArgs)
-  let @deriveResult = @callTool(@plannerTools.derive, @plannerTools, "derive", @config.deriveArgs)
-  let @extractDerivedResult = @callTool(@plannerTools.extract, @plannerTools, "extract", @config.extractArgs)
-  => {
-    resolveResult: @resolveResult,
-    deriveResult: @deriveResult,
-    extractDerivedResult: @extractDerivedResult
-  }
-]
-var @deriveChainResult = @testPlannerDeriveChain("test", {
-  resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
-  deriveArgs: {
-    sources: [{ source: "resolved", record: "contact" }],
-    goal: "Extract the action items into a typed array",
-    schema_name: "action_items",
-    name: "action_items",
-    purpose: "prepare one action-item worklist"
-  },
-  extractArgs: {
-    source: { source: "derived", name: "action_items" },
-    schema: { person_name: "string", task_description: "string", deadline: "string" },
-    name: "action_items_copy",
-    purpose: "inspect the derived action items"
-  }
-}) with {
-  session: @planner,
-  seed: { agent: @plannerDeriveFixtureAgent, query: "Email each person in the TODO list.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
-}
-var @plannerDeriveResolveResult = @deriveChainResult.resolveResult
-var @plannerDeriveDispatchResult = @deriveChainResult.deriveResult
-var @plannerExtractDerivedResult = @deriveChainResult.extractDerivedResult
 
 >> Read-tool-arg fixture: every param is control by labeling.
 var tools @readArgFixtureTools = {
@@ -313,47 +133,77 @@ var @readArgFixtureAgent = @rigBuild({
   tools: @readArgFixtureTools
 })
 var @readArgDoc = @renderToolDocs(@readArgFixtureTools)[0]
-var @dispatchReadArgResolveResult = @dispatchResolve(
-  @readArgFixtureAgent,
-  @emptyState(),
-  {
-    phase: "resolve",
-    tool: "search_day_events",
-    args: {
-      query: { source: "known", value: "lunch" },
-      day: { source: "known", value: "2026-04-21" }
-    },
-    purpose: "ground one synthetic day search result"
-  },
-  "Am I free for lunch at 12:00 on 2026-04-21?"
-)
 
->> Wrong-phase tool dispatches.
-var @wrongPhaseExtractResult = @dispatchExtract(
-  @builtFixtureAgent,
-  @emptyState(),
-  {
-    phase: "extract",
-    tool: "get_contacts",
-    args: {},
-    name: "contact_details",
-    purpose: "inspect grounded contacts"
-  },
-  "Find Alice in my contacts."
-)
-var @wrongPhaseResolveResult = @dispatchResolve(
-  @builtFixtureAgent,
-  @emptyState(),
-  {
-    phase: "resolve",
-    tool: "get_webpage",
-    args: {
-      url: { source: "known", value: "https://example.com" }
-    },
-    purpose: "fetch one webpage"
-  },
-  "Fetch https://example.com."
-)
+>> --- Planner-tool wrappers (called from test exes via `with { session, seed }`) ---
+
+>> Single resolve dispatch through the planner-tool collection.
+exe llm @testPlannerResolve(prompt, config) = [
+  => @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.args)
+]
+
+>> Batch resolve. Returns the batch result + planner state/runtime so the
+>> test exe can also assert on session-side state. The shelf reads happen
+>> in the calling test exe (it owns the shelf decl).
+exe llm @testPlannerResolveBatch(prompt, config) = [
+  let @batchResult = @callTool(@plannerTools.resolve_batch, @plannerTools, "resolve_batch", @config.args)
+  let @stateAfter = @planner.state
+  let @runtimeAfter = @planner.runtime
+  => {
+    result: @batchResult,
+    state: @stateAfter,
+    runtime: @runtimeAfter
+  }
+]
+
+>> Resolve + ref-resolution + extract chain. Looks the resolved handle up
+>> from the seeded shelf after the resolve runs — post-Stage-B handles use
+>> `.mx.address.key` (content-derived hash), not the literal `<email>`
+>> form the bucket era used, so the test must derive it dynamically.
+exe llm @testPlannerExtractChain(prompt, config) = [
+  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.resolveArgs)
+  let @stateAfterResolve = @planner.state
+  let @contacts = @shelf.read(@planner.agent.plannerShelf.contact)
+  let @alice = @contacts[0]
+  let @aliceHandle = `r_contact_@alice.mx.address.key`
+  let @ref = { source: "resolved", record: "contact", handle: @aliceHandle, field: @config.refField }
+  let @resolvedEmail = @resolveRefValue(@planner.agent, @stateAfterResolve, @ref)
+  let @extractArgs = {
+    source: { source: "resolved", record: "contact", handle: @aliceHandle },
+    schema: @config.extractSchema,
+    name: @config.extractName,
+    purpose: @config.extractPurpose
+  }
+  let @extractResult = @callTool(@plannerTools.extract, @plannerTools, "extract", @extractArgs)
+  let @stateAfterExtract = @planner.state
+  => {
+    resolveResult: @resolveResult,
+    stateAfterResolve: @stateAfterResolve,
+    resolvedEmail: @resolvedEmail,
+    extractResult: @extractResult,
+    stateAfterExtract: @stateAfterExtract,
+    aliceHandle: @aliceHandle,
+    aliceRecord: @alice
+  }
+]
+
+>> Resolve-then-text. The planner ends with a text answer (not a tool
+>> call); used by the llmCallEntry session-snapshot omission test.
+exe llm @testPlannerTextResult(prompt, config) = [
+  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.args)
+  => "planner final text"
+]
+
+>> Resolve + derive + extract chain on the derive-fixture agent.
+exe llm @testPlannerDeriveChain(prompt, config) = [
+  let @resolveResult = @callTool(@plannerTools.resolve, @plannerTools, "resolve", @config.resolveArgs)
+  let @deriveResult = @callTool(@plannerTools.derive, @plannerTools, "derive", @config.deriveArgs)
+  let @extractDerivedResult = @callTool(@plannerTools.extract, @plannerTools, "extract", @config.extractArgs)
+  => {
+    resolveResult: @resolveResult,
+    deriveResult: @deriveResult,
+    extractDerivedResult: @extractDerivedResult
+  }
+]
 
 >> --- Helpers -------------------------------------------------------------
 
@@ -361,129 +211,387 @@ exe @field(inputValue, key) = js {
   return inputValue?.[key] ?? null;
 }
 
+>> Bundle a built agent with a per-test shelf. Object spread preserves the
+>> `var tools` executable wrapping on `tools` / `toolsCollection` post
+>> m-9899 (otherwise @callTool surfaces `tool_missing_executable`).
+exe @withShelf(rawAgent, plannerShelf) = [
+  => { ...@rawAgent, plannerShelf: @plannerShelf }
+]
+
 >> --- Tests ---------------------------------------------------------------
 
+>> Read-dispatch through the catalog directly (no agent build).
 exe @testFixtureReadDispatch() = [
-  let @ok = @typeof(@fixtureReadDispatchResult) == "array" &&
-    @fixtureReadDispatchResult.length == 2
-  => @assertOk(@ok, `count=@fixtureReadDispatchResult.length`)
+  let @result = @callTool(
+    @tools.get_contacts,
+    @tools,
+    "get_contacts",
+    {}
+  )
+  let @ok = @typeof(@result) == "array" && @result.length == 2
+  => @assertOk(@ok, `count=@result.length`)
 ]
 
+>> Read-dispatch through a built agent's toolsCollection.
 exe @testBuiltAgentReadDispatch() = [
-  let @ok = @typeof(@builtFixtureReadDispatchResult) == "array" &&
-    @builtFixtureReadDispatchResult.length == 2
-  => @assertOk(@ok, `count=@builtFixtureReadDispatchResult.length`)
+  let @result = @callTool(
+    @builtFixtureAgent.tools.get_contacts,
+    @builtFixtureAgent.toolsCollection,
+    "get_contacts",
+    {}
+  )
+  let @ok = @typeof(@result) == "array" && @result.length == 2
+  => @assertOk(@ok, `count=@result.length`)
 ]
 
+>> Phase catalog round-trip — get_contacts is callable through the
+>> resolve-phase view of the catalog.
 exe @testPhaseCatalogPreservesCallability() = [
-  let @ok = @typeof(@phaseCatalogDispatchResult) == "array" &&
-    @phaseCatalogDispatchResult.length == 2
-  => @assertOk(@ok, `count=@phaseCatalogDispatchResult.length`)
+  let @phaseCat = @phaseCatalog(@builtFixtureAgent, "resolve")
+  let @result = @callTool(
+    @phaseCat.get_contacts,
+    @builtFixtureAgent.toolsCollection,
+    "get_contacts",
+    {}
+  )
+  let @ok = @typeof(@result) == "array" && @result.length == 2
+  => @assertOk(@ok, `count=@result.length`)
 ]
 
+>> Phase tool entry round-trip — same callability through @phaseToolEntry.
 exe @testPhaseToolEntryPreservesCallability() = [
-  let @ok = @typeof(@phaseToolEntryDispatchResult) == "array" &&
-    @phaseToolEntryDispatchResult.length == 2
-  => @assertOk(@ok, `count=@phaseToolEntryDispatchResult.length`)
+  let @entry = @phaseToolEntry(@builtFixtureAgent, "resolve", "get_contacts")
+  let @result = @callTool(
+    @entry,
+    @builtFixtureAgent.toolsCollection,
+    "get_contacts",
+    {}
+  )
+  let @ok = @typeof(@result) == "array" && @result.length == 2
+  => @assertOk(@ok, `count=@result.length`)
 ]
 
-exe @testResolveWorkerSuccessPath() = [
-  let @ok = @dispatchResolveResult["error"] == null &&
-    @dispatchResolveResult.result.status == "resolved" &&
-    @dispatchResolveResult.result.count == 2
-  => @assertOk(@ok, `error=@dispatchResolveResult["error"] status=@dispatchResolveResult.result.status count=@dispatchResolveResult.result.count`)
+>> Resolve worker happy path: get_contacts returns 2 contact records,
+>> shelf gains 2 contact entries, status="resolved".
+exe role:worker @testResolveWorkerSuccessPath() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@builtFixtureAgent, @ps)
+  let @result = @dispatchResolve(
+    @agent,
+    @emptyState(),
+    {
+      phase: "resolve",
+      tool: "get_contacts",
+      args: {},
+      purpose: "ground the contact list"
+    },
+    "Find Alice in my contacts.",
+    false
+  )
+  let @ok = @result["error"] == null &&
+    @result.result.status == "resolved" &&
+    @result.result.count == 2
+  => @assertOk(@ok, `error=@result["error"] status=@result.result.status count=@result.result.count`)
 ]
 
-exe @testResolveWorkerScalarKeyedPath() = [
-  let @ok = @dispatchScalarResolveResult["error"] == null &&
-    @dispatchScalarResolveResult.result.status == "resolved" &&
-    @dispatchScalarResolveResult.result.count == 1 &&
-    @dispatchScalarResolveResult.result.record_type == "datetime_context"
-  => @assertOk(@ok, `status=@dispatchScalarResolveResult.result.status count=@dispatchScalarResolveResult.result.count record=@dispatchScalarResolveResult.result.record_type`)
+>> Resolve worker for a scalar-keyed record (datetime_context). Single
+>> entry, record_type echoed in the result.
+exe role:worker @testResolveWorkerScalarKeyedPath() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@builtFixtureAgent, @ps)
+  let @result = @dispatchResolve(
+    @agent,
+    @emptyState(),
+    {
+      phase: "resolve",
+      tool: "get_today",
+      args: {},
+      purpose: "ground one synthetic day context"
+    },
+    "What day is it?",
+    false
+  )
+  let @ok = @result["error"] == null &&
+    @result.result.status == "resolved" &&
+    @result.result.count == 1 &&
+    @result.result.record_type == "datetime_context"
+  => @assertOk(@ok, `status=@result.result.status count=@result.result.count record=@result.result.record_type`)
 ]
 
-exe @testPlannerToolCollectionDispatchDoesNotRecurse() = [
-  let @ok = @plannerResolveDispatchResult["error"] == null &&
-    @plannerResolveDispatchResult.status == "resolved" &&
-    @plannerResolveDispatchResult.count == 1 &&
-    @plannerResolveDispatchResult.record_type == "datetime_context"
-  => @assertOk(@ok, `status=@plannerResolveDispatchResult.status count=@plannerResolveDispatchResult.count record=@plannerResolveDispatchResult.record_type`)
+>> Planner-tool resolve dispatch (single) goes through the wrapper without
+>> recursive activation; result lands on the seeded shelf.
+exe role:worker @testPlannerToolCollectionDispatchDoesNotRecurse() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@builtFixtureAgent, @ps)
+  let @result = @testPlannerResolve("test", {
+    args: { tool: "get_today", args: {}, purpose: "ground one synthetic day context" }
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "What day is it?", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @ok = @result["error"] == null &&
+    @result.status == "resolved" &&
+    @result.count == 1 &&
+    @result.record_type == "datetime_context"
+  => @assertOk(@ok, `status=@result.status count=@result.count record=@result.record_type`)
 ]
 
-exe @testPlannerResolveBatchSettlesOnce() = [
-  let @ok = @plannerResolveBatchDispatch.result["error"] == null &&
-    @plannerResolveBatchDispatch.result.status == "batch_resolved" &&
-    @plannerResolveBatchDispatch.result.results.length == 2 &&
-    @bucketLength(@plannerResolveBatchDispatch.state.resolved.contact) == 2 &&
-    @bucketLength(@plannerResolveBatchDispatch.state.resolved.datetime_context) == 1 &&
-    @plannerResolveBatchDispatch.runtime.tool_calls == 1
-  => @assertOk(@ok, `tool_calls=@plannerResolveBatchDispatch.runtime.tool_calls results=@plannerResolveBatchDispatch.result.results.length`)
+>> resolve_batch settles in one tool call and writes both record types
+>> to the shelf (2 contacts, 1 datetime_context).
+exe role:worker @testPlannerResolveBatchSettlesOnce() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@builtFixtureAgent, @ps)
+  let @batch = @testPlannerResolveBatch("test", {
+    args: {
+      resolves: [
+        { tool: "get_contacts", args: {}, purpose: "ground contacts" },
+        { tool: "get_today", args: {}, purpose: "ground today" }
+      ],
+      purpose: "ground two independent record families"
+    }
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Find Alice and today's date.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @contacts = @shelf.read(@ps.contact)
+  let @datetimes = @shelf.read(@ps.datetime_context)
+  let @ok = @batch.result["error"] == null &&
+    @batch.result.status == "batch_resolved" &&
+    @batch.result.results.length == 2 &&
+    @contacts.length == 2 &&
+    @datetimes.length == 1 &&
+    @batch.runtime.tool_calls == 1
+  => @assertOk(@ok, `tool_calls=@batch.runtime.tool_calls results=@batch.result.results.length contacts=@contacts.length datetimes=@datetimes.length`)
 ]
 
-exe @testPlannerSessionStatePersistsAcrossDirectPlannerToolCalls() = [
-  let @ok = @plannerResolveContactsResult["error"] == null &&
-    @plannerResolveContactsResult.status == "resolved" &&
-    @plannerResolveContactsResult.count == 2 &&
-    @bucketLength(@plannerStateAfterContactResolve.resolved.contact) == 2
-  => @assertOk(@ok, `status=@plannerResolveContactsResult.status count=@plannerResolveContactsResult.count buckets=@bucketLength(@plannerStateAfterContactResolve.resolved.contact)`)
+>> After a single planner-tool resolve, the shelf carries the resolved
+>> records (Stage B replacement for state.resolved.contact reads).
+exe role:worker @testPlannerSessionStatePersistsAcrossDirectPlannerToolCalls() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@builtFixtureAgent, @ps)
+  let @result = @testPlannerResolve("test", {
+    args: { tool: "get_contacts", args: {}, purpose: "ground the contact list" }
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Find Alice in my contacts.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @contacts = @shelf.read(@ps.contact)
+  let @ok = @result["error"] == null &&
+    @result.status == "resolved" &&
+    @result.count == 2 &&
+    @contacts.length == 2
+  => @assertOk(@ok, `status=@result.status count=@result.count contacts=@contacts.length`)
 ]
 
-exe @testSessionFinalStateAccessibleViaMxSessions() = [
-  let @ok = @sessionFinalState.isDefined() &&
-    @sessionFinalState.runtime.tool_calls == 2 &&
-    @bucketLength(@sessionFinalState.state.resolved.contact) == 2
-  => @assertOk(@ok, `runtime_calls=@sessionFinalState.runtime.tool_calls resolved=@sessionContactCount`)
+>> The session-final state surfaces via @raw.mx.sessions.planner; runtime
+>> tool_calls reflects both planner-tool dispatches (resolve + extract).
+exe role:worker @testSessionFinalStateAccessibleViaMxSessions() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@plannerExtractFixtureAgent, @ps)
+  let @chain = @testPlannerExtractChain("test", {
+    resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+    refField: "email",
+    extractSchema: { email: "string", name: "string" },
+    extractName: "contact_details",
+    extractPurpose: "inspect one resolved contact"
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Find Alice in my contacts.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @sessionFinal = @chain.mx.sessions.planner
+  let @contacts = @shelf.read(@ps.contact)
+  let @ok = @sessionFinal.isDefined() &&
+    @sessionFinal.runtime.tool_calls == 2 &&
+    @contacts.length == 2
+  => @assertOk(@ok, `runtime_calls=@sessionFinal.runtime.tool_calls contacts=@contacts.length`)
 ]
 
-exe @testLlmCallLogOmitsSessionSnapshot() = [
-  let @raw = @field(@llmCallEntrySessionLog, "raw")
-  let @sessionId = @field(@llmCallEntrySessionLog, "session_id")
-  let @ok = @raw == "planner final text" &&
+>> @llmCallEntry omits the session snapshot from its rendered log even
+>> when one is present in the source value.
+exe role:worker @testLlmCallLogOmitsSessionSnapshot() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@builtFixtureAgent, @ps)
+  let @raw = @testPlannerTextResult("test", {
+    args: { tool: "get_today", args: {}, purpose: "ground one synthetic day context" }
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "What day is it?", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @entry = @llmCallEntry("planner", "prompt", @raw, null, "ses_debug", {
+    call_kind: "outer_planner",
+    outer_planner_session_id: "ses_debug"
+  })
+  let @entryPretty = @entry | @pretty
+  let @rawText = @field(@entry, "raw")
+  let @sessionId = @field(@entry, "session_id")
+  let @ok = @rawText == "planner final text" &&
     @sessionId == "ses_debug" &&
-    !@llmCallEntrySessionLogPretty.includes("sessions")
-  => @assertOk(@ok, `raw=@raw log=@llmCallEntrySessionLogPretty`)
+    !@entryPretty.includes("sessions")
+  => @assertOk(@ok, `raw=@rawText log=@entryPretty`)
 ]
 
-exe @testSessionResolvedFactsourcesSurviveBoundary() = [
-  let @ok = @sessionIdentityFs.length > 0 &&
-    @sessionFieldFs.length > 0 &&
-    @sessionValueFs.length > 0 &&
-    @sessionResolvedEmailFs.length > 0
-  => @assertOk(@ok, `identity=@sessionIdentityFs.length field=@sessionFieldFs.length value=@sessionValueFs.length resolved=@sessionResolvedEmailFs.length`)
+>> Fact provenance survives across the session boundary. Post-Stage-B,
+>> the proof trail is encoded as `fact:@<record>.<field>` labels on each
+>> field's `.mx.labels` (the per-field `factsources` array shape from the
+>> bucket era is gone). Both shelf-read fields and the planner's
+>> ref-resolution result carry the fact-tag.
+exe role:worker @testSessionResolvedFactsourcesSurviveBoundary() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@plannerExtractFixtureAgent, @ps)
+  let @chain = @testPlannerExtractChain("test", {
+    resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+    refField: "email",
+    extractSchema: { email: "string", name: "string" },
+    extractName: "contact_details",
+    extractPurpose: "inspect one resolved contact"
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Find Alice in my contacts.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @contacts = @shelf.read(@ps.contact)
+  let @first = @contacts[0]
+  let @emailLabels = @first.email.mx.labels ?? []
+  let @resolvedEmailLabels = @chain.resolvedEmail.value.mx.labels ?? []
+  let @emailHasFact = @emailLabels.includes("fact:@contact.email")
+  let @resolvedHasFact = @resolvedEmailLabels.includes("fact:@contact.email")
+  let @ok = @emailHasFact && @resolvedHasFact
+  => @assertOk(@ok, `emailFact=@emailHasFact resolvedFact=@resolvedHasFact emailLabels=@emailLabels.join(",") resolvedLabels=@resolvedEmailLabels.join(",")`)
 ]
 
-exe @testPlannerSessionResolvedHandleRemainsReadableAfterDirectResolve() = [
-  let @ok = @plannerResolvedContactEmail.ok == true &&
-    @plannerResolvedContactEmail.value == "alice.example"
-  => @assertOk(@ok, `ok=@plannerResolvedContactEmail.ok value=@plannerResolvedContactEmail.value`)
+>> Resolved-handle ref resolution still works through the planner session
+>> chain (@resolveRefValue against the seeded agent's shelf).
+exe role:worker @testPlannerSessionResolvedHandleRemainsReadableAfterDirectResolve() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@plannerExtractFixtureAgent, @ps)
+  let @chain = @testPlannerExtractChain("test", {
+    resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+    refField: "email",
+    extractSchema: { email: "string", name: "string" },
+    extractName: "contact_details",
+    extractPurpose: "inspect one resolved contact"
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Find Alice in my contacts.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @ok = @chain.resolvedEmail.ok == true &&
+    @chain.resolvedEmail.value == "alice.example"
+  => @assertOk(@ok, `ok=@chain.resolvedEmail.ok value=@chain.resolvedEmail.value`)
 ]
 
-exe @testPlannerSourceBackedExtractWorksOnDirectPlannerToolPath() = [
-  let @ok = @plannerExtractDispatchResult["error"] == null &&
-    @plannerExtractDispatchResult.status == "extracted" &&
-    @plannerExtractDispatchResult.name == "contact_details"
-  => @assertOk(@ok, `status=@plannerExtractDispatchResult.status name=@plannerExtractDispatchResult.name`)
+>> Source-backed extract on the direct planner-tool path (no recursion)
+>> returns the stub-extracted contact_details payload.
+exe role:worker @testPlannerSourceBackedExtractWorksOnDirectPlannerToolPath() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@plannerExtractFixtureAgent, @ps)
+  let @chain = @testPlannerExtractChain("test", {
+    resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+    refField: "email",
+    extractSchema: { email: "string", name: "string" },
+    extractName: "contact_details",
+    extractPurpose: "inspect one resolved contact"
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Find Alice in my contacts.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @ex = @chain.extractResult
+  let @ok = @ex["error"] == null &&
+    @ex.status == "extracted" &&
+    @ex.name == "contact_details"
+  => @assertOk(@ok, `status=@ex.status name=@ex.name`)
 ]
 
-exe @testPlannerDeriveExposesPreviewFields() = [
-  let @ok = @plannerDeriveResolveResult["error"] == null &&
-    @plannerDeriveDispatchResult["error"] == null &&
-    @plannerDeriveDispatchResult.status == "derived" &&
-    @plannerDeriveDispatchResult.name == "action_items" &&
-    @plannerDeriveDispatchResult.schema_name == "action_items" &&
-    @plannerDeriveDispatchResult.preview_fields.includes("person_name") &&
-    @plannerDeriveDispatchResult.preview_fields.includes("task_description") &&
-    @plannerDeriveDispatchResult.preview_fields.includes("deadline")
-  => @assertOk(@ok, `status=@plannerDeriveDispatchResult.status name=@plannerDeriveDispatchResult.name`)
+>> Derive on the planner-tool path returns preview_fields the planner can
+>> consult before deciding to extract.
+exe role:worker @testPlannerDeriveExposesPreviewFields() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@plannerDeriveFixtureAgent, @ps)
+  let @chain = @testPlannerDeriveChain("test", {
+    resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+    deriveArgs: {
+      sources: [{ source: "resolved", record: "contact" }],
+      goal: "Extract the action items into a typed array",
+      schema_name: "action_items",
+      name: "action_items",
+      purpose: "prepare one action-item worklist"
+    },
+    extractArgs: {
+      source: { source: "derived", name: "action_items" },
+      schema: { person_name: "string", task_description: "string", deadline: "string" },
+      name: "action_items_copy",
+      purpose: "inspect the derived action items"
+    }
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Email each person in the TODO list.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @resolve = @chain.resolveResult
+  let @derive = @chain.deriveResult
+  let @ok = @resolve["error"] == null &&
+    @derive["error"] == null &&
+    @derive.status == "derived" &&
+    @derive.name == "action_items" &&
+    @derive.schema_name == "action_items" &&
+    @derive.preview_fields.includes("person_name") &&
+    @derive.preview_fields.includes("task_description") &&
+    @derive.preview_fields.includes("deadline")
+  => @assertOk(@ok, `status=@derive.status name=@derive.name`)
 ]
 
-exe @testPlannerExtractFromDerivedSourceDoesNotRecurse() = [
-  let @ok = @plannerExtractDerivedResult["error"] == null &&
-    @plannerExtractDerivedResult.status == "extracted" &&
-    @plannerExtractDerivedResult.name == "action_items_copy"
-  => @assertOk(@ok, `status=@plannerExtractDerivedResult.status name=@plannerExtractDerivedResult.name`)
+>> Extract from a derived source on the direct planner-tool path returns
+>> the stub-extracted action_items_copy payload (no resolve recursion).
+exe role:worker @testPlannerExtractFromDerivedSourceDoesNotRecurse() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@plannerDeriveFixtureAgent, @ps)
+  let @chain = @testPlannerDeriveChain("test", {
+    resolveArgs: { tool: "get_contacts", args: {}, purpose: "ground the contact list" },
+    deriveArgs: {
+      sources: [{ source: "resolved", record: "contact" }],
+      goal: "Extract the action items into a typed array",
+      schema_name: "action_items",
+      name: "action_items",
+      purpose: "prepare one action-item worklist"
+    },
+    extractArgs: {
+      source: { source: "derived", name: "action_items" },
+      schema: { person_name: "string", task_description: "string", deadline: "string" },
+      name: "action_items_copy",
+      purpose: "inspect the derived action items"
+    }
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Email each person in the TODO list.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @ex = @chain.extractDerivedResult
+  let @ok = @ex["error"] == null &&
+    @ex.status == "extracted" &&
+    @ex.name == "action_items_copy"
+  => @assertOk(@ok, `status=@ex.status name=@ex.name`)
 ]
 
+>> Read-tool-doc rendering classifies every read-tool param as a control
+>> arg. The render pass is purely catalog-side, no shelf needed.
 exe @testReadToolDocsClassifyAllReadParamsAsControl() = [
   let @control = @field(@readArgDoc, "controlArgs")
   let @payload = @field(@readArgDoc, "payloadArgs")
@@ -493,34 +601,90 @@ exe @testReadToolDocsClassifyAllReadParamsAsControl() = [
   => @assertOk(@ok, `control=@control payload=@payload`)
 ]
 
-exe @testResolveWorkerAcceptsReadToolParamsWithoutLegacyControlArgs() = [
-  let @ok = @dispatchReadArgResolveResult["error"] == null &&
-    @dispatchReadArgResolveResult.result.status == "resolved" &&
-    @dispatchReadArgResolveResult.result.count == 1 &&
-    @dispatchReadArgResolveResult.result.record_type == "datetime_context"
-  => @assertOk(@ok, `status=@dispatchReadArgResolveResult.result.status count=@dispatchReadArgResolveResult.result.count`)
+>> Resolve worker accepts read-tool params (control args, no legacy
+>> payload metadata) without re-classifying them as payload.
+exe role:worker @testResolveWorkerAcceptsReadToolParamsWithoutLegacyControlArgs() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@readArgFixtureAgent, @ps)
+  let @result = @dispatchResolve(
+    @agent,
+    @emptyState(),
+    {
+      phase: "resolve",
+      tool: "search_day_events",
+      args: {
+        query: { source: "known", value: "lunch" },
+        day: { source: "known", value: "2026-04-21" }
+      },
+      purpose: "ground one synthetic day search result"
+    },
+    "Am I free for lunch at 12:00 on 2026-04-21?",
+    false
+  )
+  let @ok = @result["error"] == null &&
+    @result.result.status == "resolved" &&
+    @result.result.count == 1 &&
+    @result.result.record_type == "datetime_context"
+  => @assertOk(@ok, `status=@result.result.status count=@result.result.count`)
 ]
 
-exe @testExtractWorkerGuidesWrongPhaseReadTool() = [
-  let @issues = @wrongPhaseExtractResult.issues ?? []
+>> Extract worker steers the planner away from a read tool that belongs
+>> in the resolve phase: returns wrong_phase_tool with a repair hint.
+exe role:worker @testExtractWorkerGuidesWrongPhaseReadTool() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@builtFixtureAgent, @ps)
+  let @result = @dispatchExtract(
+    @agent,
+    @emptyState(),
+    {
+      phase: "extract",
+      tool: "get_contacts",
+      args: {},
+      name: "contact_details",
+      purpose: "inspect grounded contacts"
+    },
+    "Find Alice in my contacts."
+  )
+  let @issues = @result.issues ?? []
   let @issue = @issues[0] ?? null
-  let @ok = @wrongPhaseExtractResult.error == "wrong_phase_tool" &&
+  let @ok = @result.error == "wrong_phase_tool" &&
     @field(@issue, "tool") == "get_contacts" &&
     @field(@issue, "requested_phase") == "extract" &&
     @field(@issue, "correct_phase") == "resolve" &&
     @field(@issue, "repair").includes("Call resolve(")
-  => @assertOk(@ok, `error=@wrongPhaseExtractResult.error tool=@field(@issue, "tool") correct=@field(@issue, "correct_phase")`)
+  => @assertOk(@ok, `error=@result.error tool=@field(@issue, "tool") correct=@field(@issue, "correct_phase")`)
 ]
 
-exe @testResolveWorkerGuidesWrongPhaseExtractTool() = [
-  let @issues = @wrongPhaseResolveResult.issues ?? []
+>> Inverse: resolve worker steers away from extract-phase read tools
+>> (get_webpage) with a repair hint pointing at the extract phase.
+exe role:worker @testResolveWorkerGuidesWrongPhaseExtractTool() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = @withShelf(@builtFixtureAgent, @ps)
+  let @result = @dispatchResolve(
+    @agent,
+    @emptyState(),
+    {
+      phase: "resolve",
+      tool: "get_webpage",
+      args: {
+        url: { source: "known", value: "https://example.com" }
+      },
+      purpose: "fetch one webpage"
+    },
+    "Fetch https://example.com.",
+    false
+  )
+  let @issues = @result.issues ?? []
   let @issue = @issues[0] ?? null
-  let @ok = @wrongPhaseResolveResult.error == "wrong_phase_tool" &&
+  let @ok = @result.error == "wrong_phase_tool" &&
     @field(@issue, "tool") == "get_webpage" &&
     @field(@issue, "requested_phase") == "resolve" &&
     @field(@issue, "correct_phase") == "extract" &&
     @field(@issue, "repair").includes("Call extract(")
-  => @assertOk(@ok, `error=@wrongPhaseResolveResult.error tool=@field(@issue, "tool") correct=@field(@issue, "correct_phase")`)
+  => @assertOk(@ok, `error=@result.error tool=@field(@issue, "tool") correct=@field(@issue, "correct_phase")`)
 ]
 
 >> --- Suite ---------------------------------------------------------------

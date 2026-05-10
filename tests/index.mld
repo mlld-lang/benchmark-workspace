@@ -26,10 +26,7 @@ import { @urlRefsASuite } from "./rig/url-refs-a.mld"
 import { @urlRefsBSuite } from "./rig/url-refs-b.mld"
 import { @outputValidatorsSuite } from "./rig/output-validators.mld"
 import { @proofChainFirewallSuite } from "./rig/proof-chain-firewall.mld"
->> Stage B follow-up: worker-dispatch needs shelf-shape rewrite (mostly
->> scripted-LLM and blocks on task #17). Tracked in MIGRATION-HANDOFF.md.
->> Skipped from the main gate until converted.
->>
+import { @workerDispatchSuite } from "./rig/worker-dispatch.mld"
 >> state-projection-{a,b}.mld DELETED in Stage B Phase 2 conversion: their
 >> entire test surface targeted bucket helpers that no longer exist
 >> (@mergeResolvedEntries, @updateResolvedState, @batchSpecMergeState,
@@ -81,7 +78,8 @@ var @suites = [
   @extractDeriveAndExecuteCompileSuite,
   @namedStateAndCollectionSuite,
   @identityContractsSuite,
-  @proofChainFirewallSuite
+  @proofChainFirewallSuite,
+  @workerDispatchSuite
 ]
 
 var @result = @runSuites(@suites)

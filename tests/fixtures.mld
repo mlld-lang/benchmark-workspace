@@ -142,7 +142,8 @@ record @datetime_context = {
   read: {
     role:planner: [{ value: "value" }, kind],
     role:worker: [{ value: "value" }, kind]
-  }
+  },
+  write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }
 }
 
 >> Indexed-array selection-proof fixture used by tests/rig/proof-chain-firewall.mld.
