@@ -70,53 +70,7 @@ exe @stateWithDerived(name, schemaName, payload) = [
   }
 ]
 
->> DEPRECATED — Stage B retired the bucket-shape `state.resolved`. The rig
->> pipeline no longer reads bucket entries; resolved records live on the
->> shelf via @agent.plannerShelf. This stub returns an empty state so
->> existing imports don't break the suite at parse time, but test bodies
->> that depend on the seeded resolved entry will fail at lookup time with
->> "resolved_handle_not_found".
->>
->> Migration path for callers (per Task #7):
->>   - Drive a real @dispatchResolve from the test's @script (production
->>     path; records enter shelf with proper factsource minting).
->>   - OR declare a shelf inline in a `role:worker` test exe and call
->>     @shelf.write directly (escape-hatch for tests where dispatch
->>     isn't the subject — match the production
->>     `as record @def + @shelf.write` shape and label the bypass).
->>
->> Removing this stub is gated on all four scripted suites (banking,
->> slack, workspace, travel) migrating off bucket-shape pre-seeding.
-exe @stateWithResolved(record, handle, payload) = [
-  => @emptyStateShape()
-]
-
->> DEPRECATED — see @stateWithResolved.
-exe @stateResolvedAndExtracted(record, handle, recordValue, extractName, extractSchema, extractValue) = [
-  let @previewFields = @extractValue.mx.keys ?? []
-  => {
-    extracted: {
-      "@extractName": {
-        provenance: "extracted",
-        schema_name: @extractSchema,
-        preview_fields: @previewFields,
-        value: @extractValue
-      }
-    },
-    derived: {},
-    extract_sources: {}
-  }
-]
-
->> Internal helper — returns the post-Stage-B empty state shape (no
->> `resolved`, no `capabilities`).
-exe @emptyStateShape() = [
-  => { extracted: {}, derived: {}, extract_sources: {} }
-]
-
 export {
   @stateWithExtracted,
-  @stateWithDerived,
-  @stateWithResolved,
-  @stateResolvedAndExtracted
+  @stateWithDerived
 }

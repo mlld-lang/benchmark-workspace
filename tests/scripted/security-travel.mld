@@ -29,8 +29,7 @@ import {
 } from "../lib/mock-llm.mld"
 import {
   @stateWithExtracted,
-  @stateWithDerived,
-  @stateWithResolved
+  @stateWithDerived
 } from "../lib/security-fixtures.mld"
 import { @shelfRecords } from "../../rig/runtime.mld"
 import { @rig } from "../../rig/index.mld"

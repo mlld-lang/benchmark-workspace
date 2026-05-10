@@ -25,8 +25,7 @@ import {
 } from "../lib/mock-llm.mld"
 import {
   @stateWithExtracted,
-  @stateWithDerived,
-  @stateWithResolved
+  @stateWithDerived
 } from "../lib/security-fixtures.mld"
 import { @rig } from "../../rig/index.mld"
 import { @records } from "../../bench/domains/workspace/records.mld"
