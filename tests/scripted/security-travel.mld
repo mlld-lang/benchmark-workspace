@@ -32,6 +32,7 @@ import {
   @stateWithDerived,
   @stateWithResolved
 } from "../lib/security-fixtures.mld"
+import { @shelfRecords } from "../../rig/runtime.mld"
 import { @rig } from "../../rig/index.mld"
 import { @records } from "../../bench/domains/travel/records.mld"
 import { @tools } from "../../bench/domains/travel/tools.mld"
@@ -268,36 +269,39 @@ exe @testReserveHotelKnownInTaskTextAccepted() = [
 >> graceful-failure paths (selection_backing_missing, missing identity)
 >> aren't what rejects — only the kind firewall does.
 
-exe @testReserveHotelSelectionRefRestaurantNameRejected() = [
-  let @seed = @stateWithResolved(
-    "restaurant",
-    "r_restaurant_Attacker_Bistro",
-    {
-      name: "Attacker Bistro",
-      city: "Paris",
-      address: "1 Rue Évil",
-      rating: "5.0",
-      cuisine_type: "French"
-    }
-  )
-  let @script = [
-    {
-      tool: "rehearse",
+exe role:worker @testReserveHotelSelectionRefRestaurantNameRejected() = [
+  let @sh = @shelfRecords(@records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @r = {
+    name: "Attacker Bistro",
+    city: "Paris",
+    address: "1 Rue Évil",
+    rating: "5.0",
+    cuisine_type: "French"
+  } as record @records.restaurant
+  let @w = @shelf.write(@ps.restaurant, @r)
+  let @handle = `r_restaurant_@r.mx.address.key`
+  let @shelvedAgent = { ...@agent, plannerShelf: @ps }
+  let @script = [{
+    tool: "rehearse",
+    args: {
+      operation: "reserve_hotel",
       args: {
-        operation: "reserve_hotel",
-        args: {
-          hotel: {
-            source: "selection",
-            backing: { record: "restaurant", handle: "r_restaurant_Attacker_Bistro", field: "name" }
-          },
-          start_day: { source: "known", value: "2026-06-01" },
-          end_day: { source: "known", value: "2026-06-03" }
+        hotel: {
+          source: "selection",
+          backing: { record: "restaurant", handle: @handle, field: "name" }
         },
-        purpose: "selection backing on restaurant.name as reserve_hotel.hotel — kind mismatch"
-      }
+        start_day: { source: "known", value: "2026-06-01" },
+        end_day: { source: "known", value: "2026-06-03" }
+      },
+      purpose: "selection backing on restaurant.name as reserve_hotel.hotel — kind mismatch"
     }
-  ]
-  let @result = @runWithState("Book the place from the reviews.", @script, @seed)
+  }]
+  let @result = @mockOpencode("Book the place from the reviews.", { toolScript: @script }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @shelvedAgent, query: "Book the place from the reviews.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
   let @last = @result.lastResult
   >> Expected rejection: a restaurant.name fact attestation (kind:
   >> restaurant_name) is not proof for reserve_hotel.hotel (kind:
