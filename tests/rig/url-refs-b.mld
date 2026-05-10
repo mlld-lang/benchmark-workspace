@@ -323,12 +323,38 @@ exe role:worker @testUr18RecordArgsRejectsDerivedSource() = [
   => @assertEq(@r.ok, false)
 ]
 
-exe role:worker @testUr19RecordArgsRejectsForgedHandle() = [
-  let @ctx = @urCAgentWithUrlRef()
-  let @r = @compileRecordArgs(@ctx.agent, @urCRefSpec, {
-    ref: { source: "resolved", record: "url_ref", handle: "r_url_ref_forged_not_in_shelf" }
-  })
-  => @assertEq(@r.ok, false)
+>> UR-19 reframe: post-Stage-B, handle-existence validation moved from
+>> @compileRecordArgs (recordArgs-shape only) to @lookupResolvedEntry
+>> (downstream resolution). A forged handle no longer fails at the
+>> recordArgs validator — it fails when @dispatchResolve looks the
+>> handle up in the planner shelf and finds nothing. Dispatch with an
+>> entirely-non-existent handle: empty shelf, totally-fabricated handle
+>> string. Defense: control_ref_backing_missing at the resolve worker.
+exe role:worker @testUr19DispatchForgedHandleRejectedAtLookup() = [
+  let @sh = @shelfRecords(@urDRecords)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @agent = {
+    suite: "url-promotion-dispatch-test",
+    defense: "defended",
+    records: @urDRecords,
+    plannerShelf: @ps,
+    tools: @urDTools,
+    toolsCollection: @urDTools,
+    basePolicy: @urDBasePolicy
+  }
+  let @result = @dispatchResolve(@agent, @emptyState(), {
+    phase: "resolve",
+    tool: "get_webpage_via_ref",
+    args: { ref: { source: "resolved", record: "url_ref", handle: "r_url_ref_forged_never_minted" } },
+    purpose: "attempt to fetch a forged ref handle that never existed in the shelf"
+  }, "fetch", false)
+  >> Defense fires at @lookupResolvedEntry's shelf-lookup step (rig/intent.mld
+  >> emits "ref: handle '<h>' not found on planner shelf for '<rt>'"). The
+  >> exact error string is intent-compile-shaped; the structural assertion
+  >> is "dispatch rejected, did not call the underlying tool".
+  let @err = @result.error
+  let @ok = @err.isDefined() && @err.includes("not found on planner shelf")
+  => @assertOk(@ok, `error=@err`)
 ]
 
 exe role:worker @testUr20RecordArgsRejectsMismatchedRecordType() = [
@@ -380,24 +406,6 @@ exe role:worker @testUr24DispatchGetWebpageViaRefRejectsMissingCapability() = [
 ]
 
 >> --- Suite ---------------------------------------------------------------
-
->> Stage B follow-up #1: Group D dispatch tests (UR-21..24) deferred.
->> @dispatchResolve invocation through @urDRunFindRefs etc. trips
->> "record arg '_mlld' is missing" — likely a recordArgs-validation
->> path inside dispatch is iterating over keys that include the rig-
->> internal `_mlld` injected by the `var tools` declaration. Needs
->> a deeper trace into rig's resolve dispatch path before the test
->> harness can drive it from a zero-LLM context. Test exes (@testUr21..
->> testUr24) are kept above for fast revival once the resolve internals
->> are ironed out.
->>
->> Stage B follow-up #2: UR-19 "rejects forged handle" is omitted from
->> the suite. Pre-Stage-B, @compileRecordArgs validated handle existence
->> against state.resolved.<rt>; post-Stage-B, that validation moved to
->> @lookupResolvedEntry and the recordArgs validator only checks ref
->> shape (record name + no field). Test exe @testUr19RecordArgsRejects-
->> ForgedHandle preserved above; needs reframing as a downstream-
->> resolution test rather than recordArgs-shape test.
 var @urlRefsBSuite = @suite("url-refs-b", [
   @group("capability-map", [
     @testUr13BlockedRefMintsNoCapability,
@@ -410,6 +418,9 @@ var @urlRefsBSuite = @suite("url-refs-b", [
     @testUr18RecordArgsRejectsDerivedSource,
     @testUr20RecordArgsRejectsMismatchedRecordType
   ], { ticket: "c-be06" }),
+  @group("downstream-resolution", [
+    @testUr19DispatchForgedHandleRejectedAtLookup
+  ], { ticket: "c-be06", notes: "UR-19 post-Stage-B reframe: handle-existence check moved from @compileRecordArgs to @lookupResolvedEntry; forged handle now caught at the resolve worker's downstream lookup." }),
   @group("dispatch-integration", [
     @testUr21DispatchFindReferencedUrlsMintsRecordsAndCaps,
     @testUr22DispatchStateDeltaShapeAndNoUrlInRecords,
