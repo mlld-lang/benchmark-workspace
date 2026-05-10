@@ -16,7 +16,7 @@ import {
   @plannerValidationFailure
 } from "../planner_inputs.mld"
 
-exe @derivePrompt(query, sources, schemaDoc, decision, handleMap, suiteAddendum) = template "../prompts/derive.att"
+exe @derivePrompt(query, sources, schemaDoc, decision, suiteAddendum) = template "../prompts/derive.att"
 
 >> Mirrors the extract-side hardening (see extract.mld for rationale).
 >> Without this, `@parse.llm` turns "" / "null" / non-JSON into mlld-null,
@@ -126,16 +126,58 @@ exe @validateSelectionRefs(agent, sources, refs) = [
 exe @dispatchDerive(agent, state, decision, query) = [
   let @sourceCheck = @validatePlannerSourcesArray(@decision.sources ?? [], ["resolved", "selection", "extracted", "derived"])
   if !@sourceCheck.ok [ => @plannerValidationFailure("planner_source_validation_failed", @sourceCheck, @sourceCheck.issues) ]
-  let @resolved = for @source in (@decision.sources ?? []) => @resolveRefValue(@agent, @state, @source)
-  let @errors = for @entry in @resolved when !@entry.ok => @entry
-  if @errors.length > 0 [ => @plannerValidationFailure("derive_source_resolution_failed", { issues: @errors }, @errors) ]
-  let @sources = for @entry in @resolved => @entry.value
-  let @handleMap = for @source in (@decision.sources ?? []) when @source.source == "resolved" [
-    let @records = @resolvedEntries(@agent, @source.record)
-    => for @r in @records => { record: @source.record, handle: @stateHandleFromAddress(@r) }
+  >> Pair-resolve once per source so the bail check and the typed_sources
+  >> build don't double-resolve. Failed resolutions are rejected here,
+  >> before any source content reaches the prompt template.
+  let @resolvedPaired = for @source in (@decision.sources ?? []) [
+    let @res = @resolveRefValue(@agent, @state, @source)
+    => { source: @source, resolution: @res }
   ]
-  let @flatHandles = @handleMap.flat()
-  let @prompt = @derivePrompt(@query, @sources, @decision.schema, @decision, @flatHandles, @agent.deriveAddendum ?? "")
+  let @errorPairs = for @pair in @resolvedPaired when !@pair.resolution.ok => @pair
+  if @errorPairs.length > 0 [
+    let @errorIssues = for @e in @errorPairs => @e.resolution
+    => @plannerValidationFailure("derive_source_resolution_failed", { issues: @errorIssues }, @errorIssues)
+  ]
+  >> Build typed_sources: each entry pairs the planner's source spec with
+  >> its resolved value. Resolved/selection sources carry the opaque
+  >> handle inline with the projected fields so the LLM doesn't need to
+  >> correlate two arrays positionally (c-e414).
+  let @typedSources = for @pair in @resolvedPaired [
+    let @source = @pair.source
+    let @resolution = @pair.resolution
+    let @familyRecords = when [
+      @source.source == "resolved" && !@source.handle.isDefined() => @resolvedEntries(@agent, @source.record)
+      * => []
+    ]
+    let @familyEntries = for @r in @familyRecords => { handle: @stateHandleFromAddress(@r), fields: @r }
+    let @lowered = when [
+      @source.source == "selection" => @lowerSelectionRef(@agent, @source)
+      * => null
+    ]
+    => when [
+      @source.source == "resolved" && @source.handle.isDefined() => {
+        source_class: "resolved",
+        record: @source.record,
+        entries: [{ handle: @source.handle, fields: @resolution.value }]
+      }
+      @source.source == "resolved" => {
+        source_class: "resolved",
+        record: @source.record,
+        entries: @familyEntries
+      }
+      @source.source == "selection" => {
+        source_class: "selection",
+        record: @lowered.ref.record,
+        entries: [{ handle: @lowered.ref.handle, fields: @resolution.value }]
+      }
+      * => {
+        source_class: @source.source,
+        name: @source.name,
+        value: @resolution.value
+      }
+    ]
+  ]
+  let @prompt = @derivePrompt(@query, @typedSources, @decision.schema, @decision, @agent.deriveAddendum ?? "")
   let @raw = @llmCall(@agent.harness, @prompt, {
     model: @agent.workerModel ?? @agent.model,
     pure: @agent.opencodePure,

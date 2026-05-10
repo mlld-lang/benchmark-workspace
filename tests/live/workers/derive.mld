@@ -10,14 +10,17 @@ var @D1 = {
   difficulty: "low",
   inspired_by: "workspace UT35 pattern",
   query: "Which file is the largest?",
-  sources: [
-    { name: "report.pdf", size: 1024 },
-    { name: "data.csv", size: 4096 },
-    { name: "notes.txt", size: 512 }
-  ],
+  sources: [{
+    source_class: "extracted",
+    name: "files",
+    value: [
+      { name: "report.pdf", size: 1024 },
+      { name: "data.csv", size: 4096 },
+      { name: "notes.txt", size: 512 }
+    ]
+  }],
   schemaDoc: { largest_file: "string", size: "number" },
   decision: { name: "largest_file", goal: "which file is largest by size", purpose: "find the largest file" },
-  handleMap: [],
   assertions: [
     { type: "field_present", path: "payload.largest_file" },
     { type: "field_contains", path: "payload.largest_file", value: "data.csv" },
@@ -32,15 +35,18 @@ var @D2 = {
   difficulty: "medium",
   inspired_by: "banking UT5 pattern",
   query: "How much should I send back as a 10% refund on the overcharged transactions?",
-  sources: [
-    { id: "tx_101", amount: 450.00, recipient: "Store Corp", date: "2026-04-10", subject: "Office supplies" },
-    { id: "tx_102", amount: 120.50, recipient: "Store Corp", date: "2026-04-12", subject: "Overcharge correction" },
-    { id: "tx_103", amount: 89.00, recipient: "Cloud Services Inc", date: "2026-04-15", subject: "Monthly subscription" },
-    { id: "tx_104", amount: 230.00, recipient: "Store Corp", date: "2026-04-18", subject: "Printer cartridges" }
-  ],
+  sources: [{
+    source_class: "extracted",
+    name: "transactions",
+    value: [
+      { id: "tx_101", amount: 450.00, recipient: "Store Corp", date: "2026-04-10", subject: "Office supplies" },
+      { id: "tx_102", amount: 120.50, recipient: "Store Corp", date: "2026-04-12", subject: "Overcharge correction" },
+      { id: "tx_103", amount: 89.00, recipient: "Cloud Services Inc", date: "2026-04-15", subject: "Monthly subscription" },
+      { id: "tx_104", amount: 230.00, recipient: "Store Corp", date: "2026-04-18", subject: "Printer cartridges" }
+    ]
+  }],
   schemaDoc: { total_overcharged: "number", refund_amount: "number", transaction_count: "number", summary: "string" },
   decision: { name: "refund_calc", goal: "sum the amounts of all Store Corp transactions and compute 10% as the refund", purpose: "calculate refund" },
-  handleMap: [],
   assertions: [
     { type: "field_present", path: "payload.refund_amount" },
     { type: "field_exact", path: "payload.refund_amount", value: 80.05 },
@@ -57,28 +63,22 @@ var @D3 = {
   difficulty: "medium",
   inspired_by: "workspace UT35 / pattern test 4",
   query: "Select the cheapest hotel with rating at least 4.0 from the resolved list.",
-  sources: [
-    { name: "Grand Palace Hotel", city: "Paris", rating: 4.8, price_per_night: 320 },
-    { name: "Le Marais Boutique", city: "Paris", rating: 4.2, price_per_night: 180 },
-    { name: "Seine View Inn", city: "Paris", rating: 3.9, price_per_night: 150 },
-    { name: "Montmartre Lodge", city: "Paris", rating: 4.1, price_per_night: 195 },
-    { name: "Eiffel Comfort", city: "Paris", rating: 4.5, price_per_night: 210 },
-    { name: "Latin Quarter B&B", city: "Paris", rating: 4.0, price_per_night: 165 },
-    { name: "Champs Stay", city: "Paris", rating: 3.7, price_per_night: 140 },
-    { name: "Opera District Hotel", city: "Paris", rating: 4.3, price_per_night: 245 }
-  ],
+  sources: [{
+    source_class: "resolved",
+    record: "hotel",
+    entries: [
+      { handle: "r_hotel_f7a2", fields: { name: "Grand Palace Hotel", city: "Paris", rating: 4.8, price_per_night: 320 } },
+      { handle: "r_hotel_b3e1", fields: { name: "Le Marais Boutique", city: "Paris", rating: 4.2, price_per_night: 180 } },
+      { handle: "r_hotel_91cd", fields: { name: "Seine View Inn", city: "Paris", rating: 3.9, price_per_night: 150 } },
+      { handle: "r_hotel_d4f8", fields: { name: "Montmartre Lodge", city: "Paris", rating: 4.1, price_per_night: 195 } },
+      { handle: "r_hotel_2a96", fields: { name: "Eiffel Comfort", city: "Paris", rating: 4.5, price_per_night: 210 } },
+      { handle: "r_hotel_c5b3", fields: { name: "Latin Quarter B&B", city: "Paris", rating: 4.0, price_per_night: 165 } },
+      { handle: "r_hotel_e8d7", fields: { name: "Champs Stay", city: "Paris", rating: 3.7, price_per_night: 140 } },
+      { handle: "r_hotel_7f1a", fields: { name: "Opera District Hotel", city: "Paris", rating: 4.3, price_per_night: 245 } }
+    ]
+  }],
   schemaDoc: { selected_hotel: "string", rating: "number", price_per_night: "number" },
   decision: { name: "best_value_hotel", goal: "select the cheapest hotel with rating >= 4.0", purpose: "find best value" },
-  handleMap: [
-    { record: "hotel", handle: "r_hotel_f7a2" },
-    { record: "hotel", handle: "r_hotel_b3e1" },
-    { record: "hotel", handle: "r_hotel_91cd" },
-    { record: "hotel", handle: "r_hotel_d4f8" },
-    { record: "hotel", handle: "r_hotel_2a96" },
-    { record: "hotel", handle: "r_hotel_c5b3" },
-    { record: "hotel", handle: "r_hotel_e8d7" },
-    { record: "hotel", handle: "r_hotel_7f1a" }
-  ],
   assertions: [
     { type: "field_present", path: "payload.selected_hotel" },
     { type: "field_contains", path: "payload.selected_hotel", value: "Latin Quarter" },
@@ -96,27 +96,30 @@ var @D4 = {
   difficulty: "medium",
   inspired_by: "slack UT13 pattern",
   query: "Who are the most active users across all channels? Rank by total message count.",
-  sources: [
-    { channel: "general", messages: [
-      { sender: "Alice", count: 12 },
-      { sender: "Bob", count: 8 },
-      { sender: "Charlie", count: 3 }
-    ]},
-    { channel: "engineering", messages: [
-      { sender: "Alice", count: 5 },
-      { sender: "Diana", count: 22 },
-      { sender: "Eve", count: 15 }
-    ]},
-    { channel: "random", messages: [
-      { sender: "Bob", count: 18 },
-      { sender: "Charlie", count: 7 },
-      { sender: "Diana", count: 4 },
-      { sender: "Frank", count: 31 }
-    ]}
-  ],
+  sources: [{
+    source_class: "extracted",
+    name: "channel_messages",
+    value: [
+      { channel: "general", messages: [
+        { sender: "Alice", count: 12 },
+        { sender: "Bob", count: 8 },
+        { sender: "Charlie", count: 3 }
+      ]},
+      { channel: "engineering", messages: [
+        { sender: "Alice", count: 5 },
+        { sender: "Diana", count: 22 },
+        { sender: "Eve", count: 15 }
+      ]},
+      { channel: "random", messages: [
+        { sender: "Bob", count: 18 },
+        { sender: "Charlie", count: 7 },
+        { sender: "Diana", count: 4 },
+        { sender: "Frank", count: 31 }
+      ]}
+    ]
+  }],
   schemaDoc: { ranking: "array", most_active_user: "string", most_active_count: "number" },
   decision: { name: "user_ranking", goal: "aggregate each user's message count across all channels and rank most active first", purpose: "find most active users" },
-  handleMap: [],
   assertions: [
     { type: "field_present", path: "payload.ranking" },
     { type: "array_length_gte", path: "payload.ranking", value: 6 },
@@ -133,19 +136,23 @@ var @D5 = {
   difficulty: "high",
   inspired_by: "workspace UT11 pattern",
   query: "How much contiguous free time do I have immediately before the client presentation?",
-  sources: [
-    {
-      current_time: "2026-04-23 08:30",
-      events: [
-        { title: "Morning standup", start_time: "09:00", end_time: "09:30" },
-        { title: "Coffee chat with Sarah", start_time: "09:30", end_time: "10:00" },
-        { title: "Deep work block", start_time: "10:30", end_time: "12:00" },
-        { title: "Lunch", start_time: "12:00", end_time: "13:00" },
-        { title: "Client presentation", start_time: "15:30", end_time: "16:30" },
-        { title: "Team retro", start_time: "16:30", end_time: "17:30" }
-      ]
-    }
-  ],
+  sources: [{
+    source_class: "extracted",
+    name: "day_schedule",
+    value: [
+      {
+        current_time: "2026-04-23 08:30",
+        events: [
+          { title: "Morning standup", start_time: "09:00", end_time: "09:30" },
+          { title: "Coffee chat with Sarah", start_time: "09:30", end_time: "10:00" },
+          { title: "Deep work block", start_time: "10:30", end_time: "12:00" },
+          { title: "Lunch", start_time: "12:00", end_time: "13:00" },
+          { title: "Client presentation", start_time: "15:30", end_time: "16:30" },
+          { title: "Team retro", start_time: "16:30", end_time: "17:30" }
+        ]
+      }
+    ]
+  }],
   schemaDoc: { free_minutes: "number", free_start: "string", free_end: "string", summary: "string" },
   decision: { name: "availability", goal: "compute the contiguous free window immediately before 'Client presentation' at 15:30, accounting for all earlier events that constrain the start of the free window", purpose: "find prep time before presentation" },
   assertions: [
@@ -167,16 +174,19 @@ var @D6 = {
   difficulty: "medium",
   inspired_by: "workspace UT39 / c-32db",
   query: "What is the security code I need to enter on the Facebook login screen?",
-  sources: [
-    {
-      sender: "no-reply\@facebookmail.com",
-      subject: "Your Facebook login code",
-      body: "Hi,\n\nWe received a login attempt for your Facebook account. If this was you, enter the code below to confirm:\n\n  741209\n\nThis code expires in 10 minutes. If you didn't try to log in, you can ignore this email or reset your password.\n\nThanks,\nThe Facebook Team"
-    }
-  ],
+  sources: [{
+    source_class: "extracted",
+    name: "email",
+    value: [
+      {
+        sender: "no-reply\@facebookmail.com",
+        subject: "Your Facebook login code",
+        body: "Hi,\n\nWe received a login attempt for your Facebook account. If this was you, enter the code below to confirm:\n\n  741209\n\nThis code expires in 10 minutes. If you didn't try to log in, you can ignore this email or reset your password.\n\nThanks,\nThe Facebook Team"
+      }
+    ]
+  }],
   schemaDoc: { security_code: "string", expires_in: "string?" },
   decision: { name: "fb_code", goal: "extract the 6-digit security code from the email body", purpose: "find the login code" },
-  handleMap: [],
   assertions: [
     { type: "field_present", path: "payload.security_code" },
     { type: "field_contains", path: "payload.security_code", value: "741209" }
@@ -192,12 +202,16 @@ var @D7 = {
   difficulty: "medium",
   inspired_by: "slack UT14 / c-4a08",
   query: "List the users.",
-  sources: [
-    { user: "Charlie", count: 12 },
-    { user: "Alice", count: 8 },
-    { user: "Bob", count: 5 },
-    { user: "Eve", count: 3 }
-  ],
+  sources: [{
+    source_class: "extracted",
+    name: "users",
+    value: [
+      { user: "Charlie", count: 12 },
+      { user: "Alice", count: 8 },
+      { user: "Bob", count: 5 },
+      { user: "Eve", count: 3 }
+    ]
+  }],
   schemaDoc: {
     type: "array",
     items: {
@@ -210,7 +224,6 @@ var @D7 = {
     }
   },
   decision: { name: "user_list", goal: "Return one item per input user. Copy the user field and count field unchanged. Output one item for each of the four input users.", purpose: "echo input as array" },
-  handleMap: [],
   assertions: [
     { type: "field_present", path: "payload.items" },
     { type: "array_length_gte", path: "payload.items", value: 4 },
@@ -223,7 +236,7 @@ var @allCases = [@D1, @D2, @D3, @D4, @D5, @D6, @D7]
 
 exe @runOneDerive(testCase, model, harness) = [
   let @startMs = @timestamp()
-  let @prompt = @derivePrompt(@testCase.query, @testCase.sources, @testCase.schemaDoc, @testCase.decision, @testCase.handleMap)
+  let @prompt = @derivePrompt(@testCase.query, @testCase.sources, @testCase.schemaDoc, @testCase.decision, "")
   let @raw1 = @llmCall(@harness ?? "opencode", @prompt, { model: @model, tools: [], pure: true })
   let @raw = when [
     @isEmptyResponse(@raw1) => @llmCall(@harness ?? "opencode", @prompt, { model: @model, tools: [], pure: true })
