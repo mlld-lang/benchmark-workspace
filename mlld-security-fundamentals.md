@@ -214,6 +214,7 @@ policy @p = {
       role:planner: [@sendEmail, @createFile]
     }
   },
+  records_require_tool_approval_per_role: false,
   env: {
     default: "@provider/sandbox",
     tools: { allow: ["Read", "Write"] }
@@ -354,6 +355,8 @@ policy @workspace = {
 ```
 
 The planner emits bucketed authorization intent; the framework checks `can_authorize`, compiles the intent via `@policy.build`, and applies the returned policy to the worker call. Invalid intent fails closed at activation. See §8 for the full pattern, the bucket shapes (`resolved`, `known`, `allow`), and how this composes with positive checks like `no-send-to-unknown`.
+
+`records_require_tool_approval_per_role` is a separate, global strictness switch for the submit side of record-backed tools. The default is `false`: a worker may submit a tool if that tool is included in the provided catalog for the call/box/bridge. Set it to `true` when an architecture wants every record-backed submit to also require the input record's `write.<role>.tools.submit` grant.
 
 ### 2.8 `locked` — absolute label-flow constraints
 
@@ -886,15 +889,14 @@ record @send_email_inputs = {
   facts: [recipient: string, subject: string],
   data:  { untrusted: [body: string] },
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker:  { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
 record @update_password_inputs = {
   data: { trusted: [password: string] },
   exact: [password],
-  write: {}                  >> explicit denial — locked out of every write surface
+  write: {}                  >> explicit denial for shelves and planner authorization
 }
 ```
 
@@ -905,7 +907,7 @@ Structure: `write: { role:<X>: { <target>: <permissions> } }`. Role keys are can
 | `shelves` | `upsert`, `clear`, `remove` | `shelves: true` → `{ upsert: true }` only |
 | `tools` | `authorize`, `submit` | bool form rejected at validate time |
 
-**Tool dispatch has two phases.** The planner *authorizes* (certifies the dispatch); the worker *submits* (executes it). These are structurally separate, and defaulting either would silently grant or deny a phase. Specify capabilities explicitly. This is also why authorize-then-submit flows have two role contexts — see §8.5 for the dual-role pattern.
+**Tool dispatch has two phases.** The planner *authorizes* (certifies the dispatch); the worker *submits* (executes it). Planner authorization always uses `tools.authorize`. Worker submission is allowed by inclusion in the provided tool catalog by default. If an architecture wants submission to require per-role record grants too, set `policy.records_require_tool_approval_per_role: true` and declare `tools.submit` explicitly. This is also why authorize-then-submit flows have two role contexts — see §8.5 for the dual-role pattern.
 
 **Scope specs** narrow capabilities to specific instances:
 
@@ -923,13 +925,13 @@ write: {
 
 `true` means all in-scope instances. `[@ref, ...]` lists specific instances. `[{ labels: "x" }]` matches by label (tools only in v1).
 
-**Deny-by-default.** Every absence is a denial: missing `write:`, missing role, missing target, missing capability, or scope mismatch all reject the operation at runtime. The explicit denial form is `write: {}` — replaces the legacy `tool.can_authorize: false` annotation.
+**Deny-by-default for write surfaces.** Every absence is a denial for shelf writes, planner authorization, and strict submit approval: missing `write:`, missing role, missing target, missing capability, or scope mismatch all reject that operation at runtime. The explicit denial form is `write: {}` for shelf writes and planner authorization. Under the default submit model, deny tool execution by omitting the tool from the provided catalog or listing it in `policy.authorizations.deny`.
 
-**Active role.** The active role at the write site comes from the LLM bridge's display selection — `with { read }`, box config, or matching `role:*` exe label. Writes from non-bridge contexts have no active role; deny-by-default applies if the record declares `write:`. Tests that exercise tool submission must run inside an exe carrying `role:worker` (or whichever role the record's `write:` permits); tests that exercise `@policy.build` must run under `role:planner`. Without the active role, dispatch fails with `WRITE_DENIED_NO_ACTIVE_ROLE` regardless of fact proof.
+**Active role.** The active role at the write site comes from the LLM bridge's display selection — `with { read }`, box config, or matching `role:*` exe label. Writes from non-bridge contexts have no active role; deny-by-default applies to shelf writes, planner authorization, and strict submit approval if the record declares `write:`. Tests that exercise strict per-role submit approval must run inside an exe carrying `role:worker` (or whichever role the record's `write:` permits); tests that exercise `@policy.build` must run under `role:planner`. Without the active role, record write checks fail with `WRITE_DENIED_NO_ACTIVE_ROLE` regardless of fact proof.
 
 **Composition with input-record constraints.** `write:` is orthogonal to `exact`, `update`, `allowlist`, `blocklist`, `correlate`, and `optional_benign`. All applicable constraints fire at dispatch; any failure rejects the call.
 
-**Relationship to policy `authorizations.can_authorize`.** Records' `write.<role>.tools.{authorize, submit}` and policy `authorizations.can_authorize` are two surfaces granting the same authority. Catalog entries can also declare `can_authorize` legacy-style, which compiles additively into the policy. The record-side declaration is preferred because it lives with the contract; the policy-side override is for cross-cutting deny rules (`authorizations.deny`).
+**Relationship to policy `authorizations.can_authorize`.** Records' `write.<role>.tools.authorize` and policy `authorizations.can_authorize` are two surfaces for planner authorization. Catalog entries can also declare `can_authorize` legacy-style, which compiles additively into the policy. The record-side declaration is preferred because it lives with the contract; the policy-side override is for cross-cutting deny rules (`authorizations.deny`). `write.<role>.tools.submit` is only part of the submit path when `policy.records_require_tool_approval_per_role` is enabled.
 
 #### Optional facts and the benign-omission rule
 
@@ -1684,6 +1686,7 @@ Write authorization is declared per role in policy:
 ```mlld
 policy @p = {
   defaults: { rules: ["no-send-to-unknown", "no-untrusted-destructive"] },
+  records_require_tool_approval_per_role: false,
   operations: { "exfil:send": ["tool:w:send_email"] },
   authorizations: {
     deny: ["update_password"],
@@ -1696,6 +1699,7 @@ policy @p = {
 
 - **`deny`** — no role can authorize these tools, ever. Hard structural denial; survives `{ guards: false }` and is not subject to privileged-guard override.
 - **`can_authorize`** — which roles can authorize which tools. The framework checks this before calling `@policy.build`. Catalog entries can also declare `can_authorize: "role:planner" | false | [roles]`, which compiles additively into this field; policy wins on conflict.
+- **`records_require_tool_approval_per_role`** — when `true`, record-backed tool submission also requires `write.<role>.tools.submit`. The default is `false`, where membership in the provided tool catalog is enough to submit.
 
 The planner's `role:planner` exe label is the load-bearing identity for authorization decisions. Treat role labels as the security identity; do not rely on `read:` overrides to switch identity. The runtime resolves the active authorization role in this order: tool-config role > exe `role:*` label > scoped `read:` mode mapped to a role. Scoped `read:` *can* fall through into the active role when no other source declares one, so prefer explicit role labels on exes that participate in authorization rather than relying on the read-mode fallback.
 
@@ -1703,7 +1707,7 @@ The planner sees `<authorization_notes>` — auto-injected docs for tools it can
 
 #### Two separate gates
 
-`authorizations.can_authorize` (policy-level) and `write.<role>.tools.{authorize, submit}` (record-level, §4.5) are **two separate gates that compose conjunctively**, not aliases of each other. A dispatch must pass *both* — the record's per-role write capability, and (when defined) the policy's role/tool authorization map.
+`authorizations.can_authorize` (policy-level) and `write.<role>.tools.authorize` (record-level, §4.5) are **two separate authorization gates that compose conjunctively**, not aliases of each other. A planner authorization must pass *both* — the record's per-role authorize capability, and (when defined) the policy's role/tool authorization map. A worker submit is allowed by provided catalog membership by default; under `records_require_tool_approval_per_role: true`, it must also pass the record's per-role `tools.submit` capability.
 
 The record-side `write:` is the contract that travels with the record. Catalogs may also carry legacy `can_authorize` defaults at the entry level, but these are ignored when the entry has an `inputs:` record (the record-side declaration is authoritative). Policy-side `authorizations` is the right home for cross-cutting `deny` rules and for granting roles that a record's authors didn't anticipate.
 
@@ -1746,11 +1750,11 @@ exe @dispatchExecute(intent, tools, prompt, query) = [
 ]
 ```
 
-`@policy.build` runs in whatever role surface the orchestrator is currently in. When the planner emits intent from inside an `@claude` call carrying `role:planner`, the bridge's authorization-role propagation lets `@policy.build` see `role:planner` as the active role and the record's `write.role:planner.tools.authorize` check passes. The worker call then runs under `role:worker` and `write.role:worker.tools.submit` passes.
+`@policy.build` runs in whatever role surface the orchestrator is currently in. When the planner emits intent from inside an `@claude` call carrying `role:planner`, the bridge's authorization-role propagation lets `@policy.build` see `role:planner` as the active role and the record's `write.role:planner.tools.authorize` check passes. The worker call then runs under `role:worker` and may submit because the write tool is in the provided catalog. Strict deployments with `records_require_tool_approval_per_role: true` also require `write.role:worker.tools.submit` to pass.
 
 **Common cause of `WRITE_DENIED_NO_ACTIVE_ROLE`:** orchestrator code calls `@policy.build` from outside any LLM/exe-label surface, so the active role is undefined. Wrap the build in an `exe role:planner` helper, or call it from inside the planner's own `@claude` flow.
 
-**Test scaffolding.** Tests that exercise tool *submission* must run inside an exe carrying `role:worker` (or a role the record's `write:` permits for `submit`). Tests that exercise `@policy.build` directly must run under `role:planner` (typically `exe role:planner @testFoo()`). Tests covering the full dispatcher need both surfaces. Without them, `WRITE_DENIED_NO_ACTIVE_ROLE` fires before any value-level assertion — and the test failure is misleading because the cause is structural, not value-level.
+**Test scaffolding.** Tests that exercise strict per-role tool *submission* must run inside an exe carrying `role:worker` (or a role the record's `write:` permits for `submit`). Tests that exercise `@policy.build` directly must run under `role:planner` (typically `exe role:planner @testFoo()`). Tests covering the full dispatcher need both surfaces. Without them, record write checks fire `WRITE_DENIED_NO_ACTIVE_ROLE` before any value-level assertion — and the test failure is misleading because the cause is structural, not value-level.
 
 ### 8.6 Bucketed intent
 
@@ -1884,6 +1888,7 @@ Composition is **restrictive by default**. The most restrictive wins:
 - `capabilities.danger` — restrictive: intersection when both sides declare it; **empty when only one side declares it** (one-sided dangers don't pass through, because the unilateral side hasn't been confirmed by the other)
 - `authorizations.deny` — union
 - `authorizations.can_authorize` — intersection per role and per tool when both sides declare; one-sided declarations pass through unchanged
+- `records_require_tool_approval_per_role` — sticky (`true` wins)
 - `locked` — sticky (if any source is locked, the result is locked)
 - `operations` — union (semantic-label → risk-category mappings merge)
 
