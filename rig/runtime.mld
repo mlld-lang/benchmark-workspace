@@ -21,13 +21,13 @@ import {
   @resolvedEntryFieldValue
 } from "./intent.mld"
 import { @appendLlmCall, @serializeLifecycleJson } from "./lifecycle.mld"
-import { @withUrlCapabilities } from "./transforms/url_refs.mld"
 
 >> Shared runtime helpers for the rig loop and per-phase workers.
 >> Stage B (records-as-policy + bucket→shelf): state.resolved is gone;
 >> resolved records live on @agent.plannerShelf as plain record-coerced
 >> values with .mx.address.{record, key, string} for identity. State
->> still carries extracted/derived/extract_sources/capabilities.
+>> carries extracted/derived/extract_sources. URL-promotion capabilities
+>> live on @agent.urlCapShelf (c-bac4), not in state.
 
 exe llm @llmCall(harness, prompt, config) = when [
   @harness == "stub" => @stubLlmResponse(@config)
@@ -595,17 +595,14 @@ exe @adviceVisibleState(agent, state) = [
   }
 ]
 
->> capabilities is the rig-private state namespace for fact-bearing
->> material that must NOT appear in any record's public value. v1 carries
->> only `url_refs` (URL-promotion, c-be06), keyed by url_ref handle.
->> Future capabilities (typed-instruction binders, file-read authority)
->> live alongside under sibling keys.
-exe @rigState(extracted, derived, extractSources, capabilities) = [
+>> URL-promotion capabilities used to live in state.capabilities.url_refs
+>> (c-be06 era). After c-bac4 they live on @agent.urlCapShelf — a typed
+>> shelf bounded to @url_capability. State no longer carries capabilities.
+exe @rigState(extracted, derived, extractSources) = [
   => {
     extracted: @extracted,
     derived: @derived,
-    extract_sources: @extractSources,
-    capabilities: @capabilities ?? { url_refs: {} }
+    extract_sources: @extractSources
   }
 ]
 
@@ -613,8 +610,7 @@ exe @emptyState() = [
   => {
     extracted: {},
     derived: {},
-    extract_sources: {},
-    capabilities: { url_refs: {} }
+    extract_sources: {}
   }
 ]
 
@@ -625,14 +621,12 @@ exe @updateNamedState(state, bucket, name, entry) = [
     @bucket == "extracted" => @rigState(
       @nextBucket,
       @structuredData(@state.derived),
-      @structuredData(@state.extract_sources),
-      @structuredData(@state.capabilities)
+      @structuredData(@state.extract_sources)
     )
     @bucket == "derived" => @rigState(
       @structuredData(@state.extracted),
       @nextBucket,
-      @structuredData(@state.extract_sources),
-      @structuredData(@state.capabilities)
+      @structuredData(@state.extract_sources)
     )
     * => @state
   ]
@@ -644,8 +638,7 @@ exe @updateExtractSources(state, sourceKey, extractName) = [
   => @rigState(
     @structuredData(@state.extracted),
     @structuredData(@state.derived),
-    @nextSources,
-    @structuredData(@state.capabilities)
+    @nextSources
   )
 ]
 

@@ -128,18 +128,25 @@ Proposed shape:
 }
 ```
 
-`url_ref` deliberately has no URL field. The actual URL string is stored in a
-rig-private capability map:
+`url_ref` deliberately has no URL field. The actual URL string is stored
+on a separate rig-private capability shelf as `@url_capability` records
+(rig/records.mld, c-bac4):
 
 ```text
-state.capabilities.url_refs[<url_ref_handle>] = {
-  url: <exact literal URL to fetch>,
-  canonical_url: <canonical duplicate key>,
-  source_msg_handle: <slack_msg handle>,
-  safety_status: "ok" | "blocked",
-  reason?: <short diagnostic>
+@url_capability = {
+  facts: [url_ref_handle: string],
+  data: { untrusted: [url: string] },
+  read: { default: [], role:planner: [], role:worker: [] },
+  write: { role:worker: { shelves: true } }
 }
 ```
+
+The shelf (`@agent.urlCapShelf`) is declared in `@runPlannerSession`
+session-scoped, so capabilities minted by one dispatch survive subsequent
+dispatches in the same planner iteration. `dispatchFindReferencedUrls`
+writes one `@url_capability` per ok ref (keyed by the actual minted
+`url_ref` handle); `dispatchGetWebpageViaRef` reads via `@shelf.read` +
+`url_ref_handle` equality filter.
 
 `canonical_url_hash` is a non-reversible duplicate key, not a host, path, or
 masked URL preview.
@@ -148,11 +155,10 @@ masked URL preview.
 ordinal, or from an opaque counter. Do not use the URL or host in the record key,
 because rig state handles include record keys.
 
-This map is not part of `state.resolved`, is not projected to planners or
-workers, and is not accessible through `{ source: "resolved", field: ... }`.
-Current rig cannot express private record facts safely: undisplayed fields in a
-raw resolved value can still be dereferenced by `resolveRefValue`. Therefore v1
-must not put the URL string in the `url_ref` record value at all.
+`@url_capability` declares every `read:` mode empty so it is never
+projected to any LLM role; the dispatcher reads via `@shelf.read` which
+is documented unprojected. The URL string never reaches any planner or
+worker LLM view.
 
 ### `referenced_webpage_content`
 
@@ -320,7 +326,7 @@ For each input `slack_msg`:
 - read `body` from resolved state;
 - apply deterministic URL extraction;
 - mint zero or more resolved `url_ref` records;
-- write the exact URL strings into `state.capabilities.url_refs`;
+- write the exact URL strings into `@agent.urlCapShelf` (typed @url_capability shelf);
 - attach provenance to the source message handle and character position;
 - return refs in source order.
 
@@ -500,7 +506,7 @@ No generic URL laundering:
 
 - `url_ref` is a fetch capability, not a generic URL proof;
 - `url_ref` records contain no URL field;
-- the actual URL is stored only in `state.capabilities.url_refs`;
+- the actual URL is stored only in `@agent.urlCapShelf` (typed @url_capability shelf);
 - `post_webpage.url` must not accept a `url_ref` handle;
 - `post_webpage.url` must not accept a URL fact from a page fetched through
   `url_ref`, because `referenced_webpage_content` has no URL fact;
@@ -694,7 +700,7 @@ scalar URL and `url_ref` exposes no URL scalar.
 
 Add resolve-transform support. The concrete change is:
 
-- add `state.capabilities.url_refs` to `rigState` and `emptyState`;
+- add `@agent.urlCapShelf` (typed @url_capability shelf) to `rigState` and `emptyState`;
 - add helpers to merge capability deltas into state;
 - add `rig/transforms/url_refs.mld` with deterministic parser and fetch-ref
   dispatcher;
@@ -708,13 +714,13 @@ Add resolve-transform support. The concrete change is:
 - dereference the record from state;
 - run deterministic URL extraction;
 - mint resolved `url_ref` records in state;
-- write ok URLs to `state.capabilities.url_refs`;
+- write ok URLs to `@agent.urlCapShelf` (typed @url_capability shelf);
 - write blocked refs without fetchable capabilities when the safety gate fails.
 
 `get_webpage_via_ref` then:
 
 - validate a fieldless resolved `url_ref` handle or array of handles;
-- read the exact URL from `state.capabilities.url_refs`;
+- read the exact URL from `@agent.urlCapShelf` (typed @url_capability shelf);
 - call the existing webpage bridge internally;
 - normalize results as `referenced_webpage_content`, not `webpage_content`.
 
@@ -810,7 +816,7 @@ All tests below should be possible without LLM calls.
 - duplicate canonical URLs deduplicate fetches but preserve provenance;
 - planner display for `url_ref` does not contain the raw URL;
 - the raw URL is absent from the `url_ref` resolved entry value and exists only
-  in `state.capabilities.url_refs`.
+  in `@agent.urlCapShelf` (typed @url_capability shelf).
 
 `get_webpage_via_ref`:
 
@@ -895,7 +901,7 @@ Initial rollout should be Slack-only and defended-mode only.
 
 Suggested stages:
 
-1. Add `state.capabilities.url_refs` and zero-LLM tests with feature disabled.
+1. Add `@agent.urlCapShelf` (typed @url_capability shelf) and zero-LLM tests with feature disabled.
 2. Add record and catalog metadata with `rigTransform` entries.
 3. Add resolve-transform implementation and record-handle argument validation.
 4. Land zero-LLM invariant tests.

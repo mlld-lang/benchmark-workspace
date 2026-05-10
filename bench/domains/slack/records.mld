@@ -130,11 +130,12 @@ record @webpage_content = {
 >>
 >> Minted by @find_referenced_urls from a resolved slack_msg body. The
 >> record carries provenance (which message, where in the body) and a
->> safety flag — but NO `url` field. The actual URL string lives in
->> rig-private state.capabilities.url_refs and is reachable only by
->> @get_webpage_via_ref. This prevents a body-promoted URL from being
->> reused as a generic fact for post_webpage / send_direct_message etc.
->> (URL_PROMOTION.md "url_ref" + threat enumeration).
+>> safety flag — but NO `url` field. The actual URL string lives as a
+>> sibling @url_capability record on the session-scoped urlCapShelf
+>> (rig/records.mld, c-bac4) and is reachable only by @get_webpage_via_ref.
+>> This prevents a body-promoted URL from being reused as a generic fact
+>> for post_webpage / send_direct_message etc. (URL_PROMOTION.md "url_ref"
+>> + threat enumeration).
 record @url_ref = {
   facts: [
     id_: { type: string, kind: "url_ref_id" },

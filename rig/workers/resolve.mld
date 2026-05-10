@@ -3,7 +3,8 @@ import {
   @callTool,
   @writeRecordsToShelf,
   @recordHandles,
-  @shelfLookupByHandle
+  @shelfLookupByHandle,
+  @stateHandleFromAddress
 } from "../runtime.mld"
 import { @pairsToObject } from "../tooling.mld"
 import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.mld"
@@ -15,11 +16,9 @@ import {
   @applyUrlRefs,
   @urlRefId,
   @buildUrlRefRecordValue,
-  @buildUrlRefCapabilityEntry,
-  @withUrlCapabilities,
-  @hasUrlCapability,
-  @lookupUrlCapability
+  @buildUrlCapabilityValue
 } from "../transforms/url_refs.mld"
+import { @url_capability } from "../records.mld"
 
 exe @resolvePrompt(query, decision, toolDocs, stateSummary) = template "../prompts/resolve.att"
 
@@ -37,9 +36,10 @@ exe @resolveDebug(agent, marker) = [
   => null
 ]
 
->> URL-promotion (c-be06): mint url_ref handles for URLs found in a
->> resolved slack_msg body. Public records carry no URL; the URL string
->> lands in state.capabilities.url_refs keyed by handle.
+>> URL-promotion (c-be06, c-bac4): mint url_ref handles for URLs found
+>> in a resolved slack_msg body. Public records carry no URL; the URL
+>> string lands as a @url_capability entry on the agent's session-scoped
+>> urlCapShelf, keyed by the same id_ as the url_ref handle.
 exe role:worker @dispatchFindReferencedUrls(agent, state, tool, descriptors, decision, query, deltaOnly) = [
   let @msgHandle = @descriptors.message.handle
   let @msgEntry = @shelfLookupByHandle(@agent, "slack_msg", @msgHandle)
@@ -56,25 +56,26 @@ exe role:worker @dispatchFindReferencedUrls(agent, state, tool, descriptors, dec
     let @refId = @urlRefId(@msgHandle, @ref.ordinal_in_message)
     => @buildUrlRefRecordValue(@ref, @msgHandle, @refId)
   ]
-  let @capPairs = for @ref in @parsed.refs when @ref.safety_status == "ok" [
-    let @refId = @urlRefId(@msgHandle, @ref.ordinal_in_message)
-    let @stateHandleVal = `r_url_ref_@refId`
-    => { key: @stateHandleVal, value: @buildUrlRefCapabilityEntry(@ref, @msgHandle) }
-  ]
-  let @capDelta = @pairsToObject(@capPairs)
   let @recordType = "url_ref"
   let @recordDef = @tool.returns
   let @records = @writeRecordsToShelf(@agent, @recordType, @recordDef, @publicRecords)
   let @handles = @recordHandles(@records)
-  let @nextState = when [
-    @deltaOnly => null
-    * => @withUrlCapabilities(@state, @capDelta)
+  >> Capability shelf writes: one @url_capability entry per ok ref,
+  >> keyed by the actual minted url_ref handle so lookup is a plain
+  >> string match against the descriptor handle.
+  let @capWrites = for @ref in @parsed.refs when @ref.safety_status == "ok" [
+    let @refId = @urlRefId(@msgHandle, @ref.ordinal_in_message)
+    let @matched = for @r in @records when @r.mx.data.id_ == @refId => @r
+    let @urlRefHandle = when [ @matched.length > 0 => @stateHandleFromAddress(@matched[0]) * => null ]
+    let @capVal = @buildUrlCapabilityValue(@urlRefHandle, @ref.url) as record @url_capability
+    let @w = @shelf.write(@agent.urlCapShelf.url_capability, @capVal)
+    => true
   ]
   let @okList = for @ref in @parsed.refs when @ref.safety_status == "ok" => @ref
   let @blockedList = for @ref in @parsed.refs when @ref.safety_status == "blocked" => @ref
   => {
-    state: @nextState,
-    state_delta: { capabilities: { url_refs: @capDelta } },
+    state: when [ @deltaOnly => null * => @state ],
+    state_delta: {},
     result: {
       status: "resolved",
       record_type: @recordType,
@@ -86,21 +87,31 @@ exe role:worker @dispatchFindReferencedUrls(agent, state, tool, descriptors, dec
   }
 ]
 
->> URL-promotion fetch (c-be06): dereference url_ref handles to the
->> private capability map, fetch each URL via the suite-provided mlld
->> exe, and normalize the result as referenced_webpage_content with
->> source_url_ref provenance and untrusted content.
+>> URL-promotion fetch (c-be06, c-bac4): dereference url_ref handles to
+>> the urlCapShelf, fetch each URL via the suite-provided mlld exe, and
+>> normalize the result as referenced_webpage_content with source_url_ref
+>> provenance and untrusted content. The url_ref handle is
+>> `r_url_ref_<id_>`; the capability is keyed by the bare <id_>.
 exe role:worker @dispatchGetWebpageViaRef(agent, state, tool, descriptors, decision, query, deltaOnly) = [
   let @refDescriptor = @descriptors.ref
   let @refsList = when [
     @typeof(@refDescriptor) == "array" => @refDescriptor
     * => [@refDescriptor]
   ]
-  let @lookups = for @rd in @refsList => {
-    handle: @rd.handle,
-    has_url: @hasUrlCapability(@state, @rd.handle)
-  }
-  let @missing = for @lr in @lookups when !@lr.has_url => @lr
+  let @capEntries = when [
+    @agent.urlCapShelf.isDefined() => @shelf.read(@agent.urlCapShelf.url_capability)
+    * => []
+  ]
+  >> Match by url_ref_handle equality — dispatchFindReferencedUrls wrote
+  >> each capability with the actual minted handle as its key field.
+  let @lookups = for @rd in @refsList [
+    let @hits = for @e in @capEntries when @e.url_ref_handle == @rd.handle => @e
+    => {
+      handle: @rd.handle,
+      url: when [ @hits.length > 0 => @hits[0].url * => null ]
+    }
+  ]
+  let @missing = for @lr in @lookups when @lr.url == null || @lr.url == "" => @lr
   if @missing.length > 0 [
     => {
       error: "url_ref_capability_missing",
@@ -108,8 +119,7 @@ exe role:worker @dispatchGetWebpageViaRef(agent, state, tool, descriptors, decis
     }
   ]
   let @composed = for @lr in @lookups [
-    let @url = @lookupUrlCapability(@state, @lr.handle)
-    let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, { url: @url })
+    let @raw = @callTool(@tool, @agent.toolsCollection, @decision.tool, { url: @lr.url })
     let @baseId = @lr.handle.replace("r_", "")
     => {
       id_: `web_@baseId`,

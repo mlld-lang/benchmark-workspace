@@ -19,10 +19,9 @@ import {
   @applyUrlRefs,
   @urlRefId,
   @buildUrlRefRecordValue,
-  @buildUrlRefCapabilityEntry,
-  @mergeUrlRefCapabilities,
-  @lookupUrlCapability
+  @buildUrlCapabilityValue
 } from "../../rig/transforms/url_refs.mld"
+import { @url_capability } from "../../rig/records.mld"
 import { @compileRecordArgs } from "../../rig/intent.mld"
 import { @plainObjectKeys, @shelfRecords, @emptyState } from "../../rig/runtime.mld"
 import { @synthesizedPolicy } from "../../rig/orchestration.mld"
@@ -49,30 +48,18 @@ exe @urBlockedYieldsNoCapability(refMeta) = js {
   return false;
 }
 
-exe @urLookupReturnsNullFor(state, handle) = js {
-  if (!state || typeof state !== "object") return true;
-  const caps = state.capabilities;
-  if (!caps || typeof caps !== "object") return true;
-  const map = caps.url_refs;
-  if (!map || typeof map !== "object") return true;
-  const entry = map[handle];
-  if (!entry || typeof entry !== "object") return true;
-  if (entry.safety_status !== "ok") return true;
-  return typeof entry.url !== "string";
-}
-
 >> --- Group B fixtures (UR-13, UR-14) -------------------------------------
 
 var @urBFixture = @applyUrlRefs("see https://example.com/article and beacon https://internal.example.com/check?key=secret")
 var @urBOkRef = @urBFixture.refs[0]
 var @urBBlockedRef = @urBFixture.refs[1]
 var @urBOkRefId = @urlRefId("r_msg_main", 0)
-var @urBOkHandle = `r_@urBOkRefId`
+var @urBOkHandle = `r_url_ref_@urBOkRefId`
 var @urBBlockedRefId = @urlRefId("r_msg_main", 1)
-var @urBBlockedHandle = `r_@urBBlockedRefId`
+var @urBBlockedHandle = `r_url_ref_@urBBlockedRefId`
 var @urBOkRecord = @buildUrlRefRecordValue(@urBOkRef, "r_msg_main", @urBOkRefId)
 var @urBBlockedRecord = @buildUrlRefRecordValue(@urBBlockedRef, "r_msg_main", @urBBlockedRefId)
-var @urBCapEntry = @buildUrlRefCapabilityEntry(@urBOkRef, "r_msg_main")
+var @urBOkCapValue = @buildUrlCapabilityValue(@urBOkHandle, @urBOkRef.url)
 
 >> --- Group C fixtures (UR-15..20) ----------------------------------------
 >>
@@ -131,6 +118,8 @@ var @urDBasePolicy = @synthesizedPolicy(@urDTools, null)
 exe role:worker @urDRunFindRefs() = [
   let @sh = @shelfRecords(@urDRecords)
   shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @urlCapRecords = { url_capability: @url_capability }
+  shelf @ucs from @urlCapRecords with { versioned: true }
   let @msg = {
     sender: "alice",
     recipient: "bob",
@@ -144,6 +133,7 @@ exe role:worker @urDRunFindRefs() = [
     defense: "defended",
     records: @urDRecords,
     plannerShelf: @ps,
+    urlCapShelf: @ucs,
     tools: @urDTools,
     toolsCollection: @urDTools,
     basePolicy: @urDBasePolicy
@@ -162,6 +152,8 @@ exe role:worker @urDRunFindRefs() = [
 exe role:worker @urDRunFindAndFetch() = [
   let @sh = @shelfRecords(@urDRecords)
   shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @urlCapRecords = { url_capability: @url_capability }
+  shelf @ucs from @urlCapRecords with { versioned: true }
   let @msg = {
     sender: "alice",
     recipient: "bob",
@@ -175,6 +167,7 @@ exe role:worker @urDRunFindAndFetch() = [
     defense: "defended",
     records: @urDRecords,
     plannerShelf: @ps,
+    urlCapShelf: @ucs,
     tools: @urDTools,
     toolsCollection: @urDTools,
     basePolicy: @urDBasePolicy
@@ -185,8 +178,9 @@ exe role:worker @urDRunFindAndFetch() = [
     args: { message: { source: "resolved", record: "slack_msg", handle: @msgHandle } },
     purpose: "extract URL refs from the seed message"
   }, "summarize the linked article", false)
-  let @okRefHandle = @plainObjectKeys(@findResult.state.capabilities.url_refs)[0]
-  let @fetchResult = @dispatchResolve(@agent, @findResult.state, {
+  let @capEntries = @shelf.read(@ucs.url_capability)
+  let @okRefHandle = @capEntries[0].url_ref_handle
+  let @fetchResult = @dispatchResolve(@agent, @emptyState(), {
     phase: "resolve",
     tool: "get_webpage_via_ref",
     args: { ref: { source: "resolved", record: "url_ref", handle: @okRefHandle } },
@@ -196,12 +190,14 @@ exe role:worker @urDRunFindAndFetch() = [
 ]
 
 >> UR-24 fake-handle scenario: the shelf has a url_ref entry but no
->> matching capability in state.capabilities.url_refs (the
->> find_referenced_urls dispatch never minted it). Fetching that handle
->> via get_webpage_via_ref must reject as url_ref_capability_missing.
+>> matching @url_capability entry on urlCapShelf (the find_referenced_urls
+>> dispatch never minted it). Fetching that handle via get_webpage_via_ref
+>> must reject as url_ref_capability_missing.
 exe role:worker @urDRunFetchMissing() = [
   let @sh = @shelfRecords(@urDRecords)
   shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @urlCapRecords = { url_capability: @url_capability }
+  shelf @ucs from @urlCapRecords with { versioned: true }
   let @fakeRef = {
     id_: "fake_001",
     source_msg: "r_slack_msg_seed_001",
@@ -215,6 +211,7 @@ exe role:worker @urDRunFetchMissing() = [
     defense: "defended",
     records: @urDRecords,
     plannerShelf: @ps,
+    urlCapShelf: @ucs,
     tools: @urDTools,
     toolsCollection: @urDTools,
     basePolicy: @urDBasePolicy
@@ -235,16 +232,16 @@ exe @testUr13BlockedRefMintsNoCapability() = [
   => @assertEq(@minted, true)
 ]
 
-exe @testUr14EndToEndNoUrlLeakInRecords() = [
-  let @capMap = @mergeUrlRefCapabilities({}, { [@urBOkHandle]: @urBCapEntry })
-  let @lookupState = {
-    extracted: {},
-    derived: {},
-    extract_sources: {},
-    capabilities: { url_refs: @capMap }
-  }
-  let @lookedUpUrl = @lookupUrlCapability(@lookupState, @urBOkHandle)
-  let @blockedIsNull = @urLookupReturnsNullFor(@lookupState, @urBBlockedHandle)
+exe role:worker @testUr14EndToEndNoUrlLeakInRecords() = [
+  let @urlCapRecords = { url_capability: @url_capability }
+  shelf @ucs from @urlCapRecords with { versioned: true }
+  let @capRec = @urBOkCapValue as record @url_capability
+  let @w = @shelf.write(@ucs.url_capability, @capRec)
+  let @entries = @shelf.read(@ucs.url_capability)
+  let @okHits = for @e in @entries when @e.url_ref_handle == @urBOkHandle => @e
+  let @blockedHits = for @e in @entries when @e.url_ref_handle == @urBBlockedHandle => @e
+  let @lookedUpUrl = when [ @okHits.length > 0 => @okHits[0].url * => null ]
+  let @blockedIsNull = @blockedHits.length == 0
   let @combinedSerialized = @urJsonStringify({ ok: @urBOkRecord, blocked: @urBBlockedRecord })
   let @noUrlAnywhere = !@combinedSerialized.includes("https://internal.example.com/check") && !@combinedSerialized.includes("internal.example.com")
   let @capMapHit = @lookedUpUrl == "https://example.com/article"
@@ -333,11 +330,14 @@ exe role:worker @testUr18RecordArgsRejectsDerivedSource() = [
 exe role:worker @testUr19DispatchForgedHandleRejectedAtLookup() = [
   let @sh = @shelfRecords(@urDRecords)
   shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner", "role:worker"] }
+  let @urlCapRecords = { url_capability: @url_capability }
+  shelf @ucs from @urlCapRecords with { versioned: true }
   let @agent = {
     suite: "url-promotion-dispatch-test",
     defense: "defended",
     records: @urDRecords,
     plannerShelf: @ps,
+    urlCapShelf: @ucs,
     tools: @urDTools,
     toolsCollection: @urDTools,
     basePolicy: @urDBasePolicy
@@ -369,35 +369,35 @@ exe role:worker @testUr20RecordArgsRejectsMismatchedRecordType() = [
 
 exe role:worker @testUr21DispatchFindReferencedUrlsMintsRecordsAndCaps() = [
   let @ctx = @urDRunFindRefs()
-  let @capMap = @ctx.result.state.capabilities.url_refs
-  let @capCount = @plainObjectKeys(@capMap).length
+  let @capEntries = @shelf.read(@ctx.agent.urlCapShelf.url_capability)
+  let @capCount = @capEntries.length
   let @recordCount = @ctx.result.result.count
   let @ok = @ctx.result.error == null && @recordCount == 2 && @capCount == 1
   => @assertOk(@ok, `error=@ctx.result.error records=@recordCount capabilities=@capCount`)
 ]
 
-exe role:worker @testUr22DispatchStateDeltaShapeAndNoUrlInRecords() = [
+exe role:worker @testUr22DispatchNoUrlInPublicRecords() = [
   let @ctx = @urDRunFindRefs()
-  let @deltaCaps = @ctx.result.state_delta.capabilities.url_refs
   let @urlRefSlot = @ctx.agent.plannerShelf.url_ref
   let @entries = @shelf.read(@urlRefSlot)
   let @firstSerialized = @urJsonStringify(@entries[0])
   let @secondSerialized = @urJsonStringify(@entries[1])
   let @noUrlInRecords = !@firstSerialized.includes("example.com") && !@secondSerialized.includes("internal.example.com")
-  let @deltaCapsKeys = @plainObjectKeys(@deltaCaps).length
-  let @ok = @entries.length == 2 && @deltaCapsKeys == 1 && @noUrlInRecords
-  => @assertOk(@ok, `shelf_records=@entries.length delta_caps=@deltaCapsKeys no_url_leak=@noUrlInRecords`)
+  let @capEntries = @shelf.read(@ctx.agent.urlCapShelf.url_capability)
+  let @ok = @entries.length == 2 && @capEntries.length == 1 && @noUrlInRecords
+  => @assertOk(@ok, `shelf_records=@entries.length cap_entries=@capEntries.length no_url_leak=@noUrlInRecords`)
 ]
 
 exe role:worker @testUr23DispatchGetWebpageViaRefFetchesViaCapability() = [
   let @ctx = @urDRunFindAndFetch()
   let @webpageSlot = @ctx.agent.plannerShelf.referenced_webpage_content
   let @webpageEntries = @shelf.read(@webpageSlot)
-  let @webpageEntry = @webpageEntries[0]
-  let @contentOk = @webpageEntry.content.includes("STUB-CONTENT-FOR")
-  let @sourceLink = @webpageEntry.source_url_ref == @ctx.okRefHandle
+  let @entry0 = @webpageEntries[0]
+  let @contentValue = `@entry0.content`
+  let @contentOk = @contentValue.includes("STUB-CONTENT-FOR")
+  let @sourceLink = @entry0.source_url_ref == @ctx.okRefHandle
   let @ok = @ctx.fetchResult.error == null && @contentOk && @sourceLink
-  => @assertOk(@ok, `error=@ctx.fetchResult.error content_ok=@contentOk source_link_ok=@sourceLink`)
+  => @assertOk(@ok, `error=@ctx.fetchResult.error content_ok=@contentOk source_link_ok=@sourceLink content=@contentValue`)
 ]
 
 exe role:worker @testUr24DispatchGetWebpageViaRefRejectsMissingCapability() = [
@@ -423,9 +423,10 @@ var @urlRefsBSuite = @suite("url-refs-b", [
   ], { ticket: "c-be06", notes: "UR-19 post-Stage-B reframe: handle-existence check moved from @compileRecordArgs to @lookupResolvedEntry; forged handle now caught at the resolve worker's downstream lookup." }),
   @group("dispatch-integration", [
     @testUr21DispatchFindReferencedUrlsMintsRecordsAndCaps,
-    @testUr22DispatchStateDeltaShapeAndNoUrlInRecords,
+    @testUr22DispatchNoUrlInPublicRecords,
+    @testUr23DispatchGetWebpageViaRefFetchesViaCapability,
     @testUr24DispatchGetWebpageViaRefRejectsMissingCapability
-  ], { ticket: "c-be06", notes: "UR-23 (DispatchGetWebpageViaRefFetchesViaCapability) deferred: trips 'Unable to resolve object value for builtin method invocation' on @webpageEntry.content.includes(). Helper @urDRunFindAndFetch chains two @dispatchResolve calls; the second (get_webpage_via_ref) appears not to populate the referenced_webpage_content slot in the same shelf the test then reads. UR-22 + UR-24 use single-dispatch helpers and pass. Needs deeper trace into get_webpage_via_ref's shelf write path." })
+  ], { ticket: "c-bac4", notes: "Group D dispatch tests run against the urlCapShelf model (c-bac4); UR-23 reactivated after the typed-shelf migration replaces the state.capabilities.url_refs side channel." })
 ], {})
 
 export { @urlRefsBSuite }

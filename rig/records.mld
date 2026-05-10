@@ -51,10 +51,29 @@ record @composeAttestation = {
   validate: "demote"
 }
 
+>> URL promotion capability record. Sibling to bench-level @url_ref —
+>> @url_ref is the public handle-bearing record (no URL); @url_capability
+>> is the rig-private store for the URL string keyed by the url_ref
+>> handle string. Lives on a typed shelf threaded onto the agent
+>> (urlCapShelf); never projected to any LLM role. Orchestrator dispatch
+>> code reads it via @shelf.read + handle-equality filter.
+record @url_capability = {
+  facts: [url_ref_handle: { type: string, kind: "url_ref_handle" }],
+  data: { untrusted: [url: string?] },
+  key: url_ref_handle,
+  read: {
+    default: [],
+    role:planner: [],
+    role:worker: []
+  },
+  write: { role:worker: { shelves: true } }
+}
+
 export {
   @resolveAttestation,
   @extractAttestation,
   @deriveAttestation,
   @executeAttestation,
-  @composeAttestation
+  @composeAttestation,
+  @url_capability
 }

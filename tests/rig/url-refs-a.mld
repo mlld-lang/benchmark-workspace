@@ -12,9 +12,7 @@ import {
   @applyUrlRefs,
   @urlRefId,
   @buildUrlRefRecordValue,
-  @buildUrlRefCapabilityEntry,
-  @mergeUrlRefCapabilities,
-  @lookupUrlCapability
+  @buildUrlCapabilityValue
 } from "../../rig/transforms/url_refs.mld"
 
 >> --- Helpers --------------------------------------------------------------
@@ -23,10 +21,8 @@ exe @urJsonStringify(value) = js {
   return JSON.stringify(value);
 }
 
->> Mirrors @buildUrlRefCapabilityEntry's blocking guards in a single JS
->> scope so the null-roundtrip behavior at the JS-exe boundary doesn't
->> hide a positive result. Returns true iff a blocked ref correctly
->> mints no capability.
+>> Mirrors the per-ref ok-check the dispatcher uses: only refs with
+>> safety_status="ok" and a non-empty url string should yield a capability.
 exe @urBlockedYieldsNoCapability(refMeta) = js {
   if (!refMeta || typeof refMeta !== "object") return true;
   if (refMeta.safety_status !== "ok") return true;
@@ -167,17 +163,9 @@ exe @testUr11RecordValueHasNoUrlField() = [
 ]
 
 exe @testUr12OkRefMintsCapabilityWithUrl() = [
-  let @entry = @buildUrlRefCapabilityEntry(@urBOkRef, "r_msg_main")
-  let @actual = {
-    url: @entry.url,
-    source_msg_handle: @entry.source_msg_handle,
-    safety_status: @entry.safety_status
-  }
-  => @assertEq(@actual, {
-    url: "https://example.com/article",
-    source_msg_handle: "r_msg_main",
-    safety_status: "ok"
-  })
+  let @handle = `r_url_ref_@urBOkRefId`
+  let @val = @buildUrlCapabilityValue(@handle, @urBOkRef.url)
+  => @assertEq(@val, { url_ref_handle: @handle, url: "https://example.com/article" })
 ]
 
 >> --- Suite construction ---------------------------------------------------

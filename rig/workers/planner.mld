@@ -18,7 +18,6 @@ import {
   @shelfReadAll,
   @shelfLookupByHandle
 } from "../runtime.mld"
-import { @withUrlCapabilities } from "../transforms/url_refs.mld"
 import {
   @serializeLifecycleJson,
   @appendPhaseEvent,
@@ -32,6 +31,7 @@ import {
   @phaseState
 } from "../lifecycle.mld"
 import { @planner, @emptyPlannerRuntime, @emptyState } from "../session.mld"
+import { @url_capability } from "../records.mld"
 import { @dispatchResolve } from "./resolve.mld"
 import { @dispatchExtract } from "./extract.mld"
 import { @dispatchDerive } from "./derive.mld"
@@ -542,24 +542,10 @@ exe @resolveBatchWorker(input) = [
     => @debugCombined
   ]
 
-  >> Phase B — merge url_refs deltas sequentially. Resolved records were
-  >> already field-merged into the shelf by shelf-parallel; only
-  >> state.capabilities.url_refs needs a sequential walk because it lives
-  >> outside the shelf machinery (Stage C will type-shelf this too).
-  let @mergedState = loop(1000) [
-    let @ctx = @input ?? { index: 0, state: @initialCtx.state }
-    if @ctx.index >= @dispatched.length [ done @ctx.state ]
-    let @item = @dispatched[@ctx.index]
-    let @capDelta = @item.phaseResult.state_delta.capabilities.url_refs ?? null
-    let @nextState = when [
-      @capDelta.isDefined() && @capDelta != null => @withUrlCapabilities(@ctx.state, @capDelta)
-      * => @ctx.state
-    ]
-    continue {
-      index: @ctx.index + 1,
-      state: @nextState
-    }
-  ]
+  >> Phase B used to merge url_refs deltas back into state. After c-bac4,
+  >> URL capabilities live on @agent.urlCapShelf (session-scoped); the
+  >> dispatchFindReferencedUrls handler writes there directly, so the
+  >> sequential merge is no longer needed.
 
   if @debugStop == "merge" [
     let @debugCombined = {
@@ -625,7 +611,7 @@ exe @resolveBatchWorker(input) = [
   let @anyError = @errorResults.length > 0
   let @correctedToolCalls = @initialToolCalls + 1
   let @correctedInvalidCalls = @initialInvalidCalls + (@anyError ? 1 : 0)
-  let @newFingerprint = @stateProgressFingerprint(@initialCtx.agent, @mergedState)
+  let @newFingerprint = @stateProgressFingerprint(@initialCtx.agent, @initialCtx.state)
   let @priorFingerprint = @initialCtx.runtime.progress_fingerprint ?? ""
   let @priorCallsSinceProgress = @initialCtx.runtime.calls_since_progress ?? 0
   let @nextCallsSinceProgress = when [
@@ -650,7 +636,7 @@ exe @resolveBatchWorker(input) = [
   )
   let @finished = @finishPlannerTool(
     @initialCtx,
-    @mergedState,
+    @initialCtx.state,
     @correctedRuntime,
     null,
     when [ @anyError => "error" * => "success" ],
@@ -1249,7 +1235,14 @@ exe @runPlannerSession(rawAgent, query) = [
   >> testShelfSurvivesObjectSpread).
   let @shelfableRecords = @shelfRecords(@rawAgent.records ?? {})
   shelf @plannerShelf from @shelfableRecords with { versioned: true, projection_cache: ["role:planner"] }
-  let @agent = { ...@rawAgent, plannerShelf: @plannerShelf }
+  >> URL-promotion capability shelf (c-bac4). Typed bounded to @url_capability —
+  >> stores the private url string per url_ref handle. Session-scoped so
+  >> capabilities minted by one dispatch survive to subsequent dispatches in
+  >> the same planner iteration. Never projected to any LLM role; the
+  >> dispatcher reads via @shelf.read which is unprojected.
+  let @urlCapRecords = { url_capability: @url_capability }
+  shelf @urlCapShelf from @urlCapRecords with { versioned: true }
+  let @agent = { ...@rawAgent, plannerShelf: @plannerShelf, urlCapShelf: @urlCapShelf }
   let @resolveDocs = @phaseToolDocs(@agent, "resolve")
   let @extractDocs = @phaseToolDocs(@agent, "extract")
   let @executeDocs = @phaseToolDocs(@agent, "execute")

@@ -9,7 +9,7 @@ import { @defaultHarness } from "../../../rig/runtime.mld"
 var @model = @payload.model ?? "openrouter/z-ai/glm-5.1"
 var @harness = @payload.harness ?? @defaultHarness(@model)
 var @commit = cmd { git rev-parse --short HEAD }
-var @scoreboardFile = `@root/rig/tests/workers/scoreboard.jsonl`
+var @scoreboardFile = `@root/tests/live/workers/scoreboard.jsonl`
 
 show `Worker tests | model: @model | harness: @harness | commit: @commit`
 show "---"

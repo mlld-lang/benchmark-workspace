@@ -24,9 +24,7 @@ import { @assertOk, @assertEq } from "../assert.mld"
 import { @suite, @group, @runSuites } from "../runner.mld"
 import { @parseRigHandle } from "../../rig/intent.mld"
 import {
-  @buildUrlRefCapabilityEntry,
-  @hasUrlCapability,
-  @lookupUrlCapability
+  @buildUrlCapabilityValue
 } from "../../rig/transforms/url_refs.mld"
 
 >> --- Conformance helper ---------------------------------------------------
@@ -106,37 +104,21 @@ exe @testParseRigHandleValidReturnsObject() = [
   => @assertOk(@s.conformsAsValue && @r.record == "calendar_evt" && @r.key == "abc123", `parseRigHandle('r_calendar_evt_abc123'): @s | @pretty + record=@r.record key=@r.key`)
 ]
 
->> --- @buildUrlRefCapabilityEntry (rig/transforms/url_refs.mld) -----------
+>> --- @buildUrlCapabilityValue (rig/transforms/url_refs.mld) --------------
 
-exe @testBuildUrlRefCapabilityEntryNullRefConformsAsNull() = [
-  let @s = @nullShape(@buildUrlRefCapabilityEntry(null, "msg_handle"))
-  => @assertOk(@s.conformsAsNull, `buildUrlRefCapabilityEntry(null, ...): @s | @pretty`)
+exe @testBuildUrlCapabilityValueEmptyRefIdConformsAsNull() = [
+  let @s = @nullShape(@buildUrlCapabilityValue("", "https://example.com"))
+  => @assertOk(@s.conformsAsNull, `buildUrlCapabilityValue('', url): @s | @pretty`)
 ]
 
-exe @testBuildUrlRefCapabilityEntryBlockedRefConformsAsNull() = [
-  let @blockedRef = { safety_status: "blocked", url: "http://example.com" }
-  let @s = @nullShape(@buildUrlRefCapabilityEntry(@blockedRef, "msg_handle"))
-  => @assertOk(@s.conformsAsNull, `buildUrlRefCapabilityEntry(blocked, ...): @s | @pretty`)
+exe @testBuildUrlCapabilityValueEmptyUrlConformsAsNull() = [
+  let @s = @nullShape(@buildUrlCapabilityValue("ref_001", ""))
+  => @assertOk(@s.conformsAsNull, `buildUrlCapabilityValue(id, ''): @s | @pretty`)
 ]
 
->> --- @lookupUrlCapability (rig/transforms/url_refs.mld) ------------------
-
-exe @testLookupUrlCapabilityNullStateConformsAsNull() = [
-  let @s = @nullShape(@lookupUrlCapability(null, "h"))
-  => @assertOk(@s.conformsAsNull, `lookupUrlCapability(null, ...): @s | @pretty`)
-]
-
-exe @testLookupUrlCapabilityMissingHandleConformsAsNull() = [
-  let @s = @nullShape(@lookupUrlCapability({ capabilities: { url_refs: {} } }, "missing_handle"))
-  => @assertOk(@s.conformsAsNull, `lookupUrlCapability(empty caps, ...): @s | @pretty`)
-]
-
->> --- @hasUrlCapability returns BOOLEAN, not null (sanity) ----------------
-
-exe @testHasUrlCapabilityNullStateReturnsBoolean() = [
-  let @r = @hasUrlCapability(null, "h")
-  let @s = @nonNullShape(@r)
-  => @assertOk(@s.conformsAsValue && @typeof(@r) == "boolean" && @r == false, `hasUrlCapability(null, ...): @s + value=@r`)
+exe @testBuildUrlCapabilityValueNullUrlConformsAsNull() = [
+  let @s = @nullShape(@buildUrlCapabilityValue("ref_001", null))
+  => @assertOk(@s.conformsAsNull, `buildUrlCapabilityValue(id, null): @s | @pretty`)
 ]
 
 >> --- Suite construction ---------------------------------------------------
@@ -153,17 +135,11 @@ var @nullConformanceSuite = @suite("null-conformance", [
     @testParseRigHandleEmptyKeyConformsAsNull,
     @testParseRigHandleValidReturnsObject
   ], { ticket: "m-231c", notes: "JS-return-null path conformance. Pre-9abefbf3d these returned string-null surfaces and callers' == null checks were 'working by accident'." }),
-  @group("buildUrlRefCapabilityEntry", [
-    @testBuildUrlRefCapabilityEntryNullRefConformsAsNull,
-    @testBuildUrlRefCapabilityEntryBlockedRefConformsAsNull
-  ], { ticket: "m-231c" }),
-  @group("lookupUrlCapability", [
-    @testLookupUrlCapabilityNullStateConformsAsNull,
-    @testLookupUrlCapabilityMissingHandleConformsAsNull
-  ], { ticket: "m-231c" }),
-  @group("hasUrlCapability-boolean", [
-    @testHasUrlCapabilityNullStateReturnsBoolean
-  ], { ticket: "m-231c", notes: "Sanity: hasUrlCapability returns boolean, not null. Locks the contract so a future refactor can't silently change to null-returning." })
+  @group("buildUrlCapabilityValue", [
+    @testBuildUrlCapabilityValueEmptyRefIdConformsAsNull,
+    @testBuildUrlCapabilityValueEmptyUrlConformsAsNull,
+    @testBuildUrlCapabilityValueNullUrlConformsAsNull
+  ], { ticket: "c-bac4", notes: "Replacement for the c-be06 capability-entry helpers — c-bac4 moves URL storage to @url_capability shelf entries built via @buildUrlCapabilityValue." })
 ], {})
 
 export { @nullConformanceSuite }

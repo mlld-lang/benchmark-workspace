@@ -1,11 +1,12 @@
->> rig/transforms/url_refs.mld — deterministic URL ref minting (v1, c-be06)
+>> rig/transforms/url_refs.mld — deterministic URL ref minting (c-be06, c-bac4)
 >>
 >> Extracts URLs from a message body, applies a conservative safety gate
 >> (no query strings, no fragments, no template syntax, http/https/www
 >> only), and returns metadata refs in source order. The actual URL string
->> is returned ONLY for ok refs so the dispatcher can populate the private
->> state.capabilities.url_refs map. The URL must NOT be persisted into the
->> public url_ref record value — see URL_PROMOTION.md "url_ref" section.
+>> is returned ONLY for ok refs so the dispatcher can write it as a
+>> @url_capability record to the session-scoped urlCapShelf. The URL must
+>> NOT be persisted into the public url_ref record value — see
+>> URL_PROMOTION.md "url_ref" section.
 >>
 >> Bounded engine: regex extraction with input-length cap and ref-count cap.
 >> ReDoS-safe pattern (no nested quantifiers on overlapping classes). No
@@ -115,9 +116,9 @@ exe @applyUrlRefs(body) = js {
       has_fragment,
       safety_status,
       reason: blocked_reason,
-      // url is populated only for ok refs. Caller writes this into the
-      // private capability map and DROPS it before persisting the public
-      // url_ref record value.
+      // url is populated only for ok refs. Caller writes this into a
+      // @url_capability record on the urlCapShelf and DROPS it before
+      // persisting the public url_ref record value.
       url: blocked_reason ? null : url
     });
     ordinal++;
@@ -136,9 +137,10 @@ exe @applyUrlRefs(body) = js {
 >> Build the public url_ref record value from a parser-result ref entry.
 >>
 >> The output deliberately omits any URL-bearing field. The url string
->> lives only in the private capability map; see @buildUrlRefCapabilityEntry
->> below. Defense-in-depth invariant for UR-14: the URL string must not
->> appear anywhere inside the returned object, even as substring.
+>> lives only on @url_capability records on the urlCapShelf — see
+>> @buildUrlCapabilityValue below. Defense-in-depth invariant for UR-14:
+>> the URL string must not appear anywhere inside the returned object,
+>> even as substring.
 exe @buildUrlRefRecordValue(refMeta, sourceMsgHandle, refId) = js {
   if (!refMeta || typeof refMeta !== "object") {
     return null;
@@ -155,86 +157,16 @@ exe @buildUrlRefRecordValue(refMeta, sourceMsgHandle, refId) = js {
   };
 }
 
->> Build the private capability-map entry for a parser-result ref.
+>> Build the @url_capability record value for a parser-result ref.
 >>
->> Returns the {url, canonical_url, source_msg_handle, safety_status, reason?}
->> object for ok refs. Returns null for blocked refs — the dispatcher writes
->> nothing into state.capabilities.url_refs for blocked refs, so
->> get_webpage_via_ref cannot dereference them.
-exe @buildUrlRefCapabilityEntry(refMeta, sourceMsgHandle) = js {
-  if (!refMeta || typeof refMeta !== "object") return null;
-  if (refMeta.safety_status !== "ok") return null;
-  if (typeof refMeta.url !== "string" || refMeta.url.length === 0) return null;
-  return {
-    url: refMeta.url,
-    canonical_url_hash: refMeta.canonical_url_hash,
-    source_msg_handle: sourceMsgHandle,
-    safety_status: "ok"
-  };
-}
-
->> Merge a delta map of {handle: capabilityEntry} into existing
->> state.capabilities.url_refs. Pure JS so callers can reuse it from
->> dispatchResolve when the rigTransform branch fires.
-exe @mergeUrlRefCapabilities(existingMap, deltaMap) = js {
-  const existing = existingMap && typeof existingMap === "object" ? existingMap : {};
-  const delta = deltaMap && typeof deltaMap === "object" ? deltaMap : {};
-  const out = {};
-  for (const [k, v] of Object.entries(existing)) out[k] = v;
-  for (const [k, v] of Object.entries(delta)) out[k] = v;
-  return out;
-}
-
->> Attach a url_ref capability delta to a state object. Preserves all
->> sibling state fields (resolved, extracted, derived, extract_sources,
->> and any other capabilities namespaces) and merges the delta over the
->> existing url_refs map (delta wins on collision). Used by the
->> dispatchResolve rigTransform branch after @updateResolvedStateWithDef.
-exe @withUrlCapabilities(state, deltaMap) = js {
-  if (!state || typeof state !== "object") return state;
-  const out = {};
-  for (const [k, v] of Object.entries(state)) out[k] = v;
-  const existingCaps = (state.capabilities && typeof state.capabilities === "object") ? state.capabilities : {};
-  const existingMap = (existingCaps.url_refs && typeof existingCaps.url_refs === "object") ? existingCaps.url_refs : {};
-  const newMap = {};
-  for (const [k, v] of Object.entries(existingMap)) newMap[k] = v;
-  for (const [k, v] of Object.entries(deltaMap || {})) newMap[k] = v;
-  const newCaps = {};
-  for (const [k, v] of Object.entries(existingCaps)) newCaps[k] = v;
-  newCaps.url_refs = newMap;
-  out.capabilities = newCaps;
-  return out;
-}
-
->> Returns true iff state.capabilities.url_refs[handle] holds an ok
->> capability entry with a non-empty url string. Companion to
->> @lookupUrlCapability that sidesteps mlld's null-wrapping at the
->> JS-exe boundary — callers can `when !@hasUrlCapability(...)` to
->> detect missing/blocked refs without comparing to null.
-exe @hasUrlCapability(state, urlRefHandle) = js {
-  if (!state || typeof state !== "object") return false;
-  const caps = state.capabilities;
-  if (!caps || typeof caps !== "object") return false;
-  const map = caps.url_refs;
-  if (!map || typeof map !== "object") return false;
-  const entry = map[urlRefHandle];
-  if (!entry || typeof entry !== "object") return false;
-  return entry.safety_status === "ok" && typeof entry.url === "string" && entry.url.length > 0;
-}
-
->> Read the URL string for a url_ref handle from state. Returns null when
->> the handle is unknown or the entry is malformed. This is the only path
->> the dispatcher should use — public record reads never expose the URL.
-exe @lookupUrlCapability(state, urlRefHandle) = js {
-  if (!state || typeof state !== "object") return null;
-  const caps = state.capabilities;
-  if (!caps || typeof caps !== "object") return null;
-  const map = caps.url_refs;
-  if (!map || typeof map !== "object") return null;
-  const entry = map[urlRefHandle];
-  if (!entry || typeof entry !== "object") return null;
-  if (entry.safety_status !== "ok") return null;
-  return typeof entry.url === "string" ? entry.url : null;
+>> Returns { url_ref_handle, url } for ok refs. Returns null when either
+>> arg is missing. The dispatcher writes the non-null result to the
+>> urlCapShelf via @shelf.write so the url survives across planner
+>> iterations and is looked up later by url_ref_handle equality.
+exe @buildUrlCapabilityValue(urlRefHandle, url) = js {
+  if (typeof urlRefHandle !== "string" || urlRefHandle.length === 0) return null;
+  if (typeof url !== "string" || url.length === 0) return null;
+  return { url_ref_handle: urlRefHandle, url };
 }
 
 >> Compute a deterministic url_ref id from source message handle + ordinal.
@@ -260,9 +192,5 @@ export {
   @applyUrlRefs,
   @urlRefId,
   @buildUrlRefRecordValue,
-  @buildUrlRefCapabilityEntry,
-  @mergeUrlRefCapabilities,
-  @withUrlCapabilities,
-  @hasUrlCapability,
-  @lookupUrlCapability
+  @buildUrlCapabilityValue
 }
