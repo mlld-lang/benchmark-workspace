@@ -40,7 +40,7 @@ exe @resolveDebug(agent, marker) = [
 >> URL-promotion (c-be06): mint url_ref handles for URLs found in a
 >> resolved slack_msg body. Public records carry no URL; the URL string
 >> lands in state.capabilities.url_refs keyed by handle.
-exe @dispatchFindReferencedUrls(agent, state, tool, descriptors, decision, query, deltaOnly) = [
+exe role:worker @dispatchFindReferencedUrls(agent, state, tool, descriptors, decision, query, deltaOnly) = [
   let @msgHandle = @descriptors.message.handle
   let @msgEntry = @shelfLookupByHandle(@agent, "slack_msg", @msgHandle)
   if !@msgEntry.isDefined() [
@@ -90,7 +90,7 @@ exe @dispatchFindReferencedUrls(agent, state, tool, descriptors, decision, query
 >> private capability map, fetch each URL via the suite-provided mlld
 >> exe, and normalize the result as referenced_webpage_content with
 >> source_url_ref provenance and untrusted content.
-exe @dispatchGetWebpageViaRef(agent, state, tool, descriptors, decision, query, deltaOnly) = [
+exe role:worker @dispatchGetWebpageViaRef(agent, state, tool, descriptors, decision, query, deltaOnly) = [
   let @refDescriptor = @descriptors.ref
   let @refsList = when [
     @typeof(@refDescriptor) == "array" => @refDescriptor
@@ -139,7 +139,7 @@ exe @dispatchGetWebpageViaRef(agent, state, tool, descriptors, decision, query, 
 >> Resolve dispatch is mechanical: validate the planner's control refs
 >> through the shared intent compiler, call the read tool, normalize
 >> returned records into rig state, then append the execution log entry.
-exe @dispatchResolve(agent, state, decision, query, deltaOnly) = [
+exe role:worker @dispatchResolve(agent, state, decision, query, deltaOnly) = [
   @resolveDebug(@agent, "dispatchResolve:start")
   let @tool = @phaseToolEntry(@agent, "resolve", @decision.tool)
   if !@tool [
