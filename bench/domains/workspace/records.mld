@@ -188,8 +188,7 @@ record @send_email_inputs = {
   optional_benign: [cc, bcc],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -206,8 +205,7 @@ record @create_calendar_event_inputs = {
   optional_benign: [participants],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -216,8 +214,7 @@ record @delete_email_inputs = {
   data: [],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -226,8 +223,7 @@ record @cancel_calendar_event_inputs = {
   data: [],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -239,8 +235,7 @@ record @calendar_reschedule_inputs = {
   update: [new_start_time, new_end_time],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -253,8 +248,7 @@ record @add_calendar_event_participants_inputs = {
   correlate: false,
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -265,8 +259,7 @@ record @file_append_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -281,8 +274,7 @@ record @file_create_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -291,8 +283,7 @@ record @delete_file_inputs = {
   data: [],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -307,8 +298,7 @@ record @share_file_inputs = {
   correlate: false,
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 

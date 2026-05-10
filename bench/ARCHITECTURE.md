@@ -295,7 +295,7 @@ What suite authors should keep in mind when writing or porting a suite:
 
 2. **Sessions and shelves are separate primitives.** Don't bolt shelf hooks onto session schemas. `var session @planner` is per-call planner context; `shelf @x = ...` is record-typed state. They co-occur in the planner case but are unrelated otherwise.
 
-3. **Records used in shelves need `write:` blocks.** Without a `write:` declaration, runtime denies `@shelf.write` with `WRITE_DENIED_NO_DECLARATION`. The standard suite shape is `write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }` on output records. Input records add `write: { role:planner: { tools: { authorize: true } }, role:worker: { tools: { submit: true } } }` instead.
+3. **Records used in shelves need `write:` blocks.** Without a `write:` declaration, runtime denies `@shelf.write` with `WRITE_DENIED_NO_DECLARATION`. The standard suite shape is `write: { role:worker: { shelves: { upsert: true, clear: true, remove: true } } }` on output records. Input records use `write: { role:planner: { tools: { authorize: true } } }` — the planner authorize gate is the meaningful security check (kind/fact certification at intent compile). The `role:worker: { tools: { submit: true } }` opt-in was previously required but stripped pending m-1b99 (catalog membership becomes implicit submit permission).
 
 4. **Without a `key:` declaration, shelf defaults to `merge: append`.** Two writes of the same canonical content produce two slot entries. Either declare `key:` on records that need merge collapse, or accept append semantics.
 

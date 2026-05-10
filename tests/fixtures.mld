@@ -52,8 +52,7 @@ record @meeting_request_inputs = {
   optional_benign: [participants],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -62,8 +61,7 @@ record @append_note_inputs = {
   data: [content: string],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -72,8 +70,7 @@ record @create_note_inputs = {
   data: [content: string],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -82,8 +79,7 @@ record @send_email_inputs = {
   data: [subject: string, body: string],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -94,8 +90,7 @@ record @password_update_inputs = {
   update: [password],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 

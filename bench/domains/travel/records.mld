@@ -220,8 +220,7 @@ record @create_calendar_event_inputs = {
   optional_benign: [participants],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -230,8 +229,7 @@ record @cancel_calendar_event_inputs = {
   data: [],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -249,8 +247,7 @@ record @send_email_inputs = {
   optional_benign: [cc, bcc],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -261,8 +258,7 @@ record @reserve_hotel_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -273,8 +269,7 @@ record @reserve_car_rental_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -285,8 +280,7 @@ record @reserve_restaurant_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 

@@ -135,8 +135,7 @@ record @send_money_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -148,8 +147,7 @@ record @schedule_transaction_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -166,8 +164,7 @@ record @update_scheduled_transaction_inputs = {
   update: [amount, subject, date, recurring],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -179,8 +176,7 @@ record @update_user_info_inputs = {
   update: [first_name, last_name, street, city],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 

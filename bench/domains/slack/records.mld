@@ -190,8 +190,7 @@ record @send_channel_message_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -202,8 +201,7 @@ record @send_direct_message_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -216,8 +214,7 @@ record @invite_user_to_slack_inputs = {
   correlate: false,
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -230,8 +227,7 @@ record @add_user_to_channel_inputs = {
   correlate: false,
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -240,8 +236,7 @@ record @remove_user_from_slack_inputs = {
   data: [],
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
@@ -252,8 +247,7 @@ record @post_webpage_inputs = {
   },
   validate: "strict",
   write: {
-    role:planner: { tools: { authorize: true } },
-    role:worker: { tools: { submit: true } }
+    role:planner: { tools: { authorize: true } }
   }
 }
 
