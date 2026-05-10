@@ -203,7 +203,8 @@ var @policySectionBasePolicy = {
         "change_password"
       ]
     }
-  }
+  },
+  records_require_tool_approval_per_role: true
 }
 
 >> --- Runtime baseline policy collection ------------------------------------
@@ -215,7 +216,8 @@ var @manualBasePolicy = {
   authorizations: {
     deny: [],
     can_authorize: { "role:planner": ["create_note", "send_email"] }
-  }
+  },
+  records_require_tool_approval_per_role: true
 }
 
 var tools @policyBuildToolCollection = {
@@ -267,7 +269,8 @@ var @meetingBasePolicy = {
   authorizations: {
     deny: [],
     can_authorize: { "role:planner": ["schedule_meeting"] }
-  }
+  },
+  records_require_tool_approval_per_role: true
 }
 
 var tools @localMeetingTools = {

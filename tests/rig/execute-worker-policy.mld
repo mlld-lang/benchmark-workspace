@@ -336,7 +336,8 @@ var @ewpPolicySectionBasePolicy = {
         "change_password"
       ]
     }
-  }
+  },
+  records_require_tool_approval_per_role: true
 }
 
 var tools @ewpPolicySectionPlannerTools = {
