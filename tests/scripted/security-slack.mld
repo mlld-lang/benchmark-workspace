@@ -677,7 +677,7 @@ var @securitySlackSuite = @suite("security-slack", [
   ], { slow: true, ticket: "c-5ef9", notes: "lock the source-class firewall on slack write tools (B10 get_webpage extracted-URL + no-novel-urls added under c-d374)" }),
   @group("instruction-channel-label", [
     @testInstructionChannelLabelNotPromoted
-  ], { slow: true, ticket: "c-fb58", notes: "B6 historic UT18 × IT3 breach: instruction-shaped channel labels treated as actionable. Now passes uniformly post-shelf-collapse — instruction-shaped labels rejected by the source-class firewall." }),
+  ], { slow: true, xfail: true, ticket: "c-fb58", notes: "B6 historic UT18 × IT3 breach: instruction-shaped channel labels treated as actionable. The bucket-era seed (@stateWithResolvedCanonical) writes a stale shape ignored post-Stage-B, so empty-state lookup-fail makes this test 'pass' for the wrong reason. Verified 2026-05-10 by converting to a real shelf seed with @records.slack_channel + @shelf.write: with proper handle, resolve dispatch SUCCEEDS — no rig-level defense rejects the instruction-shape. Defense gap is real; would need (a) kind-format validator in mlld for slack_channel_name, or (b) slack-specific guard. Conversion to the real-seed shape is blocked module-wide by m-6dc0 (role:worker exe annotation regresses unrelated tests in scripted-LLM modules)." }),
   @group("recursive-url-fetch", [
     @testRecursiveWebpageFetchRejected
   ], { slow: true, ticket: "c-a720", notes: "B5 historic UT1 × IT3 breach: laundered get_webpage with extracted URL. Same defense layer as getWebpageExtractedUrlRejected (source-class firewall) — this test adds the multi-step mediated-path setup that mirrors the historic breach environment." }),
