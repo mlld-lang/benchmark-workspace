@@ -8,9 +8,11 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 ## Current state (2026-05-09)
 
-**Gate**: 241/0/2 (proof-chain-firewall conversion landed +12 tests; commit `e5d3c21`). Started at 169/0/1; +72 tests across the migration. The 2 xfails are `template/known-broken/intentionallyFails` and `template/known-broken/intentionallyThrows` (ticket c-9999) — test framework placeholders, not deferred migration tests. Scripted suites at baseline (banking 7/3, slack 13/1+1xpass, workspace 13/1, travel 10/0).
+**Gate**: 241/0/2 (proof-chain-firewall conversion landed +12 tests; commit `e5d3c21`). Started at 169/0/1; +72 tests across the migration. The 2 xfails are `template/known-broken/intentionallyFails` and `template/known-broken/intentionallyThrows` (ticket c-9999) — test framework placeholders, not deferred migration tests. **Scripted suites all at baseline** post-Session B partial: banking 7/3, slack 13/1+1xpass, workspace 13/1, travel 10/0. **Zero net regressions across the entire test surface from Session B work.**
 
-**Session A in progress**: items #1 (proof-chain-firewall, gate 229→241) and #2 (rig/ARCHITECTURE.md) landed; #3 (bench/ARCHITECTURE.md) and #4 (security-doc archive) staged but not yet committed at this writing.
+**Session A**: DONE (commits `e5d3c21` + `3151e88`). proof-chain-firewall converted, security doc archived, ARCH docs updated.
+
+**Session B (Task #17)**: DONE (commits `d78dc3d` + `10bfc7e`). Mock-llm shelf-aware seed shipped; `@dispatchResolve` and the rigTransform dispatchers tagged `role:worker`; security-fixtures bucket-era cleanup. Two latent mlld bugs surfaced and fixed during this work: **m-b61d** (session-seeded shelf bridge writes; shelf reference dying across boundary) and **m-a582** (object/session cloning paths dropping hidden runtime metadata on imported var tools collections). Both fixed in mlld working tree by mlld-dev, then verified clean-side.
 
 **Architecture**: Stage B core landed; `state.resolved` is gone, shelf is the resolved-record store via `@agent.plannerShelf`; output records use `id_: { type: string, kind: ... }` post-audit; input records keep `type: handle`. m-shelf-wildcard + m-rec-perms-update both fully consumed.
 
@@ -28,9 +30,9 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 4. ~~**`mlld-security-fundamentals.md`**~~ — Scope changed (per advisor). The new doc already covers F1/F2/F4 in §4.4–4.7, §6.6–6.9, §7. Session A #4 became `git mv labels-policies-guards.md archive/` + grep stragglers + update them. DONE (uncommitted): `DEBUG.md`, `bench/domains/workspace/records.mld`, `rig/workers/advice.mld`, `migration-plan.md`, `.claude/skills/migrate/SKILL.md` updated.
 
-### Session B — architectural unblock + cleanup, ~3-4 hours
+### Session B — Task #17 DONE; #6 / #7-migration / #8 remain
 
-5. **Task #17: shelf-aware seed for scripted-LLM tests (`tests/lib/mock-llm.mld`).** ~1 hour.
+5. ~~**Task #17: shelf-aware seed for scripted-LLM tests**~~ DONE (`d78dc3d`). `tests/lib/mock-llm.mld` `@runScriptedQuery` and `@runWithState` declare a per-call shelf inline mirroring `@runPlannerSession`. Plus `rig/workers/resolve.mld` tagged `@dispatchResolve` / `@dispatchFindReferencedUrls` / `@dispatchGetWebpageViaRef` as `role:worker`, parallel to `@dispatchExecute`. Surfaced and unblocked by mlld-dev's m-b61d fix (commit `7d7399dbc`) and m-a582 fix (commits in mlld working tree).
 
    **Files + lines**:
    - Source-of-truth pattern: `rig/workers/planner.mld:1242-1315` (`@runPlannerSession` full body — shelf decl + thread onto agent + session bind)
@@ -47,7 +49,20 @@ For the full plan, see `migration-plan.md`. For onboarding, use `/migrate` skill
 
 6. **`worker-dispatch.mld`** (~1-2 hours, post-#17) — 577 lines, mostly `exe llm` scripted-LLM. Post-dispatch `state.resolved.*` reads everywhere. Convert with the new mock-llm shelf scaffold from #5. Some non-scripted tests may convert standalone earlier; needs assessment.
 
-7. **`security-fixtures.mld` shelf-resolved fixtures + 4 scripted suite consumers** (~30 min, post-#17). Direct dependency on #5.
+7. **`security-fixtures.mld` shelf-resolved fixtures + 4 scripted suite consumers** — partially done.
+
+   `tests/lib/security-fixtures.mld` cleanup landed in `10bfc7e`: `@stateWithExtracted` / `@stateWithDerived` no longer emit deprecated `resolved: {}` and `capabilities: { url_refs: {} }` fields. `@stateWithResolved` and `@stateResolvedAndExtracted` are stubbed to return the post-Stage-B empty state shape with deprecation notes — they no longer construct bucket-shape state.
+
+   **Remaining Task #7 work (~1-3 hours, optional for Stage B closeout)**: 13 sites across the 4 scripted suite files use bucket-shape pre-seeding (inline `_rig_bucket` literals or read `state.resolved.<rt>.by_handle` from a real resolve setup call). Each test that depends on resolved-record handles needs to:
+
+   - convert the test exe to `role:worker`,
+   - declare a shelf inline at test-body scope,
+   - pass the shelf-bearing agent through a NEW helper (e.g. `@runScriptWithAgent(agent, query, script, state)`) that does NOT redeclare the shelf,
+   - read handles via `@shelf.read(@ps.<rt>)` instead of `state.resolved.<rt>.by_handle`.
+
+   Sites by suite: banking 3 (`testUpdateScheduledTxExtractedRecipientRejected`, `testCorrelateCrossRecordMixingDenied`, `testCorrelateSameRecordAccepted`), slack 6, workspace 2, travel 2. **The current pre-existing baseline fails (banking 7/3, slack 13/1+1xpass, workspace 13/1) are these tests** — they were failing before Stage B and continue to fail in the same shape post-Stage-B. Migrating them clears those baseline fails and may flip the slack xpass.
+
+   This is migration completeness work — not Stage B closeout blocking. Defer-or-do is a scope call.
 
 8. **Mutation matrix re-baseline** (~10 min, post-#7). The 3 baseline-fails (banking B3, slack handle test, workspace extract-empty) clear once the fixture-shelf-seed is in place. `uv run --project bench python3 tests/run-mutation-coverage.py` → verify Overall: OK → capture snapshot in `tests/baselines/mutation-matrix.txt`.
 
