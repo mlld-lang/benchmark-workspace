@@ -33,7 +33,7 @@ exe @dispatchScriptStep(step) = [
 ]
 
 >> Iterate the script in a bounded loop. Each step runs against the
->> seeded planner session; @plannerResolveBatch in particular triggers
+>> seeded planner session; @resolveBatchWorker in particular triggers
 >> the Phase B settle/merge/cache/projection chain we're profiling.
 >> Returns the LAST step's result (typically compose).
 exe @runScript(script) = [

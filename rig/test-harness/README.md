@@ -38,7 +38,7 @@ Per c-63fe diagnosis (in_progress with gpt; opus + codex investigations filed in
 
 - Inner Python MCP calls finish in 1-11ms
 - mlld/rig spends 5+ minutes between fast inner calls and the outer 500s opencode `mcpTimeoutMs`
-- That gap is in `@plannerResolveBatch` Phase B (sequential settle, state merge, projection, planner_cache)
+- That gap is in `@resolveBatchWorker` Phase B (sequential settle, state merge, projection, planner_cache)
 - Codex's spike measured 100×-215× speedup with delta-merge + incremental cache (the optimizations now in HEAD)
 
 This reproducer replays UT19's exact Phase B work without LLM cost. mlld-dev gets:
@@ -56,7 +56,7 @@ Per c-63fe diagnosis (in_progress with gpt; opus + codex investigations filed in
 
 - Inner Python MCP calls finish in 1-11ms
 - mlld/rig spends 5+ minutes between fast inner calls and the outer 500s opencode `mcpTimeoutMs`
-- That gap is in `@plannerResolveBatch` Phase B (sequential settle, state merge, projection, planner_cache)
+- That gap is in `@resolveBatchWorker` Phase B (sequential settle, state merge, projection, planner_cache)
 - Codex's spike measured 100×-215× speedup with delta-merge + incremental cache (the optimizations now in HEAD)
 
 A reproducer that exercises Phase B without LLM calls gives mlld-dev a fast iteration loop for memory profiling and a regression test once the fix lands.

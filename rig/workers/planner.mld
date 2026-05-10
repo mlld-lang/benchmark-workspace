@@ -473,7 +473,7 @@ exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
   }
 ]
 
-exe @plannerResolve(input) = [
+exe @resolveWorker(input) = [
   let @coerced = @input ?? {}
   let @tool = @coerced.tool
   let @args = @coerced.args ?? {}
@@ -503,7 +503,7 @@ exe @plannerResolve(input) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerResolveBatch(input) = [
+exe @resolveBatchWorker(input) = [
   let @coerced = @input ?? {}
   let @resolves = @coerced.resolves ?? []
   let @batchPurpose = @coerced.purpose ?? null
@@ -663,7 +663,7 @@ exe @plannerResolveBatch(input) = [
   => @combined
 ] => record @planner_tool_result
 
-exe @plannerExtract(input) = [
+exe @extractWorker(input) = [
   let @coerced = @input ?? {}
   let @tool = @coerced.tool ?? null
   let @args = @coerced.args ?? {}
@@ -749,7 +749,7 @@ exe @plannerExtract(input) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerDerive(input) = [
+exe @deriveWorker(input) = [
   let @coerced = @input ?? {}
   let @sources = @coerced.sources ?? []
   let @goal = @coerced.goal
@@ -925,7 +925,7 @@ exe @rehearseStructurallyInfeasible(history, operation, blockedArgs) = [
   => @anyTrue.length > 0
 ]
 
-exe @plannerRehearse(input) = [
+exe @rehearseWorker(input) = [
   let @coerced = @input ?? {}
   let @operation = @coerced.operation
   let @args = @coerced.args ?? {}
@@ -1013,7 +1013,7 @@ exe @plannerRehearse(input) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerExecute(input) = [
+exe @executeWorker(input) = [
   let @coerced = @input ?? {}
   let @operation = @coerced.operation
   let @args = @coerced.args ?? {}
@@ -1047,7 +1047,7 @@ exe @plannerExecute(input) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerCompose(input) = [
+exe @composeWorker(input) = [
   let @coerced = @input ?? {}
   let @sources = @coerced.sources ?? []
   let @purpose = @coerced.purpose ?? null
@@ -1098,7 +1098,7 @@ exe @plannerCompose(input) = [
   => @result
 ] => record @planner_tool_result
 
-exe @plannerBlocked(input) = [
+exe @blockedWorker(input) = [
   let @coerced = @input ?? {}
   let @reason = @coerced.reason
   let @decision = {
@@ -1145,13 +1145,13 @@ exe @plannerBlocked(input) = [
 
 var tools @terminalTools = {
   compose: {
-    mlld: @plannerCompose,
+    mlld: @composeWorker,
     inputs: @planner_compose_inputs,
     labels: ["tool:w"],
     description: "Write the final answer for the user and end the session."
   },
   blocked: {
-    mlld: @plannerBlocked,
+    mlld: @blockedWorker,
     inputs: @planner_blocked_inputs,
     labels: ["tool:w"],
     description: "Stop and explain why the task cannot be completed."
@@ -1160,49 +1160,49 @@ var tools @terminalTools = {
 
 var tools @plannerTools = {
   rehearse: {
-    mlld: @plannerRehearse,
+    mlld: @rehearseWorker,
     inputs: @planner_rehearse_inputs,
     labels: ["tool:w"],
     description: "Pre-flight check for an `execute` intent. Same args shape as execute. Returns {ok, blocked_args} without dispatching the MCP call. Use when uncertain whether a write would be accepted by policy. Counts against tool-call budget. blocked_args names the failing arg(s); no reason is exposed."
   },
   resolve: {
-    mlld: @plannerResolve,
+    mlld: @resolveWorker,
     inputs: @planner_resolve_inputs,
     labels: ["tool:w"],
     description: "Look up information using a read tool. Returns structured records with handles you can reference later."
   },
   resolve_batch: {
-    mlld: @plannerResolveBatch,
+    mlld: @resolveBatchWorker,
     inputs: @planner_resolve_batch_inputs,
     labels: ["tool:w"],
     description: "Look up multiple independent record types in one call. Each entry in the resolves array is { tool, args?, purpose? }. Saves round-trips."
   },
   extract: {
-    mlld: @plannerExtract,
+    mlld: @extractWorker,
     inputs: @planner_extract_inputs,
     labels: ["tool:w"],
     description: "Read hidden content from a resolved record (like an email body or file content) and extract specific fields into a named result."
   },
   derive: {
-    mlld: @plannerDerive,
+    mlld: @deriveWorker,
     inputs: @planner_derive_inputs,
     labels: ["tool:w"],
     description: "Compute a result from data you already have — ranking, selection, comparison, arithmetic, or summarization. Returns a named result."
   },
   execute: {
-    mlld: @plannerExecute,
+    mlld: @executeWorker,
     inputs: @planner_execute_inputs,
     labels: ["tool:w"],
     description: "Perform a write operation (send email, create event, update record, etc.). Target values must come from prior resolves or exact task text."
   },
   compose: {
-    mlld: @plannerCompose,
+    mlld: @composeWorker,
     inputs: @planner_compose_inputs,
     labels: ["tool:w"],
     description: "Write the final answer for the user and end the session."
   },
   blocked: {
-    mlld: @plannerBlocked,
+    mlld: @blockedWorker,
     inputs: @planner_blocked_inputs,
     labels: ["tool:w"],
     description: "Stop and explain why the task cannot be completed."
