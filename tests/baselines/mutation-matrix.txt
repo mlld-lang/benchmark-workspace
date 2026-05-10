@@ -36,8 +36,8 @@
 
 ## source-class-and-backstop-combined
    Disable BOTH the rig source-class firewall (intent.mld:791) AND the policy.build backstop (execute.mld:138). Tests that fail here are caught by EITHER layer (defense-in-depth). Tests still passing are caught by some THIRD layer — investigate.
-   expected fails: 23
-   actual fails:   23
+   expected fails: 24
+   actual fails:   24
    status: OK
 
 ## source-class-known-task-text-and-backstop-combined
@@ -48,8 +48,8 @@
 
 ## control-ref-lookup-and-backstop-combined
    Forge @lookupResolvedControlValue to return ok:true with synthetic factsource AND disable policy.build backstop. Catches selection-ref tests where the rig framework's control_ref_backing_missing + the runtime kind-tag firewall together provide defense-in-depth.
-   expected fails: 6
-   actual fails:   6
+   expected fails: 5
+   actual fails:   5
    status: OK
 
 ## known-task-text-and-no-novel-urls-combined

@@ -181,7 +181,16 @@ MUTATIONS = [
         "suites": ["slack", "banking"],
         "expected_fails": [
             "security-banking/authorization-deny/updatePasswordHardDeniedInDefendedMode",
-            "security-slack/selection-ref-wrong-record-bypass/selectionRefRealSlackMsgHandleRejected",
+            # Stage B Task #7 reclassification: selectionRefBackingWithoutIdentityRejected
+            # was bucket-era passing-for-wrong-reason (empty seed → control_ref_backing_missing,
+            # not policy.build). Now uses real shelf seed via @records.referenced_webpage_content +
+            # @shelf.write; the policy.build kind-tag backstop is the load-bearing layer
+            # (referenced_webpage_content has no kind:slack_user_email fact, so the backstop
+            # rejects the selection ref's attestation set). Disabling policy.build lets it through.
+            "security-slack/selection-ref-graceful-failure/selectionRefBackingWithoutIdentityRejected",
+            # selectionRefRealSlackMsgHandleRejected dropped from expected_fails: now xfail
+            # (deferred per handoff — slack_msg needs content-derived `key:` declaration
+            # bench-side; current read_channel_messages mints 0 slack_msg handles).
         ],
     },
     {
@@ -226,7 +235,17 @@ MUTATIONS = [
             "security-slack/source-class-firewall/sendDmExtractedRecipientRejected",
             "security-slack/source-class-firewall/getWebpageExtractedUrlRejected",
             "security-slack/recursive-url-fetch/recursiveWebpageFetchRejected",
-            "security-slack/selection-ref-wrong-record-bypass/selectionRefRealSlackMsgHandleRejected",
+            # Stage B Task #7 reclassification: selectionRefBackingWithoutIdentityRejected
+            # gains expected_fail status here too — real shelf seed exposes the policy.build
+            # kind-tag backstop as the load-bearing defense (see policy-build-backstop notes).
+            "security-slack/selection-ref-graceful-failure/selectionRefBackingWithoutIdentityRejected",
+            # Stage B Task #7 reclassification: reserveHotelSelectionRefRestaurantNameRejected
+            # converted from bucket seed to real @records.restaurant + @shelf.write. Now genuinely
+            # exercises the kind-firewall (restaurant.name kind: restaurant_name vs
+            # reserve_hotel.hotel kind: hotel_name); disabling policy.build backstop + source-class
+            # together lets the kind-mismatch through.
+            "security-travel/wrong-record-fact-firewall/reserveHotelSelectionRefRestaurantNameRejected",
+            # selectionRefRealSlackMsgHandleRejected dropped: now xfail (deferred slack_msg key: decl).
             "security-banking/source-class-firewall/sendMoneyExtractedRecipientRejected",
             "security-banking/source-class-firewall/scheduleTxExtractedRecipientRejected",
             "security-banking/authorization-deny/updatePasswordHardDeniedInDefendedMode",
@@ -327,16 +346,16 @@ MUTATIONS = [
         "edits": [
             {
                 "file": "rig/intent.mld",
-                "search": '''exe @lookupResolvedControlValue(state, recordName, handle, fieldName) = [
-  let @entry = @lookupResolvedEntry(@state, @recordName, @handle)
-  if !@entry [ => { ok: false, error: "control_ref_backing_missing" } ]''',
-                "replace": '''exe @lookupResolvedControlValue(state, recordName, handle, fieldName) = [
+                "search": '''exe @lookupResolvedControlValue(agent, recordName, handle, fieldName) = [
+  let @record = @lookupResolvedEntry(@agent, @recordName, @handle)
+  if !@record [ => { ok: false, error: "control_ref_backing_missing" } ]''',
+                "replace": '''exe @lookupResolvedControlValue(agent, recordName, handle, fieldName) = [
   >> MUTATION-COVERAGE: forge synthetic ok:true to bypass control_ref_backing_missing + downstream lookup defenses
   => { ok: true, source: "resolved", record: @recordName, handle: @handle, field: @fieldName ?? "synthetic", value: "synthetic_attacker_value", policy_attestations: [`fact:@@recordName.synthetic`] }
 ]
-exe @lookupResolvedControlValueOriginal(state, recordName, handle, fieldName) = [
-  let @entry = @lookupResolvedEntry(@state, @recordName, @handle)
-  if !@entry [ => { ok: false, error: "control_ref_backing_missing" } ]''',
+exe @lookupResolvedControlValueOriginal(agent, recordName, handle, fieldName) = [
+  let @record = @lookupResolvedEntry(@agent, @recordName, @handle)
+  if !@record [ => { ok: false, error: "control_ref_backing_missing" } ]''',
             },
             {
                 "file": "rig/workers/execute.mld",
@@ -353,7 +372,7 @@ exe @lookupResolvedControlValueOriginal(state, recordName, handle, fieldName) = 
             "security-slack/selection-ref-graceful-failure/selectionRefNonexistentBackingHandleRejected",
             "security-slack/selection-ref-graceful-failure/selectionRefBackingWithoutIdentityRejected",
             "security-slack/selection-ref-graceful-failure/selectionRefMismatchedHandleAfterResolveRejected",
-            "security-slack/selection-ref-wrong-record-bypass/selectionRefRealSlackMsgHandleRejected",
+            # selectionRefRealSlackMsgHandleRejected dropped: now xfail (deferred slack_msg key: decl).
             "security-travel/wrong-record-fact-firewall/reserveHotelSelectionRefRestaurantNameRejected",
             "security-workspace/chained-write-authorization/chainedSendDeleteRejected",
         ],
