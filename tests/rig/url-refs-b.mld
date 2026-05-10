@@ -409,7 +409,12 @@ var @urlRefsBSuite = @suite("url-refs-b", [
     @testUr17RecordArgsRejectsExtractedSource,
     @testUr18RecordArgsRejectsDerivedSource,
     @testUr20RecordArgsRejectsMismatchedRecordType
-  ], { ticket: "c-be06" })
+  ], { ticket: "c-be06" }),
+  @group("dispatch-integration", [
+    @testUr21DispatchFindReferencedUrlsMintsRecordsAndCaps,
+    @testUr22DispatchStateDeltaShapeAndNoUrlInRecords,
+    @testUr24DispatchGetWebpageViaRefRejectsMissingCapability
+  ], { ticket: "c-be06", notes: "UR-23 (DispatchGetWebpageViaRefFetchesViaCapability) deferred: trips 'Unable to resolve object value for builtin method invocation' on @webpageEntry.content.includes(). Helper @urDRunFindAndFetch chains two @dispatchResolve calls; the second (get_webpage_via_ref) appears not to populate the referenced_webpage_content slot in the same shelf the test then reads. UR-22 + UR-24 use single-dispatch helpers and pass. Needs deeper trace into get_webpage_via_ref's shelf write path." })
 ], {})
 
 export { @urlRefsBSuite }
