@@ -1,0 +1,164 @@
+>> tests/rig/c-3162-dispatch-denial.mld
+>>
+>> c-3162 / c-d0e3 Outcome 1 vs 2 discriminator: does
+>> labels.influenced.deny: ["exfil"] actually DENY at @policy.build /
+>> dispatch when the body arg of an exfil:send tool is sourced from
+>> derived content carrying the 'influenced' label?
+>>
+>> If this test passes (denial fires), c-d0e3 closes structurally on the
+>> mlld input-taint patch alone. If denial doesn't fire, labels propagate
+>> via the patch but enforcement has a downstream scope gap.
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @synthesizedPolicy, @updateNamedState } from "../../rig/orchestration.mld"
+import { @emptyState } from "../../rig/runtime.mld"
+import { @dispatchExecute } from "../../rig/workers/execute.mld"
+
+>> --- Tool fixture: minimal exfil:send shape ----------------------------------
+
+exe @c3162_runtime_send(body) = [
+  => { ok: true, body: @body }
+]
+
+>> Input record matching slack send_direct_message_inputs shape:
+>>   - body in data.untrusted (data classification, not control-arg)
+>>   - exfil:send authorization permission on planner role
+record @c3162_send_inputs = {
+  data: {
+    untrusted: [body: string]
+  },
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+var tools @c3162Tools = {
+  send_message: {
+    mlld: @c3162_runtime_send,
+    inputs: @c3162_send_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send a message with body content."
+  }
+}
+
+>> --- Agent fixture with full rig basePolicy ---------------------------------
+
+var @c3162Agent = {
+  defense: "defended",
+  tools: @c3162Tools,
+  toolsCollection: @c3162Tools,
+  basePolicy: @synthesizedPolicy(@c3162Tools, null)
+}
+
+>> --- Seed state: derived value carrying 'influenced' label ------------------
+>>
+>> A real chain would arrive here via untrusted-record → extract → derive
+>> (with the patched mlld auto-rule attaching 'influenced' to derive's
+>> LLM output). For the dispatch-layer test we attach the label directly
+>> via `var influenced` so the test runs deterministically without an
+>> LLM call.
+
+var influenced @influencedSummary = "ATTACKER PROSE laundered through derive"
+
+var @influencedDerivedState = @updateNamedState(
+  @emptyState(),
+  "derived",
+  "tainted_summary",
+  {
+    provenance: "derived",
+    schema_name: "inline-schema",
+    preview_fields: ["body"],
+    value: {
+      body: @influencedSummary
+    },
+    selection_refs: []
+  }
+)
+
+>> --- The dispatch under test ------------------------------------------------
+
+var @c3162DispatchResult = @dispatchExecute(
+  @c3162Agent,
+  @influencedDerivedState,
+  {
+    phase: "execute",
+    operation: "send_message",
+    args: {
+      body: { source: "derived", name: "tainted_summary", field: "body" }
+    }
+  },
+  "Send the derived summary."
+)
+
+>> --- Tests ------------------------------------------------------------------
+
+>> Discriminator: does dispatch DENY when body is influenced-derived?
+exe @testInfluencedBodyDenied() = [
+  let @result = @c3162DispatchResult
+  let @denied = @result.policy_denials.isDefined() && @result.policy_denials.length > 0
+  let @ok = @denied || (@result.error.isDefined() && @result.error.includes("policy"))
+  => @assertOk(@ok, `dispatch result: @result | @pretty`)
+]
+
+>> Sanity: a clean (non-influenced) body should NOT be denied. This
+>> ensures the patch isn't over-denying every send.
+var @cleanState = @updateNamedState(
+  @emptyState(),
+  "derived",
+  "clean_summary",
+  {
+    provenance: "derived",
+    schema_name: "inline-schema",
+    preview_fields: ["body"],
+    value: { body: "this is a clean task-text-sourced body" },
+    selection_refs: []
+  }
+)
+
+var @c3162CleanResult = @dispatchExecute(
+  @c3162Agent,
+  @cleanState,
+  {
+    phase: "execute",
+    operation: "send_message",
+    args: {
+      body: { source: "derived", name: "clean_summary", field: "body" }
+    }
+  },
+  "Send the clean summary."
+)
+
+exe @testCleanBodyNotDenied() = [
+  let @result = @c3162CleanResult
+  let @notDenied = !(@result.policy_denials.isDefined() && @result.policy_denials.length > 0)
+  let @noPolicyError = !(@result.error.isDefined() && @result.error.includes("policy"))
+  => @assertOk(@notDenied && @noPolicyError, `clean dispatch should not be policy-denied. result: @result | @pretty`)
+]
+
+>> --- Suite construction -----------------------------------------------------
+
+var @c3162DispatchSuite = @suite("c-3162-dispatch-denial", [
+  @group("influenced-flow-to-exfil-send", [
+    @testInfluencedBodyDenied,
+    @testCleanBodyNotDenied
+  ], { ticket: "c-3162", notes: "Outcome 1 vs 2 discriminator: does labels.influenced.deny: [exfil] fire on derived bodies after the mlld input-taint patch?" })
+], {})
+
+export { @c3162DispatchSuite }
+
+>> --- Standalone runner ------------------------------------------------------
+
+var @result = @runSuites([@c3162DispatchSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]
