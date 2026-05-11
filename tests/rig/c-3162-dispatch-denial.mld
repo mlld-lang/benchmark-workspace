@@ -81,26 +81,32 @@ var @influencedDerivedState = @updateNamedState(
 
 >> --- The dispatch under test ------------------------------------------------
 
-var @c3162DispatchResult = @dispatchExecute(
-  @c3162Agent,
-  @influencedDerivedState,
-  {
-    phase: "execute",
-    operation: "send_message",
-    args: {
-      body: { source: "derived", name: "tainted_summary", field: "body" }
-    }
-  },
-  "Send the derived summary."
-)
+var @c3162DispatchResult = when [
+  denied => {
+    denied: true,
+    reason: @mx.guard.reason,
+    rule: @mx.guard.guardFilter ?? null
+  }
+  * => @dispatchExecute(
+    @c3162Agent,
+    @influencedDerivedState,
+    {
+      phase: "execute",
+      operation: "send_message",
+      args: {
+        body: { source: "derived", name: "tainted_summary", field: "body" }
+      }
+    },
+    "Send the derived summary."
+  )
+]
 
 >> --- Tests ------------------------------------------------------------------
 
 >> Discriminator: does dispatch DENY when body is influenced-derived?
 exe @testInfluencedBodyDenied() = [
   let @result = @c3162DispatchResult
-  let @denied = @result.policy_denials.isDefined() && @result.policy_denials.length > 0
-  let @ok = @denied || (@result.error.isDefined() && @result.error.includes("policy"))
+  let @ok = @result.denied == true && @result.reason.isDefined() && @result.reason.includes("influenced")
   => @assertOk(@ok, `dispatch result: @result | @pretty`)
 ]
 
@@ -119,22 +125,29 @@ var @cleanState = @updateNamedState(
   }
 )
 
-var @c3162CleanResult = @dispatchExecute(
-  @c3162Agent,
-  @cleanState,
-  {
-    phase: "execute",
-    operation: "send_message",
-    args: {
-      body: { source: "derived", name: "clean_summary", field: "body" }
-    }
-  },
-  "Send the clean summary."
-)
+var @c3162CleanResult = when [
+  denied => {
+    denied: true,
+    reason: @mx.guard.reason,
+    rule: @mx.guard.guardFilter ?? null
+  }
+  * => @dispatchExecute(
+    @c3162Agent,
+    @cleanState,
+    {
+      phase: "execute",
+      operation: "send_message",
+      args: {
+        body: { source: "derived", name: "clean_summary", field: "body" }
+      }
+    },
+    "Send the clean summary."
+  )
+]
 
 exe @testCleanBodyNotDenied() = [
   let @result = @c3162CleanResult
-  let @notDenied = !(@result.policy_denials.isDefined() && @result.policy_denials.length > 0)
+  let @notDenied = !(@result.denied == true)
   let @noPolicyError = !(@result.error.isDefined() && @result.error.includes("policy"))
   => @assertOk(@notDenied && @noPolicyError, `clean dispatch should not be policy-denied. result: @result | @pretty`)
 ]
@@ -143,9 +156,11 @@ exe @testCleanBodyNotDenied() = [
 
 var @c3162DispatchSuite = @suite("c-3162-dispatch-denial", [
   @group("influenced-flow-to-exfil-send", [
-    @testInfluencedBodyDenied,
+    @testInfluencedBodyDenied
+  ], { xfail: true, ticket: "c-3162", notes: "Acceptance test for Gap B closure. Today FAILS because rig's @callToolWithPolicy → @callToolWithOptionalPolicy chain is two parameter-passing levels deep from @writeTools, and mlld's tool-collection dispatch identity preservation drops to plain `computed` at that depth. Probed: inlining the dispatch into @dispatchExecute (1 level) makes this test PASS but causes broader policy denials in existing rig tests because previously-bypassed policy guards (no-send-to-unknown etc.) start firing on every dispatch. Proper closure needs either (a) mlld dispatch-identity preservation that survives multi-level parameter passing, OR (b) rig-side policy-aware migration where every tool dispatch carries the labels its catalog declared." }),
+  @group("clean-flow-allowed", [
     @testCleanBodyNotDenied
-  ], { ticket: "c-3162", notes: "Outcome 1 vs 2 discriminator: does labels.influenced.deny: [exfil] fire on derived bodies after the mlld input-taint patch?" })
+  ], { ticket: "c-3162", notes: "Sanity: clean dispatch (non-influenced body) should not be denied. Passes today; ensures the eventual influenced-deny fix doesn't over-broaden." })
 ], {})
 
 export { @c3162DispatchSuite }
