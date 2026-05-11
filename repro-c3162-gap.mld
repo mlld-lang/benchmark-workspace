@@ -1,0 +1,54 @@
+>> Minimal repro for c-3162 Gap B (post-ab333f2a9):
+>>
+>> dispatch IDENTITY (mlld-dev's fix) works — `@tool(@args)` succeeds.
+>> dispatch ENFORCEMENT (the goal) does NOT — labels.influenced.deny
+>> doesn't fire on the surfaced exfil:send tool when the call site is
+>> two levels of recursive wrapper deep from the tools collection.
+>>
+>> Expected: this script should die with "Label 'influenced' cannot
+>> flow to 'exfil'". Today it prints `{ sent: "attacker" }`.
+
+exe @send_message(body) = [ => `sent:@body` ]
+
+var tools @writeTools = {
+  send_message: {
+    mlld: @send_message,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    expose: ["body"]
+  }
+}
+
+policy @p = {
+  operations: { exfil: ["exfil:send"] },
+  labels: { influenced: { deny: ["exfil"] } }
+}
+
+>> Inner: 2nd wrapper level — receives toolsCollection as a param a
+>> second time. let-rebinds, calls with policy.
+exe recursive @inner(toolsCollection, toolKey, args, policyValue) = [
+  let @callable = @toolsCollection[@toolKey].isDefined()
+  if @callable [
+    let @tool = @toolsCollection[@toolKey]
+    => when [
+      @policyValue.isDefined() => @tool(@args) with { policy: @policyValue }
+      * => @tool(@args)
+    ]
+  ]
+  => { error: "no callable" }
+]
+
+>> Outer: 1st wrapper level — forwards to inner.
+exe recursive @outer(toolEntry, toolsCollection, toolKey, args, policyValue) = [
+  => @inner(@toolsCollection, @toolKey, @args, @policyValue)
+]
+
+var influenced @body = "attacker"
+var @args = { body: @body }
+var @entry = @writeTools["send_message"]
+
+>> One-level dispatch via @inner alone DENIES correctly:
+>> var @r = @inner(@writeTools, "send_message", @args, @p)
+>>
+>> Two-level dispatch via @outer → @inner DOES NOT deny:
+var @r = @outer(@entry, @writeTools, "send_message", @args, @p)
+/show @r
