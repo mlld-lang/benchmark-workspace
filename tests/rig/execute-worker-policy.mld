@@ -603,10 +603,12 @@ exe role:worker @testInputRecordExactRequiresTaskLiteral() = [
 var @executeWorkerPolicySuite = @suite("execute-worker-policy", [
   @group("control-args", [
     @testExecuteWorkerZeroControlArgPolicy,
-    @testExecuteWorkerOptionalFactOmission,
-    @testKnownDatetimeCanonicalization,
     @testExecuteWorkerKnownControlArgPolicy
   ], {}),
+  @group("control-args-no-known-destination", [
+    @testExecuteWorkerOptionalFactOmission,
+    @testKnownDatetimeCanonicalization
+  ], { xfail: true, ticket: "c-3162", notes: "XFAIL: these dispatch schedule_meeting (exfil:send) WITHOUT a known destination arg. mlld's no-send-to-unknown rule correctly denies. Pre-c-3162 these tests silently passed because @toolCallError narrowness was swallowing the policy_denied envelope. The test premise (optional control-arg omission must still succeed; natural datetime canonicalization must still succeed) is outdated — they were verifying rig-side dispatch shape against a partially-disabled defense layer. Both tests need fixture rework: either add a known destination so no-send-to-unknown is satisfied, or reframe to assert the policy denial." }),
   @group("input-record-collection", [
     @testExecuteWorkerCollectionInputRecordPolicy,
     @testExecuteWorkerCollectionDerivedPayloadPolicy

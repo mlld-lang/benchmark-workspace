@@ -1,30 +1,31 @@
 >> tests/rig/c-3162-dispatch-denial.mld
 >>
->> c-3162 / c-d0e3 Outcome 1 vs 2 discriminator: does
->> labels.influenced.deny: ["exfil"] actually DENY at @policy.build /
->> dispatch when the body arg of an exfil:send tool is sourced from
->> derived content carrying the 'influenced' label?
+>> c-3162 / c-d0e3 acceptance test: does labels.influenced.deny: ["exfil"]
+>> deny when the body arg of an exfil:send tool is sourced from derived
+>> content carrying the 'influenced' label?
 >>
->> If this test passes (denial fires), c-d0e3 closes structurally on the
->> mlld input-taint patch alone. If denial doesn't fire, labels propagate
->> via the patch but enforcement has a downstream scope gap.
+>> Closure mechanism (per mlld-dev): rig's @toolCallError narrowness was
+>> swallowing mlld's {ok:false, error:"policy_denied"} envelope. With
+>> @toolCallError updated to also match that shape, the denial surfaces.
 
-import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @assertOk } from "../assert.mld"
 import { @suite, @group, @runSuites } from "../runner.mld"
 import { @synthesizedPolicy, @updateNamedState } from "../../rig/orchestration.mld"
 import { @emptyState } from "../../rig/runtime.mld"
 import { @dispatchExecute } from "../../rig/workers/execute.mld"
 
->> --- Tool fixture: minimal exfil:send shape ----------------------------------
+>> --- Tool fixture: send_message with body + known recipient ----------------
+>>
+>> Modeled on slack send_direct_message_inputs. Includes a `recipient` fact
+>> so the dispatch satisfies no-send-to-unknown (otherwise that rule would
+>> deny first and obscure the labels.influenced.deny signal we're testing).
 
-exe @c3162_runtime_send(body) = [
-  => { ok: true, body: @body }
+exe @c3162_runtime_send(body, recipient) = [
+  => { ok: true, body: @body, recipient: @recipient }
 ]
 
->> Input record matching slack send_direct_message_inputs shape:
->>   - body in data.untrusted (data classification, not control-arg)
->>   - exfil:send authorization permission on planner role
 record @c3162_send_inputs = {
+  facts: [recipient: { type: string, kind: "user_name" }],
   data: {
     untrusted: [body: string]
   },
@@ -41,7 +42,7 @@ var tools @c3162Tools = {
     inputs: @c3162_send_inputs,
     labels: ["execute:w", "tool:w", "exfil:send"],
     can_authorize: "role:planner",
-    description: "Send a message with body content."
+    description: "Send a message with body content to a recipient."
   }
 }
 
@@ -54,13 +55,7 @@ var @c3162Agent = {
   basePolicy: @synthesizedPolicy(@c3162Tools, null)
 }
 
->> --- Seed state: derived value carrying 'influenced' label ------------------
->>
->> A real chain would arrive here via untrusted-record → extract → derive
->> (with the patched mlld auto-rule attaching 'influenced' to derive's
->> LLM output). For the dispatch-layer test we attach the label directly
->> via `var influenced` so the test runs deterministically without an
->> LLM call.
+>> --- Influenced case: body carries 'influenced' label ----------------------
 
 var influenced @influencedSummary = "ATTACKER PROSE laundered through derive"
 
@@ -79,39 +74,32 @@ var @influencedDerivedState = @updateNamedState(
   }
 )
 
->> --- The dispatch under test ------------------------------------------------
+var @c3162DispatchResult = @dispatchExecute(
+  @c3162Agent,
+  @influencedDerivedState,
+  {
+    phase: "execute",
+    operation: "send_message",
+    args: {
+      recipient: { source: "known", value: "Alice" },
+      body: { source: "derived", name: "tainted_summary", field: "body" }
+    }
+  },
+  "Send the derived summary to Alice."
+)
 
-var @c3162DispatchResult = when [
-  denied => {
-    denied: true,
-    reason: @mx.guard.reason,
-    rule: @mx.guard.guardFilter ?? null
-  }
-  * => @dispatchExecute(
-    @c3162Agent,
-    @influencedDerivedState,
-    {
-      phase: "execute",
-      operation: "send_message",
-      args: {
-        body: { source: "derived", name: "tainted_summary", field: "body" }
-      }
-    },
-    "Send the derived summary."
-  )
-]
-
->> --- Tests ------------------------------------------------------------------
-
->> Discriminator: does dispatch DENY when body is influenced-derived?
+>> Discriminator: dispatch must surface policy_denied with influenced/exfil
+>> in the denial reason.
 exe @testInfluencedBodyDenied() = [
   let @result = @c3162DispatchResult
-  let @ok = @result.denied == true && @result.reason.isDefined() && @result.reason.includes("influenced")
-  => @assertOk(@ok, `dispatch result: @result | @pretty`)
+  let @errMatch = @result.error == "policy_denied"
+  let @codeMatch = @result.code == "POLICY_LABEL_FLOW_DENIED"
+  let @reasonMatch = @result.message.isDefined() && @result.message.includes("influenced")
+  => @assertOk(@errMatch && @codeMatch && @reasonMatch, `expected policy_denied with influenced reason. got: @result | @pretty`)
 ]
 
->> Sanity: a clean (non-influenced) body should NOT be denied. This
->> ensures the patch isn't over-denying every send.
+>> --- Clean case: body is non-influenced, known recipient -------------------
+
 var @cleanState = @updateNamedState(
   @emptyState(),
   "derived",
@@ -125,31 +113,26 @@ var @cleanState = @updateNamedState(
   }
 )
 
-var @c3162CleanResult = when [
-  denied => {
-    denied: true,
-    reason: @mx.guard.reason,
-    rule: @mx.guard.guardFilter ?? null
-  }
-  * => @dispatchExecute(
-    @c3162Agent,
-    @cleanState,
-    {
-      phase: "execute",
-      operation: "send_message",
-      args: {
-        body: { source: "derived", name: "clean_summary", field: "body" }
-      }
-    },
-    "Send the clean summary."
-  )
-]
+var @c3162CleanResult = @dispatchExecute(
+  @c3162Agent,
+  @cleanState,
+  {
+    phase: "execute",
+    operation: "send_message",
+    args: {
+      recipient: { source: "known", value: "Alice" },
+      body: { source: "derived", name: "clean_summary", field: "body" }
+    }
+  },
+  "Send the clean summary to Alice."
+)
 
+>> Sanity: clean dispatch with known recipient must not be denied.
 exe @testCleanBodyNotDenied() = [
   let @result = @c3162CleanResult
-  let @notDenied = !(@result.denied == true)
-  let @noPolicyError = !(@result.error.isDefined() && @result.error.includes("policy"))
-  => @assertOk(@notDenied && @noPolicyError, `clean dispatch should not be policy-denied. result: @result | @pretty`)
+  let @noError = !@result.error.isDefined()
+  let @sent = @result.result.status == "sent"
+  => @assertOk(@noError && @sent, `expected clean dispatch to succeed. got: @result | @pretty`)
 ]
 
 >> --- Suite construction -----------------------------------------------------
@@ -157,10 +140,10 @@ exe @testCleanBodyNotDenied() = [
 var @c3162DispatchSuite = @suite("c-3162-dispatch-denial", [
   @group("influenced-flow-to-exfil-send", [
     @testInfluencedBodyDenied
-  ], { xfail: true, ticket: "c-3162", notes: "Acceptance test for Gap B closure. Today FAILS because rig's @callToolWithPolicy → @callToolWithOptionalPolicy chain is two parameter-passing levels deep from @writeTools, and mlld's tool-collection dispatch identity preservation drops to plain `computed` at that depth. Probed: inlining the dispatch into @dispatchExecute (1 level) makes this test PASS but causes broader policy denials in existing rig tests because previously-bypassed policy guards (no-send-to-unknown etc.) start firing on every dispatch. Proper closure needs either (a) mlld dispatch-identity preservation that survives multi-level parameter passing, OR (b) rig-side policy-aware migration where every tool dispatch carries the labels its catalog declared." }),
+  ], { xfail: true, ticket: "c-3162", notes: "XFAIL pending mlld-side fix. The @toolCallError patch closed the envelope-swallowing half of c-3162. A SECOND mlld enforcement-scope gap remains: labels.<X>.deny only fires when the influenced/labeled arg is the primary input. As soon as a fact arg (recipient/destination) joins the dispatch, the body's influenced label falls out of enforcement scope. Repro at /tmp/probe-scope.mld: body-only fixture denies via labels.influenced.deny; body+known-recipient fixture passes through with status:sent despite body carrying influenced. This is the c-d0e3 root cause across all 5 SHOULD-FAIL writes (WS UT13, BK UT14, SL UT16/19/20) — they're all multi-arg dispatches where the destination is known and the data arg carries the laundered taint." }),
   @group("clean-flow-allowed", [
     @testCleanBodyNotDenied
-  ], { ticket: "c-3162", notes: "Sanity: clean dispatch (non-influenced body) should not be denied. Passes today; ensures the eventual influenced-deny fix doesn't over-broaden." })
+  ], { ticket: "c-3162", notes: "Sanity: clean dispatch (non-influenced body, known recipient) must succeed." })
 ], {})
 
 export { @c3162DispatchSuite }

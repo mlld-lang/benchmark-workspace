@@ -1,0 +1,102 @@
+>> c-3162 Gap C repro: labels.<X>.deny enforcement scope appears limited to primary input.
+>>
+>> Two fixtures, same untrusted/influenced body, same exfil:send tool labels:
+>>   1. body-only fixture: denial fires (Label 'influenced' cannot flow to 'exfil')
+>>   2. body + known recipient fixture: no denial, status:"sent"
+>>
+>> Adding the known recipient apparently moves enforcement focus to recipient,
+>> and the body's influenced label is silently bypassed. This is the systemic
+>> closure path for c-d0e3 (5 SHOULD-FAIL bench writes are all multi-arg
+>> dispatches of this shape).
+
+import { @synthesizedPolicy, @updateNamedState } from "./rig/orchestration.mld"
+import { @emptyState } from "./rig/runtime.mld"
+import { @dispatchExecute } from "./rig/workers/execute.mld"
+
+>> Tool with body ONLY
+exe @send_body_only(body) = [ => { ok: true, body: @body } ]
+record @body_only_inputs = {
+  data: { untrusted: [body: string] },
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+var tools @toolsBodyOnly = {
+  send_message: {
+    mlld: @send_body_only,
+    inputs: @body_only_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send body only."
+  }
+}
+
+>> Tool with body + recipient
+exe @send_with_recipient(body, recipient) = [ => { ok: true, body: @body, recipient: @recipient } ]
+record @with_recipient_inputs = {
+  facts: [recipient: { type: string, kind: "user_name" }],
+  data: { untrusted: [body: string] },
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+var tools @toolsWithRecipient = {
+  send_message: {
+    mlld: @send_with_recipient,
+    inputs: @with_recipient_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Send body to recipient."
+  }
+}
+
+var influenced @taintedBody = "ATTACKER PROSE"
+var @derivedState = @updateNamedState(
+  @emptyState(), "derived", "tainted",
+  {
+    provenance: "derived",
+    schema_name: "inline",
+    preview_fields: ["body"],
+    value: { body: @taintedBody },
+    selection_refs: []
+  }
+)
+
+var @agentBodyOnly = {
+  defense: "defended",
+  tools: @toolsBodyOnly,
+  toolsCollection: @toolsBodyOnly,
+  basePolicy: @synthesizedPolicy(@toolsBodyOnly, null)
+}
+
+var @agentWithRecipient = {
+  defense: "defended",
+  tools: @toolsWithRecipient,
+  toolsCollection: @toolsWithRecipient,
+  basePolicy: @synthesizedPolicy(@toolsWithRecipient, null)
+}
+
+/show "=== body-only fixture ==="
+var @r1 = @dispatchExecute(
+  @agentBodyOnly, @derivedState,
+  { phase: "execute", operation: "send_message",
+    args: { body: { source: "derived", name: "tainted", field: "body" } } },
+  "Send tainted body."
+)
+/show `result: @r1 | @pretty`
+
+/show "=== body+recipient fixture ==="
+var @r2 = @dispatchExecute(
+  @agentWithRecipient, @derivedState,
+  { phase: "execute", operation: "send_message",
+    args: {
+      recipient: { source: "known", value: "Alice" },
+      body: { source: "derived", name: "tainted", field: "body" }
+    } },
+  "Send tainted body to Alice."
+)
+/show `result: @r2 | @pretty`

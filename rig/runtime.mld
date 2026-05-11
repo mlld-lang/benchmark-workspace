@@ -811,9 +811,12 @@ exe @toolFailureDetail(raw) = when [
 >> Runtime bridges sometimes return an object envelope with `error: false`
 >> on success. Treat only an explicit boolean `true` as a structured tool
 >> failure; checking mere field presence turns valid MCP payloads into
->> false-positive phase errors.
+>> false-positive phase errors. Additionally, mlld surfaces policy denials
+>> from traced tool calls as { ok: false, error: "policy_denied", ... } —
+>> catch that shape so denied dispatches don't proceed to status:"sent".
 exe @toolCallError(raw) = when [
   @typeof(@raw) == "object" && @raw["error"] == true => @raw
+  @typeof(@raw) == "object" && @raw["ok"] == false && @raw["error"].isDefined() => @raw
   * => null
 ]
 

@@ -2,13 +2,13 @@
 id: c-d0e3
 status: open
 deps: []
-links: [c-6935, c-84d5, c-3c2b, c-3162]
+links: [c-6935, c-84d5, c-3c2b, c-3162, c-41e1]
 created: 2026-05-11T17:00:39Z
 type: bug
 priority: 1
 assignee: Adam
 tags: [security, defense-gap, derive-worker, workspace, SL-UT13]
-updated: 2026-05-11T18:06:15Z
+updated: 2026-05-11T22:58:38Z
 ---
 # WS UT13 derive-reason text laundering channel — derive_insufficient_information.summary leaks untrusted content to planner
 
