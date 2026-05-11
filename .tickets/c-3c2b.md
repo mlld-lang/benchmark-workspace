@@ -2,13 +2,13 @@
 id: c-3c2b
 status: closed
 deps: []
-links: [c-c2e7, c-5ef9, c-ce5a]
+links: [c-c2e7, c-5ef9, c-ce5a, c-d0e3]
 created: 2026-05-05T03:08:52Z
 type: bug
 priority: 1
 assignee: Adam
 tags: [security, firewall, rig, c-5ef9]
-updated: 2026-05-05T06:13:40Z
+updated: 2026-05-11T17:00:45Z
 ---
 # Security tests: deep UT16 firewall bypass — the wrong-record-fact bug
 
