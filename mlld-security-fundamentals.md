@@ -163,6 +163,8 @@ The four channels are conceptually distinct:
 
 `untrusted` lives in `taint`. `known` lives in `attestations`. The distinction is load-bearing: positive checks like `no-send-to-unknown` consume attestations (exact-value match), while negative checks like `no-untrusted-destructive` consume taint (sticky propagation).
 
+For objects and arrays, `@value.mx.labels` is a conservative aggregate summary: it may include labels found on descendant fields. Field reads remain field-local. A label that only appears on `@value.bad` must not smear onto `@value.clean`, while an explicit label on the container itself (`var secret @value = { clean: "x" }`) is a label on the exact container value and does flow down to child reads. Runtime policy code uses separate self, aggregate, field/index, and proof metadata channels rather than treating public `.mx.labels` as a policy-input primitive.
+
 ### 1.8 Auto-applied labels
 
 The runtime applies certain labels without you asking:
@@ -681,6 +683,8 @@ record @issue = {
 ```
 
 Fact fields get **proof and taint cleared**. Trusted-payload fields get **taint cleared but no proof** (safe to read, not authorization-grade). Untrusted-payload fields stay tainted. The `when` clause can conditionally promote data fields to trusted based on input values.
+
+Fact proof is field-local proof metadata. A parent record may summarize descendant labels through `@record.mx.labels`, but positive checks consume the actual argument value's fact labels and factsources. `@contact.email` can authorize a recipient; `@contact.notes` cannot borrow that proof from its sibling.
 
 Schema validation metadata is available on `@output.mx.schema.valid` and `@output.mx.schema.errors`. `validate:` on the record controls the failure mode: `"demote"` (the default) keeps invalid output but strips fact proof; `"strict"` denies on validation error; `"drop"` drops invalid rows from arrays.
 
