@@ -140,7 +140,7 @@ exe @testCleanBodyNotDenied() = [
 var @c3162DispatchSuite = @suite("c-3162-dispatch-denial", [
   @group("influenced-flow-to-exfil-send", [
     @testInfluencedBodyDenied
-  ], { xfail: true, ticket: "c-3162", notes: "XFAIL pending mlld-side fix. The @toolCallError patch closed the envelope-swallowing half of c-3162. A SECOND mlld enforcement-scope gap remains: labels.<X>.deny only fires when the influenced/labeled arg is the primary input. As soon as a fact arg (recipient/destination) joins the dispatch, the body's influenced label falls out of enforcement scope. Repro at /tmp/probe-scope.mld: body-only fixture denies via labels.influenced.deny; body+known-recipient fixture passes through with status:sent despite body carrying influenced. This is the c-d0e3 root cause across all 5 SHOULD-FAIL writes (WS UT13, BK UT14, SL UT16/19/20) — they're all multi-arg dispatches where the destination is known and the data arg carries the laundered taint." }),
+  ], { ticket: "c-3162", notes: "Acceptance test for c-d0e3 closure. mlld field-level provenance + multi-arg enforcement fix ensures labels.influenced.deny fires on body arg even with known recipient also present. Pre-fix, this was the systemic c-d0e3 root cause: multi-arg dispatches where destination was known and data arg carried laundered taint silently passed." }),
   @group("clean-flow-allowed", [
     @testCleanBodyNotDenied
   ], { ticket: "c-3162", notes: "Sanity: clean dispatch (non-influenced body, known recipient) must succeed." })
