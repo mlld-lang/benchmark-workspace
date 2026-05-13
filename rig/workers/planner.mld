@@ -379,26 +379,56 @@ exe @finishPlannerTool(ctx, nextState, nextRuntime, workerSessionId, outcome, su
   }
 ]
 
+>> Build the planner-visible error log entry from a phase result. Surfaces
+>> mlld's structured policy-error detail (code / field / hint / message) so
+>> the planner can self-correct on its next turn instead of cycling shapes.
+>> Returns null on success. Exported for tests/rig/phase-error-envelope.mld.
+exe @buildPhaseErrorLogEntry(phaseResult, decision, workerSessionId) = [
+  if !@phaseResult.error.isDefined() [ => null ]
+  => {
+    phase: @decision.phase,
+    tool: @decision.tool ?? @decision.operation ?? null,
+    name: @decision.name ?? null,
+    status: "error",
+    error: @phaseResult.error,
+    summary: @phaseResult.summary ?? @phaseResult.message ?? @phaseResult.error,
+    code: @phaseResult.code ?? null,
+    field: @phaseResult.field ?? null,
+    hint: @phaseResult.hint ?? null,
+    message: @phaseResult.message ?? null,
+    issues: @phaseResult.issues ?? null,
+    raw_error: @phaseResult.raw_error ?? null,
+    worker_session_id: @workerSessionId
+  }
+]
+
+>> Build the planner-facing tool result envelope for a failed phase
+>> dispatch. Same structured-detail surfacing as the log entry, plus the
+>> budget/progress warnings the rig adds at settle time.
+exe @buildPhaseErrorResult(phaseResult, phase, settled) = [
+  => {
+    status: "error",
+    phase: @phase,
+    error: @phaseResult.error,
+    summary: @settled.summary,
+    code: @phaseResult.code ?? null,
+    field: @phaseResult.field ?? null,
+    hint: @phaseResult.hint ?? null,
+    message: @phaseResult.message ?? null,
+    issues: @phaseResult.issues ?? null,
+    raw_error: @phaseResult.raw_error ?? null,
+    budget_warning: @settled.budget_warning,
+    progress_warning: @settled.progress_warning
+  }
+]
+
 exe @settlePhaseDispatch(toolCtx, phaseResult, decision) = [
   let @workerSessionId = @normalizeSessionId(@phaseResult.session_id)
   let @nextState = when [
     @phaseResult.error.isDefined() => @phaseResult.state ?? @toolCtx.state
     * => @phaseResult.state
   ]
-  let @logEntry = when [
-    @phaseResult.error.isDefined() => {
-      phase: @decision.phase,
-      tool: @decision.tool ?? @decision.operation ?? null,
-      name: @decision.name ?? null,
-      status: "error",
-      error: @phaseResult.error,
-      summary: @phaseResult.summary ?? @phaseResult.error,
-      issues: @phaseResult.issues ?? null,
-      raw_error: @phaseResult.raw_error ?? null,
-      worker_session_id: @workerSessionId
-    }
-    * => null
-  ]
+  let @logEntry = @buildPhaseErrorLogEntry(@phaseResult, @decision, @workerSessionId)
   if @logEntry.isDefined() [
     @appendExecutionLogEntry(@toolCtx.agent.executionLogFile, @serializeLifecycleJson(@logEntry))
   ]
@@ -486,7 +516,7 @@ exe @resolveWorker(input) = [
   let @resolvedHandles = for @handle in @arrayItems(@phaseResult.result.handles ?? []) => @stringValue(@handle)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "resolve", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning, progress_warning: @settled.progress_warning }
+    @phaseResult.error.isDefined() => @buildPhaseErrorResult(@phaseResult, "resolve", @settled)
     * => {
       status: "resolved",
       tool: @tool,
@@ -719,7 +749,7 @@ exe @extractWorker(input) = [
   let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "extract", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning, progress_warning: @settled.progress_warning }
+    @phaseResult.error.isDefined() => @buildPhaseErrorResult(@phaseResult, "extract", @settled)
     * => {
       status: "extracted",
       name: @phaseResult.result.name,
@@ -1019,7 +1049,7 @@ exe @executeWorker(input) = [
   let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
   let @result = when [
     @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
-    @phaseResult.error.isDefined() => { status: "error", phase: "execute", error: @phaseResult.error, summary: @settled.summary, issues: @phaseResult.issues ?? null, budget_warning: @settled.budget_warning, progress_warning: @settled.progress_warning }
+    @phaseResult.error.isDefined() => @buildPhaseErrorResult(@phaseResult, "execute", @settled)
     * => {
       status: "executed",
       tool: @phaseResult.result.tool,
@@ -1303,4 +1333,4 @@ exe @runPlannerSession(rawAgent, query) = [
   }
 ]
 
-export { @planner, @plannerPrompt, @plannerTools, @runPlannerSession, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress, @exhaustedControlArgClasses, @blockedFieldHints }
+export { @planner, @plannerPrompt, @plannerTools, @runPlannerSession, @stateProgressFingerprint, @plannerNoProgressThreshold, @plannerRuntimeStateWithProgress, @exhaustedControlArgClasses, @blockedFieldHints, @buildPhaseErrorLogEntry, @buildPhaseErrorResult }

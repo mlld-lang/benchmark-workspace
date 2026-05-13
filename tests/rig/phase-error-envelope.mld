@@ -1,0 +1,135 @@
+>> tests/rig/phase-error-envelope.mld
+>>
+>> Asserts that when mlld surfaces a structured policy error (e.g.
+>> tool_input_validation_failed with code/field/hint/message), rig
+>> preserves the detail through both:
+>>   (1) @dispatchExecute return — what the worker emits to its caller
+>>   (2) @buildPhaseErrorLogEntry — what gets written to the execution log
+>>       AND seen by the planner in its next-turn tool result.
+>>
+>> Pre-fix: rig's @settlePhaseDispatch picks only {error, summary, issues,
+>> raw_error} from the phaseResult, dropping code/field/hint/message. The
+>> planner sees a generic "tool_input_validation_failed" and cycles through
+>> shapes blindly (BK UT3/4/11, TR UT4).
+>>
+>> Post-fix: helper @buildPhaseErrorLogEntry surfaces code/field/hint/message
+>> alongside the existing fields, giving the planner the actionable detail.
+
+import { @assertOk, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @synthesizedPolicy } from "../../rig/orchestration.mld"
+import { @emptyState } from "../../rig/runtime.mld"
+import { @dispatchExecute } from "../../rig/workers/execute.mld"
+import { @buildPhaseErrorLogEntry } from "../../rig/workers/planner.mld"
+
+>> --- Fixture: send_money-shaped tool with strict input validation ---------
+
+exe @env_send_money(recipient, amount, date, subject) = [
+  => { ok: true, recipient: @recipient, amount: @amount, date: @date, subject: @subject }
+]
+
+record @env_send_money_inputs = {
+  facts: [recipient: { type: string, kind: "iban" }],
+  data: {
+    trusted: [amount: number, date: string],
+    untrusted: [subject: string]
+  },
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+var tools @envTools = {
+  send_money: {
+    mlld: @env_send_money,
+    inputs: @env_send_money_inputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "Fixture send_money for phase error envelope test."
+  }
+}
+
+var @envAgent = {
+  defense: "defended",
+  tools: @envTools,
+  toolsCollection: @envTools,
+  basePolicy: @synthesizedPolicy(@envTools, null)
+}
+
+var @envQuery = "Send back the share to GB29NWBK60161331926819. Today is 2026-05-13."
+
+>> Trigger MlldPolicyError(direction:input, code:input_type_mismatch) by
+>> passing amount as a string. The validator declared amount: number.
+var @envBadAmount = @dispatchExecute(
+  @envAgent,
+  @emptyState(),
+  {
+    phase: "execute",
+    operation: "send_money",
+    args: {
+      recipient: { source: "known", value: "GB29NWBK60161331926819" },
+      amount: { source: "known", value: "4.00" },
+      date: { source: "known", value: "2026-05-13" },
+      subject: { source: "known", value: "Refund" }
+    }
+  },
+  @envQuery
+)
+
+>> --- Assertion 1: @dispatchExecute return preserves rich envelope ----------
+
+exe @testDispatchReturnsRichEnvelope() = [
+  let @r = @envBadAmount
+  let @hasCode = @r.code == "input_type_mismatch"
+  let @hasField = @r.field == "amount"
+  let @hasHint = @r.hint.isDefined() && @r.hint.includes("number")
+  let @hasMessage = @r.message.isDefined() && @r.message.includes("amount")
+  => @assertOk(
+    @hasCode && @hasField && @hasHint && @hasMessage,
+    `expected code=input_type_mismatch field=amount hint includes 'number' message includes 'amount'. got: @r | @pretty`
+  )
+]
+
+>> --- Assertion 2: @buildPhaseErrorLogEntry preserves code/field/hint -------
+
+exe @testLogEntryPreservesDetail() = [
+  let @entry = @buildPhaseErrorLogEntry(@envBadAmount, { phase: "execute", tool: "send_money" }, null)
+  let @hasCode = @entry.code == "input_type_mismatch"
+  let @hasField = @entry.field == "amount"
+  let @hasHint = @entry.hint.isDefined() && @entry.hint.includes("number")
+  let @hasMessage = @entry.message.isDefined() && @entry.message.includes("amount")
+  let @keepsError = @entry.error == "tool_input_validation_failed"
+  let @keepsPhase = @entry.phase == "execute"
+  => @assertOk(
+    @hasCode && @hasField && @hasHint && @hasMessage && @keepsError && @keepsPhase,
+    `expected logEntry to keep error/phase AND surface code/field/hint/message. got: @entry | @pretty`
+  )
+]
+
+>> --- Suite construction -----------------------------------------------------
+
+var @phaseErrorEnvelopeSuite = @suite("phase-error-envelope", [
+  @group("dispatch-return-rich", [
+    @testDispatchReturnsRichEnvelope
+  ], { notes: "Sanity: @dispatchExecute already returns mlld's rich envelope. Catches regressions in @toolCallError or upstream." }),
+  @group("logentry-preserves-detail", [
+    @testLogEntryPreservesDetail
+  ], { notes: "Post-fix: @buildPhaseErrorLogEntry must thread code/field/hint/message through to logEntry. Pre-fix this test fails: helper doesn't exist or returns narrow shape." })
+], {})
+
+export { @phaseErrorEnvelopeSuite }
+
+>> --- Standalone runner ------------------------------------------------------
+
+var @result = @runSuites([@phaseErrorEnvelopeSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]
