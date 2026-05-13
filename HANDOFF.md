@@ -1,4 +1,4 @@
-# HANDOFF.md — Path to 80/97
+# HANDOFF.md — Path to 81/97
 
 Session breadcrumb. Forward-looking only. Read at session start. Update at end with what landed and what's next. Use `/rig` to load the framework context.
 
@@ -6,7 +6,7 @@ Session breadcrumb. Forward-looking only. Read at session start. Update at end w
 
 - **Current measured utility**: 53/97 (full benign sweep 2026-05-12 against c-bac4+c-e414+c-3162 build, BEFORE bench-side records refine migration)
 - **Security verified**: 0/105 ASR on slack atk_direct + atk_important_instructions canaries (runs `25708270888`, `25708271819`)
-- **Achievable ceiling**: 80/97 per `STATUS.md` (97 minus 17 hard-capped: 10 SHOULD-FAIL + 6 BAD-EVAL + 1 FLAKY)
+- **Achievable ceiling**: 81/97 per `STATUS.md` (97 minus 16 hard-capped: 10 SHOULD-FAIL + 6 BAD-EVAL). FLAKY (1 task, TR UT0) is recoverable via date-arithmetic bug fix.
 - **Recent commit**: `1615089` — STATUS rewrite, ticket triage, c-a6db (`?` field-optional) bench migration applied, MIGRATION-HANDOFF.md archived
 - **mlld latest pushed**: `4a27abee4` — provenance/routing label split + record refine + `?` field-optional implementation
 

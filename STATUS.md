@@ -8,19 +8,20 @@ Canonical state of the benchmark. Replaces the experiment-log style of the old S
 |---|---|---|
 | Short-term: defenses hold | 0% ASR on slack canaries (atk_direct + atk_important_instructions) | ✅ verified 0/105 on both (run `25708270888`, `25708271819`, 2026-05-12, post-c-3162-Gap-C) |
 | Mid-term: complete migration | records-as-policy + records refine + Gap C fixes | ✅ mlld-side done (refine impl + provenance/routing split, mlld commits `4a27abee4` + `a5f3142666`); bench-side migration in flight (c-a6db, c-4076, c-7780) |
-| Long-term: utility ≥80% with deterministic security | ≥78/97 utility, full 6×5 attack matrix at 0% ASR | In flight. Ceiling per current classification: 81/97 (see below). |
+| Long-term: utility ≥80% with deterministic security | ≥81/97 utility (the achievable ceiling), full 6×5 attack matrix at 0% ASR | In flight. |
 
 ## Achievable ceiling
 
-Hard cap = SHOULD-FAIL + BAD-EVAL + FLAKY tasks (these are not recoverable without weakening defenses or eval-shaping the harness).
+Hard cap = SHOULD-FAIL + BAD-EVAL (these are not recoverable without weakening defenses or eval-shaping the harness).
 
 | Category | Count | Tasks |
 |---|---|---|
 | SHOULD-FAIL | 10 | WS UT19 · BK UT0, UT14 · SL UT2, UT11, UT16, UT17, UT18, UT19, UT20 |
 | BAD-EVAL | 6 | WS UT31, UT33 · BK UT9, UT10 · TR UT11, UT17 |
-| FLAKY | 1 | TR UT0 |
-| **Hard cap** | **17** | |
-| **Achievable ceiling** | **80/97** | (97 - 17) |
+| **Hard cap** | **16** | |
+| **Achievable ceiling** | **81/97** | (97 - 16) |
+
+FLAKY tasks (1 — TR UT0 date-arithmetic year-boundary bug) are recoverable when the underlying bug is fixed; they live in the recovery path, not the hard cap.
 
 The ceiling shifts as classifications change. Tasks currently OPEN may resolve to SHOULD-FAIL or BAD-EVAL (lowering the ceiling). Currently SHOULD-FAIL classifications may turn out to be recoverable (raising the ceiling). **Only the user marks tasks FLAKY or BAD-EVAL.** Agents may not pre-classify into those categories.
 
@@ -67,7 +68,7 @@ Sequenced layers, dependencies in order:
 | **Planner-quality fixes** | per-task tickets (c-6ed8, c-57a6, b2-94c7) | 2-3 tasks (BK UT15, TR UT16, BK UT6) | Existing tickets |
 | **CaMeL-mirror profile (separate dimension)** | c-f97d | comparable number alongside strict | Post-Tier-1; for paper-ready apples-to-apples |
 
-Combined estimate: **76-81/97 with Tier 1 + Tier 2 + Cluster I + per-task fixes**. Reader-set primitive can push toward the ceiling further. Anything beyond requires reclassifying SHOULD-FAIL or BAD-EVAL (security ratchet trade or eval-shaping).
+Combined estimate: **76-81/97 with Tier 1 + Tier 2 + Cluster I + per-task fixes + FLAKY UT0 fix**. Reader-set primitive can push toward the ceiling further. Anything beyond requires reclassifying SHOULD-FAIL or BAD-EVAL (security ratchet trade or eval-shaping).
 
 ---
 
