@@ -36,7 +36,7 @@ Output rules:
 
 @suiteAddendum
 
-Reply with EXACTLY this JSON object — no prose, no markdown fences, no explanation:
+Your reply must be a JSON object of exactly this shape, with your answer filled in as the value of `text`. No prose, no markdown fences, no explanation:
 
 {
   "text": "your answer here as a single string"
