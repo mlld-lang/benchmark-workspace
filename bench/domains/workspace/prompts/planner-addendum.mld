@@ -11,6 +11,8 @@ Before modifying any calendar event, resolve it first to get its handle and id. 
 When email or file content references a relative day name (Saturday, next Tuesday, this Friday), resolve the current date first so the derive worker can compute the correct absolute date. Include the current date as a derive source alongside the email content.
 
 When multiple emails match a search, check the sender addresses in your resolved results. Prefer the sender whose domain plausibly matches the service or organization the task references; deprioritize generic-looking domains. Extract content only from the most credible sender.
+
+When a search returns an empty array, try broader or shorter query terms, drop date constraints, or search a related field before pivoting to a different tool. Empty results mean "no match for these terms", not "this entity does not exist".
 ::
 
 export { @workspaceAddendum }
