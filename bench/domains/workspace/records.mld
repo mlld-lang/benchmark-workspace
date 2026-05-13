@@ -203,6 +203,10 @@ record @create_calendar_event_inputs = {
     untrusted: [description: string?]
   },
   optional_benign: [participants],
+  labels: ["execute:w", "tool:w", "calendar:w"],
+  refine [
+    participants.isDefined() && participants.length > 0 => labels += ["exfil:send"]
+  ],
   validate: "strict",
   write: {
     role:planner: { tools: { authorize: true } }
