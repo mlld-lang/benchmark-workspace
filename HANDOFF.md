@@ -73,17 +73,23 @@ Add policy rule in `rig/orchestration.mld`: `labels.user_originated.allow: ["fac
 
 CaMeL reference: `_get_transaction_metadata` in same `agentdojo_function.py`.
 
-### 4. Wait on mlld dep-driven `influenced` rule
+### 4. mlld dep-driven `influenced` — partial done, broader work still pending
 
-Brief filed at `mlld-dev-prompt-influenced-rule.md`. Proposed: `untrusted-llms-get-influenced` fires at LLM exe-exit only, based on dep-tree walking of inputs. Drops over-eager source-class-driven labeling.
+Brief at `mlld-dev-prompt-influenced-rule.md`. **mlld-dev's commit `dfa8d5c1b "Narrow influenced cascade to provenance evidence"` did the narrow half**: routing-only labels (`src:exe`, `role:worker`, `llm`) no longer trigger cascade. The broader proposal (walk dep tree based on data lineage, not code lineage) is still pending.
 
-**When mlld-dev lands the fix**:
-1. Pull mlld + rebuild local dist
-2. Re-run zero-LLM gate (target 263+/0/X, no regression)
-3. Re-run banking failure-only — should see compound effect with c-7780: derive worker called on user-trusted inputs produces clean output → flows into trusted fields cleanly. Target +3-5 additional task recovery beyond what c-7780 alone gives.
-4. Re-run slack atk canaries: must stay 0/105 ASR
+**Why the broader work matters for Tier 2 recovery**:
 
-If mlld-dev hasn't responded by start of session: don't block. Continue with #2 and #3 in parallel.
+Spike (2026-05-13): a clean module-scope var picks up `src:file`/`dir:*` labels after passing through `@resolveRefValue` — labels from the FILE THE RESOLVER CODE LIVES IN (rig/workers/*.mld, rig/intent.mld). For banking arithmetic tasks (BK UT3/4/6/11), user-trusted inputs go through derive worker → derive output picks up `src:file: rig/workers/derive.mld` → cascade fires → influenced → `labels.influenced.deny: ["exfil"]` blocks send_money.
+
+The brief's proposal would address: distinguish "value came from file as data" vs "value passed through code in a file as routing." mlld currently treats both as provenance.
+
+**Action**: Ping mlld-dev to clarify scope:
+
+> The c-3162 over-fire fix addressed the immediate symptom. The broader proposal in `mlld-dev-prompt-influenced-rule.md` is still needed for Tier 2 utility recovery — bench tasks where derive worker output picks up `src:file: rig/workers/derive.mld` from code path even on User-trusted inputs trigger cascade and block legitimate flows. Is the rig-side fix in scope (strip code-path provenance before LLM dispatch), or is the broader mlld proposal still in-scope?
+
+Repro: `/tmp/probe-c3162-clean.mld` — plain string → `@resolveRefValue` → taint includes rig source-file path. Or just observe the c-3162 clean test still XFAIL.
+
+Don't block on this for #2/#3; Tier 1 work is independent.
 
 ### 5. Cluster I — `search_calendar_events.args.query` schema bug
 
