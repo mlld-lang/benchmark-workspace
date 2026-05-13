@@ -47,6 +47,7 @@ import { @policyBuildCatalogArchSuite } from "./rig/policy-build-catalog-arch.ml
 import { @toolMetadataSuite } from "./rig/tool-metadata.mld"
 import { @executeWorkerPolicySuite } from "./rig/execute-worker-policy.mld"
 import { @c3162DispatchSuite } from "./rig/c-3162-dispatch-denial.mld"
+import { @phaseErrorEnvelopeSuite } from "./rig/phase-error-envelope.mld"
 import { @numericCoercionSuite } from "./rig/numeric-coercion.mld"
 import { @thinArrowAndDisplaySuite } from "./rig/thin-arrow-and-display.mld"
 import { @shelfIntegrationSuite } from "./rig/shelf-integration.mld"
@@ -72,6 +73,7 @@ var @suites = [
   @toolMetadataSuite,
   @executeWorkerPolicySuite,
   @c3162DispatchSuite,
+  @phaseErrorEnvelopeSuite,
   @numericCoercionSuite,
   @thinArrowAndDisplaySuite,
   @shelfIntegrationSuite,
