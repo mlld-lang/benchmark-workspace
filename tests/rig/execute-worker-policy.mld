@@ -65,9 +65,8 @@ exe @runtime_schedule_meeting(title, start_time, end_time, participants: array) 
 >> shape used in the rig invariant suite — keep this here so tests
 >> exercise the planner/worker contract directly.
 record @local_meeting_request_inputs = {
-  facts: [participants: array?],
+  facts: [participants?: array],
   data: [title: string, start_time: string, end_time: string],
-  optional_benign: [participants],
   validate: "strict",
   write: {
     role:planner: { tools: { authorize: true } },

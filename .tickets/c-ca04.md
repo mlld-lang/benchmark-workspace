@@ -35,3 +35,7 @@ OPEN — needs transcript-grounded diagnosis. NOT pre-existing 'stochastic' clas
 - c-bac4 (migration commit 31919f3)
 - STATUS.md slack section UT4 per-task note (needs revision after diagnosis)
 
+
+## Notes
+
+**2026-05-13T11:35:24Z** Defer until records refine migration + full re-sweep lands. Re-verify UT4 status post-migration. If still failing after Tier 1 work, this remains OPEN; if recovered, close.

@@ -84,11 +84,25 @@ mlld rig/tests/workers/run.mld --no-checkpoint     # worker LLM tests (17 tests,
 
 ## Running benchmarks
 
-CLAUDE.md "Running benchmarks" is the operational guide — you've already read it as part of step 4 above. Two reminders worth carrying into the session:
+CLAUDE.md "Running benchmarks" is the operational guide — you've already read it as part of step 4 above. Three reminders worth carrying into the session:
 
 - **Match shape to question.** Spike (zero-LLM) for runtime/contract questions; targeted sweep (1 suite or task subset) for iterating on a fix; full `scripts/bench.sh` for closeout regression checks only. Iterating with full sweeps is the most expensive mistake.
 
+- **Bench gate ordering — benign FIRST, attacks SECOND.** An ASR result from a non-functional agent is structurally meaningless. If utility is broken, ASR=0 just means "the dispatcher didn't fire any writes," not "defense held." Always confirm benign utility within ±2 of baseline before trusting attack canary numbers. The 2-at-a-time sub-suite concurrency cap is non-negotiable regardless of provider.
+
+- **Baseline-attribution discipline.** When claiming "Δ-N vs baseline," cite the explicit pre-change baseline run id and verify against the actual JSONL — don't lean on memory. Compute per-task set diff (not just count), so regressions aren't hidden by stochastic recoveries. The number 78/97 from baseline 2026-05-04 is the comparison anchor.
+
 Never use `--debug` on bench runs — it triggers OOM. `MLLD_TRACE=effects MLLD_TRACE_FILE=tmp/trace.jsonl` is the right tracing knob.
+
+## Session-end discipline
+
+**Session boundaries are the user's call.** Specifically:
+
+- If you hit an mlld-side blocker: file an upstream ticket (`cd ~/mlld/mlld && tk add ...`), keep working on adjacent items, or ask the user. **Never** end the session because mlld-dev needs to do something — mlld-dev typically responds same-turn or next-turn, faster than the deferred-loop cost of waiting.
+- If you finish the work the user asked for: report status (commits, gates, what landed) and ask whether to continue with the next item or wrap. Do not pre-emptively write a session-end document.
+- If the user explicitly says "end session," "wrap up," "hand off," or similar: update any handoff/breadcrumb file and stop.
+
+The session-end document (when one exists) is for **landed work and forward-pointing context**, not for documenting why you stopped. Strip closed-bug/fixed-issue history at session end as routine cleanup — future agents read forward-pointing context, not archeological narratives. Once an mlld ticket closes or any blocker resolves, remove its mention from session breadcrumbs.
 
 ## Auditing attack runs for planner-clean invariant
 

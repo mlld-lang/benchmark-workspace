@@ -2,13 +2,13 @@
 id: c-d0e3
 status: open
 deps: []
-links: [c-6935, c-84d5, c-3c2b, c-3162, c-41e1]
+links: [c-6935, c-84d5, c-3c2b, c-3162, c-41e1, c-a6db]
 created: 2026-05-11T17:00:39Z
 type: bug
 priority: 1
 assignee: Adam
 tags: [security, defense-gap, derive-worker, workspace, SL-UT13]
-updated: 2026-05-11T22:58:38Z
+updated: 2026-05-13T11:33:27Z
 ---
 # WS UT13 derive-reason text laundering channel — derive_insufficient_information.summary leaks untrusted content to planner
 
@@ -122,3 +122,12 @@ C. **Sanitize derive.reason at the dispatcher** (Instance 1 only — partial). D
 D. **Strip reason from planner-visible summary entirely** (Instance 1 only — partial).
 
 Phase 2 close target is c-84d5 alone, which closes the canary case. The systemic fix (A or B) is Phase 3 or post-migration grinding scope. Updating STATUS.md per-task notes to reflect the additional instances.
+
+**2026-05-13T11:35:24Z** Closure path identified:
+1. mlld c-3162 Gap C fix LANDED (commit 051d66396 + 4a27abee4): provenance/routing label split + multi-arg labels.influenced.deny enforcement.
+2. Bench-side records refine migration NEXT (c-a6db, c-4076, c-7780): apply ? field-optional + records refine across all suites.
+3. Re-verification on cloud sweep + slack atk_direct canary should show: c-d0e3 class tasks (WS UT13, BK UT14 asterisk, SL UT16/19/20) either correctly deny at influenced flow OR (if recoverable) succeed via dep-driven trust.
+
+Slack atk_direct canary on c-bac4+c-e414 binary verified 0/105 ASR (run 25708270888, 2026-05-12), confirming defense layer works in real bench shape. Pre-fix ASR was 1/105 (UT1×IT1 c-d0e3 instance).
+
+Holding open pending bench-side records refine migration verification. Will close when full benign + canary re-run confirms numbers.

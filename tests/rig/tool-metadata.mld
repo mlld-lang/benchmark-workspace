@@ -97,16 +97,17 @@ exe @testImportedVarToolsPreserveParamMetadata() = [
 ]
 
 exe @testInputRecordToolMetadata() = [
+  >> Post-c-a6db: optional_benign: section removed; ?-field-optional on participants now
+  >> carries the optionality. optionalBenign is no longer reported.
+  >> exfil:send moved to record refine (fires conditionally) — tool catalog labels no longer carry it statically.
   let @ok = @meetingParams.length == 4 &&
     @meetingControlArgs.includes("participants") &&
     @meetingPayloadArgs.includes("title") &&
     @meetingPayloadArgs.includes("start_time") &&
     @meetingOptionalArgs.includes("participants") &&
-    @meetingOptionalBenign.includes("participants") &&
     @meetingRisk.includes("calendar:w") &&
-    @meetingRisk.includes("exfil:send") &&
     @meetingCanAuthorizeRoles.includes("role:planner")
-  => @assertOk(@ok, `params=@meetingParams control=@meetingControlArgs payload=@meetingPayloadArgs optional=@meetingOptionalArgs optionalBenign=@meetingOptionalBenign risk=@meetingRisk roles=@meetingCanAuthorizeRoles`)
+  => @assertOk(@ok, `params=@meetingParams control=@meetingControlArgs payload=@meetingPayloadArgs optional=@meetingOptionalArgs risk=@meetingRisk roles=@meetingCanAuthorizeRoles`)
 ]
 
 exe @testFactsourceRoundtrip() = [
@@ -176,12 +177,12 @@ exe @testToolDocsControlArgs() = [
 ]
 
 exe @testInputRecordToolDocs() = [
+  >> Post-c-a6db: optional_benign: removed; ?-field carries optionality.
   let @ok = @meetingDoc.controlArgs.includes("participants") &&
     @meetingDoc.payloadArgs.includes("title") &&
     @meetingDoc.optionalArgs.includes("participants") &&
-    @meetingDoc.optionalBenign.includes("participants") &&
     @meetingDoc.description.includes("personal event")
-  => @assertOk(@ok, `control=@meetingDoc.controlArgs payload=@meetingDoc.payloadArgs optional=@meetingDoc.optionalArgs optionalBenign=@meetingDoc.optionalBenign description=@meetingDoc.description`)
+  => @assertOk(@ok, `control=@meetingDoc.controlArgs payload=@meetingDoc.payloadArgs optional=@meetingDoc.optionalArgs description=@meetingDoc.description`)
 ]
 
 >> --- Suite ---------------------------------------------------------------

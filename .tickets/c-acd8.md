@@ -37,3 +37,7 @@ C for the test rewrite (clean assertion of the defense), then surface D to mlld-
 ## Linked
 c-3162, c-41e1
 
+
+## Notes
+
+**2026-05-13T11:35:24Z** Two execute-worker-policy tests (executeWorkerOptionalFactOmission + knownDatetimeCanonicalization) are xfail'd because they dispatch schedule_meeting without a known destination. Post-c-a6db (? field-optional), schedule_meeting could be migrated to mark participants as optional via ?; tests would then pass without policy denial. Wait for c-a6db to land, then un-xfail and verify.

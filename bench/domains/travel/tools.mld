@@ -420,7 +420,7 @@ var tools @tools = {
   create_calendar_event: {
     mlld: @create_calendar_event,
     inputs: @create_calendar_event_inputs,
-    labels: ["execute:w", "tool:w", "calendar:w", "exfil:send"],
+    labels: ["execute:w", "tool:w", "calendar:w"],
     can_authorize: "role:planner",
     description: "Create a calendar event.",
     instructions: "`start_time` and `end_time` must use YYYY-MM-DD HH:MM."

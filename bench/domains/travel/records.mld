@@ -212,12 +212,15 @@ record @travel_fact = {
 >> Write input records live with the domain records so travel's tool
 >> catalog can reference the fact/data split directly.
 record @create_calendar_event_inputs = {
-  facts: [participants: { type: array?, kind: "email" }],
+  facts: [participants?: { type: array, kind: "email" }],
   data: {
     trusted: [title: string, location: string?, start_time: string, end_time: string],
     untrusted: [description: string?]
   },
-  optional_benign: [participants],
+  labels: ["execute:w", "tool:w", "calendar:w"],
+  refine [
+    participants.isDefined() && participants.length > 0 => labels += ["exfil:send"]
+  ],
   validate: "strict",
   write: {
     role:planner: { tools: { authorize: true } }
@@ -236,15 +239,14 @@ record @cancel_calendar_event_inputs = {
 record @send_email_inputs = {
   facts: [
     recipients: { type: array, kind: "email" },
-    cc: { type: array?, kind: "email" },
-    bcc: { type: array?, kind: "email" }
+    cc?: { type: array, kind: "email" },
+    bcc?: { type: array, kind: "email" }
   ],
   data: {
     trusted: [subject: string, attachments: array?],
     untrusted: [body: string]
   },
   correlate: false,
-  optional_benign: [cc, bcc],
   validate: "strict",
   write: {
     role:planner: { tools: { authorize: true } }

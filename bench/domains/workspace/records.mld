@@ -177,15 +177,14 @@ record @datetime_context = {
 record @send_email_inputs = {
   facts: [
     recipients: { type: array, kind: "email" },
-    cc: { type: array?, kind: "email" },
-    bcc: { type: array?, kind: "email" }
+    cc?: { type: array, kind: "email" },
+    bcc?: { type: array, kind: "email" }
   ],
   data: {
     trusted: [subject: string, attachments: array?],
     untrusted: [body: string]
   },
   correlate: false,
-  optional_benign: [cc, bcc],
   validate: "strict",
   write: {
     role:planner: { tools: { authorize: true } }
@@ -197,12 +196,11 @@ record @send_email_inputs = {
 >> destination set. Omitting it models the benign personal-event case;
 >> providing it requires per-element grounding.
 record @create_calendar_event_inputs = {
-  facts: [participants: { type: array?, kind: "email" }],
+  facts: [participants?: { type: array, kind: "email" }],
   data: {
     trusted: [title: string, start_time: string, end_time: string, location: string?],
     untrusted: [description: string?]
   },
-  optional_benign: [participants],
   labels: ["execute:w", "tool:w", "calendar:w"],
   refine [
     participants.isDefined() && participants.length > 0 => labels += ["exfil:send"]

@@ -47,9 +47,8 @@ record @email_payload = {
 >> plus ordinary payload fields, authored on the surfaced tool instead
 >> of split across controlArgs/expose/optional metadata.
 record @meeting_request_inputs = {
-  facts: [participants: array?],
+  facts: [participants?: array],
   data: [title: string, start_time: string, end_time: string],
-  optional_benign: [participants],
   validate: "strict",
   write: {
     role:planner: { tools: { authorize: true } }
