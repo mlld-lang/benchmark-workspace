@@ -1,4 +1,12 @@
-# Brief for mlld-dev: privileged trust elevation on record fields
+# [SUPERSEDED by m-aecd] Brief for mlld-dev: privileged trust elevation on record fields
+
+**Status: SUPERSEDED.** The framing in this brief was based on an incomplete probe (used `as record` on declarative-labeled value). A revised probe using the documented `exe untrusted ... => record` form (see `tmp/probe-trusted-field/probe-exe-return.mld`) shows §4.2's refinement DOES fire correctly — `untrusted` IS cleared on `data.trusted` fields at coercion time. The production failure has a different root cause: `tmp/probe-trusted-field/probe-shelf-roundtrip.mld` empirically shows the shelf `@shelf.write` + `@shelf.read` round-trip silently re-introduces `untrusted` on `data.trusted` fields, regressing §4.2. Filed as mlld ticket `m-aecd` (P0 bug).
+
+This brief is preserved as context but `m-aecd` is the load-bearing item.
+
+---
+
+# Original brief (superseded)
 
 ## Summary
 
