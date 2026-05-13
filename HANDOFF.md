@@ -42,12 +42,22 @@ Worker LLM gate: compose 6/6 (was 3/6 on the simple "Return only JSON" prompt; l
 - **`c-6a39`** (clean) — `[BK-UT6]` compose-worker fabrication ticket. Addressed by compose.att anti-fabrication rule.
 - **`c-c80e`** (clean) — integration test followup for the masking-fix invariant (different regression class from helper unit test).
 
-## What's blocked on `m-aecd`
+## What's blocked on `m-aecd` (and twin-site `as record` bug)
 
-BK UT3, UT4, UT11. TR UT4 (calendar event partial — the same shelf-strip flows the derived hotel-name into untrusted at execute time). When mlld-dev fixes the shelf strip:
+BK UT3, UT4, UT11. TR UT4 (calendar event partial — the same shelf-strip flows the derived hotel-name into untrusted at execute time). TR UT3 also hits this on `subject` field at send_email.
 
-1. Re-probe with **existing** records (migrator-7's `labels + satisfies` for travel, `refine sender == "me" => labels += [...]` for banking) BEFORE adding any `data.trusted` + refine-trust edits. The migrator-7 "0/6 recovery" verdict may have been confounded by the shelf-strip masking the §4.2 refinement.
-2. If existing records don't recover: per advisor + mlld-devrel, the next layer is `bench/domains/banking/records.mld` — add `data.trusted: [amount, date]` schema declaration AND `refine [ sender == "me" => data.amount = trusted, data.date = trusted ]`. Same pattern likely applies to travel records (per camel-alignment-analysis.md Cluster B).
+Per mlld-devrel investigation (msg in fray clean#bench): m-aecd and the `as record` coercion divergence (bug doc in `~/mlld/mlld/bug-as-record-coercion-untrusted-divergence.md`) share **the same recursive-extraction anti-pattern**, applied at different code sites:
+
+- **`expressions.ts:947`** — `as record` coercion path post-extraction recursively walks descriptor and re-aggregates per-field untrusted/`fact:*` labels back up to the wrapper.
+- **`shelf/runtime.ts:696-699`** — shelf-write path recursively re-extracts per-field descriptors; untrusted aggregates up (per-field walks find it from the wrapper), then `slotDescriptor` adds the `src:shelf:...` taint on top.
+
+Both are filed; mlld-dev will likely fix as a bundled pair. Fix shape: don't recursively re-extract after coercion; use the field-local self descriptor that coercion already produced.
+
+When mlld-dev lands the fixes:
+
+1. Re-probe with **existing** records (migrator-7's `labels + satisfies` for travel, `refine sender == "me" => labels += [...]` for banking) FIRST. The migrator-7 "0/6 recovery" verdict was confounded by these two bugs masking the §4.2 refinement.
+2. If existing records don't recover the full set: per advisor + mlld-devrel, the next layer is `bench/domains/banking/records.mld` — add `data.trusted: [amount, date]` schema declaration AND `refine [ sender == "me" => data.amount = trusted, data.date = trusted ]`. Same pattern likely applies to travel records (per camel-alignment-analysis.md Cluster B).
+3. Records-edit timing is pending Adam's call (see fray msg-set this session): adopt-now (mlld-devrel's framing, structurally correct) vs hold (advisor's earlier framing, atomic recovery). Both defensible.
 
 ## Priority queue for next session
 
