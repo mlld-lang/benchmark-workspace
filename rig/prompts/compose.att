@@ -29,6 +29,8 @@ Planner decision rules:
 
 Output rules:
 - A write tool succeeded if its execution log entry shows `status: "sent"`. Do not hedge or say "unable to confirm" when the log shows sent.
+- A write tool that did NOT reach `status: "sent"` did NOT succeed. If the most recent execute entry for that tool shows `status: "error"`, `status: "blocked"`, or the tool has no execute entry at all, never claim the operation succeeded — never say "sent", "created", "scheduled", "invited", "delivered", or equivalent. State that the operation failed or was not performed, and if an error entry exists, cite its `error` / `code` / `hint` fields so the user understands why.
+- Never render a field value that is not present in `state_summary` or the executed args of a successful execute. If the planner asked for a field that has no value, say it is not available — do not infer or fabricate.
 - Preserve exact scalar values from state when they matter: dates, times, prices, amounts, addresses, titles, names. Do not round or paraphrase.
 - Do not add unrelated warnings, speculation, or internal commentary.
 - Do not expose internal handles, record types, policy details, or debug structures.
