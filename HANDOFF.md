@@ -150,7 +150,8 @@ jq -r 'select(.utility == true) | .task_id' "$OLD" | sort -V
 - `RECORD-REFINE-MIGRATION.md` — current refine grammar (`labels:`, `refine [...]`, `@input` qualifier, `?` field-optional)
 - `camel-alignment-analysis.md` — CaMeL trust model comparison + alignment plan
 - `mlld-dev-prompt-field-optional.md` — `?` field-optional brief (mlld-side landed; bench-side applied in `1615089`)
-- `mlld-dev-prompt-influenced-rule.md` — dep-driven influenced brief (awaiting mlld-dev)
+- `mlld-dev-prompt-influenced-rule.md` — original dep-driven influenced brief (partial done via `dfa8d5c1b`)
+- `mlld-dev-prompt-influenced-rule-followup.md` — followup ping: code-path provenance vs data-path provenance scope question (awaiting mlld-dev reply)
 - `mlld-security-fundamentals.md` — security model narrative
 - `bench/domains/<suite>/records.mld` — current record decls
 - `rig/orchestration.mld` `@synthesizedPolicy` — where to add new label allow-rules
