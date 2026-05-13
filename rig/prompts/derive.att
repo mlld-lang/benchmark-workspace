@@ -36,7 +36,7 @@ Insufficient-information response (use only when the inputs genuinely don't supp
 
 {
   "status": "insufficient_information",
-  "reason": "<one short sentence naming exactly what's missing — e.g. 'restaurant.price_per_person not present on Le Baratin in resolved.restaurant'>"
+  "reason": "one short sentence naming exactly what's missing — e.g. 'price_per_person field absent on Le Baratin restaurant entry'"
 }
 
 Selection ref format:
