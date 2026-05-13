@@ -59,7 +59,9 @@ exe @synthesizedPolicy(tools, overridePolicy, options) = [
     },
     operations: @operations,
     labels: {
-      influenced: { deny: @baseInfluencedDeny }
+      influenced: { deny: @baseInfluencedDeny },
+      trusted_tool_output: { satisfies: ["fact:*"] },
+      user_originated: { satisfies: ["fact:*"] }
     },
     authorizations: @synthesizedAuthorizations(@tools)
   }

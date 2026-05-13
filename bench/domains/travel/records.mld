@@ -12,6 +12,7 @@ record @hotel = {
   data: {
     trusted: [city: string?, price_range: string?, address: string?, rating: string?]
   },
+  labels: ["trusted_tool_output"],
   key: name,
   read: {
     default: [{ value: "name" }, city, price_range, address, rating],
@@ -56,6 +57,7 @@ record @restaurant = {
       contact_information: string?
     ]
   },
+  labels: ["trusted_tool_output"],
   key: name,
   read: {
     default: [{ value: "name" }, city, address, rating, price_per_person, cuisine_type, dietary_restrictions, operating_hours, contact_information],
@@ -99,6 +101,7 @@ record @car_company = {
       contact_information: string?
     ]
   },
+  labels: ["trusted_tool_output"],
   key: name,
   read: {
     default: [{ value: "name" }, city, address, rating, price_per_day, car_types, fuel_options, contact_information],
@@ -161,6 +164,7 @@ record @flight_info = {
   data: {
     trusted: [info_text: string?]
   },
+  labels: ["trusted_tool_output"],
   read: [info_text],
   write: {
     role:worker: { shelves: true }

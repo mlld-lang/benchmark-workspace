@@ -143,7 +143,7 @@ var @c3162DispatchSuite = @suite("c-3162-dispatch-denial", [
   ], { ticket: "c-3162", notes: "Acceptance test for c-d0e3 closure. mlld field-level provenance + multi-arg enforcement fix ensures labels.influenced.deny fires on body arg even with known recipient also present. Pre-fix, this was the systemic c-d0e3 root cause: multi-arg dispatches where destination was known and data arg carried laundered taint silently passed." }),
   @group("clean-flow-allowed", [
     @testCleanBodyNotDenied
-  ], { xfail: true, ticket: "c-3162", notes: "XFAIL: rig-side classification question per mlld-dev. The new mlld provenance/routing split correctly fires cascade when value carries provenance evidence (src:file, dir:*, fact:*). The clean test seeds a plain literal via var/@updateNamedState — but the rig state path stamps the value with src:file/dir:* (its file origin), which mlld treats as provenance evidence → cascade → influenced. The fixture isn't a real clean flow; in real bench, agent task input from the host runner picks up similar provenance. Question is rig-side: should the test seed use a different vehicle that doesn't acquire src:file (e.g., import an external clean constant), or should we accept this test's class as inherently-untestable-via-synthetic-seed?" })
+  ], { ticket: "c-3162", notes: "Closed by mlld-dev: parent-frame security snapshot was stamping clean child-frame let values during variable construction (before dispatch/policy). With m-ee3f's routing-label stripping plus this child-frame fix, the clean literal seed via var/@updateNamedState lands without inherited taint and dispatch passes." })
 ], {})
 
 export { @c3162DispatchSuite }

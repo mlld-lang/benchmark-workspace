@@ -13,6 +13,32 @@ exe @asString(inputValue) = js {
 }
 
 
+>> AgentDojo's search functions raise ValueError on empty matches
+>> (`search_calendar_events`, `search_emails`, `search_files`,
+>> `search_emails_any_sender`). Two MCP-layer formats reach the
+>> wrapper depending on path:
+>>   - native AgentDojo runtime: `ERROR: ValueError: No <kind> found...`
+>>   - bench_mcp_extras handler:  `ERROR: No <kind> found...`
+>> Both mean "zero matches" — not a tool failure. The planner reads
+>> the error string as a failure and loops on query variants. Convert
+>> the empty-search class to a YAML empty list so record coercion
+>> lands a clean empty array and the planner can pivot strategy.
+>>
+>> Pattern is narrow on purpose: matches the three concrete empty
+>> messages AgentDojo uses (events / emails / files). Id-lookup
+>> errors like `Event with ID 'X' not found.` do NOT match (`not
+>> found` vs `No ... found`) — those are real failures the planner
+>> should see.
+exe @emptyArrayIfNotFound(raw) = when [
+  @typeof(@raw) != "string" => @raw
+  !@raw.startsWith("ERROR:") => @raw
+  @raw.includes("No events found") => "[]"
+  @raw.includes("No emails found") => "[]"
+  @raw.includes("No files found") => "[]"
+  * => @raw
+]
+
+
 >> Calendar read tools take user-facing date phrases, while AgentDojo's
 >> backend expects strict ISO dates. Normalize that formatting at the
 >> adapter boundary so the planner can keep citing the task literal.
