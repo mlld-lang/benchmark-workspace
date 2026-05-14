@@ -21,7 +21,15 @@ import {
   @correlatedControlArgsCheck
 } from "./runtime.mld"
 import { @runPlannerSession } from "./workers/planner.mld"
-import { @standard, @urlDefense } from "@mlld/policy"
+import { @standard, @urlDefense, @noNovelUrl } from "@mlld/policy"
+
+>> @noNovelUrl is imported here even though it is not referenced directly:
+>> @urlDefense.dataflow.check[0].do holds an exe ref to @noNovelUrl. When
+>> @policy.build resolves the check action at dispatch time it looks the
+>> name up in the calling module's scope, so the exe has to be visible
+>> here for the URL defense to fire. Without this import, dispatch fails
+>> with "Command not found: noNovelUrl" on any tool whose suite has
+>> @hasNovelUrlRisk == true (e.g. slack's get_webpage).
 
 >> @standard ships labels.{rules, apply, args} for secret/sensitive/
 >> trust:untrusted exfil + destructive + privileged blocking, the

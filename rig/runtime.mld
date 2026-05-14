@@ -744,17 +744,46 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
   let @argCheck = @validateToolCallArgs(@entry, @args)
   if !@argCheck.ok [ => { error: @argCheck.error, summary: @argCheck.summary, tool: @toolKey } ]
   let @hasInputRecord = @entry.inputs.isDefined()
-  let @hasArgs = @typeof(@args) == "object" && @plainObjectKeys(@args).length > 0
   let @paramNames = @toolParamNames(@entry)
   let @callableEntry = @toolsCollection[@toolKey].isDefined()
   let @exeParamCount = @typeof(@entry.mlld) == "executable" ? @entry.mlld.mx.params.length : 0
+  >> mlld auto-unpacks an object into positional params only when every
+  >> declared param is present as a key (partial objects collapse to a
+  >> single positional first arg — probe-labeled-exe-unpack.mld). For
+  >> multi-param read tools called with a subset of declared params (e.g.
+  >> workspace.search_calendar_events(query, date) with only query),
+  >> normalize the dispatch args so each declared param is present,
+  >> defaulting missing ones to null. Skip for input-record-bearing write
+  >> tools — those have validate:"strict" on the record and would reject
+  >> the synthesized null fields. Use a fresh name (@dispatchArgs) rather
+  >> than rebinding @args (a function parameter).
+  let @dispatchArgs = when [
+    @typeof(@args) != "object" => @args
+    @paramNames.length <= 1 => @args
+    @hasInputRecord => @args
+    * => [
+      let @existingPairs = for @key in @plainObjectKeys(@args) => { key: @key, value: @args[@key] }
+      let @missingPairs = for @param in @paramNames when !@args[@param].isDefined() => { key: `@param`, value: null }
+      => @pairsToObject(@existingPairs.concat(@missingPairs))
+    ]
+  ]
+  let @hasArgs = @typeof(@dispatchArgs) == "object" && @plainObjectKeys(@dispatchArgs).length > 0
 
   let @hasPayloadArgs = @hasInputRecord && @toolPayloadArgs(@entry).length > 0
-  if @hasInputRecord && @exeParamCount > 1 && @callableEntry && !@hasPayloadArgs [
+  >> Collection-callable dispatch unpacks an object-shaped @args into the
+  >> exe's positional params (verified probe-collection-unpack.mld). Direct
+  >> exe call via @entry.mlld does not auto-unpack on policy-redesign, so
+  >> multi-param read tools (e.g. workspace.search_calendar_events(query, date))
+  >> would receive the entire args object as their first param. Route any
+  >> multi-param exe with a callable entry through the collection form,
+  >> input-record-bearing or not. Input-record write tools with payload args
+  >> still go positional so payload values flow as named args (matching the
+  >> existing @hasPayloadArgs branch shape).
+  if @exeParamCount > 1 && @callableEntry && !@hasPayloadArgs [
     => when [
-      @policyValue.isDefined() && @hasArgs => @toolsCollection[@toolKey](@args) with { policy: @policyValue }
+      @policyValue.isDefined() && @hasArgs => @toolsCollection[@toolKey](@dispatchArgs) with { policy: @policyValue }
       @policyValue.isDefined() => @toolsCollection[@toolKey]() with { policy: @policyValue }
-      @hasArgs => @toolsCollection[@toolKey](@args)
+      @hasArgs => @toolsCollection[@toolKey](@dispatchArgs)
       * => @toolsCollection[@toolKey]()
     ]
   ]
@@ -765,12 +794,12 @@ exe recursive @callToolWithOptionalPolicy(toolEntry, toolsCollection, toolName, 
   let @directExe = @entry.mlld
   if @typeof(@directExe) != "executable" [ => { error: "tool_missing_executable", tool: @toolKey } ]
   => when [
-    @policyValue.isDefined() && @hasArgs => @directExe(@args) with { policy: @policyValue }
+    @policyValue.isDefined() && @hasArgs => @directExe(@dispatchArgs) with { policy: @policyValue }
     @policyValue.isDefined() && @paramNames.length == 0 => @directExe() with { policy: @policyValue }
-    @policyValue.isDefined() => @directExe(@args) with { policy: @policyValue }
-    @hasArgs => @directExe(@args)
+    @policyValue.isDefined() => @directExe(@dispatchArgs) with { policy: @policyValue }
+    @hasArgs => @directExe(@dispatchArgs)
     @paramNames.length == 0 => @directExe()
-    * => @directExe(@args)
+    * => @directExe(@dispatchArgs)
   ]
 ]
 

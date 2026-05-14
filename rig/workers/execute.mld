@@ -20,6 +20,14 @@ import { @serializeLifecycleJson, @appendExecutionLogEntry } from "../lifecycle.
 import { @compileExecuteIntent } from "../intent.mld"
 import { @executeAttestation } from "../records.mld"
 import { @validatePlannerArgRefs, @plannerValidationFailure } from "../planner_inputs.mld"
+>> @noNovelUrl is captured as the `do:` action on @urlDefense.dataflow.check[0]
+>> built by orchestration's @synthesizedPolicy. When @policy.build runs here
+>> (line ~127) it resolves the action by name, which requires the exe to be
+>> visible in this module's scope. Without this import dispatch fails with
+>> "Command not found: noNovelUrl" on tools whose suite has @hasNovelUrlRisk
+>> (slack get_webpage). The import is referenced indirectly; the unused-import
+>> warning would be a false positive.
+import { @noNovelUrl } from "@mlld/policy"
 
 >> Most execute steps dispatch directly once intent compilation and
 >> policy construction succeed. The prompt remains available for suites
