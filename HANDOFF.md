@@ -6,55 +6,27 @@ Session breadcrumb. Forward-looking only. Read at session start.
 
 ## What this session did
 
-Phase 0 + Phase 1 fully complete; opened the cross-cutting Phase 3 BasePolicy migration that unblocks all per-suite work. Eight commits on the migration branch.
+Phase 0 + Phase 1 fully complete; opened the cross-cutting Phase 3 BasePolicy migration that unblocks all per-suite work. Commits on the migration branch: `3737ea6` infra, `062285e` sec-docs + 55 threat tickets, `f8232ad` 46 ticket closures + 8 to `.tickets/review/`, `93036ea` url_output defense, `48bc93e` + `0c69128` HANDOFFs, `31d1ace` BasePolicy migration, `5a03de1` c-3162-dispatch-wrap ticket, `0cd3d8c` MIGRATION-TASKS update.
 
-### Phase 0 — Setup ✅
+### Phase 1 sec-doc maturity (5-mark scheme)
 
-- Migration branch `policy-structured-labels-migration` created off `clean@096bcd2`.
-- Five thematic commits captured the prior-session working-tree state:
-  - `3737ea6` migration: infrastructure (MIGRATION-PLAN renamed, MIGRATION-TASKS, SEC-HOWTO, migrate skill, CLAUDE.md three-tier section).
-  - `062285e` sec-docs: per-suite threat models + 55 threat tickets in `.tickets/threats/`.
-  - `f8232ad` tickets: 46 closures + 8 moved to `.tickets/review/` + c-5f4d filed.
-  - `93036ea` rig/policies: url_output URL-smuggling defense + tests lockfile.
-  - `48bc93e` HANDOFF: migration session begins.
+| Doc | [T] | [-] | [?] | [!] | [ ] |
+|---|---|---|---|---|---|
+| sec-banking | 0 | 11 | 22 | 1 | 3 |
+| sec-slack | 5 | 40 | 16 | 5 | 4 |
+| sec-workspace | 0 | 60 | 22 | 20 | 7 |
+| sec-travel | 16 | 26 | 9 | 4 | 2 |
+| sec-cross-domain | 0 | 6 | 3 | 1 | 6 |
 
-### Phase 1 — sec-doc authoring ✅
+55 threat tickets in `.tickets/threats/`. Every uncertain mark linked to a ticket; no coverage roll-ups.
 
-All 5 docs landed and verified per SEC-HOWTO 10-section template + 5-mark scheme:
+### Phase 3 BasePolicy cross-cutting (commit `31d1ace`)
 
-| Doc | [T] | [-] | [?] | [!] | [ ] | Filed-tickets table |
-|---|---|---|---|---|---|---|
-| sec-banking | 0 | 11 | 22 | 1 | 3 | ✓ (19 BK-* tickets) |
-| sec-slack | 5 | 40 | 16 | 5 | 4 | ✓ (10 SL-* tickets) |
-| sec-workspace | 0 | 60 | 22 | 20 | 7 | ✓ (WS-* tickets) |
-| sec-travel | 16 | 26 | 9 | 4 | 2 | ✓ (TR-* tickets — most mature) |
-| sec-cross-domain | 0 | 6 | 3 | 1 | 6 | ✓ (XS-* tickets) |
+`rig/orchestration.mld @synthesizedPolicy` and `rig/workers/advice.mld` migrated to v2.x schema. Imports `@standard` + `@urlDefense` from `@mlld/policy`, produces new-schema data shape directly. Key finding from spike probes (`tmp/policy-spike/`, six probes): `@policy.build` accepts the new-schema data shape without requiring `policy @p = union(...)` at module scope — which matters because rig's overlay is runtime-dynamic. `union()` is module-scope-only; rig builds the merged data directly. Rig overlay additively widens `labels.rules.influenced.deny` (`+["destructive","exfil"]`) and preserves `trusted_tool_output` / `user_originated` `satisfies` transitional alias.
 
-55 threat tickets total in `.tickets/threats/`. No orphan marks; every uncertain mark links to a ticket inline. No coverage roll-up tables (drift surface).
+`tests/rig/policy-build-catalog-arch.mld testSynthesizedPolicyShape` re-asserts new-schema presence (`labels.args["exfil:send"].recipient`, `labels.apply["trust:untrusted+llm"]`, `dataflow.check`). Passes 20/20 isolated.
 
-### Phase 3 cross-cutting — BasePolicy schema migration (started)
-
-Commit `31d1ace` re-authors `rig/orchestration.mld @synthesizedPolicy` against the v2.x `labels:` / `dataflow:` schema:
-
-- Imports `@standard` + `@urlDefense` from `@mlld/policy`. `@standard` ships `labels.{rules, apply, args}` stanzas; `@urlDefense` ships `dataflow.{enrich, check}`.
-- Drops the named-rule string list (no-secret-exfil, etc. — retired upstream).
-- Uses new-schema `labeling: { unlabeled: "untrusted" }` keyword.
-- Verified via `tmp/policy-spike/probe-policy-build-data.mld` that `@policy.build` accepts the new-schema data shape directly — no need to declare `policy @p = union(...)` at module scope (which would fail because rig overlay depends on runtime tool catalog).
-- Rig overlay additively widens `labels.rules.influenced.deny` to also block destructive + exfil; preserves `trusted_tool_output` + `user_originated` `satisfies:` for fact-equivalent positive checks.
-
-`rig/workers/advice.mld` updated to `policy @adviceGatePolicy = union(@noInfluencedAdvice)` (imported fragment).
-
-`tests/rig/policy-build-catalog-arch.mld` test updated to assert new-schema presence: `labels.args["exfil:send"].recipient`, `labels.apply["trust:untrusted+llm"]`, `dataflow.check.length > 0`. Test passes 20/20 in isolation.
-
-Spike probes preserved in `tmp/policy-spike/`:
-- `probe-standard-import.mld` — `@standard + @urlDefense` composes cleanly.
-- `probe-influenced-union.mld` — `union()` merges deny arrays additively.
-- `probe-union-in-exe.mld` — proves `union()` is NOT valid as a general expression.
-- `probe-policy-in-exe.mld` — proves `/policy` declarations are module-scope only.
-- `probe-standard-shape.mld` — proves `@standard` is field-accessible.
-- `probe-policy-build-data.mld` — proves `@policy.build` accepts data-shape basePolicy without `union()`.
-
-Commit `5a03de1` filed ticket **c-3162-dispatch-wrap** for the surfaced gap: when the new `labels.rules.influenced.deny` correctly fires on dispatch, the throw propagates past `@dispatchExecute` because there's no wrapper around `@callToolWithPolicy`. Defense IS firing structurally; envelope shape needs the wrapper for diagnostic readability.
+Surfaced gap → ticket **c-3162-dispatch-wrap** (commit `5a03de1`): the new `labels.rules.influenced.deny` correctly fires when influenced body flows to `exfil:send`, but the throw propagates past `@dispatchExecute` because there's no wrapper around `@callToolWithPolicy`. Defense IS firing structurally; envelope shape needs the wrapper. P0 next session.
 
 ## Where we are
 
@@ -107,18 +79,16 @@ scripts/bench-attacks.sh single direct banking
 
 ## Useful pointers
 
-- `.claude/skills/migrate/SKILL.md` — `/migrate` skill, three-tier separation + spike-then-test
-- `MIGRATION-PLAN.md` — 8-phase mlld-side cutover plan
-- `MIGRATION-TASKS.md` — phase tracker (this session marked Phase 0 + Phase 1 complete)
-- `SEC-HOWTO.md` — authoring guide for sec-*.md
-- `sec-{banking,slack,workspace,travel,cross-domain}.md` — threat models (all 5 landed)
+Session-specific:
+- `.tickets/c-3162-dispatch-wrap.md` — P0 next session
+- `.tickets/threats/` — 55 sec-doc tickets (BK / SL / WS / TR / XS)
+- `tmp/policy-spike/` — six probes verifying schema/union semantics
+
+Migration references (skill loads the broader set):
+- `MIGRATION-TASKS.md` — phase tracker (this is the canonical checklist)
+- `MIGRATION-PLAN.md` — 8-phase plan + Phase 7 commit dispositions
 - `~/mlld/mlld/MIGRATION-POLICY-REDESIGN.md` — mlld-side migration patterns + checklist
 - `~/mlld/mlld/spec-label-structure.md` — v2.x value-metadata channels
 - `~/mlld/mlld/spec-policy-box-urls-records-design-updates.md` — v2.x policy schema
-- `tmp/policy-spike/` — six probes verifying schema/union semantics
-- `.tickets/c-3162-dispatch-wrap.md` — filed this session, P0
-- `.tickets/threats/` — 55 sec-doc tickets (BK / SL / WS / TR / XS)
-- `STATUS.md` — bench results (53/97 measured, ceiling 81/97)
-- `rig/ARCHITECTURE.md` — three-tier separation specifics
-- `mlld-security-fundamentals.md` — current security model narrative (labels, factsources, records, refine, shelves, sessions)
-- `DEBUG.md` — investigation methodology
+- `sec-{banking,slack,workspace,travel,cross-domain}.md` — threat models
+- `mlld-security-fundamentals.md` — current primitives (labels, factsources, records, refine, shelves, sessions)
