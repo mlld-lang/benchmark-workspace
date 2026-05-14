@@ -1,131 +1,124 @@
-# HANDOFF.md — v2.x migration begins next
+# HANDOFF.md — migrator-8 end-of-session
 
 Session breadcrumb. Forward-looking only. Read at session start.
 
-**For the next session: run `/migrate`.** This is a migration session, not general rig/bench work. The migrate skill (`.claude/skills/migrate/SKILL.md`) loads exactly the context you need — it's been rewritten for this cutover and includes the three-tier separation discipline, spike-then-test rhythm, and required reading list. `/rig` will give you general framework context but won't surface the migration-specific structure.
+**For the next session: run `/migrate`.** Migration session continues on branch `policy-structured-labels-migration`. The `/migrate` skill loads three-tier separation + spike-then-test discipline; `/rig` gives general framework context but won't surface migration-specific structure.
 
 ## What this session did
 
-A diagnosis session that ended with a major architectural pivot. We started chasing per-bug fixes (m-aecd shelf re-tainting, m-9f33 §4.2-(B), m-c00b whole-object input), shipped five surgical mlld fixes, and then recognized the bug pattern as architectural — every one was the same shape: **aggregation defeats per-field sanitization**. That recognition pointed at the existing `~/mlld/mlld/spec-label-structure.md` + `~/mlld/mlld/spec-policy-box-urls-records-design-updates.md` as the proper target architecture, and the rest of the session set up the infrastructure to migrate to that target cleanly.
+Phase 0 + Phase 1 fully complete; opened the cross-cutting Phase 3 BasePolicy migration that unblocks all per-suite work. Eight commits on the migration branch.
+
+### Phase 0 — Setup ✅
+
+- Migration branch `policy-structured-labels-migration` created off `clean@096bcd2`.
+- Five thematic commits captured the prior-session working-tree state:
+  - `3737ea6` migration: infrastructure (MIGRATION-PLAN renamed, MIGRATION-TASKS, SEC-HOWTO, migrate skill, CLAUDE.md three-tier section).
+  - `062285e` sec-docs: per-suite threat models + 55 threat tickets in `.tickets/threats/`.
+  - `f8232ad` tickets: 46 closures + 8 moved to `.tickets/review/` + c-5f4d filed.
+  - `93036ea` rig/policies: url_output URL-smuggling defense + tests lockfile.
+  - `48bc93e` HANDOFF: migration session begins.
+
+### Phase 1 — sec-doc authoring ✅
+
+All 5 docs landed and verified per SEC-HOWTO 10-section template + 5-mark scheme:
+
+| Doc | [T] | [-] | [?] | [!] | [ ] | Filed-tickets table |
+|---|---|---|---|---|---|---|
+| sec-banking | 0 | 11 | 22 | 1 | 3 | ✓ (19 BK-* tickets) |
+| sec-slack | 5 | 40 | 16 | 5 | 4 | ✓ (10 SL-* tickets) |
+| sec-workspace | 0 | 60 | 22 | 20 | 7 | ✓ (WS-* tickets) |
+| sec-travel | 16 | 26 | 9 | 4 | 2 | ✓ (TR-* tickets — most mature) |
+| sec-cross-domain | 0 | 6 | 3 | 1 | 6 | ✓ (XS-* tickets) |
+
+55 threat tickets total in `.tickets/threats/`. No orphan marks; every uncertain mark links to a ticket inline. No coverage roll-up tables (drift surface).
+
+### Phase 3 cross-cutting — BasePolicy schema migration (started)
+
+Commit `31d1ace` re-authors `rig/orchestration.mld @synthesizedPolicy` against the v2.x `labels:` / `dataflow:` schema:
+
+- Imports `@standard` + `@urlDefense` from `@mlld/policy`. `@standard` ships `labels.{rules, apply, args}` stanzas; `@urlDefense` ships `dataflow.{enrich, check}`.
+- Drops the named-rule string list (no-secret-exfil, etc. — retired upstream).
+- Uses new-schema `labeling: { unlabeled: "untrusted" }` keyword.
+- Verified via `tmp/policy-spike/probe-policy-build-data.mld` that `@policy.build` accepts the new-schema data shape directly — no need to declare `policy @p = union(...)` at module scope (which would fail because rig overlay depends on runtime tool catalog).
+- Rig overlay additively widens `labels.rules.influenced.deny` to also block destructive + exfil; preserves `trusted_tool_output` + `user_originated` `satisfies:` for fact-equivalent positive checks.
+
+`rig/workers/advice.mld` updated to `policy @adviceGatePolicy = union(@noInfluencedAdvice)` (imported fragment).
+
+`tests/rig/policy-build-catalog-arch.mld` test updated to assert new-schema presence: `labels.args["exfil:send"].recipient`, `labels.apply["trust:untrusted+llm"]`, `dataflow.check.length > 0`. Test passes 20/20 in isolation.
+
+Spike probes preserved in `tmp/policy-spike/`:
+- `probe-standard-import.mld` — `@standard + @urlDefense` composes cleanly.
+- `probe-influenced-union.mld` — `union()` merges deny arrays additively.
+- `probe-union-in-exe.mld` — proves `union()` is NOT valid as a general expression.
+- `probe-policy-in-exe.mld` — proves `/policy` declarations are module-scope only.
+- `probe-standard-shape.mld` — proves `@standard` is field-accessible.
+- `probe-policy-build-data.mld` — proves `@policy.build` accepts data-shape basePolicy without `union()`.
+
+Commit `5a03de1` filed ticket **c-3162-dispatch-wrap** for the surfaced gap: when the new `labels.rules.influenced.deny` correctly fires on dispatch, the throw propagates past `@dispatchExecute` because there's no wrapper around `@callToolWithPolicy`. Defense IS firing structurally; envelope shape needs the wrapper for diagnostic readability.
 
 ## Where we are
 
-- **Current measured utility**: 53/97 (last full sweep 2026-05-12). No new full sweep this session — final canonical-6 probe was 0/6, but failure modes shifted from "cycle blindly through arg shapes" to "block cleanly with transcript-grounded reasoning." That's the right kind of progress; score recovery comes when the v2.x migration lands.
-- **Security verified**: 0/105 ASR on slack `atk_direct` + `atk_important_instructions` canaries (runs `25708270888`, `25708271819`).
-- **Achievable ceiling**: 81/97. Reachable post-migration; the migration's acceptance gate is ≥78/97 utility AND 0 ASR across the full 6×5 attack matrix.
-- **mlld**: branch `2.1.0` HEAD carries five fixes from this session (the as-record divergence + m-aecd + m-9f33 + m-c00b + e8ff25521/034af723e). Spec-implementations live on the `policy-redesign` branch — that's the migration target.
-- **Zero-LLM gate**: 266/0/4 ✅. Will need to migrate alongside records redraft.
-
-## What landed this session
-
-### Five rig commits (still relevant in the new architecture)
-
-- `4d2b0c0` Cluster I masking fix — `@buildPhaseErrorLogEntry` + `@buildPhaseErrorResult` helpers in `rig/workers/planner.mld` surface mlld's structured policy-error envelope (code / field / hint / message) to the planner's next-turn input. Behavioral pivot: planner stops cycling on opaque errors, blocks cleanly with reason. Test at `tests/rig/phase-error-envelope.mld` (2/2 green).
-- `4b4b894` Worker prompt fixes — derive.att file-load artifact + compose.att JSON-enforcement strengthening.
-- `10d861a` Compose anti-fabrication — refuses to claim sent/created when no successful execute. Eliminates BK UT3 / TR UT3 / BK UT6 "we sent it" lying. Transitional per `c-5f4d` (closed; structural enforcement post-migration is a separate concern, not blocking).
-- `fa21cb7` Cluster II planner.att nudge — teaches the planner to use derive selection_refs as control-arg ref shape, with `field` slot when needed. Structural framing, not task-shaped.
-- `f168037` + `096bcd2` Banking records refine-trust + `@deriveAttestation.payload` data.trusted widening — these become unnecessary under the v2.x model (§2.4 LLM-pass invariants handle this) but stay spec-compliant; revert during migration if the new schema makes them no-ops.
-
-### Migration plumbing (the work that teed up the next session)
-
-- **`MIGRATION-PLAN.md`** — 8-phase plan for the clean repo adopting the policy-redesign + structured-labels work. Already existed; verified current.
-- **`SEC-HOWTO.md`** — authoring guide for per-suite security/threat-model docs replacing `*.threatmodel.txt`. Ten-section template. Five-mark maturity ladder (`[ ]` / `[!]` / `[?]` / `[-]` / `[T]`) with ticket-anchored uncertain marks, citation-required certain marks, tier-3 sweeps explicitly excluded from `[T]`. Suite-specific extension patterns for banking (fact-grounding), slack (URL promotion + channel-name firewall), workspace (typed-instruction-channel refusal), travel (advice gate).
-- **`sec-banking.md`** — v1 draft. Needs tightening per SEC-HOWTO (drop §10/§12/§14, drop coverage roll-up, renumber, adopt 5-mark scheme). Other three suites + cross-domain doc are first task in Phase 1.
-- **`MIGRATION-TASKS.md`** — temporary task tracker. Phase 0 (setup) → Phase 1 (sec-doc authoring) → Phase 2 (audit via probes) → Phase 3 (per-suite migration: banking → slack → workspace → travel) → Phase 4 (full sweep + ship). Each phase has explicit exit criteria.
-- **`.claude/skills/migrate/SKILL.md`** — rewritten for v2.x cutover. Loads three-tier separation discipline, spike-then-test rhythm, per-suite exit gates, negative-discipline rules (no prompt-as-defense, no eval-shaping, no tier-bleeding fixes, etc.). Step 0 is `mlld qs` so you actually know how to write mlld before touching records.
-- **`CLAUDE.md` updated** — added three-tier separation section after Cardinal Rules; replaced strict prompt-approval rule with iteration discipline + escape-hatch pattern (`USER REVIEW: {title}` P0 ticket for borderline cases).
-
-### Ticket cleanup
-
-- 67 → 26 open tickets. 46 closed across two passes (must-close + probably-obsoleted + agent-reviewed close batch + reframes).
-- 8 tickets moved to `.tickets/review/` for individual triage: c-5041, c-debc, c-5ef9, c-3edc, c-63fe, c-a873, c-6479, c-f97d. These are real architectural primitives + active infra + migration-conditional reframes that survive the cutover but need individual reads.
-- 5 tickets reframed under the new architecture: c-891b, c-6479, c-f97d, c-4564, c-634c. Titles + bodies updated to express the concern under structured-labels + policy-redesign vocabulary.
-
-## Working-tree state (uncommitted)
-
-```
-M  CLAUDE.md                                  — three-tier section + prompt discipline rewrite
-?? SEC-HOWTO.md                               — authoring guide
-?? sec-banking.md                             — v1 draft
-?? MIGRATION-TASKS.md                         — phase tracker
-?? TICKET-REVIEW-PROMPT.md                    — prompt for the agent-driven ticket review (used; can archive)
-M  .claude/skills/migrate/SKILL.md            — rewritten for v2.x cutover
-?? .tickets/review/                            — 8 tickets moved here for individual review
-   (plus the 46 closed tickets across two passes — all in main .tickets/)
-```
-
-Plus the 5 rig commits listed above are already committed on `main` and pushed.
-
-**Phase 0 step 1 for the next session: commit current state, then start Phase 1 sec-doc authoring.**
+- **Branch**: `policy-structured-labels-migration` on `clean@5a03de1`.
+- **mlld**: `policy-redesign` @ `f90d47e77` — runtime is the migration target.
+- **Zero-LLM gate**: YELLOW — BasePolicy migration parses, 20/20 policy-build-catalog-arch tests pass, but `tests/rig/c-3162-dispatch-denial.mld` fails at module-load because dispatchExecute doesn't wrap the policy throw. Other tests may surface similar throw-vs-return shape issues.
+- **Worker LLM gate**: not run this session (skipped — gate dependencies still resolving).
+- **Bench utility**: 53/97 baseline from migrator-7 (2026-05-12 sweep `25710915492` et al). No new sweep this session.
 
 ## Priority queue for next session
 
-1. **Phase 0 (Setup)** per `MIGRATION-TASKS.md`:
-   - Commit the uncommitted working-tree state above.
-   - Create migration branch `policy-structured-labels-migration`.
-   - Verify all the specs/plan/howto/skill/tasks files are current.
-2. **Phase 1 (sec-doc authoring)** — first real work:
-   - Tighten `sec-banking.md` per SEC-HOWTO checklist (drop §10/§12/§14, drop roll-up, renumber, 5-mark scheme).
-   - Write `sec-slack.md` from current `slack.threatmodel.txt` + code.
-   - Write `sec-workspace.md`.
-   - Write `sec-travel.md`.
-   - Write `sec-cross-domain.md` after the four single-suite docs surface deferred items.
-3. **Phase 2 (audit current state vs sec-docs)** — probe every `[-]` and `[?]` claim. Mark transitions per spike-then-test discipline. File tickets for any gaps.
-4. **Phase 3 (per-suite migration)** — banking → slack → workspace → travel. Per-suite exit gate (no orphan `[?]`, attack canary 0 ASR for that suite) before next suite.
-5. **Phase 4 (full sweep + ship)** — utility ≥78/97 AND 0 ASR across 6×5 matrix.
+1. **c-3162-dispatch-wrap** (filed this session) — wrap `@callToolWithPolicy` in `@dispatchExecute` with `when [denied => ...]` arm so policy throws surface as `{ ok: false, stage: "dispatch_policy", failure: { ... } }`. Unblocks c-3162-dispatch-denial test and similar shape across suites. P0 — closest path to green gate.
 
-## Hard rules carried forward (from the migrate skill)
+2. **Sweep remaining zero-LLM test breakages.** Run `mlld tests/index.mld --no-checkpoint` and triage each failing suite. Most likely classes:
+   - Throw-vs-return shape (same family as c-3162-dispatch-wrap).
+   - Records using retired `when:` shape that needs `refine [...]` per MIGRATION-POLICY-REDESIGN.md §"Record refine".
+   - Tests asserting old basePolicy shape (`defaults.rules`, `operations:`) — re-author to new schema.
 
-- **Spike-then-test before structural commits.** Every `[?]` mark in a sec-doc needs either `[-]` (citation: commit SHA + probe path) or `[T]` (tier-1 or tier-2 test). Tier-3 sweeps don't lock anything.
-- **Three-tier separation** (mlld / rig / bench). Don't bridge tiers in bench; file a mlld ticket instead.
-- **No prompt-as-defense.** Defense nodes in sec-doc trees must be structural.
-- **No eval-shaping.** Don't read AgentDojo `utility()` / `security()` bodies. Don't lift eval examples into prompts.
-- **Prompts must be minimal.** Claude has a habit of over-explaining and lifting eval examples. Don't.
-- **Escape hatch** for borderline prompt changes: proceed + file `USER REVIEW: {title}` P0 ticket. See CLAUDE.md Prompt Placement Rules for the full discipline.
-- **Stop-on-mlld-bug**: file `~/mlld/mlld/.tickets/m-XXXX` with probe attached, wait. Don't workaround unless small + on-target.
-- **Acceptance gate is two-dimensional**: ≥78/97 utility AND 0 ASR.
+3. **Phase 3.a tools punch list (banking)** — once gate is green, walk `bench/domains/banking/tools.mld` against `sec-banking.md §3`. Likely no major changes; confirm.
+
+4. **Phase 3.b records redraft (banking)** — `bench/domains/banking/records.mld` against `sec-banking.md §4`. Apply v2.x `refine [...]` shape, verify `facts:` / `data.trusted:` / `data.untrusted:` declarations match the threat model. Spike each declaration in `tmp/records-banking/`.
+
+5. **Phase 3.d test lockdown (banking)** — promote `[?]` marks in sec-banking §5/§8 to `[T]` where feasible via tier-1 (`tests/rig/`) or tier-2 (`tests/scripted/security-banking.mld`) tests. Don't promote against tier-3 sweep evidence.
+
+6. **Suite exit gate (banking)** — zero-LLM green, worker LLM green, local probe of UT0/UT3/UT4/UT6/UT11, attack canary `scripts/bench-attacks.sh single direct banking` at 0 ASR. Then move to slack → workspace → travel.
+
+7. **Per-suite continuation** — slack/workspace/travel follow banking's pattern. Travel is most mature (16 [T] marks); banking + workspace need the most records-side work.
+
+8. **Phase 4 ship gate** — full benign sweep (≥78/97 utility), full 6×5 attack matrix (0 ASR), Phase 7 whack-a-mole reconciliation per MIGRATION-PLAN. Archive `*.threatmodel.txt`, `*.taskdata.txt`, `MIGRATION-PLAN.md`, `MIGRATION-TASKS.md` to `archive/`.
 
 ## What NOT to do
 
-- Don't run the full attack matrix until the suite-by-suite migration is complete. Per-suite canaries during migration; full matrix at ship.
-- Don't pre-revert this session's bench-side commits (`f168037`, `096bcd2`). They stay until the v2.x migration verifies they're no-ops under the new model.
-- Don't write a session-end document or close work without user direction. Update HANDOFF + tasks tracker; don't create new wrap-up artifacts.
-- Don't approach this as a series of patches. This is one coherent cutover; the migration is the work, not a backlog of small fixes.
+- Don't merge back to main until gate is green AND attack canaries verified. The branch IS the migration container.
+- Don't pre-revert this session's bench-side overlay commits (`f168037`, `096bcd2` on main, plus the satisfies declarations now in orchestration.mld). They stay until v2.x verifies they're structurally redundant.
+- Don't workaround retired-syntax errors by avoiding the affected code path. The errors are the migration's punch list — answer each with a migration, file a ticket, or both.
+- Don't add task-id-specific or evaluator-shaped behavior anywhere (Cardinal Rule A + Prompt Placement Rules in CLAUDE.md).
+- Don't write summary documents at session end. Update HANDOFF + MIGRATION-TASKS; don't create new wrap-up artifacts.
 
 ## Verification gates
 
 ```bash
-mlld tests/index.mld --no-checkpoint              # zero-LLM, target 266/0/4
-mlld tests/live/workers/run.mld --no-checkpoint   # worker LLM, target 24/24
-mlld tests/rig/phase-error-envelope.mld --no-checkpoint  # masking-fidelity regression, 2/2
-uv run --project bench python3 src/run.py -s <suite> -d defended -t user_task_N  # per-task probe
-scripts/bench-attacks.sh single direct <suite>     # per-suite attack canary
-scripts/bench.sh                                  # full benign sweep (ship gate)
-scripts/bench-attacks.sh                          # full 6×5 attack matrix (ship gate)
+mlld tests/index.mld --no-checkpoint              # zero-LLM gate (currently YELLOW)
+mlld tests/live/workers/run.mld --no-checkpoint   # worker LLM (not run this session)
+mlld tests/rig/policy-build-catalog-arch.mld --no-checkpoint  # 20/20 ✓ this session
+mlld tests/rig/c-3162-dispatch-denial.mld --no-checkpoint     # FAIL — c-3162-dispatch-wrap
+
+uv run --project bench python3 src/run.py -s banking -d defended -t user_task_3 user_task_4 user_task_6 user_task_11 -p 4
+scripts/bench-attacks.sh single direct banking
 ```
 
 ## Useful pointers
 
-- **`.claude/skills/migrate/SKILL.md`** — run `/migrate` to load it. Three-tier separation, spike-then-test, per-suite gates.
-- **`MIGRATION-PLAN.md`** — 8-phase mlld-side cutover plan.
-- **`MIGRATION-TASKS.md`** — temporary task tracker for this migration.
-- **`SEC-HOWTO.md`** — authoring guide for per-suite security docs.
-- **`sec-banking.md`** — v1 draft for the banking suite (needs tightening).
-- **`CLAUDE.md`** — Cardinal Rules + three-tier separation + Prompt Placement Rules (with escape hatch).
-- **`STATUS.md`** — canonical per-task bench classification + sweep history.
-- **`rig/ARCHITECTURE.md`** — three-tier separation specifics + phase model.
-- **`mlld-security-fundamentals.md`** — labels, policies, guards, records, refine, shelves (current model).
-- **`~/mlld/mlld/spec-label-structure.md`** — v2.x value-metadata channel design.
-- **`~/mlld/mlld/spec-policy-box-urls-records-design-updates.md`** — v2.x policy schema.
-- **`.tickets/review/`** — 8 tickets pending individual triage against new architecture.
-
-## Session continuity note
-
-The architectural pivot mid-session means the working-tree state combines (a) earlier-session surgical-fix work that survives the migration and (b) later-session migration-prep that supersedes it. Both are intentional. The five rig commits already on `main` are durable; the docs in the working tree (SEC-HOWTO, sec-banking, MIGRATION-TASKS, the CLAUDE.md + migrate-skill rewrites) are the bridge to the next session.
-
-When committing the working-tree state, group thematically:
-1. CLAUDE.md + migrate SKILL.md changes — discipline + tier-separation + escape hatch
-2. SEC-HOWTO.md + sec-banking.md (and archive TICKET-REVIEW-PROMPT.md if it served its purpose) — security-doc authoring infrastructure
-3. MIGRATION-TASKS.md — temporary tracker
-
-The 46 ticket closures and the `.tickets/review/` moves can land in their own commit (or fold into one of the above).
+- `.claude/skills/migrate/SKILL.md` — `/migrate` skill, three-tier separation + spike-then-test
+- `MIGRATION-PLAN.md` — 8-phase mlld-side cutover plan
+- `MIGRATION-TASKS.md` — phase tracker (this session marked Phase 0 + Phase 1 complete)
+- `SEC-HOWTO.md` — authoring guide for sec-*.md
+- `sec-{banking,slack,workspace,travel,cross-domain}.md` — threat models (all 5 landed)
+- `~/mlld/mlld/MIGRATION-POLICY-REDESIGN.md` — mlld-side migration patterns + checklist
+- `~/mlld/mlld/spec-label-structure.md` — v2.x value-metadata channels
+- `~/mlld/mlld/spec-policy-box-urls-records-design-updates.md` — v2.x policy schema
+- `tmp/policy-spike/` — six probes verifying schema/union semantics
+- `.tickets/c-3162-dispatch-wrap.md` — filed this session, P0
+- `.tickets/threats/` — 55 sec-doc tickets (BK / SL / WS / TR / XS)
+- `STATUS.md` — bench results (53/97 measured, ceiling 81/97)
+- `rig/ARCHITECTURE.md` — three-tier separation specifics
+- `mlld-security-fundamentals.md` — current security model narrative (labels, factsources, records, refine, shelves, sessions)
+- `DEBUG.md` — investigation methodology
