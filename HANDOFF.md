@@ -18,6 +18,9 @@ P0 unblocker landed + four tier-2 defense-load-bearing parity test prototypes + 
 | `24eda3d` | sec-banking promotes 16 marks `[?]`/`[-]` → `[T]` against the tier-2 scripted tests + parity. 6 threat tickets closed. |
 | `6e76a18` | tests/scripted parity tests for slack/workspace/travel. Each suite now has a `security-<suite>-parity.mld` proving (a) source-class firewall fires regardless of defense flag, (b) the undefended agent runs a legitimate same-shape call. |
 | `d4fd1c3` | MIGRATION-TASKS: migrator-9 progress update. |
+| `06a73a0` | HANDOFF: migrator-9 end-of-session state + next-session priorities. |
+| `354ef0a` | sec-slack: 3 marks promoted to [T] (known-bucket-task-text + url-promotion-shelf + no-novel-construction) against tests/scripted/security-slack.mld. 3 threat tickets closed. |
+| `331b7cc` | sec-workspace + sec-slack: source-class firewall marks promoted to [T] (known-kind-floor, no-extract-mint). 2 threat tickets closed. |
 
 ### Test surface (all GREEN)
 
@@ -63,12 +66,14 @@ This pattern is templated and can be expanded to additional defense layers.
 | Doc | [T] | [-] | [?] | [!] | [ ] |
 |---|---|---|---|---|---|
 | sec-banking | **16** (was 0) | 5 | 4 | 1 | 3 |
-| sec-slack | 5 | 40 | 16 | 5 | 4 |
-| sec-workspace | 0 | 60 | 22 | 20 | 7 |
+| sec-slack | **8** (was 5) | 40 | 13 | 5 | 4 |
+| sec-workspace | **3** (was 0) | 60 | 20 | 20 | 7 |
 | sec-travel | 16 | 26 | 9 | 4 | 2 |
 | sec-cross-domain | 0 | 6 | 3 | 1 | 6 |
 
-Sec-banking [T] count jumped from 0 → 16 against the tier-2 scripted tests + parity. Slack/workspace/travel still have their original counts because the bulk-promote was not run on them this session — that's the next-session work surface.
+Sec-banking [T] count jumped 0 → 16; sec-slack 5 → 8; sec-workspace 0 → 3. Sec-travel still at 16 (its pre-existing count). The bulk-promote on the remaining slack/workspace [?] marks is mechanical and is the largest single piece of next-session work.
+
+11 threat tickets closed this session (6 banking + 3 slack + 2 workspace).
 
 ## Priority queue for next session
 
