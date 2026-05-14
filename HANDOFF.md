@@ -1,122 +1,131 @@
-# HANDOFF.md — Path to 81/97
+# HANDOFF.md — v2.x migration begins next
 
-Session breadcrumb. Forward-looking only. Read at session start. Update at end with what landed and what's next. Use `/rig` to load the framework context.
+Session breadcrumb. Forward-looking only. Read at session start.
 
-## Where we are (end of bench-grind-24, 2026-05-13)
+**For the next session: run `/migrate`.** This is a migration session, not general rig/bench work. The migrate skill (`.claude/skills/migrate/SKILL.md`) loads exactly the context you need — it's been rewritten for this cutover and includes the three-tier separation discipline, spike-then-test rhythm, and required reading list. `/rig` will give you general framework context but won't surface the migration-specific structure.
 
-- **Current measured utility**: 53/97 (last full sweep 2026-05-12). No new full sweep this session.
-- **Security verified**: 0/105 ASR on slack atk_direct + atk_important_instructions canaries (runs `25708270888`, `25708271819`).
-- **Achievable ceiling**: 81/97. Tasks blocked on `m-aecd` (shelf round-trip strips §4.2 refinement) are NOT in the hard cap — once that lands they should recover via existing migrator-7 records.
-- **mlld**: branch `2.1.0` HEAD. Carries m-383e + m-ee3f + m-a3ad + child-frame stamping fix.
-- **Zero-LLM gate**: 264/0/4 xfail ✅.
+## What this session did
+
+A diagnosis session that ended with a major architectural pivot. We started chasing per-bug fixes (m-aecd shelf re-tainting, m-9f33 §4.2-(B), m-c00b whole-object input), shipped five surgical mlld fixes, and then recognized the bug pattern as architectural — every one was the same shape: **aggregation defeats per-field sanitization**. That recognition pointed at the existing `~/mlld/mlld/spec-label-structure.md` + `~/mlld/mlld/spec-policy-box-urls-records-design-updates.md` as the proper target architecture, and the rest of the session set up the infrastructure to migrate to that target cleanly.
+
+## Where we are
+
+- **Current measured utility**: 53/97 (last full sweep 2026-05-12). No new full sweep this session — final canonical-6 probe was 0/6, but failure modes shifted from "cycle blindly through arg shapes" to "block cleanly with transcript-grounded reasoning." That's the right kind of progress; score recovery comes when the v2.x migration lands.
+- **Security verified**: 0/105 ASR on slack `atk_direct` + `atk_important_instructions` canaries (runs `25708270888`, `25708271819`).
+- **Achievable ceiling**: 81/97. Reachable post-migration; the migration's acceptance gate is ≥78/97 utility AND 0 ASR across the full 6×5 attack matrix.
+- **mlld**: branch `2.1.0` HEAD carries five fixes from this session (the as-record divergence + m-aecd + m-9f33 + m-c00b + e8ff25521/034af723e). Spec-implementations live on the `policy-redesign` branch — that's the migration target.
+- **Zero-LLM gate**: 266/0/4 ✅. Will need to migrate alongside records redraft.
 
 ## What landed this session
 
-### Cluster I masking fix (commit `4d2b0c0`)
+### Five rig commits (still relevant in the new architecture)
 
-`@settlePhaseDispatch` + the 3 phase-tool error returns in `rig/workers/planner.mld` now surface mlld's structured policy-error envelope (code, field, hint, message) to the planner's next-turn input. Previously rig narrowed mlld's rich envelope (`buildSurfacedToolFailureResult` returns `{error, message, code, field, hint, details, ...}`) to just `{error, summary, issues, raw_error}`. Planner saw "tool_input_validation_failed" with no detail and cycled blind through arg shapes.
+- `4d2b0c0` Cluster I masking fix — `@buildPhaseErrorLogEntry` + `@buildPhaseErrorResult` helpers in `rig/workers/planner.mld` surface mlld's structured policy-error envelope (code / field / hint / message) to the planner's next-turn input. Behavioral pivot: planner stops cycling on opaque errors, blocks cleanly with reason. Test at `tests/rig/phase-error-envelope.mld` (2/2 green).
+- `4b4b894` Worker prompt fixes — derive.att file-load artifact + compose.att JSON-enforcement strengthening.
+- `10d861a` Compose anti-fabrication — refuses to claim sent/created when no successful execute. Eliminates BK UT3 / TR UT3 / BK UT6 "we sent it" lying. Transitional per `c-5f4d` (closed; structural enforcement post-migration is a separate concern, not blocking).
+- `fa21cb7` Cluster II planner.att nudge — teaches the planner to use derive selection_refs as control-arg ref shape, with `field` slot when needed. Structural framing, not task-shaped.
+- `f168037` + `096bcd2` Banking records refine-trust + `@deriveAttestation.payload` data.trusted widening — these become unnecessary under the v2.x model (§2.4 LLM-pass invariants handle this) but stay spec-compliant; revert during migration if the new schema makes them no-ops.
 
-Refactor extracted `@buildPhaseErrorLogEntry` + `@buildPhaseErrorResult` helpers; both exported. Test: `tests/rig/phase-error-envelope.mld` (2/2 green). c-3162 dispatch denial test still 2/2.
+### Migration plumbing (the work that teed up the next session)
 
-Behavioral verification on BK UT3/4/6/11 + TR UT4 re-probe: planner stops cycling, blocks cleanly with transcript-grounded reasoning. 0/6 utility recovery on this fix alone, but the FAILURE MODE shifted from "cycle blindly" to "block cleanly with reason" — the prerequisite for downstream fixes to land cleanly.
+- **`MIGRATION-PLAN.md`** — 8-phase plan for the clean repo adopting the policy-redesign + structured-labels work. Already existed; verified current.
+- **`SEC-HOWTO.md`** — authoring guide for per-suite security/threat-model docs replacing `*.threatmodel.txt`. Ten-section template. Five-mark maturity ladder (`[ ]` / `[!]` / `[?]` / `[-]` / `[T]`) with ticket-anchored uncertain marks, citation-required certain marks, tier-3 sweeps explicitly excluded from `[T]`. Suite-specific extension patterns for banking (fact-grounding), slack (URL promotion + channel-name firewall), workspace (typed-instruction-channel refusal), travel (advice gate).
+- **`sec-banking.md`** — v1 draft. Needs tightening per SEC-HOWTO (drop §10/§12/§14, drop coverage roll-up, renumber, adopt 5-mark scheme). Other three suites + cross-domain doc are first task in Phase 1.
+- **`MIGRATION-TASKS.md`** — temporary task tracker. Phase 0 (setup) → Phase 1 (sec-doc authoring) → Phase 2 (audit via probes) → Phase 3 (per-suite migration: banking → slack → workspace → travel) → Phase 4 (full sweep + ship). Each phase has explicit exit criteria.
+- **`.claude/skills/migrate/SKILL.md`** — rewritten for v2.x cutover. Loads three-tier separation discipline, spike-then-test rhythm, per-suite exit gates, negative-discipline rules (no prompt-as-defense, no eval-shaping, no tier-bleeding fixes, etc.). Step 0 is `mlld qs` so you actually know how to write mlld before touching records.
+- **`CLAUDE.md` updated** — added three-tier separation section after Cardinal Rules; replaced strict prompt-approval rule with iteration discipline + escape-hatch pattern (`USER REVIEW: {title}` P0 ticket for borderline cases).
 
-### Compose anti-fabrication (commit `10d861a`)
+### Ticket cleanup
 
-`rig/prompts/compose.att`: tighten the "don't claim sent if status != 'sent'" rule into an explicit anti-fabrication directive AND a "never render field values not in state" rule. BK UT3 + TR UT3 used to compose-fabricate "we sent the refund" / "email sent" despite zero successful executes. Now they block cleanly with a security-aware reason instead.
+- 67 → 26 open tickets. 46 closed across two passes (must-close + probably-obsoleted + agent-reviewed close batch + reframes).
+- 8 tickets moved to `.tickets/review/` for individual triage: c-5041, c-debc, c-5ef9, c-3edc, c-63fe, c-a873, c-6479, c-f97d. These are real architectural primitives + active infra + migration-conditional reframes that survive the cutover but need individual reads.
+- 5 tickets reframed under the new architecture: c-891b, c-6479, c-f97d, c-4564, c-634c. Titles + bodies updated to express the concern under structured-labels + policy-redesign vocabulary.
 
-Worker LLM gate: compose 6/6 (was 3/6 on the simple "Return only JSON" prompt; lifted by the consequence-stated wording in 4d2b0c0, then strengthened further here).
+## Working-tree state (uncommitted)
 
-### Worker prompt fixes (commit `4b4b894`)
+```
+M  CLAUDE.md                                  — three-tier section + prompt discipline rewrite
+?? SEC-HOWTO.md                               — authoring guide
+?? sec-banking.md                             — v1 draft
+?? MIGRATION-TASKS.md                         — phase tracker
+?? TICKET-REVIEW-PROMPT.md                    — prompt for the agent-driven ticket review (used; can archive)
+M  .claude/skills/migrate/SKILL.md            — rewritten for v2.x cutover
+?? .tickets/review/                            — 8 tickets moved here for individual review
+   (plus the 46 closed tickets across two passes — all in main .tickets/)
+```
 
-- `rig/prompts/derive.att:39`: dropped `<...restaurant.price_per_person...>` placeholder — the angle-bracket + dots tripped mlld's file-load syntax at template render time, fired a "Failed to load file" warning, AND corrupted derive_ranking via prompt mangling.
-- `rig/prompts/compose.att`: strengthened "Return only JSON" to consequence-stated, plus output anchor.
+Plus the 5 rig commits listed above are already committed on `main` and pushed.
 
-### Workspace planner addendum (commit `217a071`)
-
-`bench/domains/workspace/prompts/planner-addendum.mld`: query-broadening rule for empty search results. Probe of WS UT2/UT7: 0/2 recovery so addendum didn't help on its own. Wording is structurally true, kept as a low-cost safety net.
-
-### Tickets filed
-
-- **`m-aecd`** (`~/mlld/mlld`, P0) — the load-bearing finding. `@shelf.write` + `@shelf.read` round-trip silently re-introduces `untrusted` on `data.trusted` fields that §4.2 coercion correctly cleared. Probe: `tmp/probe-trusted-field/probe-shelf-roundtrip.mld`. Blocks BK UT3/4/11 + TR UT4 directly.
-- **`m-c371`** (`~/mlld/mlld`) — closed. Originally framed as "need new trust-elevation primitive"; superseded by m-aecd once shelf-strip root cause was found.
-- **`c-6a39`** (clean) — `[BK-UT6]` compose-worker fabrication ticket. Addressed by compose.att anti-fabrication rule.
-- **`c-c80e`** (clean) — integration test followup for the masking-fix invariant (different regression class from helper unit test).
-
-## What's blocked on `m-aecd` (and twin-site `as record` bug)
-
-BK UT3, UT4, UT11. TR UT4 (calendar event partial — the same shelf-strip flows the derived hotel-name into untrusted at execute time). TR UT3 also hits this on `subject` field at send_email.
-
-Per mlld-devrel investigation (msg in fray clean#bench): m-aecd and the `as record` coercion divergence (bug doc in `~/mlld/mlld/bug-as-record-coercion-untrusted-divergence.md`) share **the same recursive-extraction anti-pattern**, applied at different code sites:
-
-- **`expressions.ts:947`** — `as record` coercion path post-extraction recursively walks descriptor and re-aggregates per-field untrusted/`fact:*` labels back up to the wrapper.
-- **`shelf/runtime.ts:696-699`** — shelf-write path recursively re-extracts per-field descriptors; untrusted aggregates up (per-field walks find it from the wrapper), then `slotDescriptor` adds the `src:shelf:...` taint on top.
-
-Both are filed; mlld-dev will likely fix as a bundled pair. Fix shape: don't recursively re-extract after coercion; use the field-local self descriptor that coercion already produced.
-
-When mlld-dev lands the fixes:
-
-1. Re-probe with **existing** records (migrator-7's `labels + satisfies` for travel, `refine sender == "me" => labels += [...]` for banking) FIRST. The migrator-7 "0/6 recovery" verdict was confounded by these two bugs masking the §4.2 refinement.
-2. If existing records don't recover the full set: per advisor + mlld-devrel, the next layer is `bench/domains/banking/records.mld` — add `data.trusted: [amount, date]` schema declaration AND `refine [ sender == "me" => data.amount = trusted, data.date = trusted ]`. Same pattern likely applies to travel records (per camel-alignment-analysis.md Cluster B).
-3. Records-edit timing is pending Adam's call (see fray msg-set this session): adopt-now (mlld-devrel's framing, structurally correct) vs hold (advisor's earlier framing, atomic recovery). Both defensible.
+**Phase 0 step 1 for the next session: commit current state, then start Phase 1 sec-doc authoring.**
 
 ## Priority queue for next session
 
-### 1. Wait for `m-aecd` to land
+1. **Phase 0 (Setup)** per `MIGRATION-TASKS.md`:
+   - Commit the uncommitted working-tree state above.
+   - Create migration branch `policy-structured-labels-migration`.
+   - Verify all the specs/plan/howto/skill/tasks files are current.
+2. **Phase 1 (sec-doc authoring)** — first real work:
+   - Tighten `sec-banking.md` per SEC-HOWTO checklist (drop §10/§12/§14, drop roll-up, renumber, 5-mark scheme).
+   - Write `sec-slack.md` from current `slack.threatmodel.txt` + code.
+   - Write `sec-workspace.md`.
+   - Write `sec-travel.md`.
+   - Write `sec-cross-domain.md` after the four single-suite docs surface deferred items.
+3. **Phase 2 (audit current state vs sec-docs)** — probe every `[-]` and `[?]` claim. Mark transitions per spike-then-test discipline. File tickets for any gaps.
+4. **Phase 3 (per-suite migration)** — banking → slack → workspace → travel. Per-suite exit gate (no orphan `[?]`, attack canary 0 ASR for that suite) before next suite.
+5. **Phase 4 (full sweep + ship)** — utility ≥78/97 AND 0 ASR across 6×5 matrix.
 
-When it does, re-probe the canonical 6 locally before any records edits. Goal: see how many recover from the shelf-strip fix alone. The migrator-7 records are still committed in `ef73cb5`.
+## Hard rules carried forward (from the migrate skill)
 
-### 2. Cluster II — TR UT3 selection-ref discipline (independent of m-aecd)
-
-TR UT3 still fabricates / blocks at the same place even with masking fix: derive emits selection_refs for `best_hotel`, planner runs a SECOND derive (`email_fields`) without requesting selection_refs, tries `{source:derived}` for `recipients` control arg, rig firewall denies with the hint in `issues[]`. Even with detail surfaced, the planner doesn't connect "derived recipient → ask derive for selection_refs."
-
-This is a prompt-education move at `rig/prompts/derive.att` or `rig/prompts/planner.att` or per-tool `instructions:`. Prompt-approval gated. The right framing is structural ("when a derive output will populate a downstream control arg, the derive's goal must request selection_refs on that field"), not task-shaped.
-
-Read the TR UT3 transcript before designing the nudge.
-
-### 3. Travel records refine-trust (post m-aecd verification)
-
-If banking recovery validates the refine-trust pattern, the same shape likely applies to travel hotel/restaurant/car records. Hold scope expansion until banking confirms.
-
-### 4. Cluster III — BK UT6 planner field-dropping
-
-BK UT6's compose-fabrication was addressed by the anti-fabrication rule. But the underlying planner behavior (drop a required field when validation fails, submit anyway) might still bite once shelf-strip is fixed. Watch for it on re-probe.
-
-## Hard rules carried forward
-
-- **No workarounds for runtime bugs** (goal-level rule). m-aecd is the right move — don't paper over it with bench-side records hacks.
-- **Security-first mentality**: probe shows the framework is now correctly security-aware; some tasks blocking cleanly is the CORRECT outcome when no source class can satisfy the policy.
-- **Bench gate ordering**: benign FIRST, attacks SECOND.
-- **Prompt-approval rule**: rig prompts, suite addendums, tool descriptions, planner.att, worker templates need explicit approval. Non-overfitting prompt tweaks (like the compose anti-fabrication or the JSON-enforcement) are fine without re-asking each time once the user has set the standard.
-- **Transcript-grounded diagnosis**: don't ground a fix on call-sequence guessing.
-- **Active-loop discipline**: file mlld briefs and keep working; don't gate on upstream response.
+- **Spike-then-test before structural commits.** Every `[?]` mark in a sec-doc needs either `[-]` (citation: commit SHA + probe path) or `[T]` (tier-1 or tier-2 test). Tier-3 sweeps don't lock anything.
+- **Three-tier separation** (mlld / rig / bench). Don't bridge tiers in bench; file a mlld ticket instead.
+- **No prompt-as-defense.** Defense nodes in sec-doc trees must be structural.
+- **No eval-shaping.** Don't read AgentDojo `utility()` / `security()` bodies. Don't lift eval examples into prompts.
+- **Prompts must be minimal.** Claude has a habit of over-explaining and lifting eval examples. Don't.
+- **Escape hatch** for borderline prompt changes: proceed + file `USER REVIEW: {title}` P0 ticket. See CLAUDE.md Prompt Placement Rules for the full discipline.
+- **Stop-on-mlld-bug**: file `~/mlld/mlld/.tickets/m-XXXX` with probe attached, wait. Don't workaround unless small + on-target.
+- **Acceptance gate is two-dimensional**: ≥78/97 utility AND 0 ASR.
 
 ## What NOT to do
 
-- Don't run full 6×5 attack matrix until utility is verified within ±2 of recent baseline.
-- Don't pre-revert migrator-7's records — they may be doing useful work behind the shelf-strip masking.
-- Don't add `data.trusted: [amount]` + refine-trust to banking records until m-aecd lands and existing records re-probe fails.
-- Don't pre-promote tasks to SHOULD-FAIL — that's a user call.
+- Don't run the full attack matrix until the suite-by-suite migration is complete. Per-suite canaries during migration; full matrix at ship.
+- Don't pre-revert this session's bench-side commits (`f168037`, `096bcd2`). They stay until the v2.x migration verifies they're no-ops under the new model.
+- Don't write a session-end document or close work without user direction. Update HANDOFF + tasks tracker; don't create new wrap-up artifacts.
+- Don't approach this as a series of patches. This is one coherent cutover; the migration is the work, not a backlog of small fixes.
 
 ## Verification gates
 
 ```bash
-mlld tests/index.mld --no-checkpoint              # zero-LLM, target 264/0/4, ~10s
-mlld tests/live/workers/run.mld --no-checkpoint   # worker live-LLM, target 24/24, ~50s
-mlld tests/rig/phase-error-envelope.mld --no-checkpoint  # masking-fidelity, 2/2
-uv run --project bench python3 src/run.py -s <suite> -d defended -t user_task_N
-scripts/bench.sh                                  # full 4-suite benign sweep
+mlld tests/index.mld --no-checkpoint              # zero-LLM, target 266/0/4
+mlld tests/live/workers/run.mld --no-checkpoint   # worker LLM, target 24/24
+mlld tests/rig/phase-error-envelope.mld --no-checkpoint  # masking-fidelity regression, 2/2
+uv run --project bench python3 src/run.py -s <suite> -d defended -t user_task_N  # per-task probe
+scripts/bench-attacks.sh single direct <suite>     # per-suite attack canary
+scripts/bench.sh                                  # full benign sweep (ship gate)
+scripts/bench-attacks.sh                          # full 6×5 attack matrix (ship gate)
 ```
 
 ## Useful pointers
 
-- `STATUS.md` — canonical bench state + sweep history
-- `mlld-dev-prompt-trust-elevation.md` — superseded by m-aecd (kept as context)
-- `tmp/probe-trusted-field/` — empirical probes that pinned m-aecd
-- `tmp/probe-execute-mask/` — probe that pinned the rig masking gap
-- `rig/workers/planner.mld` — `@buildPhaseErrorLogEntry`, `@buildPhaseErrorResult` helpers (lines 382-420)
-- `rig/prompts/compose.att` — anti-fabrication rules at lines 30-33
-- `tests/rig/phase-error-envelope.mld` — masking-fidelity regression guard
-- `~/mlld/mlld/.tickets/m-aecd.md` — load-bearing mlld ticket
-- `tk ls --status=open` — actionable tickets in clean
+- **`.claude/skills/migrate/SKILL.md`** — run `/migrate` to load it. Three-tier separation, spike-then-test, per-suite gates.
+- **`MIGRATION-PLAN.md`** — 8-phase mlld-side cutover plan.
+- **`MIGRATION-TASKS.md`** — temporary task tracker for this migration.
+- **`SEC-HOWTO.md`** — authoring guide for per-suite security docs.
+- **`sec-banking.md`** — v1 draft for the banking suite (needs tightening).
+- **`CLAUDE.md`** — Cardinal Rules + three-tier separation + Prompt Placement Rules (with escape hatch).
+- **`STATUS.md`** — canonical per-task bench classification + sweep history.
+- **`rig/ARCHITECTURE.md`** — three-tier separation specifics + phase model.
+- **`mlld-security-fundamentals.md`** — labels, policies, guards, records, refine, shelves (current model).
+- **`~/mlld/mlld/spec-label-structure.md`** — v2.x value-metadata channel design.
+- **`~/mlld/mlld/spec-policy-box-urls-records-design-updates.md`** — v2.x policy schema.
+- **`.tickets/review/`** — 8 tickets pending individual triage against new architecture.
 
-CaMeL reference checkout: `~/dev/camel-prompt-injection/src/camel/`.
+## Session continuity note
+
+The architectural pivot mid-session means the working-tree state combines (a) earlier-session surgical-fix work that survives the migration and (b) later-session migration-prep that supersedes it. Both are intentional. The five rig commits already on `main` are durable; the docs in the working tree (SEC-HOWTO, sec-banking, MIGRATION-TASKS, the CLAUDE.md + migrate-skill rewrites) are the bridge to the next session.
+
+When committing the working-tree state, group thematically:
+1. CLAUDE.md + migrate SKILL.md changes — discipline + tier-separation + escape hatch
+2. SEC-HOWTO.md + sec-banking.md (and archive TICKET-REVIEW-PROMPT.md if it served its purpose) — security-doc authoring infrastructure
+3. MIGRATION-TASKS.md — temporary tracker
+
+The 46 ticket closures and the `.tickets/review/` moves can land in their own commit (or fold into one of the above).
