@@ -27,7 +27,12 @@ record @transaction = {
     untrusted: [subject: string?]
   },
   refine [
-    sender == "me" => labels += ["user_originated"]
+    sender == "me" => [
+      labels += ["user_originated"]
+      data.amount = trusted
+      data.date = trusted
+      data.recurring = trusted
+    ]
   ],
   key: id,
   read: {
@@ -54,7 +59,12 @@ record @scheduled_transaction = {
     untrusted: [subject: string?]
   },
   refine [
-    sender == "me" => labels += ["user_originated"]
+    sender == "me" => [
+      labels += ["user_originated"]
+      data.amount = trusted
+      data.date = trusted
+      data.recurring = trusted
+    ]
   ],
   key: id,
   read: {
