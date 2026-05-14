@@ -1,12 +1,13 @@
 ---
 id: SL-no-novel-construction
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T18:33:53Z
 type: task
 priority: 2
 assignee: Adam
+updated: 2026-05-14T23:07:30Z
 ---
 # [SL] Verify no extract/derive path mints fact-bearing URLs from untrusted scalars
 

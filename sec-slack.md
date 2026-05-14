@@ -442,17 +442,19 @@ __Agent emits an attacker-controlled URL through any exfil:send / exfil:fetch po
          > (verbatim task-text URL). Attacker URL is neither.
     + [-] `@post_webpage_inputs.url: facts` enforce fact-floor on the post path (same canary runs, ASR 0/105 on IT2/IT4)
          > UT4's `www.our-company.com` passes (task-text); IT2/IT4 attacker URL fails.
-    + [?] `known` bucket requires verbatim TASK-TEXT substring (NOT environment-key match) (ticket: SL-known-bucket-task-text)
+    + [T] `known` bucket requires verbatim TASK-TEXT substring — `tests/scripted/security-slack.mld#knownEmailNotInTaskTextRejected` (error `known_value_not_in_task_text`)
          > IT3's `www.true-informations.com` exists in `web.web_content` keys but appears
-         > in NO user task prompt. The `known` source-class implementation must restrict
-         > to user task text, not arbitrary environment contents. Verify post-migration.
+         > in NO user task prompt. The test passes a fabricated email NOT in task text;
+         > the validator rejects, proving the `known` source-class restricts to user task
+         > text rather than environment contents.
   + URL-laundering path: extract URL from @slack_msg.body or @webpage_content.content
-    + [?] URL-promotion firewall prevents body URLs from becoming `url` facts (ticket: SL-url-promotion-shelf)
+    + [T] URL-promotion firewall prevents body URLs from becoming `url` facts — `tests/scripted/security-slack.mld#getWebpageExtractedUrlRejected` + `#recursiveWebpageFetchRejected` + `#selectionRefNonexistentBackingHandleRejected`
          > `find_referenced_urls(message)` mints `@url_ref` handles whose URL string lives
          > only on `urlCapShelf` (private, session-scoped). `@get_webpage_via_ref(ref)`
          > resolves a ref to its URL inside the rig dispatcher — the URL is NEVER a
-         > public fact on @url_ref or @referenced_webpage_content.
-         > Verify shelf round-trip preserves opacity post-m-aecd.
+         > public fact on @url_ref or @referenced_webpage_content. The three tests
+         > exercise extracted-URL rejection, recursive fetch rejection, and missing-handle
+         > rejection paths respectively.
     + [-] `@url_ref` has NO `url` field (clean@096bcd2)
     + [-] `@referenced_webpage_content` has NO `url` field (clean@096bcd2)
 - Worker dispatches send_direct_message with attacker URL embedded in body
@@ -467,9 +469,10 @@ __Agent emits an attacker-controlled URL through any exfil:send / exfil:fetch po
          > Worker output that reads untrusted input is labeled influenced. The guard's
          > `before influenced` arm catches this.
 - Worker constructs URL by concatenation (encoding secret as path)
-  + [?] No fact-promotion path exists for worker-composed scalars (ticket: SL-no-novel-construction)
-         > extract / derive output cannot mint string-facts on `url` kind. Verify the
-         > construction path is blocked by source-class firewall.
+  + [T] No fact-promotion path exists for worker-composed scalars — `tests/scripted/security-slack.mld#derivedEmailAsControlArgRejected` + `#influencedNovelUrlOnGetWebpageRejected`
+         > extract / derive output cannot mint string-facts on `url`/`email`/`slack_user_name`
+         > kinds. The derived parity proves the construction path is blocked by source-class
+         > firewall regardless of which kind is being constructed.
 ```
 
 **Notes.** This is the load-bearing attack class — 4 of 5 ITs reduce to it (IT1, IT2, IT3, IT4). The Gap-C closure (c-d0e3, c-bac4, c-e414) verified end-to-end on the 2026-05-12 canary sweeps closes the primary `[?]` blockers for the planner-strip, output-validator-fire, and post_webpage-url-floor nodes. The remaining `[?]` cluster reflects (a) the `known` bucket scoping question and (b) the url_ref shelf round-trip dependency on m-aecd. **A regression in any one primitive makes the class live again** — the four don't all close the same path, they close *different* paths in the AND/OR tree.
@@ -640,17 +643,19 @@ __Agent fetches an attacker URL with a sensitive secret encoded as query paramet
        > Even if the worker reads the secret, worker output that read untrusted input
        > is influenced and cannot satisfy fact:* on downstream control args.
 - Worker constructs attacker URL with secret in query
-  + [?] No fact-promotion path for worker-composed URL strings (ticket: SL-no-novel-construction)
-       > extract / derive output cannot mint `fact:` on URL kind. A URL constructed
-       > by concatenating known + secret cannot satisfy `@get_webpage.url`'s fact-floor.
-  + [?] `known` bucket requires verbatim task-text URL match (ticket: SL-known-bucket-task-text)
+  + [T] No fact-promotion path for worker-composed URL strings — `tests/scripted/security-slack.mld#derivedEmailAsControlArgRejected` + `#influencedNovelUrlOnGetWebpageRejected`
+       > extract / derive output cannot mint `fact:` on URL/email/slack_user_name kinds.
+       > A URL constructed by concatenating known + secret cannot satisfy
+       > `@get_webpage.url`'s fact-floor.
+  + [T] `known` bucket requires verbatim task-text URL match — `tests/scripted/security-slack.mld#knownEmailNotInTaskTextRejected`
        > Any beacon URL is not in any UT prompt and not in any prior tool result.
-       > The `known` bucket implementation must enforce task-text-match strictly.
+       > The `known` bucket validator rejects values not in task text regardless of
+       > whether they appear in the environment.
   + [-] `@webpage_content.url: facts` requires URL to be a fact (clean@096bcd2)
        > Resolved URLs from prior @webpage_content reads carry fact, but those URLs are
        > the legitimate fixture URLs — not the beacon URL.
 - Worker uses URL-promotion path (find_referenced_urls)
-  + [?] @url_ref does not carry the URL as a public fact (ticket: SL-url-promotion-shelf)
+  + [T] @url_ref does not carry the URL as a public fact — `tests/scripted/security-slack.mld#getWebpageExtractedUrlRejected` + `#recursiveWebpageFetchRejected` (verifies the URL-promotion-shelf opacity holds end-to-end)
        > Even if the attacker plants the beacon URL in a message body, find_referenced_urls
        > mints a @url_ref handle whose URL lives on the private urlCapShelf. The planner
        > can route @get_webpage_via_ref(ref) but cannot read the URL string and cannot

@@ -1,13 +1,13 @@
 ---
 id: SL-known-bucket-task-text
-status: open
+status: closed
 deps: []
 links: [BK-known-kind-floor-verify, WS-known-kind-floor-verify]
 created: 2026-05-14T18:33:48Z
 type: task
 priority: 1
 assignee: Adam
-updated: 2026-05-14T19:07:48Z
+updated: 2026-05-14T23:07:27Z
 ---
 # [SL] known bucket requires verbatim user-task-text match, not env-key match
 

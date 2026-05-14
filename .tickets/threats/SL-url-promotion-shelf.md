@@ -1,12 +1,13 @@
 ---
 id: SL-url-promotion-shelf
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T18:33:51Z
 type: task
 priority: 1
 assignee: Adam
+updated: 2026-05-14T23:07:30Z
 ---
 # [SL] Verify urlCapShelf round-trip preserves URL opacity (m-aecd dependency)
 
