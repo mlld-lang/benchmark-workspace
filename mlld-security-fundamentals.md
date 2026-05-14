@@ -1,6 +1,6 @@
 # mlld security fundamentals
 
-mlld's security model is built on a simple insight: you can't stop an LLM from being tricked, but you **can** stop the consequences from happening. Labels track facts about data — what it is, where it came from, what trust level it carries, what proof attaches to it. Policies declare rules about what labeled data is allowed to do. Guards provide imperative hooks for inspection, transformation, and strategic overrides. Records are the data security boundary: they classify tool output, validate tool input, mint proof on authoritative fields, and project handles instead of values across the LLM boundary. Shelves and sessions accumulate state — durably across phases, ephemerally per call. The runtime enforces all of this regardless of LLM intent.
+mlld's security model is built on a simple insight: you can't stop an LLM from being tricked, but you **can** stop the consequences from happening. Every value carries structured security metadata — a trust channel, an influenced flag, a label set, and factsources. Policies declare rules over those channels. Guards provide imperative hooks for inspection, transformation, and strategic overrides. Records are the data security boundary: they classify tool output, validate tool input, mint proof on authoritative fields, and project handles instead of values across the LLM boundary. Shelves and sessions accumulate state — durably across phases, ephemerally per call. The runtime enforces all of this regardless of LLM intent.
 
 ## Principles
 
@@ -10,29 +10,67 @@ mlld's security model is built on a simple insight: you can't stop an LLM from b
 4. **Narrow the LLM's view.** Records project handles instead of values; named read modes serve different agents from the same record. The LLM sees only what its role needs.
 5. **Selection beats re-derivation.** Once a value has proof, pass the value (or its handle) — don't re-fabricate it from a string.
 6. **Proof flows through values plus factsources.** Cross-phase identity is value-keyed, not handle-string-keyed. Handles are per-call ephemeral.
-7. **Taint is sticky; proof is specific.** Untrusted data spreads conservatively; fact proof attaches only to the specific value it was minted on.
+7. **Trust is sticky; proof is specific.** Untrusted state spreads conservatively through compute; fact proof attaches only to the specific value it was minted on.
 8. **The runtime owns observability.** Trace events, audit logs, and `@mx` introspection are runtime-emitted facts, not LLM-reported claims.
 
-## Built-in Rules Reference
+## Runtime Invariants vs Configurable Policy
 
-mlld ships **11 built-in default rules** you can enable in `policy.defaults.rules`, plus one **per-tool structural check** (`correlate-control-args`) that fires when a tool's bound input record explicitly declares `correlate: true`.
+mlld separates **what the runtime enforces structurally** from **what authors and libraries configure**. Knowing which is which is the fastest way to read the rest of this document.
 
-| Rule | What it blocks | Operation labels checked |
+| Runtime invariants (structural) | User / library configuration |
+|---|---|
+| Every value carries `mx.trust` (`"trusted"`/`"untrusted"`/`null`), `mx.influenced` (boolean), `mx.labels` (set), `mx.factsources` (structured) | `labeling.unlabeled`, `labeling.trustconflict` |
+| `mx.sources`, `mx.urls`, `mx.tools` are inert audit metadata — policy never consults them | `labels.risks`, `labels.rules`, `labels.args`, `labels.apply`, `labels.{enrich,transform,check}`, `labels.locked` |
+| Record coercion mints `fact:*` labels and `mx.factsources` on declared fact fields | `dataflow.{enrich,transform,check,apply}` |
+| Compute aggregates trust by meet (`untrusted < null < trusted`) | `capabilities` allow/deny/danger/network |
+| Constructed values derive aggregate metadata from contents, not parent | `credentials` mappings (`using creds:name`) |
+| Handles are per-call mint-table entries; resolution preserves proof | `authorizations.deny`, `authorizations.can_authorize` |
+| Shelves preserve field-local descriptors and factsources | `default_box: @ref` for runtime config defaults |
+| Records' `read:` projection, `write:` permission, and `correlate:` are non-bypassable structural gates | Stock policy fragments from `@mlld/policy`, custom rules, custom action pipelines |
+
+The principle: **mlld ships primitives; libraries ship the content built on them.** The named rules that earlier mlld pre-installed (`no-secret-exfil`, `no-send-to-unknown`, etc.) now live as ordinary importable policy fragments. Authors compose them with `union(...)` alongside their own application rules.
+
+## Stock Policy Library (`@mlld/policy`)
+
+Most policies start by importing fragments from `@mlld/policy` and composing them with application-specific rules:
+
+```mlld
+import { @standard, @urlDefense } from "@mlld/policy"
+
+var @appRules = {
+  labeling: { unlabeled: "untrusted" },
+  labels: {
+    risks: { exfil: ["net:w"], destructive: ["fs:w"] },
+    rules: { internal: { deny: ["external"] } }
+  }
+}
+
+policy @app = union(@standard, @urlDefense, @appRules)
+```
+
+Available fragments:
+
+| Fragment | Implements | Built from |
 |---|---|---|
-| `no-secret-exfil` | `secret` data flowing to exfil ops | `exfil` |
-| `no-sensitive-exfil` | `sensitive` data flowing to exfil ops | `exfil` |
-| `no-untrusted-destructive` | Untrusted data driving destructive ops | `destructive` (taint scoped to control args when known) |
-| `no-untrusted-privileged` | Untrusted data driving privileged ops | `privileged` (taint scoped to control args when known) |
-| `no-send-to-unknown` | Sends without proof on the destination | `exfil:send` — destination arg must carry `fact:*` or `known` |
-| `no-send-to-external` | Sends to external without internal proof | `exfil:send` — stricter; requires `fact:internal:*` or `known:internal` |
-| `no-destroy-unknown` | Destructive ops without proof on the target | `destructive:targeted` — target arg must carry `fact:*` or `known` |
-| `no-unknown-extraction-sources` | Extraction without proof on source args | source-arg-bearing reads — runs only when source-arg metadata exists |
-| `no-novel-urls` | URLs the LLM fabricated | URLs in `influenced` tool-call args must appear in prior context |
-| `no-influenced-advice` | Influenced fact-state reaching `advice` ops | `advice` — used as the structural trigger for `denied =>` debias gates |
-| `untrusted-llms-get-influenced` | Doesn't block — auto-applies `influenced` to LLM output | Triggered on `llm` exes whose input carries `untrusted` |
-| `correlate-control-args` *(per-tool, not in `defaults.rules`)* | Cross-record fact-arg mixing on a single dispatch | Fires only on tools whose bound input record declares `correlate: true` |
+| `@standard` | Bundles the non-URL label-flow and proof-floor rules — equivalent to importing all the standard fragments below | `labels.rules`, `labels.args`, `labels.apply` |
+| `@noSecretExfil` | `secret` data cannot flow to `exfil` operations | `labels.rules: { secret: { deny: ["exfil"] } }` |
+| `@noSensitiveExfil` | `sensitive` data cannot flow to `exfil` operations | `labels.rules: { sensitive: { deny: ["exfil"] } }` |
+| `@noUntrustedDestructive` | Untrusted data cannot drive `destructive` operations | `labels.rules: { "trust:untrusted": { deny: ["destructive"] } }` |
+| `@noUntrustedPrivileged` | Untrusted data cannot drive `privileged` operations | `labels.rules: { "trust:untrusted": { deny: ["privileged"] } }` |
+| `@noSendToUnknown` | `exfil:send` requires `fact:*` or `known` on recipient-style args (`recipient`, `recipients`, `cc`, `bcc`) | `labels.args: { "exfil:send": { ... } }` (one entry per recipient alias) |
+| `@noSendToExternal` | Stricter send: requires `fact:internal:*` or `known:internal` on recipient args | `labels.args: { "exfil:send:external": { ... } }` |
+| `@noDestroyUnknown` | `destructive:targeted` requires proof on target-style args (`target`, `id`, and common id aliases) | `labels.args: { "destructive:targeted": { ... } }` |
+| `@noUnknownExtractionSources` | `extract:r` and `tool:r` require proof on source-style args (`source`, `input`, and common aliases) | `labels.args: { "extract:r": { ... }, "tool:r": { ... } }` |
+| `@noInfluencedAdvice` | Routes `influenced` data on `advice` operations to the `denied =>` debias path | `labels.rules: { influenced: { deny: ["advice"] } }` |
+| `@untrustedLlmsGetInfluenced` | When this fragment is in the active policy, LLM output gets `mx.influenced = true` whenever any input had `trust: "untrusted"`. Bundled into `@standard`; defended-agent setups should always include it | `labels.apply: { "trust:untrusted+llm": [{ add: "influenced" }] }` |
+| `@urlDefense` | URLs in LLM output / tool args must appear in the bridge frame's input | `dataflow.enrich` + `dataflow.check` against `@mlld/patterns/url` |
 
-The first four are **negative checks** (block contaminated data from reaching operations). `no-send-to-unknown`, `no-send-to-external`, `no-destroy-unknown`, and `no-unknown-extraction-sources` are **positive checks** (require proof that a value came from an authoritative source). `no-novel-urls` is a **URL identity check**. `no-influenced-advice` is a **structural trigger** for the advice-gate `denied =>` pattern. `untrusted-llms-get-influenced` is a **labeling rule**. `correlate-control-args` is a **cross-arg correlation check** that runs only on tools that opt in.
+These fragments are **just policies authored against the same primitives any user has access to.** You can read their source under `@mlld/policy/*`, fork them, or write your own and `union()` them in.
+
+In addition to label-flow rules and proof-requirement floors, two structural mechanisms still ship in the runtime itself:
+
+- **Positive-check precedence chain.** Per-record `accepts:` > kind-derived (from `kind:` tags) > `labels.args:` floor. Most policies get their proof requirements from the schema layer; `@noSendToUnknown`, `@noSendToExternal`, `@noDestroyUnknown`, and `@noUnknownExtractionSources` are the system-wide floor for tools whose records don't carry `kind:` tags.
+- **`correlate-control-args`**, a per-tool record-level check. Set `correlate: true` on an input record with multiple fact fields and the runtime verifies all fact args on a single dispatch trace to the same source-record instance. This is *not* shipped as an importable policy fragment — it lives on the record because the cross-record mixing surface is a per-tool decision.
 
 `correlate` does **not** default to `true` for multi-fact records — set it explicitly on input records where cross-record mixing is the attack surface you care about.
 
@@ -48,37 +86,48 @@ Labels are strings attached to values. They're the foundation of mlld's security
 
 When an operation is attempted, the runtime checks: what labels does the input data carry? what labels does the operation carry? does policy allow this flow? The LLM may have been tricked into trying something dangerous, but the runtime sees the labels and blocks it.
 
-### 1.2 The four roles labels play
+### 1.2 What labels are not
 
-A label isn't one thing — labels are a single mechanism that fills four distinct roles depending on which label and how it's used:
+Three pieces of security state look like labels but are not stored in `mx.labels`:
+
+| Concept | Where it lives | Why it's separated |
+|---|---|---|
+| **Trust** | `mx.trust` — tri-state: `"trusted"` / `"untrusted"` / `null` | Mutually exclusive states with conflict-resolution semantics; a string set can't express the asymmetry |
+| **Influenced** | `mx.influenced` — sticky boolean | Once-set-stays-set monotonicity that a label can't express |
+| **Code-routing provenance** | `mx.sources` (and `mx.urls`, `mx.tools`) — inert audit fields | These accumulate freely for tracing but never gate behavior; mixing them with security labels was the root cause of the phantom-untrusted bug class |
+
+Policy authoring is still uniform — authors mostly write labels as strings, and the runtime sorts them into the right channel. When matching, the runtime synthesizes `trust:trusted`, `trust:untrusted`, and `influenced` as transient match-time tokens so a rule like `"trust:untrusted+influenced": { deny: [...] }` can fire — but those tokens are **never** stored on the value.
+
+### 1.3 The roles labels play
+
+A label isn't one thing — labels are a single mechanism that fills three distinct roles depending on which label and how it's used:
 
 | Role | What it means | Examples |
 |---|---|---|
 | **Type-like adjective** | Refines what a value *is* — its sensitivity or nature | `secret`, `pii`, `sensitive`, user-declared (`internal`, `redacted`) |
-| **Taint tag** | Sticky propagation through transformations; tracks contamination | `untrusted`, `influenced`, `src:*`, `op:*` |
-| **Decorator** | Triggers a runtime capability when present on a value | `secret` → trace redaction, `untrusted` → `influenced` rule, `fact:*` → positive checks |
+| **Decorator** | Triggers a runtime capability when present on a value | `secret` → trace redaction, `fact:*` → positive checks, `src:cmd` → input-classification candidate for `labels.apply` |
 | **Role marker** | Identity for authorization, not data classification | `role:planner`, `role:worker`, custom roles |
 
-Most built-in labels fill more than one role. `secret` is type-like (declares "this is sensitive") **and** a decorator (triggers redaction in traces and SDK output). `untrusted` is type-like **and** a taint tag (spreads conservatively) **and** a decorator (triggers the `untrusted-llms-get-influenced` rule). `fact:*` is a decorator (consumed by positive checks like `no-send-to-unknown`) and a proof carrier (minted only by record coercion).
+Most built-in labels fill more than one role. `secret` is type-like (declares "this is sensitive") **and** a decorator (triggers redaction in traces and SDK output). `fact:*` is a decorator (consumed by positive checks like `@noSendToUnknown`) and a proof carrier (minted only by record coercion).
 
-### 1.3 The load-bearing built-ins
+### 1.4 The load-bearing built-ins
 
 Labels are user-extensible — you can declare any string as a label on any variable. But a small set is built-in-and-load-bearing: the runtime recognizes them, applies them automatically, and triggers specific behaviors based on their presence.
 
-| Label | Origin | What it does mechanically |
+| Label / channel | Origin | What it does mechanically |
 |---|---|---|
-| `secret` | Declared on variables; auto-applied to keychain reads | Triggers redaction in trace events, SDK streams, and post-call snapshots; default rule `no-secret-exfil` blocks flow to net/output ops |
-| `sensitive` | Declared | Default rule `no-sensitive-exfil` blocks flow to net/output ops |
-| `pii` | Declared | Type-like; you wire it to flow rules via `policy.labels.pii` |
-| `untrusted` | Declared, or auto-applied via `defaults.unlabeled: "untrusted"`; auto-applied to data fields by `=> record` coercion | Sticky taint; triggers `untrusted-llms-get-influenced`; checked by `no-untrusted-destructive` and `no-untrusted-privileged` |
-| `trusted` | Declared, or carried through from trusted tool results | Marks data as cleared for sensitive ops; conflicts with `untrusted` raise unless resolved |
-| `known` (and `known:<scope>`) | Declared on planner-supplied literals | Attestation: this exact value was vetted by an uninfluenced source; satisfies positive checks |
-| `influenced` | Auto-applied by `untrusted-llms-get-influenced` rule | Marks LLM output that processed untrusted input; you wire restrictions via `policy.labels.influenced` |
-| `fact:<record>.<field>` (and `fact:<scope>:<record>.<field>`) | Minted only by `=> record` coercion on `facts:` fields | Proof carrier; satisfies positive checks (`no-send-to-unknown`, `no-destroy-unknown`); `factsources` metadata enables `correlate-control-args` |
-| `src:*` (e.g., `src:cmd`, `src:mcp`, `src:file`) | Auto-applied when data enters through that channel | Provenance tracking; consumable in custom flow rules |
-| `op:*` (e.g., `op:cmd:git:status`) | Auto-applied during execution | Operation lineage |
+| `secret` | Declared on variables; auto-applied to keychain reads | Triggers redaction in trace events, SDK streams, and post-call snapshots; `@noSecretExfil` blocks flow to `exfil` ops |
+| `sensitive` | Declared | `@noSensitiveExfil` blocks flow to `exfil` ops |
+| `pii` | Declared | Type-like; wire it to flow rules via `labels.rules: { pii: { deny: [...] } }` |
+| `mx.trust = "untrusted"` | Declared (`var untrusted @x = ...`); auto-set on `data.untrusted:` fields by `=> record` coercion; set by `labels.apply` rules on ingestion sources | Sticky via compute meet; checked by `@noUntrustedDestructive` and `@noUntrustedPrivileged`; flips `mx.influenced = true` on LLM passes when `@untrustedLlmsGetInfluenced` is in the active policy |
+| `mx.trust = "trusted"` | Declared (`var trusted @x = ...`); auto-set on record `facts:` and `data.trusted:` fields | Marks data as cleared for sensitive ops; satisfies positive checks looking for `trust:trusted` |
+| `mx.trust = null` | Default for unclaimed values and compute outputs without trust evidence | "No claim." Negative checks pass; positive `require trusted` checks fail |
+| `known` (and `known:<scope>`) | Declared on planner-supplied literals; minted by `@policy.build` on user-typed values | Attestation: this exact value was vetted by an uninfluenced source; satisfies positive checks |
+| `mx.influenced = true` | Auto-flipped by `@untrustedLlmsGetInfluenced` rule when LLM input carries `trust: "untrusted"` | Marks LLM output that processed untrusted input; wire restrictions via `labels.rules: { influenced: { deny: [...] } }` |
+| `fact:<record>.<field>` (and `fact:<scope>:<record>.<field>`) | Minted only by `=> record` coercion on `facts:` fields | Proof carrier; satisfies positive checks (`@noSendToUnknown`, `@noDestroyUnknown`); `mx.factsources` provides structured backing for `correlate-control-args` |
+| `src:cmd`, `src:mcp`, `src:network`, `src:user`, `src:stdin`, `src:file` | Auto-applied when data enters through that ingestion channel | Live in `mx.labels`; visible to `labels.apply` for trust classification and to custom flow rules |
+| `src:js`, `src:py`, `src:node`, `src:sh`, `src:exe`, `dir:*`, `op:*` | Auto-applied during execution as code-routing provenance | Live in `mx.sources` only — **policy never sees them**. The structural separation is what eliminates the phantom-untrusted bug class |
 | `role:*` (e.g., `role:planner`, `role:worker`) | Declared on exes (`exe llm role:planner @planner(...)`) | Authorization identity; selects record read mode; satisfies the matching read key |
-| `dir:/path` | Auto-applied on filesystem reads | Path provenance |
 
 Beyond these, you declare your own labels for domain-specific flow rules:
 
@@ -90,7 +139,7 @@ var redacted @cleanedOutput = @output | @scrub
 
 User-declared labels carry no behavior on their own — they're inert string tags until you reference them in a policy or guard.
 
-### 1.4 Declaring labels
+### 1.5 Declaring labels
 
 The label sigil precedes the variable name in declarations:
 
@@ -113,9 +162,19 @@ exe @classify(data) = [
 
 See [label modification][mod] for the full set of return-side operations (`=> trusted!`, `=> !label`, `=> clear!`).
 
-### 1.5 Propagation
+### 1.6 Propagation
 
-Labels propagate through transformations:
+Labels and trust state propagate through compute. The rule for constructed values is **content-derived aggregation**: a constructed value's aggregate metadata derives from its included contents, not inherited from any parent.
+
+| Channel | How it aggregates over included fields |
+|---|---|
+| `mx.trust` | Meet on the lattice `untrusted < null < trusted` — any untrusted input poisons; mixed `trusted` + `null` produces `null` |
+| `mx.influenced` | OR (sticky union) |
+| `mx.labels` | Union |
+| `mx.factsources` | Union |
+| `mx.sources` / `mx.urls` / `mx.tools` | Accumulate freely as inert audit metadata |
+
+This is what makes role-projection security work by construction. A `role:planner` projection that includes only fact fields produces a `trusted` aggregate even when the source record's data fields were `untrusted`. A `role:worker` projection that includes data.untrusted fields produces an `untrusted` aggregate. Same record, two views, two trust states.
 
 ```mlld
 var secret @customerList = <internal/customers.csv>
@@ -123,61 +182,91 @@ var @summary = @customerList | @summarize
 show @summary.mx.labels    >> ["secret"]
 ```
 
-The `@summary` value still carries `secret` because the `secret` taint flows through. This applies to assignments, pipe transformations, parameter binding, and shelf I/O — anywhere a value is derived from a labeled source.
+The `@summary` value still carries `secret` because `secret` propagates through compute. This applies to assignments, pipe transformations, parameter binding, and shelf I/O — anywhere a value is derived from a labeled source.
 
-`fact:*` labels do **not** propagate the same way. Fact proof attaches to a specific value at the moment of `=> record` coercion. Derived values (a substring, a transformation, a re-fabrication) lose the fact label — they're a different value. This is intentional: proof is specific, not sticky.
+`fact:*` labels do **not** propagate through transformations. Fact proof attaches to a specific value at the moment of `=> record` coercion. Derived values (a substring, a transformation, a re-fabrication) lose the fact label — they're a different value. This is intentional: proof is specific, not sticky.
 
-### 1.6 Trust asymmetry
+### 1.7 Trust as a channel, not a label
 
-`untrusted` is sticky and conservative; `trusted` cannot remove it. Adding `trusted` to already-untrusted data raises a conflict (configurable via `policy.defaults.trustconflict`). Removing `untrusted` requires a privileged guard:
+`mx.trust` is a tri-state enum stored in its own channel — never inside `mx.labels`. The runtime synthesizes `trust:trusted` / `trust:untrusted` as match-time tokens when policy keys reference them, but those tokens are read-only projections, never stored on the value.
+
+| State | Meaning | Negative check fires? | Positive check fires? |
+|---|---|---|---|
+| `"trusted"` | Positive claim: vetted, authoritative | No | No (passes "require trusted") |
+| `"untrusted"` | Positive claim: from an adversarial-suspected source | Yes (untrusted-* rules) | Yes (fails "require trusted") |
+| `null` | No claim. Default for compute outputs with no provenance signal | No | Yes (fails "require trusted") |
+
+Trust state is set by exactly these paths: record coercion (`facts:` and `data.trusted:` → `trusted`; `data.untrusted:` → `untrusted`), author declarations (`var trusted @x = ...`), policy `labels.apply` rules on ingestion sources, and privileged guards. Compute (mlld exes, `/run js`, `/run py`, `/run node`, pipe stages, object construction) inherits via the meet operation in §1.6. The runtime never invents trust state on values that didn't come through one of these paths.
+
+LLM passes inherit `mx.trust` as compute. When the stock `@untrustedLlmsGetInfluenced` fragment is in the active policy (it's bundled into `@standard`), LLM passes additionally flip `mx.influenced = true` whenever any input had `trust: "untrusted"`. Trusted-only projections fed to an LLM produce `trust: "trusted", influenced: false` output. This is why role-projection security composes — a planner pass over a record's fact-only projection stays clean by construction. Defended-agent setups should always include `@untrustedLlmsGetInfluenced` (via `@standard` or directly).
+
+Mutation syntax (declaration and privileged removal):
 
 | Syntax | Privilege? | Effect |
 |---|---|---|
-| `=> untrusted @var` | No | Adds `untrusted` (taint flows down freely) |
-| `=> trusted @var` | No | Adds `trusted`; conflict with existing `untrusted` |
-| `=> trusted! @var` | **Yes** | Blessing: removes `untrusted`, adds `trusted` |
-| `=> !untrusted @var` | **Yes** | Removes `untrusted` only |
-| `=> clear! @var` | **Yes** | Removes all non-factual labels |
+| `var untrusted @x = ...` | No (author declaration) | Sets `mx.trust = "untrusted"` |
+| `var trusted @x = ...` | No (author declaration) | Sets `mx.trust = "trusted"`; conflict with existing `untrusted` governed by `labeling.trustconflict` |
+| `=> trusted! @var` | **Yes** | Privileged: demote `untrusted` to `trusted` |
+| `=> !untrusted @var` | **Yes** | Privileged: demote `untrusted` to `null` |
+| `=> clear! @var` | **Yes** | Privileged: reset trust to `null` and remove non-protected labels |
 
-The `!` and `clear!` shorthands work only inside privileged guards. See §3 (Guards) for the privileged-guard model.
+The `!` and `clear!` shorthands work only inside privileged guards. See §3 (Guards).
 
-### 1.7 Inspecting labels via `@mx`
+### 1.8 Inspecting metadata via `@mx`
 
 Every value carries metadata accessible via `@mx`:
 
 ```mlld
 var secret @key = "abc"
-show @key.mx.labels         >> user-declared sensitivity labels
-show @key.mx.taint           >> labels + auto-applied source/op markers
-show @key.mx.attestations    >> value-scoped approvals (known, known:*)
-show @key.mx.sources         >> source references (file paths, guard names)
-show @key.mx.tools           >> tool lineage with audit references
+var @result = @claude("summarize @userText")
+
+show @key.mx.trust          >> "trusted" | "untrusted" | null
+show @key.mx.influenced     >> false (boolean)
+show @key.mx.labels         >> ["secret"]
+show @key.mx.factsources    >> [] (structured fact-source handles, when present)
+show @key.mx.sources        >> inert audit trail: file paths, code-routing src:*, op:*, dir:*
+show @key.mx.urls           >> inert audit trail: URLs the value transited
+show @key.mx.tools          >> inert audit trail: tool lineage with audit references
 ```
 
-The four channels are conceptually distinct:
+The first four are **security-gating** channels — policy and guards inspect them. The last three are **audit-only** — policy never consults them; they exist for forensic reconstruction and debugging.
 
-- **`labels`** — what you declared (`secret`, `pii`, `untrusted`, `internal`, `redacted`, ...)
-- **`taint`** — union of declared labels and auto-applied markers (`src:cmd`, `op:sh`, `dir:/path`, ...)
-- **`attestations`** — value-scoped approvals (`known`, `known:internal`); unlike taint, attestations match the *exact* value and do not propagate to derived values
-- **`sources`** / **`tools`** — provenance trails for audit, not for security checks
+- **`mx.trust`** — tri-state: `"trusted"` / `"untrusted"` / `null`. State, not a label.
+- **`mx.influenced`** — sticky boolean. Once true, only privileged guards can clear it.
+- **`mx.labels`** — string set. Sensitivity tags, fact labels, attestations (`known`/`known:*`), source-classification (`src:cmd`, `src:network`, `src:mcp`, `src:user`, `src:stdin`, `src:file`), custom domain labels. **Never contains `trusted`, `untrusted`, `trust:*`, or `influenced`** — those live in their own channels.
+- **`mx.factsources`** — structured array of fact-source handles (`{ record, field, instanceKey?, coercionId?, position?, tiers? }`). Backing for cross-phase identity and `correlate-control-args`.
+- **`mx.sources`** / **`mx.urls`** / **`mx.tools`** — audit trails. Code-routing labels (`src:js`, `src:py`, `src:node`, `src:exe`, `dir:*`, `op:*`) and tool lineage live here. Policy never consults them.
 
-`untrusted` lives in `taint`. `known` lives in `attestations`. The distinction is load-bearing: positive checks like `no-send-to-unknown` consume attestations (exact-value match), while negative checks like `no-untrusted-destructive` consume taint (sticky propagation).
+Policy matching builds a transient match set from the four security channels:
 
-For objects and arrays, `@value.mx.labels` is a conservative aggregate summary: it may include labels found on descendant fields. Field reads remain field-local. A label that only appears on `@value.bad` must not smear onto `@value.clean`, while an explicit label on the container itself (`var secret @value = { clean: "x" }`) is a label on the exact container value and does flow down to child reads. Runtime policy code uses separate self, aggregate, field/index, and proof metadata channels rather than treating public `.mx.labels` as a policy-input primitive.
+```
+matchSet = mx.labels
+         ∪ (mx.trust === "trusted"   ? {"trust:trusted"}   : ∅)
+         ∪ (mx.trust === "untrusted" ? {"trust:untrusted"} : ∅)
+         ∪ (mx.influenced            ? {"influenced"}      : ∅)
+```
 
-### 1.8 Auto-applied labels
+This lets a rule key like `"trust:untrusted+influenced"` match without storing those tokens. Trying to write `untrusted` or `trust:untrusted` into `mx.labels` is rejected by the runtime — use `mx.trust` (set via `var untrusted @x`, record `data.untrusted:`, or `labels.apply`) instead.
 
-The runtime applies certain labels without you asking:
+For objects and arrays, `@value.mx.labels` is a conservative aggregate summary: it may include labels found on descendant fields. Field reads remain field-local. A label that only appears on `@value.bad` must not smear onto `@value.clean`. Runtime policy code uses separate self, aggregate, field/index, and proof metadata channels rather than treating public `.mx.labels` as a policy-input primitive.
 
-- **`secret`** — applied to anything retrieved from the keychain
-- **`src:*`** — applied whenever data enters through a channel (`src:cmd`, `src:mcp`, `src:file`, `src:js`)
-- **`op:*`** — applied during execution to mark operation lineage
-- **`dir:/path`** — applied on filesystem reads
-- **`influenced`** — applied to LLM output by the `untrusted-llms-get-influenced` rule when input carried `untrusted`
-- **`fact:*`** — minted by `=> record` coercion on `facts:` fields; never user-declared
-- **`untrusted`** — applied to unlabeled values when `policy.defaults.unlabeled: "untrusted"` is set; applied by `=> record` to `data:` fields by default
+### 1.9 Auto-applied state
 
-Auto-applied labels follow the same propagation and check rules as user-declared ones. The asymmetry is in *who can remove them*: `secret`, `untrusted`, and `src:*` can only be removed via privileged guard.
+The runtime applies certain metadata without you asking:
+
+- **`secret`** — added to `mx.labels` on anything retrieved from the keychain
+- **`src:cmd`, `src:network`, `src:mcp`, `src:user`, `src:stdin`, `src:file`** — added to `mx.labels` when data enters through that ingestion channel (visible to `labels.apply` for trust classification)
+- **`src:js`, `src:py`, `src:node`, `src:sh`, `src:exe`** — added to `mx.sources` only (code-routing provenance, never gates policy)
+- **`dir:*`, `op:*`** — added to `mx.sources` only (path and operation lineage)
+- **URL lineage** — added to `mx.urls`
+- **Tool lineage** — added to `mx.tools`
+- **`fact:*` + `mx.factsources` entry** — minted by `=> record` coercion on `facts:` fields; never user-declared
+- **`mx.trust`** — set by `=> record` coercion (`facts:` and `data.trusted:` → `trusted`; `data.untrusted:` → `untrusted`); set by `labels.apply` rules on matching ingestion sources; declared via `var trusted/untrusted @x`
+- **`mx.influenced`** — flipped to `true` by `@untrustedLlmsGetInfluenced` (the canonical `labels.apply` rule on `"trust:untrusted+llm"`) when an LLM pass sees untrusted input
+
+The runtime never invents trust state on values that didn't come through an explicit path. The retired section name `defaults.unlabeled` is replaced by `labeling.unlabeled` — a coarse policy knob that classifies all unclaimed values uniformly. For fine-grained control over which ingestion sources are classified untrusted, prefer explicit `labels.apply:` rules that enumerate them.
+
+Privileged-only removal: `secret`, `mx.trust = "untrusted"`, and `mx.influenced = true` can only be cleared via privileged guards (`trusted!`, `!untrusted`, `clear!`).
 
 [mod]: https://mlld.ai/atoms/effects/labels-modification
 
@@ -190,135 +279,131 @@ A policy is a declarative object that bundles security configuration. Where labe
 ### 2.1 Anatomy
 
 ```mlld
-policy @p = {
-  defaults: {
-    rules: ["no-secret-exfil", "no-untrusted-destructive"],
-    unlabeled: "untrusted"
-  },
-  operations: {
-    exfil: ["net:w"],
-    destructive: ["fs:w"],
-    privileged: ["sys:admin"]
-  },
+import { @standard, @urlDefense } from "@mlld/policy"
+
+var @appRules = {
+  labeling: { unlabeled: "untrusted", trustconflict: "warn" },
+
   labels: {
-    pii: { deny: ["op:cmd", "net:w"] }
+    risks: {
+      exfil:       ["net:w"],
+      destructive: ["fs:w"],
+      privileged:  ["sys:admin"]
+    },
+
+    rules: {
+      pii:                          { deny: ["op:cmd", "net:w"] },
+      "trust:untrusted+influenced": { deny: ["exfil"] }
+    },
+
+    args: {
+      "exfil:send":           { recipient: ["fact:*", "known"] },
+      "destructive:targeted": { target:    ["fact:*", "known"] }
+    },
+
+    apply: {
+      "trust:untrusted+llm": [{ add: "influenced" }]
+    },
+
+    locked: false
   },
-  capabilities: {
-    allow: ["cmd:git:*"],
-    danger: ["@keychain"]
+
+  dataflow: {
+    enrich: [{ from: @url.pattern, as: "urls" }],
+    check:  [{ on: @url.pattern, do: @noNovelUrlCheck }]
   },
-  auth: {
-    claude: "ANTHROPIC_API_KEY"
-  },
+
+  capabilities:   { allow: ["cmd:git:*"], danger: ["@keychain"] },
+  credentials:    { claude: "ANTHROPIC_API_KEY" },
   authorizations: {
     deny: ["update_password"],
-    can_authorize: {
-      role:planner: [@sendEmail, @createFile]
-    }
+    can_authorize: { role:planner: [@sendEmail, @createFile] }
   },
-  records_require_tool_approval_per_role: false,
-  env: {
-    default: "@provider/sandbox",
-    tools: { allow: ["Read", "Write"] }
-  },
-  locked: false
+  default_box: @safeDefault
+}
+
+policy @app = union(@standard, @urlDefense, @appRules)
+```
+
+Most policies start with `union(@standard, ...)` and add a few application-specific sections. The required mental model: a policy is a **single source of truth** that the runtime consults at every operation boundary.
+
+Top-level sections:
+
+| Section | Purpose |
+|---|---|
+| `labeling:` | Auto-labeling configuration (`unlabeled`, `trustconflict`) |
+| `labels:` | All label-mediated rules — `risks`, `rules`, `args`, `apply`, `enrich`, `transform`, `check`, `locked` |
+| `dataflow:` | System-wide content rules — `enrich`, `transform`, `check`, `apply` (always-on, regardless of label set) |
+| `capabilities:` | Structural operation-level gates — `allow`, `deny`, `danger`, `network` |
+| `credentials:` | Caller-side credential mappings for `using creds:name` |
+| `authorizations:` | Planner-worker dispatch authorization (`deny`, `can_authorize`) |
+| `urls:` | URL-defense allowlist consumed by `@urlDefense` (`allowConstruction`) |
+| `records_require_tool_approval_per_role:` | Boolean strictness flag; when `true`, worker submit additionally requires `write.role:worker.tools.submit` |
+| `default_box:` | Runtime config used when no local box is declared |
+
+Retired (hard error if authored): `defaults.rules`, top-level `operations`, top-level `auth`, `using auth:`, `policy.env`, top-level `locked`, `box.mcps:`, `facts.requirements`. See §2.12 for the migration matrix.
+
+### 2.2 `labeling:` — how the runtime auto-labels values
+
+```mlld
+labeling: {
+  unlabeled:     "untrusted",   >> apply this trust state to values with no explicit claim
+  trustconflict: "warn"          >> "warn" | "error" | "silent" — what happens when apply conflicts
 }
 ```
 
-Most policies use only a few of these sections. The required mental model: a policy is a **single source of truth** that the runtime consults at every operation boundary.
+- **`unlabeled`** — what to do with values that arrive without a trust claim. Setting it to `"untrusted"` is the conservative default; `"trusted"` is rare; omitting leaves unclaimed values at `mx.trust = null`. This is a **coarse policy knob applied uniformly** to anything without an explicit claim — for fine-grained per-source classification, use `labels.apply` (§2.6) instead. The two compose: `labels.apply` runs on values matching its predicates; `labeling.unlabeled` only affects values that nothing else has classified. (Renamed from the retired `defaults.unlabeled`.)
+- **`trustconflict`** — feedback mode when an `apply` rule tries to set `trust: "trusted"` on a value already carrying `trust: "untrusted"`. Resolution is always to `"untrusted"` (taint is sticky on the conservative side); this only governs whether a trace event/warning/error fires.
 
-### 2.2 `defaults.rules` — enable built-in rules
+### 2.3 `labels.risks:` — semantic-label → risk-category map
 
-This turns on the 11 built-in rules from the reference table at the top of this doc. Pick the ones relevant to your use case:
-
-```mlld
-defaults: {
-  rules: [
-    "no-secret-exfil",
-    "no-sensitive-exfil",
-    "no-untrusted-destructive",
-    "no-untrusted-privileged",
-    "no-send-to-unknown",
-    "no-send-to-external",
-    "no-destroy-unknown",
-    "no-unknown-extraction-sources",
-    "no-novel-urls",
-    "no-influenced-advice",
-    "untrusted-llms-get-influenced"
-  ]
-}
-```
-
-**Per-rule overrides.** Any entry can be an object form for runtime tweaks:
-
-```mlld
-rules: [
-  "no-secret-exfil",
-  { "rule": "no-untrusted-destructive", "taintFacts": true }
-]
-```
-
-`taintFacts: true` forces all-arg taint checking even when the tool's bound input record declares effective control args. The default scope is "fact args only" when the runtime knows the control-arg shape.
-
-`mlld validate` warns on unknown rule names and suggests close matches.
-
-### 2.3 `defaults.unlabeled` — auto-label unlabeled data
-
-Without this, data with no explicit labels has no trust label. Set it to `"untrusted"` to treat all unlabeled data as untrusted by default:
-
-```mlld
-defaults: {
-  unlabeled: "untrusted"
-}
-```
-
-File-loaded data, command output, and anything else without explicit labels now automatically gets `untrusted`. Data you explicitly labeled (`var trusted @config = ...`) is unaffected. Set to `"trusted"` to default the other way; opt-in either direction.
-
-### 2.4 `operations` — the two-step pattern
-
-You label exes with **what they do** (`net:w`, `fs:w`). Policy maps those to **risk categories** (`exfil`, `destructive`, `privileged`). The built-in rules reference the risk categories.
+Label exes with **what they do** (`net:w`, `fs:w`); the policy maps those to **risk categories** (`exfil`, `destructive`, `privileged`). Label-flow rules reference the risk categories.
 
 ```mlld
 >> Step 1: label exes by capability
 exe net:w @postToSlack(msg) = run cmd { curl -X POST @channel -d @msg }
 exe fs:w @deleteFile(path) = run cmd { rm -rf "@path" }
-exe sys:admin @restartService(name) = run cmd { systemctl restart @name }
 
 >> Step 2: policy classifies capability labels as risk types
-operations: {
-  exfil: ["net:w"],
-  destructive: ["fs:w"],
-  privileged: ["sys:admin"]
-}
-```
-
-`no-secret-exfil` blocks `secret` data from reaching anything classified as `exfil`. `no-untrusted-destructive` blocks `untrusted` data from reaching anything classified as `destructive`. The indirection is what makes a single policy reusable across scripts that share semantic labels but differ on which capabilities they classify as risky.
-
-**Direct labeling shortcut.** You can skip the mapping and label exes directly: `exe exfil @sendData(...)`. This works but couples function definitions to risk policy. The two-step pattern is preferred for maintainability.
-
-`mlld analyze --format json` surfaces these mappings under `policies[].operations`. `mlld validate --context ...` warns when a privileged guard's `op:` trigger doesn't match any declared operation label.
-
-### 2.5 `labels` — custom flow rules
-
-For rules beyond the built-ins, declare deny/allow lists per label:
-
-```mlld
 labels: {
-  secret: {
-    deny: ["op:show"]                  >> secrets can't be displayed
-  },
-  pii: {
-    deny: ["op:cmd", "net:w"]          >> PII can't reach shell or network
-  },
-  "src:mcp": {
-    deny: ["destructive"],             >> MCP data can't reach destructive ops
-    allow: ["op:cmd:git:status"]       >> ...except git status is fine
-  },
-  influenced: {
-    deny: ["destructive", "exfil"]     >> LLM-influenced data is restricted
+  risks: {
+    exfil:       ["net:w"],
+    destructive: ["fs:w"],
+    privileged:  ["sys:admin"]
   }
 }
 ```
+
+`@noSecretExfil` blocks `secret` data from reaching anything classified as `exfil`. `@noUntrustedDestructive` blocks `trust:untrusted` data from reaching anything classified as `destructive`. The indirection is what makes a single policy reusable across scripts that share semantic labels but differ on which capabilities they classify as risky.
+
+**Direct labeling shortcut.** You can skip the mapping and label exes directly: `exe exfil @sendData(...)`. This works but couples function definitions to risk policy. The two-step pattern is preferred for maintainability.
+
+Renamed from top-level `operations:` — the keys are risk categories, and the section answers "what risks does this op label imply?"
+
+### 2.4 `labels.rules:` — variadic-key flow rules
+
+Singletons and label combinations live in one map. Keys are label sets; a rule fires when the active match set is a superset of the keyed set.
+
+```mlld
+labels: {
+  rules: {
+    secret:                       { deny: ["exfil"] },
+    pii:                          { deny: ["op:cmd", "net:w"] },
+    "trust:untrusted":             { deny: ["destructive", "privileged"] },
+    "secret+trust:untrusted":      { deny: ["op:cmd"] },
+    "trust:untrusted+influenced":  { deny: ["exfil"] },
+    "src:mcp+trust:untrusted":     { deny: ["destructive"], allow: ["op:cmd:git:status"] }
+  }
+}
+```
+
+**Key syntax — the one intentional DSL exception in the schema.**
+
+- Bare keys for label names that are valid identifiers: `secret`, `pii`, `internal`.
+- Quoted keys when the label contains `:` or other non-identifier characters: `"trust:untrusted"`, `"src:mcp+trust:untrusted"`.
+- Combination via `+`: `"secret+trust:untrusted"` means "the active match set contains both `secret` and `trust:untrusted`."
+- Synthesized tokens (`trust:trusted`, `trust:untrusted`, `influenced`) participate in matching exactly like ordinary `mx.labels` entries.
+- Normalized at parse time: sort, deduplicate. `secret+pii` and `pii+secret` produce the same internal key.
 
 **Targets** for deny/allow:
 - Auto-applied operation labels: `op:cmd`, `op:show`, `op:sh`
@@ -328,17 +413,103 @@ labels: {
 
 **Most-specific-wins.** If you deny `op:cmd:git` but allow `op:cmd:git:status`, status is allowed while push, reset, etc. are blocked. The matcher walks the hierarchy from most specific to least and uses the first matching rule.
 
-### 2.6 Other config sections
+**Hierarchical label matching.** A rule keyed on `known` matches values carrying `known:internal` (the value is a more-specific refinement). A rule keyed on `known:internal` does *not* match values carrying bare `known`. Trailing-only `*` is the wildcard: `fact:*` matches any `fact:X`; `known:*` matches scoped knowns but not bare `known`.
 
-Three sections live in the policy object but operate at different layers than label-flow rules. They're load-bearing but you can usually set them once and forget:
+### 2.5 `labels.args:` — proof-requirement floor for positive checks
 
-- **`capabilities`** — what operations are allowed at all. `allow` whitelists command patterns; `danger` marks capabilities that require explicit opt-in (`@keychain` reads must declare `danger: ["@keychain"]` in `policy.auth`).
-- **`auth`** — caller-side credential mappings for `using auth:name`. Short form (`"API_KEY"`) or object form (`{ from, as }`).
-- **`env`** — execution-environment constraints (provider defaults, allow/deny rules, tools/mcps/network allowlists). These attenuate runtime box/env configs and cannot be bypassed by local config. Guards can also return `env` policy fragments via `env { ... }` actions to scope environment to a specific operation.
+The system-wide secure default for positive proof requirements. **Layer 3 of a three-layer precedence chain.** Fires when no more-specific source provides accepts.
 
-See the `policy-capabilities`, `auth`, and `policy-operations` atoms for full coverage.
+```mlld
+labels: {
+  args: {
+    "exfil:send":           { recipient: ["fact:*", "known"] },
+    "exfil:send:external":  { recipient: ["fact:internal:*", "known:internal"] },
+    "destructive:targeted": { target:    ["fact:*", "known"] },
+    "extract:r":            { source:    ["fact:*", "known"] }
+  }
+}
+```
 
-### 2.7 `authorizations` — planner-worker compiled policy
+**Three-layer precedence** (most-specific wins):
+
+| Layer | Source | Use |
+|---|---|---|
+| 1 (most specific) | Per-record `accepts:` on input record field | Tool-author's narrow override |
+| 2 | Kind-derived (from input record's `kind:` tags + global kind index) | Primary expression; covers most cases |
+| 3 (floor) | `labels.args:` | System-wide secure default for unconfigured tools |
+
+This is what makes unconfigured tools secure-by-default. A tool whose input record lacks `kind:` tags still gets a proof check applied if it's in a classified op-class — `@noSendToUnknown` (which is just `labels.args: { "exfil:send": { recipient: ["fact:*", "known"] } }`) catches it.
+
+### 2.6 `labels.apply:` — set labels and trust state from label-set predicates
+
+Adds labels or sets channels on values matching a label-set key. Replaces the retired `defaults.unlabeled` cascade with explicit, narrowly-targeted classification rules.
+
+```mlld
+labels: {
+  apply: {
+    "trust:untrusted+llm":   [{ add: "influenced" }],
+    "src:network":           [{ add: "trust:untrusted" }],
+    "src:cmd":               [{ add: "trust:untrusted" }],
+    "src:user+verified":     [{ add: "trust:trusted" }]
+  }
+}
+```
+
+**Channel-aware application.** The runtime routes the added label to the right channel based on what it names:
+
+| Added label | Target channel | Semantics |
+|---|---|---|
+| `trust:trusted` / `trust:untrusted` | `mx.trust` | State transition; conflict governed by `labeling.trustconflict` |
+| `influenced` | `mx.influenced` | Monotonic flip to `true`; cleared only by privileged guards |
+| Any other string | `mx.labels` | Set-additive; idempotent |
+
+`@untrustedLlmsGetInfluenced` is the canonical apply rule — when an LLM pass sees `trust:untrusted` input, the output gets `influenced: true` flipped in its own channel, not as a label.
+
+### 2.7 Action-verb pipelines: `labels.{enrich,transform,check}` and `dataflow.*`
+
+Beyond label-flow rules, policy ships four action verbs at three scope tiers:
+
+- **`enrich:`** — extract metadata from value content (e.g., URLs into `mx.enrich.urls`)
+- **`transform:`** — replace matches in value content (e.g., mask SSNs to `***-**-****`)
+- **`check:`** — match (or call a matcher exe), then act (`do: deny`, `do: @exeRef`, or multi-outcome via `result:`)
+- **`apply:`** — add labels (covered above in §2.6 — also runs as a pipeline verb)
+
+The same verbs live at three scope tiers, with the section name signaling cost:
+
+| Tier | Where | Coverage | Use for |
+|---|---|---|---|
+| 1 | Per-field on records (`data.<field>: { check: [...] }`) | Declared fields only | Format constraints, per-record content rules |
+| 2 | Per-label-set in `labels.<verb>:` | Values carrying the keyed labels | Cross-record rules where labels are the natural trigger |
+| 3 | System-wide in `dataflow.<verb>:` | Every value crossing the bridge | Invariants where partial coverage is unacceptable |
+
+**Example — URL defense as `dataflow:`:**
+
+```mlld
+import { @url }         from "@mlld/patterns/url"
+import { @noNovelUrl }  from "@mlld/sanitizers/url"
+
+policy @p = {
+  dataflow: {
+    enrich: [{ from: @url.pattern, as: "urls" }],
+    check:  [{ on: @url.pattern, do: @noNovelUrl }]
+  }
+}
+```
+
+`@noNovelUrl` checks accumulated input URLs against URLs found in LLM-emitted tool args. The whole policy is what `@urlDefense` from `@mlld/policy` ships.
+
+**Matchers** are either typed regex strings (`var regex @url = "..."`) or matcher exes returning a structured `{ matches: [...] }` contract. Library bundles like `@mlld/patterns/url` export named patterns (e.g. `@url.pattern`, `@url.mask`) for use in action-pipeline entries.
+
+`dataflow.transform:` is the sledgehammer — it mutates content on every value crossing the bridge data plane. Reserve it for invariants like universal SSN redaction; review trace output before enabling new entries.
+
+### 2.8 Other top-level sections
+
+- **`capabilities`** — structural Plane-1 operation gates. `allow`/`deny` for command, MCP, filesystem, and network patterns; `danger` marks capabilities requiring explicit opt-in (e.g., `@keychain`); `network: { allow: [...] }` for domain-level egress control. Never overridable by guards.
+- **`credentials`** — caller-side credential mappings, e.g. `claude: "ANTHROPIC_API_KEY"` or `github: { from: "@keychain", as: "GITHUB_TOKEN" }`. Inline at call sites: `using creds:claude`. (Renamed from `auth:` to avoid collision with `authorizations:`.)
+- **`urls`** — URL-defense configuration consumed by `@urlDefense` and equivalent `dataflow:` rules. `urls: { allowConstruction: ["github.com"] }` lists host patterns the LLM is permitted to construct from scratch even when not present in input. Plane-1 enforcement (it composes with `dataflow.check`); cannot be punched through with privileged guards.
+- **`default_box`** — references a defined box whose configuration is used when no local box is declared. Replaces the retired `policy.env:`. A local `box ... with { ... } [...]` declaration replaces the default entirely; there's no envelope/intersection semantic.
+
+### 2.9 `authorizations` — planner-worker compiled policy
 
 `authorizations` is the surface for the capability agent pattern (full coverage in §8). Two roles:
 
@@ -356,39 +527,67 @@ policy @workspace = {
 }
 ```
 
-The planner emits bucketed authorization intent; the framework checks `can_authorize`, compiles the intent via `@policy.build`, and applies the returned policy to the worker call. Invalid intent fails closed at activation. See §8 for the full pattern, the bucket shapes (`resolved`, `known`, `allow`), and how this composes with positive checks like `no-send-to-unknown`.
+The planner emits bucketed authorization intent; the framework checks `can_authorize`, compiles the intent via `@policy.build`, and applies the returned policy to the worker call. Invalid intent fails closed at activation. See §8 for the full pattern, the bucket shapes (`resolved`, `known`, `allow`), and how this composes with positive checks like `@noSendToUnknown`.
 
 `records_require_tool_approval_per_role` is a separate, global strictness switch for the submit side of record-backed tools. The default is `false`: a worker may submit a tool if that tool is included in the provided catalog for the call/box/bridge. Set it to `true` when an architecture wants every record-backed submit to also require the input record's `write.<role>.tools.submit` grant.
 
-### 2.8 `locked` — absolute label-flow constraints
+### 2.10 `locked` — absolute label-flow constraints
 
-By default, policies are **unlocked** — privileged guards can create strategic exceptions to label-flow denials (see §3). Set `locked: true` to make a policy's **label-flow denials** non-overridable:
+By default, `labels:` rules are **unlocked** — privileged guards can create strategic exceptions to label-flow denials (see §3). Lock individual rules or the whole `labels:` block:
 
 ```mlld
-policy @absolute = {
-  defaults: { rules: ["no-secret-exfil"] },
-  operations: { exfil: ["net:w"] },
-  locked: true
+labels: {
+  rules: {
+    secret:           { deny: ["exfil"], locked: true },   >> non-overridable
+    pii:              { deny: ["net:w"] }                  >> overridable
+  },
+  locked: false   >> bulk default for rules that don't set locked: explicitly
 }
 ```
 
-Now no guard, no matter how privileged, can override `no-secret-exfil`'s denial. Use this for security invariants that should never have exceptions.
+`labels.locked: true` makes everything in `labels:` absolute unless individually marked `locked: false`. With locking on, no guard — no matter how privileged — can override that rule's denial.
 
-`locked` applies specifically to **managed label-flow denials** — the rules in `defaults.rules` and the `labels` flow declarations. It doesn't make capability allowlists, auth bindings, or environment constraints "more locked" — those are already structural and not subject to guard override.
+`locked` applies specifically to **managed label-flow denials and label-mediated action pipelines** in `labels:`. It doesn't apply to:
 
-### 2.9 Export, import, composition
+- `dataflow:` rules — already Plane-1-equivalent (always non-overridable; no `locked:` flag).
+- `capabilities:` — Plane 1 structural gates.
+- `authorizations.deny:` — Plane 1 structural denial.
+
+Top-level `policy.locked: true` is retired; move it inside `labels:` or set per-rule.
+
+### 2.11 Export, import, composition
 
 Share policies across scripts:
 
 ```mlld
-export { @p }
+import { @standard, @urlDefense } from "@mlld/policy"
+import { @piiPolicy }              from "./security/pii.mld"
+
+policy @combined = union(@standard, @urlDefense, @piiPolicy)
 ```
 
-```mlld
-import policy @p from "./policies.mld"
-```
+Policies compose with `union()` — combine multiple config objects into one policy. **The most restrictive rules win**: `deny` sets union, `allow` sets intersect per label, `locked` is sticky. See §9 for the full composition rules.
 
-Policies compose with `union()` — combine multiple config objects into one policy. **The most restrictive rules win**: `allow` sets intersect, `deny` sets union, `locked` is sticky. See §9 for the full composition rules.
+### 2.12 Migration: old → new syntax
+
+The policy schema was overhauled for 2.1.0; old syntax now hard-errors at policy load with a pointer to the migration path. Common conversions:
+
+| Old syntax | Replaced by | Error code |
+|---|---|---|
+| `defaults: { rules: [...] }` | Import fragments from `@mlld/policy` and compose via `union(...)` | `POLICY_DEFAULTS_RULES_RETIRED` |
+| `defaults: { unlabeled: "untrusted" }` | `labeling: { unlabeled: "untrusted" }` (or write explicit `labels.apply:` rules) | — |
+| Top-level `operations: {...}` | `labels: { risks: {...} }` | `POLICY_OPERATIONS_MOVED` |
+| Top-level `locked: true` | `labels: { locked: true }` (or per-rule `locked:`) | `POLICY_TOP_LEVEL_LOCKED_RETIRED` |
+| `facts: { requirements: {...} }` | `labels: { args: {...} }` | `POLICY_FACTS_REQUIREMENTS_RETIRED` |
+| `auth: {...}` | `credentials: {...}` | `POLICY_AUTH_RENAMED` |
+| `using auth:name` | `using creds:name` | `POLICY_AUTH_CALL_SITE_RENAMED` |
+| `policy.env: {...}` | `default_box: @boxRef` + `capabilities:` | `POLICY_ENV_RETIRED` |
+| `box { mcps: [...] }` | `capabilities.allow: ["mcp:server:*"]` | `BOX_MCPS_RETIRED` |
+| `{ rule: "X", taintFacts: true }` per-rule override | Removed — control-arg scoping is record-driven now; for all-arg checks, the rule key handles it | `POLICY_VERB_RETIRED` |
+| `dataflow.label:` action verb | `dataflow.apply:` | `POLICY_VERB_RENAMED` |
+| `sanitize:`, `event:`, `call:` action blocks | `enrich:`, `transform:`, `check:`, `apply:` | parser/load error |
+
+`mlld validate` flags any old construct it finds and points at the new form.
 
 ---
 
@@ -454,10 +653,13 @@ Inside a guard body, `@mx` is the security context:
 
 | Accessor | What it carries |
 |---|---|
-| `@mx.labels` | User-declared labels on the matched value |
-| `@mx.taint` | Union of labels and auto-applied source/op markers |
-| `@mx.attestations` | Value-scoped approvals (`known`, `known:*`) — distinct from taint |
-| `@mx.sources` | File paths, guard names, transformation trail |
+| `@mx.trust` | Tri-state trust on the matched value: `"trusted"` / `"untrusted"` / `null` |
+| `@mx.influenced` | Sticky boolean — true if the value's lineage saw `trust:untrusted` through an LLM pass |
+| `@mx.labels` | String label set on the matched value (sensitivity tags, `known`/`known:*`, `fact:*`, ingestion `src:*`, custom) |
+| `@mx.factsources` | Structured fact-source handles (cross-phase identity carriers) |
+| `@mx.sources` | Inert audit trail — file paths, code-routing `src:*`, `op:*`, `dir:*` |
+| `@mx.urls` | Inert audit trail of URLs the value transited |
+| `@mx.tools` | Inert audit trail of tool lineage |
 | `@mx.op.type` | Operation kind: `cmd`, `show`, `exe`, `tool`, etc. |
 | `@mx.op.name` | Operation name (exe name, tool name, command name) |
 | `@mx.op.labels` | Labels on the operation/exe being called |
@@ -467,12 +669,16 @@ Inside a guard body, `@mx` is the security context:
 | `@mx.guard.name` | Name of the denying guard |
 | `@mx.guard.hintHistory` | Prior retry/resume hints (after-phase) |
 | `@mx.llm.resume` | Resume-continuation metadata when in a resumed call |
+| `@mx.denial` | Structured denial details (`code`, `phase`, `tool`, `field`) inside `denied =>` arms |
+
+**Audit fields don't gate policy.** `@mx.sources`, `@mx.urls`, and `@mx.tools` are visible inside guard bodies for inspection and trace correlation, but policy and built-in checks never consult them. Code-routing labels like `src:js` or `dir:/path` live there; they cannot reach trust state by construction.
 
 `@input` is the value being inspected — a per-input value for data-side guards, the array of operation inputs for operation-side guards. Per-operation guards expose helpers:
 
+- `@input.any.mx.trust === "untrusted"`
 - `@input.any.mx.labels.includes("secret")`
-- `@input.all.mx.taint.includes("src:file")`
-- `@input.none.mx.attestations.includes("known")`
+- `@input.all.mx.labels.includes("known")`
+- `@input.none.mx.factsources.length > 0`
 - `@input.mx.labels` — union across all inputs
 - `@input[0]` / `@input[n]` — positional access (less readable than named `@mx.args.*`)
 
@@ -537,14 +743,14 @@ guard @taskAllow before tool:w = when [
 
 What privileged guards can do that regular guards cannot:
 
-- **Override unlocked policy denials.** A matched `allow` takes precedence over a label-flow denial from `defaults.rules` or `labels`. This is the mechanism for strategic exceptions.
-- **Remove protected labels** via `trusted!`, `!label`, or `clear!` syntax (see §1.6).
+- **Override unlocked Plane-2 denials.** A matched `allow` takes precedence over a label-flow denial from `labels.rules` or `labels.args`. This is the mechanism for strategic exceptions.
+- **Clear protected channels** via `trusted!`, `!untrusted`, or `clear!` syntax (see §1.7). Demote `mx.trust = "untrusted"`, clear `mx.influenced`, or remove protected labels.
 - **Survive `{ guards: false }`.** Disabling guards only disables non-privileged ones; privileged guards always run. Policy-rule guards are automatically privileged.
 
 What privileged guards **cannot** do:
 
-- Override a **locked** policy. With `locked: true`, even privileged guards can't punch holes in label-flow denials.
-- Override capability denials, environment constraints, or `authorizations.deny` — those are structural, not label-flow.
+- Override a **locked** Plane-2 rule. With per-rule `locked: true` or `labels.locked: true`, even privileged guards can't punch holes.
+- Override Plane-1 structural denials — `capabilities` denials, `dataflow:` rule denials, `authorizations.deny`, or record `write:` denials.
 
 **No wildcard arm in privileged guards that override policy.** When a privileged guard is meant to allow specific cases while letting policy block everything else, omit the `* => allow` wildcard. If no condition matches, the guard produces no action and the policy denial stands. A `* => allow` would override the policy for **every** call.
 
@@ -574,15 +780,16 @@ exe advice @adviceGate(query, factState, factSchema, model) = when [
 ]
 ```
 
-When `@adviceGate` is invoked with input that triggers a denial (e.g. `no-influenced-advice` firing because `factState` carries `influenced`), the runtime catches the denial via the `denied =>` arm and runs `@debiasedEval` instead of letting the call fail.
+When `@adviceGate` is invoked with input that triggers a denial (e.g. `@noInfluencedAdvice` firing because `factState` carries `influenced`), the runtime catches the denial via the `denied =>` arm and runs `@debiasedEval` instead of letting the call fail.
 
 `denied` matches denials from:
 
 - User-defined and policy guards
-- Managed policy label-flow denials (`defaults.rules`, `labels` deny/allow)
+- Plane-2 label-flow denials (`labels.rules`, `labels.args`, `labels.{check,transform}` actions)
+- `dataflow:` action denials (the `denied =>` arm sees `@mx.denial` with the action context)
 - Input-record dispatch checks (`proofless_control_arg`, `allowlist_mismatch`, `blocklist_match`, `no_update_fields`, `correlate_mismatch`)
 
-Capability denials and environment-constraint denials are hard errors and cannot be caught.
+`capabilities:` denials and `authorizations.deny` are hard errors and cannot be caught.
 
 Inside the `denied =>` arm, `@input` carries the value that triggered the denial (with security labels intact) and `@mx.guard.reason`, `@mx.guard.name`, and `@mx.denial.*` (for input-record denials) are populated. Reserve `denied =>` for policy-aware fallback paths with a meaningful response — debiasing, structured re-extraction, escalation. Don't use it as a generic try/catch.
 
@@ -594,37 +801,39 @@ mlld's security checks live in three structurally distinct planes. They run in d
 
 | Plane | What it checks | Where | Override surface |
 |---|---|---|---|
-| **Structural gates** | Capability allowlists, env constraints, `authorizations.deny`, record `write:` permissions, active-role requirements | Before any value-level check | None — structural denials are absolute |
-| **Label-flow policy rules** | `defaults.rules` and `labels` deny/allow against value labels | At every operation boundary | Privileged guards (when `locked: false`); locked policies are absolute |
+| **Structural gates** | `capabilities` allow/deny/danger/network, `authorizations.deny`, record `write:` permissions, active-role requirements, `dataflow:` rules | Before any label-flow check | None — structural denials are absolute |
+| **Label-flow policy rules** | `labels.rules`, `labels.args`, `labels.{enrich,transform,check,apply}` against the value's match set | At every operation boundary | Privileged guards (when the rule is unlocked); locked rules are absolute |
 | **Bridge projection / handle resolution** | What the LLM sees, what handles resolve to, what proof carries through | At the LLM call boundary | Read-mode declarations; cannot be guard-overridden because guards run on resolved values |
 
 ```
-Plane 1 — Structural gates (capabilities, env, write:, active role)
+Plane 1 — Structural gates (capabilities, dataflow.*, write:, active role, authorizations.deny)
   │ Hard structural denial; not subject to any guard or policy override
   │
-Plane 2 — Label-flow policy rules (defaults.rules, labels)
-  │ locked: true → absolute, no exceptions
-  │ locked: false (default) → privileged guards can override specific cases
+Plane 2 — Label-flow policy rules (labels.rules, labels.args, labels.{check,transform,apply})
+  │ locked: true (per-rule or labels.locked: true) → absolute, no exceptions
+  │ Unlocked (default) → privileged guards can override specific cases
   │
 Plane 2.5 — Privileged guards
-  │ Can override unlocked policy denials (Plane 2) for matched conditions
-  │ Can remove protected labels
+  │ Can override unlocked Plane 2 denials for matched conditions
+  │ Can clear protected channels (mx.trust = "untrusted" → null/trusted, mx.influenced → false)
   │ Survive { guards: false }
   │ Cannot override Plane 1 (structural) or Plane 3 (bridge projection)
   │
 Plane 2.5 — Regular guards
   │ Can inspect, validate, transform, deny, retry, resume
-  │ Cannot override policy denials (Plane 2)
-  │ Cannot remove protected labels
+  │ Cannot override Plane 2 denials
+  │ Cannot clear protected channels
   │
 Plane 3 — Bridge projection / handle resolution
   │ Determined by record read modes and active role
   │ Not a "rule" you can override; a structural property of the projection
 ```
 
-The principle: **regular guards can only add restrictions, never remove them.** Privileged guards create exceptions to unlocked Plane 2 policies. Plane 1 (structural) and Plane 3 (projection) are absolute relative to guards.
+The principle: **regular guards can only add restrictions, never remove them.** Privileged guards create exceptions to unlocked Plane 2 rules. Plane 1 (structural) and Plane 3 (projection) are absolute relative to guards.
 
-A common confusion: a `WRITE_DENIED_NO_DECLARATION` error doesn't go away when you add a privileged guard — that's a Plane 1 structural gate, not a Plane 2 label-flow rule. Add `write:` to the record. Conversely, a `no-secret-exfil` denial *can* be punched through with a privileged guard, because it's Plane 2.
+A common confusion: a `WRITE_DENIED_NO_DECLARATION` error doesn't go away when you add a privileged guard — that's a Plane 1 structural gate (record `write:`), not a Plane 2 label-flow rule. Add `write:` to the record. Conversely, a `@noSecretExfil` denial *can* be punched through with a privileged guard, because it's a Plane 2 `labels.rules` entry.
+
+`dataflow:` denials are structural — `@urlDefense` rejecting an LLM-emitted URL fires on Plane 1 and cannot be punched through with privileged guards. Wrapper exes can still catch via `denied =>` (the response to denial is separate from the denial itself).
 
 ---
 
@@ -640,7 +849,7 @@ The slogan: **one record, one source of truth.** The same declaration drives run
 
 A record can serve in two directions:
 
-- **Output direction** — coerced via `=> record @r` on an exe result. Mints labels (`fact:*`, `untrusted` on `data:`), runs `read:` projection at the LLM boundary, populates `factsources` for cross-arg correlation.
+- **Output direction** — coerced via `=> record @r` on an exe result. Mints `fact:*` labels on facts fields, sets per-field `mx.trust` (`trusted` for facts and `data.trusted:`, `untrusted` for `data.untrusted:`), runs `read:` projection at the LLM boundary, and populates `mx.factsources` for cross-arg correlation.
 - **Input direction** — referenced via `inputs: @r` on a tool catalog entry. Validates incoming args at dispatch (proof checks, type checks, allowlist/blocklist, exact match, update set, contributor role, correlation).
 
 The grammar is shared. Direction is conventionally signaled by which sections a record declares: input-only sections (`exact:`, `update:`, `allowlist:`, `blocklist:`, `optional_benign:`, plus `correlate: true` and `write: { role:X: { tools: ... } }`) make a record input-shaped; a `read:` section and `write: { role:X: { shelves: ... } }` make it output-shaped. A record with neither shape may serve in both directions.
@@ -654,9 +863,11 @@ record @contact = {
   facts: [email: string, name: string, phone: string?],
   data: [notes: string?],
   read: [name, { value: "email" }],
-  when [
-    internal => :internal
-    *        => :external
+  refine [
+    when [
+      internal => [ facts += ["internal"] ]
+      *        => [ facts += ["external"] ]
+    ]
   ]
 }
 
@@ -665,12 +876,21 @@ exe @searchContacts(query) = run cmd {
 } => contact
 ```
 
-- **`facts: [...]`** — fields the source is authoritative for. On coercion, each field gets `fact:@contact.<field>` (and `fact:<scope>:@contact.<field>` if a `when` clause assigned a scope tier).
+- **`facts: [...]`** — fields the source is authoritative for. On coercion, each field gets `fact:@contact.<field>` (and `fact:<tier>:@contact.<field>` when `refine` adds a tier).
 - **`data: [...]`** — content fields. Tools may put anything here, including attacker-controlled strings.
 - **`read: [...]`** — what the LLM sees at the boundary. See §4.3.
-- **`when [...]`** — assigns trust scope tiers from the data itself. The example tags rows with `internal` data as `fact:internal:*`, others as `fact:external:*`.
+- **`refine [...]`** — conditional, monotonic refinements at coercion. Replaces the retired record-level `when:`. Top-level entries are all-match; nested `when [...]` groups are first-match. Allowed actions: `labels += [...]`, `facts += [...]`, `facts.field += [...]`, `facts = []`, `facts.field = []`, `data.field = trusted | untrusted`. Labels and fact tiers are monotonic — refine may add, never remove.
 
-**Trust refinement on `=> record`.** When coercion runs on an `untrusted`-labeled exe result, `untrusted` is cleared on `facts:` fields and on `data.trusted:` fields, and preserved on `data.untrusted:` fields. The shorthand `data: [fields]` is sugar for `data: { untrusted: [fields] }` — safe by default. To explicitly mark some payload as trusted-clearing:
+**Field trust on `=> record`.** Coercion sets `mx.trust` per-field based on classification, regardless of the exe result's incoming trust:
+
+| Record classification | Field's `mx.trust` after coercion |
+|---|---|
+| `facts: [...]` | `"trusted"` (and gets `fact:*` proof + `mx.factsources` entry) |
+| `data: { trusted: [...] }` | `"trusted"` (no proof; safe to read, not authorization-grade) |
+| `data: { untrusted: [...] }` (or shorthand `data: [...]`) | `"untrusted"` (taint preserved; expected to be tainted) |
+| Unclassified data field | `null` (no claim) |
+
+The shorthand `data: [fields]` is sugar for `data: { untrusted: [fields] }` — safe by default. `refine [data.field = trusted | untrusted]` can conditionally adjust the data trust class based on field values:
 
 ```mlld
 record @issue = {
@@ -682,9 +902,9 @@ record @issue = {
 }
 ```
 
-Fact fields get **proof and taint cleared**. Trusted-payload fields get **taint cleared but no proof** (safe to read, not authorization-grade). Untrusted-payload fields stay tainted. The `when` clause can conditionally promote data fields to trusted based on input values.
+Aggregate `mx.trust` on the coerced record is **content-derived** from included fields per §1.6 — a `role:planner` projection containing only facts produces a `trusted` aggregate; a `role:worker` projection that includes `data.untrusted` produces an `untrusted` aggregate. Same record, two views, two trust states (see §1.6).
 
-Fact proof is field-local proof metadata. A parent record may summarize descendant labels through `@record.mx.labels`, but positive checks consume the actual argument value's fact labels and factsources. `@contact.email` can authorize a recipient; `@contact.notes` cannot borrow that proof from its sibling.
+Fact proof is field-local proof metadata. A parent record's aggregate `@record.mx.labels` may summarize descendants for inspection, but positive checks consume the actual argument value's fact labels and factsources. `@contact.email` can authorize a recipient; `@contact.notes` cannot borrow that proof from its sibling.
 
 Schema validation metadata is available on `@output.mx.schema.valid` and `@output.mx.schema.errors`. `validate:` on the record controls the failure mode: `"demote"` (the default) keeps invalid output but strips fact proof; `"strict"` denies on validation error; `"drop"` drops invalid rows from arrays.
 
@@ -879,7 +1099,13 @@ Now the upstream MCP `send_email` tool is callable only through the validated wr
 
 #### `write:` permissions on records
 
-`write:` is the per-role authority surface for landing a record into write surfaces — tool dispatches and shelf upserts. **A record without `write:` cannot be persisted to a shelf or used as input to a tool dispatch** — the runtime denies the operation with `WRITE_DENIED_NO_DECLARATION`. Records used purely for `=> record` coercion (no write-surface participation) need no `write:`.
+`write:` is the per-role authority surface for landing a record into write surfaces — tool dispatches and shelf upserts. Which write checks fire depends on the operation:
+
+- **Shelf upsert / clear / remove** — always checks `write.<role>.shelves.<capability>`. Missing `write:` denies (`WRITE_DENIED_NO_DECLARATION`).
+- **Planner authorization** (`@policy.build`) — always checks `write.role:planner.tools.authorize`. Missing `write:` denies.
+- **Worker submission** — by default, granted by inclusion in the provided tool catalog. Only when `policy.records_require_tool_approval_per_role: true` does worker submit additionally check `write.role:worker.tools.submit`.
+
+So a record used purely for `=> record` coercion, or used as input to a tool the worker calls under the default submit model, needs no `write:` block. A record that participates in shelf writes or planner authorization does.
 
 ```mlld
 record @contact = {
@@ -972,9 +1198,9 @@ Kind tags don't affect minting — a value from `record @contact = { facts: [ema
 
 When a tool declared with `inputs: @r` is dispatched, the runtime walks `@r`'s sections in this order:
 
-1. **Active-role check** — the dispatch site has an active `role:*` context (from bridge display selection, box config, or exe label). Without one, dispatch fails with `WRITE_DENIED_NO_ACTIVE_ROLE`.
-2. **Record `write:` declaration check** — the record declares a `write:` block. Missing → `WRITE_DENIED_NO_DECLARATION`.
-3. **Per-role write capability check** — the active role's `write.<role>.tools.{authorize | submit}` permits this dispatch phase. Missing role / target / capability → deny-by-default (`WRITE_DENIED_*`). Scope specs (`[@send_email]`, `[{labels:"safe"}]`) further narrow.
+1. **Active-role check** — when a write check applies, the dispatch site must have an active `role:*` context (from bridge display selection, box config, or exe label). Without one, the write check fails with `WRITE_DENIED_NO_ACTIVE_ROLE`. (Builder-phase planner authorization always needs an active planner role; worker submit only needs one if a write check applies — see below.)
+2. **Record `write:` declaration check** — runs when a write check applies (planner `@policy.build` authorize, or worker submit under strict `records_require_tool_approval_per_role`). Missing `write:` → `WRITE_DENIED_NO_DECLARATION`. Under the default submit model, this check is skipped for worker submission (catalog membership is sufficient).
+3. **Per-role write capability check** — when the write check applies, the active role's `write.<role>.tools.{authorize | submit}` must permit this dispatch phase. Missing role / target / capability → deny-by-default (`WRITE_DENIED_*`). Scope specs (`[@send_email]`, `[{labels:"safe"}]`) further narrow.
 4. **Arity / presence** — required fields must be present; extras are rejected.
 5. **Type check** — values match declared field types (`type_mismatch`).
 6. **`facts:` proof check** — fact fields carry `fact:*` or compiled `known` (`proofless_control_arg` for write tools, `proofless_source_arg` for read tools).
@@ -1003,7 +1229,7 @@ record @updateTransaction_inputs = {
 
 The runtime checks that every fact-arg value's `factsources` provenance points to the same source record instance, matching by `instanceKey` (the `key:` field value) when available, or by `(coercionId, position)` for keyless records. Cross-source dispatches are denied with `correlate_mismatch`.
 
-The canonical attack this defends: an attacker who controls one record (a planted "transaction to attacker@evil.com") tricks the planner into mixing that record's `recipient` with a legitimate record's `id`. Both individual values have fact proof, so single-arg checks like `no-send-to-unknown` pass. Without correlation, the dispatch goes through and updates the legitimate transaction with the attacker's recipient. With `correlate: true`, the cross-source mismatch is caught structurally.
+The canonical attack this defends: an attacker who controls one record (a planted "transaction to attacker@evil.com") tricks the planner into mixing that record's `recipient` with a legitimate record's `id`. Both individual values have fact proof, so single-arg checks like `@noSendToUnknown` pass. Without correlation, the dispatch goes through and updates the legitimate transaction with the attacker's recipient. With `correlate: true`, the cross-source mismatch is caught structurally.
 
 ### 4.8 Automatic tool security annotations
 
@@ -1054,15 +1280,15 @@ mlld surfaces this distinction structurally. On an input record:
 
 The checks compose this way:
 
-- **Negative checks** (`no-untrusted-destructive`, `no-untrusted-privileged`) — scope their taint inspection to control args when the runtime knows the input record. Tainted payload (body, subject, description) is expected and not blocked. Override with `taintFacts: true` to force all-arg checking when control-arg scoping isn't appropriate.
-- **Positive checks** (`no-send-to-unknown`, `no-destroy-unknown`, `no-unknown-extraction-sources`, `no-send-to-external`) — require *proof* on control args. They consume `fact:*` labels and `known` attestations on the named control fields.
-- **Cross-record correlation** (`correlate-control-args`) — verifies all control args on a single dispatch trace to the same source-record instance.
+- **Negative checks** (`@noUntrustedDestructive`, `@noUntrustedPrivileged`) — scope their trust inspection to control args when the runtime knows the input record. Tainted payload (body, subject, description) is expected and not blocked. Stricter all-arg behavior comes from authoring a custom `labels.rules` entry rather than a per-rule override flag.
+- **Positive checks** (`@noSendToUnknown`, `@noDestroyUnknown`, `@noUnknownExtractionSources`, `@noSendToExternal`) — require *proof* on control args. They consume `fact:*` labels and `known` attestations on the named control fields via the `labels.args:` precedence chain (§2.5).
+- **Cross-record correlation** (`correlate-control-args`) — verifies all control args on a single dispatch trace to the same source-record instance. Per-tool record-level, not a stock fragment.
 
 Without this control-arg framing, "untrusted data → privileged op" becomes indistinguishable from "LLM-composed email body → privileged op," which would force you to either ban LLM payload (useless) or accept attacker-controlled targets (insecure). Splitting control args from payload args is what makes both safety and usefulness possible at once.
 
 The legacy `with { controlArgs: [...] }` shape on exes is still accepted during migration but emits a deprecation warning. New code declares control args via the input record's `facts:` section.
 
-**Positive checks depend on tool metadata.** When a tool catalog entry binds an input record via `inputs: @r`, the runtime derives effective control args from `@r`'s `facts:` and effective source args from the same field set on read tools. The positive checks (`no-send-to-unknown`, `no-destroy-unknown`, `no-unknown-extraction-sources`) consume that metadata to know which args carry security responsibility. Without a bound input record, taint checks fall back to all-arg scope and positive checks fall back to field-name heuristics (`fact:*.email` for sends, `fact:*.id` for deletes). The bound-record path is the supported, recommended shape; heuristics are a fallback for unannotated tools.
+**Positive checks depend on tool metadata.** When a tool catalog entry binds an input record via `inputs: @r`, the runtime derives effective control args from `@r`'s `facts:` and effective source args from the same field set on read tools. The positive-check fragments (`@noSendToUnknown`, `@noDestroyUnknown`, `@noUnknownExtractionSources`) consume that metadata via the `labels.args:` floor (or kind-derived/per-record `accepts:` when more specific) to know which args carry security responsibility. Without a bound input record, taint checks fall back to all-arg scope and positive checks fall back to field-name heuristics (`fact:*.email` for sends, `fact:*.id` for deletes). The bound-record path is the supported, recommended shape; heuristics are a fallback for unannotated tools.
 
 ### 5.3 The durable identity carrier: factsources
 
@@ -1216,25 +1442,34 @@ If your agent is copying preview strings around as authorization, you've lost th
 
 ### 5.10 Positive checks
 
-`no-send-to-unknown`, `no-destroy-unknown`, `no-unknown-extraction-sources`, and `no-send-to-external` are the positive checks. Where negative checks block contaminated data, positive checks **require proof** on specific control args:
+`@noSendToUnknown`, `@noDestroyUnknown`, `@noUnknownExtractionSources`, and `@noSendToExternal` are the stock positive-check fragments. Where negative checks block contaminated data, positive checks **require proof** on specific control args:
 
 ```mlld
-policy @p = {
-  defaults: {
-    rules: ["no-send-to-unknown", "no-destroy-unknown"]
-  },
-  operations: {
-    "exfil:send":           ["tool:w:send_email"],
-    "destructive:targeted": ["tool:w:delete_contact"]
+import { @noSendToUnknown, @noDestroyUnknown } from "@mlld/policy"
+
+var @appRisks = {
+  labels: {
+    risks: {
+      "exfil:send":           ["tool:w:send_email"],
+      "destructive:targeted": ["tool:w:delete_contact"]
+    }
   }
 }
+
+policy @p = union(@noSendToUnknown, @noDestroyUnknown, @appRisks)
 ```
 
-When the tool has a bound input record with `facts:`, any `fact:*` label on those fields satisfies the check. `known` attestation also satisfies it (a planner-pinned value the framework already vetted). Without proof, the call is denied regardless of what the LLM decided.
+Each fragment is just a `labels.args:` entry: `@noSendToUnknown` is `labels.args: { "exfil:send": { recipient: ["fact:*", "known"] } }` — the layer-3 system-wide floor in the proof-requirement precedence chain (§2.5). At dispatch, the relevant arg must carry one of the listed proofs.
 
-Without a bound input record, the check falls back to field-name heuristics (`fact:*.email` for sends, `fact:*.id` for deletes). The bound-record path is more precise and is the recommended shape.
+The precedence chain decides which accept list governs each control arg:
 
-`no-send-to-external` is the stricter form: requires `fact:internal:*` or `known:internal` rather than any `fact:*` or `known`. Use it when the operation should only allow inside-the-org targets.
+1. **Per-record `accepts:`** — most specific; tool-author's override
+2. **Kind-derived** — from the input record's `kind:` tags + global kind index
+3. **`labels.args:` floor** — what the stock fragments provide
+
+Any `fact:*` label on a fact field satisfies the check. `known` attestation also satisfies it (a planner-pinned value the framework already vetted). Without a bound input record, the check falls back to field-name heuristics (`fact:*.email` for sends, `fact:*.id` for deletes). The bound-record path is more precise and is the recommended shape.
+
+`@noSendToExternal` is the stricter form: requires `fact:internal:*` or `known:internal` rather than any `fact:*` or `known`. Use it when the operation should only allow inside-the-org targets.
 
 ### 5.11 Tying it together
 
@@ -1243,7 +1478,7 @@ The cross-phase identity story end-to-end:
 1. A tool runs and returns data. `=> record` mints `fact:*` labels and writes `factsources` onto the value.
 2. The orchestrator stores the value on a shelf (slot writes preserve the full proof carrier).
 3. A planner LLM reads the slot via `@fyi.shelf.<alias>` interpolation or via prompt variable. The bridge projects the value and mints a fresh handle. The planner sees `{value, handle, address}` in its tool result JSON.
-4. The planner emits bucketed intent: `known: { sendEmail: { recipients: ["h_xxx"] } }`. (Or it emits a value-keyed reference like `{ value: "ada@example.com", source: "user said" }` and the builder reconciles.)
+4. The planner emits bucketed intent. Handles minted in this call go in `resolved`: `resolved: { sendEmail: { recipients: "h_xxx" } }`. User-typed literal values from the task text go in `known`: `known: { sendEmail: { recipients: { value: "ada@example.com", source: "user said email ada" } } }` — the builder reconciles these against the proof-claims registry.
 5. `@policy.build` walks the intent, validates against the input record, auto-upgrades value-keyed `known` entries to `resolved` with worker-fresh handles, and produces a compiled runtime policy.
 6. The worker call runs. Its tool dispatches resolve handles against this call's mint table. The underlying values still carry their original `factsources` and `fact:*` labels. Positive checks pass. `correlate-control-args` verifies all fact args on a single dispatch trace to the same source instance.
 7. After the call, the orchestrator can read the shelf again — and any values written by the worker still carry their full proof carriers, ready for the next planner-worker round.
@@ -1334,16 +1569,16 @@ Two layers of permission fire in order: **box scoping** (does this scope have ac
 
 ### 6.5 Grounding: durable state demands durable references
 
-Slot writes are stricter than tool calls. Fact fields require **handle-bearing input only** — masked previews and bare literals are rejected:
+Slot writes are stricter than tool calls. Slot **fact fields** require **handle-bearing input only** — masked previews and bare literals are rejected. The grounding rules differ depending on whether you're filling a **fact/control arg** (where proof is required) or a **data/payload arg** (no proof required):
 
-| Form | Tool call arg | Slot write fact field |
-|---|---|---|
-| Handle wrapper `{ handle: "h_x" }` | Accepted | Accepted |
-| Bare handle string `"h_x"` | Accepted | Accepted |
-| Masked preview `"m***@example.com"` | Accepted | **Rejected** |
-| Bare literal `"mark@example.com"` | Accepted | **Rejected** |
+| Form | Tool call **control arg** (fact field) | Tool call **payload arg** (data field) | Slot write **fact field** |
+|---|---|---|---|
+| Handle wrapper `{ handle: "h_x" }` | Accepted (resolves via the per-call mint table) | Accepted as the resolved value | Accepted |
+| Bare handle string `"h_x"` | Accepted (resolves via the per-call mint table) | Accepted as the resolved value | Accepted |
+| Masked preview `"m***@example.com"` | **Rejected** — display-only, never resolves to proof | Accepted as a plain string | **Rejected** |
+| Bare literal `"mark@example.com"` | **Rejected at dispatch** unless the builder lifted it via uniqueness match (§5.9) | Accepted as a plain string | **Rejected** |
 
-Slots are durable state; durable state gets durable references. Data fields have no grounding requirement — agents pass any value into payload fields.
+Slots are durable state; durable state gets durable references. Data fields on tool calls and shelves have no grounding requirement — agents pass any value into payload fields. The strictness on fact/control args applies regardless of surface: masked previews never resolve to proof, and bare literals only survive when the builder explicitly lifted them.
 
 ### 6.6 Merge semantics
 
@@ -1653,7 +1888,7 @@ Each worker is a framework-provided tool the planner calls. Each has its own nar
 
 **Resolve** — grounds entities and handles from planner-safe tool surfaces. Uses only `resolve:r` tools. Writes grounded records to planner-selected shelf slots. Returns the grounded domain result on the canonical record path (`=> @grounded as record @RecordType` or `=> @cast(@grounded, @RecordType)`) so the bridge applies the planner's `role:*` projection. May use `->` for a deliberately different planner envelope (`{ slot, count, contacts: @grounded, summary }`).
 
-**Extract** — reads tainted content from explicitly selected sources. Uses only `extract:r` tools. Source scope is framework-enforced via `sourceArgs` and `no-unknown-extraction-sources`. Output is contract-pinned via developer-supplied records with `@cast(@raw, @contract)`. Writes typed results to planner-selected extracted slots. The right home for proposal-style outputs (`*_payload` for single downstream writes, `*_proposal` for multi-step tasks where the planner reviews before authorizing).
+**Extract** — reads tainted content from explicitly selected sources. Uses only `extract:r` tools. Source scope is framework-enforced via `sourceArgs` and `@noUnknownExtractionSources`. Output is contract-pinned via developer-supplied records with `@cast(@raw, @contract)`. Writes typed results to planner-selected extracted slots. The right home for proposal-style outputs (`*_payload` for single downstream writes, `*_proposal` for multi-step tasks where the planner reviews before authorizing).
 
 **Execute** — performs exactly one concrete write under compiled per-step authorization. The planner passes authorization intent referencing handles from prior resolve calls. The framework checks `policy.authorizations.can_authorize[role:planner]`, calls `@policy.build` to compile the intent, and dispatches the worker with the single authorized write tool plus compiled policy. No shelf scope. Pre-resolved typed inputs from the framework. Recommended return shape: `-> { status, tool, result_handles?, summary }` (frameworks may pick a different envelope; the structural property is that it's `->` from the worker, not the schema).
 
@@ -1661,7 +1896,7 @@ One write per execute dispatch. Multi-step tasks are a planner-managed sequence 
 
 **Compose** — produces the final user-facing answer. No tools (`tools: []`). Reads clean shelf state and execution log. The no-tools boundary is structural: it prevents the compose path from being an injection vector for additional tool calls. Returns `=-> @composedText` (same value to both channels).
 
-**Advice** — preserves the explicit advice gate for recommendation-style tasks. Uses the `advice`-labeled `denied =>` handler path with `no-influenced-advice` as a structural defense and `@debiasedEval` as the fallback (see §3.8). Replaces compose when the task is advice-classified.
+**Advice** — preserves the explicit advice gate for recommendation-style tasks. Uses the `advice`-labeled `denied =>` handler path with `@noInfluencedAdvice` as the structural defense and `@debiasedEval` as the fallback (see §3.8). Replaces compose when the task is advice-classified.
 
 ### 8.3 `=> record` vs `->` — data-plane vs control-plane
 
@@ -1688,10 +1923,11 @@ The design rule:
 Write authorization is declared per role in policy:
 
 ```mlld
-policy @p = {
-  defaults: { rules: ["no-send-to-unknown", "no-untrusted-destructive"] },
+import { @noSendToUnknown, @noUntrustedDestructive } from "@mlld/policy"
+
+var @appAuth = {
   records_require_tool_approval_per_role: false,
-  operations: { "exfil:send": ["tool:w:send_email"] },
+  labels: { risks: { "exfil:send": ["tool:w:send_email"] } },
   authorizations: {
     deny: ["update_password"],
     can_authorize: {
@@ -1699,6 +1935,8 @@ policy @p = {
     }
   }
 }
+
+policy @p = union(@noSendToUnknown, @noUntrustedDestructive, @appAuth)
 ```
 
 - **`deny`** — no role can authorize these tools, ever. Hard structural denial; survives `{ guards: false }` and is not subject to privileged-guard override.
@@ -1715,7 +1953,7 @@ The planner sees `<authorization_notes>` — auto-injected docs for tools it can
 
 The record-side `write:` is the contract that travels with the record. Catalogs may also carry legacy `can_authorize` defaults at the entry level, but these are ignored when the entry has an `inputs:` record (the record-side declaration is authoritative). Policy-side `authorizations` is the right home for cross-cutting `deny` rules and for granting roles that a record's authors didn't anticipate.
 
-Note also: `policy.authorizations.can_authorize` accepts a few legacy shapes (top-level `can_authorize`, `authorizations.can_authorize`, `authorizations.authorizable`) and normalizes them all to a top-level `can_authorize` at parse time. Authoring new policies, prefer the top-level form.
+Note also: `authorizations.can_authorize` is the public authoring surface. The parser accepts a few legacy shapes (top-level `can_authorize`, `authorizations.authorizable`) and normalizes them internally. Author new policies as `authorizations.can_authorize`.
 
 Composition: when both policy and a tool's catalog/record declare role lists for the same tool, the runtime intersects them. Adding a role at one layer and not the other does not silently grant.
 
@@ -1747,9 +1985,13 @@ exe role:worker llm @worker(prompt, policy, tools) = @claude(@prompt, {
   read:   "role:worker"
 }
 
+>> Planner-role helper for @policy.build — gives the build call an active role:planner surface
+exe role:planner @buildTaskPolicy(intent, tools, query) =
+  @policy.build(@intent, @tools, { task: @query })
+
 >> The orchestrator runs each phase in its own active-role surface
 exe @dispatchExecute(intent, tools, prompt, query) = [
-  let @taskPolicy = @policy.build(@intent, @tools, { task: @query })
+  let @taskPolicy = @buildTaskPolicy(@intent, @tools, @query)
   @worker(@prompt, @taskPolicy, @tools)
 ]
 ```
@@ -1784,7 +2026,7 @@ The planner structures its authorization output by proof source. Three top-level
 }
 ```
 
-- **`resolved`** — values whose proof comes from a prior tool result. Accepts handle strings minted in a prior call's read projection, OR fact-bearing values passed directly from orchestrator code (the runtime walks the value's `factsources` to mint a fresh handle for the dispatching call). Bare literals with no proof are rejected.
+- **`resolved`** — values whose proof comes from an in-scope tool result. Accepts (a) handle strings minted in the *same* planner call's read projection — handles are per-call ephemeral and dead outside their mint table, so cross-call references must use addresses or fact-bearing values; (b) addresses (`"<record>:<key>"`) that the framework dereferences against shelves to recover the live fact-bearing value; (c) fact-bearing values passed directly from orchestrator code (the runtime walks the value's `factsources` to mint a fresh handle for the dispatching call). Bare literals with no proof are rejected.
 - **`known`** — values the user explicitly provided in their task text. The runtime verifies the value appears in the task text via the `{ task: @query }` config to `@policy.build`. Optional `source` field for audit logging. Must come from uninfluenced sources only (the clean planner).
 - **`allow`** — tools the planner authorizes with no per-arg constraints. Object form `{ tool: true }`. Works for tools regardless of whether they declare an input record with `facts:` — the planner takes responsibility at the tool level instead of per-arg.
 
@@ -1878,23 +2120,32 @@ Security in mlld is designed as a **separate concern** that composes cleanly wit
 ### 9.1 Policies compose with `union()`
 
 ```mlld
-import { @secretPolicy } from "./security/secrets.mld"
-import { @piiPolicy }    from "./security/pii.mld"
+import { @standard, @urlDefense } from "@mlld/policy"
+import { @piiPolicy }              from "./security/pii.mld"
 
-policy @combined = union(@secretPolicy, @piiPolicy)
+policy @combined = union(@standard, @urlDefense, @piiPolicy)
 ```
 
 Composition is **restrictive by default**. The most restrictive wins:
 
-- `defaults.rules` — union (every rule from any policy is enabled)
-- `labels` flow rules — union of denies, intersection of allows per label
-- `capabilities.allow` — intersection (allowed in all source policies)
+- `labels.risks` — union (semantic-label → risk-category mappings merge)
+- `labels.rules` — union of denies; intersection of allows per label-set key; per-rule `locked` is sticky
+- `labels.args` — **intersection** of accept lists per `(op-class, arg)` so composition stays restrictive (an arg must satisfy every policy's accept list). One-sided declarations pass through unchanged. The precedence chain (per-record `accepts:` > kind-derived > `labels.args:`) still applies at dispatch.
+- `labels.apply` — union of entries; combo-keyed and label-keyed forms merge per their own rules
+- `labels.{enrich,transform,check}` — pipelines concatenate; entries run in declaration order with `locked` sticky per-entry
+- `labels.locked` — sticky (any source locked → result locked)
+- `dataflow.{enrich,transform,check,apply}` — concatenate; Plane-1 enforcement applies to the merged result
+- `capabilities.allow` — intersection where both sides declare; one-sided declarations pass through (same shape as `authorizations.can_authorize`)
+- `capabilities.deny` — union
 - `capabilities.danger` — restrictive: intersection when both sides declare it; **empty when only one side declares it** (one-sided dangers don't pass through, because the unilateral side hasn't been confirmed by the other)
+- `capabilities.network` — allow intersects, deny unions
+- `credentials` — pass-through when only one side declares; conflicting mappings (same key, different shape) reject at composition time
 - `authorizations.deny` — union
 - `authorizations.can_authorize` — intersection per role and per tool when both sides declare; one-sided declarations pass through unchanged
 - `records_require_tool_approval_per_role` — sticky (`true` wins)
-- `locked` — sticky (if any source is locked, the result is locked)
-- `operations` — union (semantic-label → risk-category mappings merge)
+- `labeling.unlabeled` — restrictive: `"untrusted"` wins over `"trusted"`, and any explicit setting wins over an omitted one
+- `labeling.trustconflict` — incoming-over-base (a layered policy's setting replaces the prior one)
+- `default_box` — pass-through when only one side declares; conflict (both sides name different boxes) is rejected at composition time. A box is its own configuration; there's no merge semantics for boxes themselves
 
 A restrictive overlay policy can never accidentally loosen a base policy. To deliberately replace a base policy at an invocation site rather than merge with it, use the **invocation-level** `replace: true` flag on `with { policy: ... }`:
 
@@ -2059,19 +2310,18 @@ These examples compose primitives from Part I (Labels, Policies, Guards, Records
 ### A. Protect customer data from exfiltration
 
 ```mlld
->> Label sensitive variables (§1.4)
+import { @noSecretExfil } from "@mlld/policy"
+
+>> Label sensitive variables (§1.5)
 var secret @customers = <data/customers.csv>
 
->> Policy blocks secret → exfil flow (§2.4)
-policy @p = {
-  defaults: {
-    rules: ["no-secret-exfil"],
-    unlabeled: "untrusted"
-  },
-  operations: {
-    exfil: ["net:w"]
-  }
+>> Compose @noSecretExfil with the app's risk map (§2.3)
+var @appRisks = {
+  labeling: { unlabeled: "untrusted" },
+  labels: { risks: { exfil: ["net:w"] } }
 }
+
+policy @p = union(@noSecretExfil, @appRisks)
 
 >> Exes labeled with what they do
 exe net:w @postToSlack(msg) = run cmd { curl -X POST @url -d @msg }
@@ -2082,84 +2332,91 @@ show @summarizeCustomers(@customers)
 
 >> This fails — secret data cannot reach net:w
 show @postToSlack(@summarizeCustomers(@customers))
->> Error: Rule 'no-secret-exfil': label 'secret' cannot flow to 'exfil'
+>> Error: labels.rules 'secret' deny ['exfil']: label 'secret' cannot flow to 'exfil'
 ```
 
-The `secret` label on `@customers` propagates through `@summarizeCustomers` (label propagation, §1.5). When the result reaches `@postToSlack` (labeled `net:w`, mapped to `exfil`), `no-secret-exfil` fires.
+The `secret` label on `@customers` propagates through `@summarizeCustomers` (label propagation, §1.6). When the result reaches `@postToSlack` (labeled `net:w`, mapped via `labels.risks` to `exfil`), `@noSecretExfil`'s `labels.rules: { secret: { deny: ["exfil"] } }` fires.
 
 ### B. Treat all data as untrusted, protect destructive ops
 
 ```mlld
-policy @p = {
-  defaults: {
-    rules: ["no-untrusted-destructive"],
-    unlabeled: "untrusted"
-  },
-  operations: {
-    destructive: ["fs:w"]
-  }
+import { @noUntrustedDestructive } from "@mlld/policy"
+
+var @appRisks = {
+  labeling: { unlabeled: "untrusted" },        >> coarse default
+  labels:   { risks: { destructive: ["fs:w"] } }
 }
+
+policy @p = union(@noUntrustedDestructive, @appRisks)
 
 exe fs:w @deleteFile(path) = run cmd { rm -rf "@path" }
 
-var @target = "/tmp/whatever"   >> auto-applied untrusted (§1.8)
+var @target = "/tmp/whatever"   >> labeling.unlabeled sets mx.trust = "untrusted"
 show @deleteFile(@target)
->> Error: Rule 'no-untrusted-destructive': untrusted control arg
+>> Error: labels.rules 'trust:untrusted' deny ['destructive']: untrusted control arg
 ```
 
-`defaults.unlabeled: "untrusted"` (§2.3) means any unlabeled variable picks up `untrusted`. To explicitly trust something:
+`labeling.unlabeled: "untrusted"` is a coarse default; for finer-grained classification, write explicit `labels.apply` rules naming the ingestion sources you want to mark untrusted (§2.6). To explicitly trust something:
 
 ```mlld
-var trusted @safePath = "/tmp/known-good"
+var trusted @safePath = "/tmp/known-good"   >> sets mx.trust = "trusted"
 show @deleteFile(@safePath)
 ```
 
 ### C. Lock down PII with custom flow rules
 
 ```mlld
-policy @p = {
-  defaults: { unlabeled: "untrusted" },
-  labels: {
-    pii: { deny: ["op:cmd", "net:w"] }   >> custom flow rule (§2.5)
+var @piiRules = {
+  labeling: { unlabeled: "untrusted" },
+  labels:   {
+    rules: { pii: { deny: ["op:cmd", "net:w"] } }   >> custom labels.rules entry (§2.4)
   }
 }
+
+policy @p = @piiRules
 
 var pii @customerEmails = <data/emails.csv>
 
 exe net:w @sendNewsletter(emails) = run cmd { newsletter-cli send @emails }
 show @sendNewsletter(@customerEmails)
->> Error: pii data cannot flow to net:w
+>> Error: labels.rules 'pii' deny ['op:cmd', 'net:w']: pii data cannot flow to net:w
 ```
 
 ### D. Track LLM influence on untrusted data
 
 ```mlld
-policy @p = {
-  defaults: {
-    rules: ["untrusted-llms-get-influenced"],   >> auto-applies influenced label
-    unlabeled: "untrusted"
-  },
-  labels: {
-    influenced: { deny: ["destructive", "exfil"] }
+import { @untrustedLlmsGetInfluenced } from "@mlld/policy"
+
+var @influencedRules = {
+  labeling: { unlabeled: "untrusted" },
+  labels:   {
+    risks: { exfil: ["net:w"], destructive: ["fs:w"] },
+    rules: { influenced: { deny: ["destructive", "exfil"] } }
   }
 }
 
+policy @p = union(@untrustedLlmsGetInfluenced, @influencedRules)
+
+exe net:w @sendEmail(body) = run cmd { send-email @body }
+
 var untrusted @userInput = <stdin>
-var @summary = @claude("summarize: @userInput")  >> output gets 'influenced' (§1.3 decorator role)
+var @summary = @claude("summarize: @userInput")  >> mx.influenced flips to true
+show @summary.mx.influenced  >> true
+show @summary.mx.trust       >> "untrusted" (inherited via meet)
 
 show @sendEmail(@summary)
->> Error: influenced data cannot flow to exfil
+>> Error: labels.rules 'influenced' deny ['exfil']: influenced data cannot flow to exfil (@sendEmail is net:w → exfil)
 ```
 
-The `untrusted-llms-get-influenced` rule is a labeling rule (§1.2 decorator role), not a blocking rule. It auto-applies `influenced` to LLM output when the input was untrusted. The `labels.influenced` flow rule is what does the blocking.
+`@untrustedLlmsGetInfluenced` is just `labels.apply: { "trust:untrusted+llm": [{ add: "influenced" }] }` — a labels.apply rule, not a blocking rule. It flips `mx.influenced` on LLM output when any input had `mx.trust = "untrusted"`. The blocking happens in the custom `labels.rules` entry on `influenced`.
 
 ### E. Policy + privileged guard for strategic exceptions
 
 ```mlld
-policy @p = {
-  defaults: { rules: ["no-untrusted-destructive"] },
-  operations: { destructive: ["fs:w"] }
-}
+import { @noUntrustedDestructive } from "@mlld/policy"
+
+var @appRisks = { labels: { risks: { destructive: ["fs:w"] } } }
+policy @p = union(@noUntrustedDestructive, @appRisks)
 
 >> Privileged guard punches a specific hole — no wildcard arm! (§3.7)
 guard privileged @taskAllow before fs:w = when [
@@ -2169,14 +2426,19 @@ guard privileged @taskAllow before fs:w = when [
 >> No wildcard — unmatched calls defer to base policy (blocked)
 ```
 
-### F. Absolute constraint with `locked: true`
+### F. Absolute constraint with `labels.locked: true`
 
 ```mlld
-policy @absolute = {
-  defaults: { rules: ["no-secret-exfil"] },
-  operations: { exfil: ["net:w"] },
-  locked: true   >> §2.8
+import { @noSecretExfil } from "@mlld/policy"
+
+var @absoluteRules = {
+  labels: {
+    risks:  { exfil: ["net:w"] },
+    locked: true                  >> §2.10 — labels-block-wide lock
+  }
 }
+
+policy @absolute = union(@noSecretExfil, @absoluteRules)
 
 >> Even a privileged guard cannot override
 guard privileged @attempt before net:w = when [
@@ -2184,7 +2446,7 @@ guard privileged @attempt before net:w = when [
 ]
 
 show @postToSlack(@customerList)
->> Error: Rule 'no-secret-exfil' (locked): label 'secret' cannot flow to 'exfil'
+>> Error: labels.rules 'secret' deny ['exfil'] (locked): label 'secret' cannot flow to 'exfil'
 ```
 
 ### G. Wrapping an MCP tool with security capabilities
@@ -2199,7 +2461,11 @@ record @send_email_inputs = {
   exact:     [subject],
   allowlist: { recipients: @internal_domains },
   blocklist: { recipients: @known_phish_domains },
-  correlate: false
+  correlate: false,
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker:  { tools: { submit:    true } }    >> only needed under records_require_tool_approval_per_role
+  }
 }
 
 >> Wrap the raw MCP tool
@@ -2219,7 +2485,7 @@ box @worker with { tools: @agentTools } [
 ]
 ```
 
-The agent inside the box can only call `send_email` (not the raw MCP tool). At dispatch, `@send_email_inputs` is enforced: recipients must be a fact arg matching the allowlist and not the blocklist; subject must appear verbatim in the planner's task text; body is expected to be untrusted (§5.2 control vs payload).
+The agent inside the box can only call `send_email` (not the raw MCP tool). At dispatch, `@send_email_inputs` enforces what it can without builder-phase context: recipients must be a fact arg matching the allowlist and not the blocklist; body is expected to be untrusted (§5.2 control vs payload). The `exact:` constraint on `subject` is **builder-only** — it requires a planner emitting bucketed intent into `@policy.build({ task: @query })`; it doesn't fire on direct LLM tool calls outside that flow. Wrap with the planner-worker pattern (§8) to activate it.
 
 ### H. Full provenance flow (planner → worker)
 
@@ -2239,10 +2505,13 @@ exe role:planner llm @plan(query) = @claude(`
   read: "role:planner"   >> §4.3, §8.8
 }
 
->> Execute worker performs the write under compiled per-step authorization (§8.7)
-exe role:worker @executeSendEmail(intent) = [
-  let @policy = @policy.build(@intent, @sendTools, { task: @query })
-  @worker(@prompt) with { policy: @policy, tools: @sendTools }
+>> Planner-role helper compiles intent — @policy.build needs an active role:planner surface (§8.5)
+exe role:planner @buildSendPolicy(intent, query) = @policy.build(@intent, @sendTools, { task: @query })
+
+>> Execute worker performs the write under the compiled per-step authorization (§8.7)
+exe role:worker @executeSendEmail(intent, query) = [
+  let @taskPolicy = @buildSendPolicy(@intent, @query)
+  @worker(@prompt) with { policy: @taskPolicy, tools: @sendTools }
 ]
 ```
 
@@ -2251,18 +2520,17 @@ The full chain: planner sees handles and addresses (no content). Picks one. Emit
 ### I. URL exfiltration defense
 
 ```mlld
-policy @p = {
-  defaults: {
-    rules: ["no-novel-urls", "untrusted-llms-get-influenced"],
-    unlabeled: "untrusted"
-  },
-  urls: {
-    allowConstruction: ["github.com"]   >> allowlist for constructed URLs
-  }
+import { @urlDefense, @untrustedLlmsGetInfluenced } from "@mlld/policy"
+
+var @urlAllowlist = {
+  labeling: { unlabeled: "untrusted" },
+  urls:     { allowConstruction: ["github.com"] }   >> hosts that may be constructed novel
 }
+
+policy @p = union(@urlDefense, @untrustedLlmsGetInfluenced, @urlAllowlist)
 
 >> If the LLM emits a URL not in input context, the call is blocked
 >> unless the host is in the allowlist
 ```
 
-`no-novel-urls` requires URLs in `influenced` tool-call args to appear verbatim in a prior tool result or user payload. URLs the LLM constructs from scratch are blocked. The most common exfiltration pattern (LLM is tricked into encoding stolen data into a URL the attacker controls) is structurally prevented.
+`@urlDefense` is implemented as `dataflow.enrich` + `dataflow.check` against `@mlld/patterns/url`: every value crossing the bridge data plane has its URLs extracted into the input enrichment slot; LLM-emitted output URLs are then checked against that accumulated input set. Protected/omitted record fields, hidden runtime values, shelf refs, and tool collections do not seed the allow set. The most common exfiltration pattern (LLM is tricked into encoding stolen data into a URL the attacker controls) is structurally prevented — the check fires on Plane 1 and cannot be punched through with privileged guards.
