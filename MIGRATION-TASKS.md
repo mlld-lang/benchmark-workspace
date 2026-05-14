@@ -126,28 +126,34 @@ Order: **banking → slack → workspace → travel.** Don't start the next suit
 
 Walk each commit. Record disposition: `no-op` / `test-only` / `refactor-invariant` / `merge-code`. Dispositions go in the migration PR message.
 
-mlld-side commits, likely superseded by construction:
-- [ ] `955e63628` shelf trust refinement round-trip
-- [ ] `e7793cce5` inherited ambient labels in child frames
-- [ ] `367ccf0eb` exec routing taint and label proofs
-- [ ] `53bd03591` module import source/file/dir taint split
-- [ ] `e8ff25521` record coercion trust refinement
-- [ ] `034af723e` whole-object input field taint
-- [ ] `bbcc3d1af` public provenance label semantics
-- [ ] `6593af2bc` provenance descriptor inventory
-- [ ] `776c0579e` security metadata propagation
-- [ ] `975a0ff76` provenance overhead
+**Disposition table** (migrator-9, 2026-05-14 read-only walk against `~/mlld/mlld@policy-redesign`):
 
-mlld-side commits, partially superseded; keep invariant tests:
-- [ ] `4a27abee4` influenced cascade near-miss invariants
-- [ ] `dfa8d5c1b` influenced cascade narrowed to provenance evidence
-- [ ] `f3dd43663` `src:file` data-load and code-exec routing split
-- [ ] `7d7399dbc` session-seeded shelf bridge writes
-- [ ] `8b1c43576` untrusted LLM influenced rule on payload/nested exe blocks
+| sha | summary | spec basis (in policy-redesign) | disposition |
+|---|---|---|---|
+| `955e63628` | fix shelf trust refinement round-trip (m-aecd repro fix) | spec-label-structure §2.6 shelf I/O composition retires the recursive-descriptor-extraction pattern by construction | **test-only** — keep `tests/interpreter/wrapper-boundary-matrix.test.ts` as a regression lock; the fix path (`field-access.ts`/`structured-value.ts` carve-outs) becomes structurally redundant once §2.6 is enforced. Verify with `tmp/probe-trusted-field/probe-shelf-roundtrip.mld` (migrator-8 left this attached). |
+| `e7793cce5` | avoid inherited ambient labels in child frames | spec §2.4 LLM-pass invariants impose child-frame label discipline at the channel boundary | **test-only** — `tests/interpreter/security-metadata.test.ts` additions stay as drift detector; the `Environment.ts` carve-out is supplanted by channel separation. |
+| `367ccf0eb` | refine exec routing taint and label proofs | spec §2.4 + §2.5 content-derived aggregation; `core/policy/fact-labels.ts` is general infrastructure | **refactor-invariant** — fact-labels + union helpers continue to ship. The exec-invocation.ts changes overlap with §2.4/§2.5 derivation rules but the union arithmetic primitives stay. |
+| `53bd03591` | stop module imports stamping src:file/dir taint; code-language labels as routing | spec §2.5 explicitly routes code-language `src:*` labels away from the content-derived cascade (m-383e closure) | **refactor-invariant** — the input-taint.ts `ROUTING_SOURCE_LABELS` extension is the v2.x routing channel discipline. Merge as-is. |
+| `e8ff25521` | fix record coercion trust refinement | spec §4.2 `=> record` and `as record` coerce-time trust refinement | **test-only** — keep `coerce-record.test.ts` as the §4.2 regression surface. The 141-line implementation patch is largely redundant under §4.2's coerce-channel discipline. Verify with `tmp/probe-trusted-field/probe-derive-via-parse.mld`. |
+| `034af723e` | fix whole-object input field taint | spec §2.5 input field aggregation requires whole-object taint propagation | **merge-code** — fix is the §2.5 input-field-aggregation invariant. Keep. |
+| `bbcc3d1af` | pin public provenance label semantics | spec §1 channels + docs; field-provenance-flow.test pins the rule for `mx.influenced` and friends | **merge-code** — docs + tests pin the channel-semantic boundary. Keep. |
+| `6593af2bc` | document provenance descriptor inventory (`docs/dev/PROVENANCE.md`) | docs-only | **merge-code** — docs stay regardless. |
+| `776c0579e` | restore security metadata propagation through `exe-return.ts`/when/condition-evaluator | spec §2.4 propagation invariants for trust/influenced through `=>` returns and when-arms | **merge-code** — touch points are channel-propagation seams that survive v2.x. |
+| `975a0ff76` | perf: reduce security provenance overhead | perf-only; field-access.ts + structured-value.ts hot path | **merge-code** — perf wins compound. Keep. |
+| `4a27abee4` | pin influenced cascade near-miss invariants | spec §2.5 content-derived aggregation guard tests | **merge-code** — tests pin invariants the v2.x rule depends on. Keep. |
+| `dfa8d5c1b` | narrow influenced cascade to provenance evidence | spec §2.5 explicitly excludes routing labels from cascade | **merge-code** — the `isProvenanceLabel` split is the v2.x routing channel rule. |
+| `f3dd43663` | doc: src:file as data-load only, code-execution labels as routing | docs follow-up to m-383e | **merge-code** — docs stay. |
+| `7d7399dbc` | fix session-seeded shelf bridge writes | spec §2.6 shelf I/O composition for session-scoped containers | **test-only** — keep `env-mcp-config.test.ts`; the bridge args fix overlaps with §2.6's session-frame discipline. Verify via probe at the m-aecd seam. |
+| `8b1c43576` | fix untrusted-llms-get-influenced rule on payload + nested exe blocks (m-c713) | spec §2.4 LLM-pass invariants + §2.5 input-only descriptor isolation | **merge-code** — three distinct bug closures: dynamic-resolver default-trust labeling, input-only descriptor for rule precondition, structured-value metadata merge. All hold under v2.x. |
 
-Bench-side commits, should become unnecessary under v2.x:
-- [ ] `096bcd2` elevate `@deriveAttestation.payload` to `data.trusted` — verify redundant under spec-label-structure §2.4 LLM-pass invariants.
-- [ ] `f168037` banking sender refinement to trusted fields — same verification.
+**Bench-side commits**:
+
+| sha | summary | disposition |
+|---|---|---|
+| `096bcd2` | rig/records: elevate `@deriveAttestation.payload` to `data.trusted` | **likely-no-op-under-v2.x** — the commit message explicitly cites m-9f33 follow-up that replaces blanket schema-level trust with conditional input-aware trust propagation. Under spec-label-structure §2.4 + §4.2, derive output trust should track input cleanliness automatically. Verify by reverting and probing canonical 6 (BK UT3/4/6/11 + TR UT3/UT4). If the canonical 6 still pass, this overlay can be retired. |
+| `f168037` | banking records: refine `sender=="me"` elevates data fields to trusted | **merge-code** — this IS the §4.2 application of `refine` to elevate field-level trust on a record-level predicate. The exact pattern documented in spec-label-structure §4.2. Keep. |
+
+**Reconciliation walk performed**: read-only commit/spec inspection (migrator-9). **Probe verification deferred** to the migration PR pre-merge review — each `no-op` / `test-only` row should ideally have a probe that confirms the bug class is structurally impossible before the corresponding fix gets reverted on the merge. The bench-side `096bcd2` revert is the most consequential to verify because it directly affects canonical 6 utility.
 
 ### 4.b Full sweep + ship gate
 

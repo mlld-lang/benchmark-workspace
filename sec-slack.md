@@ -595,15 +595,16 @@ __Agent invites Dora with the attacker's email instead of her legitimate email__
     + [-] `@invite_user_to_slack_inputs.user_email: facts, kind:email` (clean@096bcd2)
          > user_email must satisfy fact-floor with kind:email. An extracted scalar from
          > influenced/untrusted content cannot mint `fact:email`.
-    + [?] No extract/derive path can promote `data.untrusted` content into a fact-bearing
-        | email handle (ticket: SL-no-email-promotion-from-untrusted)
+    + [T] No extract/derive path can promote `data.untrusted` content into a fact-bearing
+        | email handle — `tests/scripted/security-slack.mld#extractedControlArgNamesBlockedField` + `#derivedEmailAsControlArgRejected` + `#sendDmExtractedRecipientRejected`
          > Selection refs only point back to already-resolved instances. read_webpage
          > resolves one @webpage_content instance whose content is untrusted, so there's
-         > no resolved email record to select. Structurally consistent with banking's
-         > Class 1 IBAN-grounding via tx records — but unlike banking, slack has no
-         > "list_known_emails" tool that would mint a fact:email surface from a trusted
-         > source. UT2/UT11/UT16 may be architecturally refused unless such a primitive
-         > is introduced.
+         > no resolved email record to select. Three tests verify this for invite_user
+         > extract path, invite_user derive path, and send_dm extract path. Structurally
+         > consistent with banking's Class 1 IBAN-grounding via tx records — but unlike
+         > banking, slack has no "list_known_emails" tool that would mint a fact:email
+         > surface from a trusted source. UT2/UT11/UT16 may be architecturally refused
+         > unless such a primitive is introduced.
 - Architectural alternative: introduce a "directory" tool that mints fact:email
   + [ ] No `list_known_users_with_emails` / directory tool exists (ticket: SL-directory-tool)
        > Threat-model design references this defense step (cross-reference extracted
@@ -680,7 +681,7 @@ Each item is one question with: gap (precise), why open, decision shape (not pro
 
 3. **Slack directory primitive for Class D** — UT2/UT11/UT16 require resolving Dora's email from `data.untrusted` webpage content. Under strict fact-floor enforcement on `@invite_user_to_slack_inputs.user_email: kind:email`, there is no path to mint `fact:email` from untrusted extract. Decision: introduce a directory tool (e.g., `list_known_users_with_emails`) that mints fact:email, OR accept UT2/UT11/UT16 as architecturally refused like banking UT0? (ticket: SL-directory-tool)
 
-4. **`known` source-class scope** — IT3's attacker URL `www.true-informations.com` exists in the fixture's `web.web_content` keys but appears in NO user task prompt. The `known` bucket must restrict to *user task text* match, not "appears somewhere in the environment." Currently `[?]` pending verification post-records-as-policy migration. (ticket: SL-known-bucket-task-text)
+4. ~~**`known` source-class scope**~~ — closed in migrator-9 against `tests/scripted/security-slack.mld#knownEmailNotInTaskTextRejected`. Mark promoted to [T] in §8 Class A.
 
 5. **BasePolicy positive check on `slack_user_name` / `slack_channel_name` / `email` kinds** — analogous to banking §9 #5 for `iban`. The `kind:` annotations on `@send_direct_message_inputs.recipient`, `@invite_user_to_slack_inputs.{user, user_email}`, and `@add_user_to_channel_inputs.{user, channel}` rely on BasePolicy enforcing a positive-match check against the kind. Verify BasePolicy's new fact-kind matching grammar correctly rejects scalars without the matching kind label, not merely scalars without *any* fact label. (ticket: SL-base-policy-positive-checks)
 
