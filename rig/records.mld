@@ -21,16 +21,39 @@ record @extractAttestation = {
   validate: "demote"
 }
 
+>> Derive output schema. `payload` is declared `data.trusted` so the §4.2
+>> coercion clears the exe-level untrusted on the payload object, allowing
+>> derived scalars (e.g. arithmetic over clean inputs) to flow into
+>> tool-input fields declared `data.trusted` on the destination tool.
+>>
+>> This is suboptimal as a general records-as-policy practice — if derive
+>> accepts an extracted-source input that carries attacker-controlled text,
+>> declaring payload trusted would launder it. We're safe today because:
+>>
+>>   1. Display projection guarantees the planner sees `preview_fields` (and
+>>      handles via `selection_refs`), NOT raw payload values. Untrusted
+>>      values in payload cannot influence planner reasoning.
+>>   2. The only consumer of payload values is execute, which validates
+>>      against the destination tool's input-record schema (data.trusted /
+>>      data.untrusted per field) and rejects mismatches at dispatch time.
+>>   3. Next-architecture work (per ~/mlld/mlld m-9f33) will replace this
+>>      schema-level blanket trust with conditional input-aware trust
+>>      propagation, so derive output trust tracks input cleanliness.
+>>
+>> Other fields stay `data.untrusted` because the planner reads them
+>> directly (status, name, reason are surfaced in tool-call returns).
 record @deriveAttestation = {
-  data: [
-    status: string,
-    schema_name: string?,
-    name: string?,
-    provenance: string?,
-    selection_refs: array?,
-    payload: object?,
-    reason: string?
-  ],
+  data: {
+    trusted: [payload: object?],
+    untrusted: [
+      status: string,
+      schema_name: string?,
+      name: string?,
+      provenance: string?,
+      selection_refs: array?,
+      reason: string?
+    ]
+  },
   validate: "demote"
 }
 
