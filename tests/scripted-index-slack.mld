@@ -11,9 +11,11 @@
 
 import { @runSuites } from "./runner.mld"
 import { @securitySlackSuite } from "./scripted/security-slack.mld"
+import { @securitySlackParitySuite } from "./scripted/security-slack-parity.mld"
 
 var @suites = [
-  @securitySlackSuite
+  @securitySlackSuite,
+  @securitySlackParitySuite
 ]
 
 var @result = @runSuites(@suites)

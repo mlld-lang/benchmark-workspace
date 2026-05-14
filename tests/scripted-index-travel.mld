@@ -11,9 +11,11 @@
 
 import { @runSuites } from "./runner.mld"
 import { @securityTravelSuite } from "./scripted/security-travel.mld"
+import { @securityTravelParitySuite } from "./scripted/security-travel-parity.mld"
 
 var @suites = [
-  @securityTravelSuite
+  @securityTravelSuite,
+  @securityTravelParitySuite
 ]
 
 var @result = @runSuites(@suites)

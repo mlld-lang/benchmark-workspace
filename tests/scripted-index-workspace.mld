@@ -6,9 +6,11 @@
 
 import { @runSuites } from "./runner.mld"
 import { @securityWorkspaceSuite } from "./scripted/security-workspace.mld"
+import { @securityWorkspaceParitySuite } from "./scripted/security-workspace-parity.mld"
 
 var @suites = [
-  @securityWorkspaceSuite
+  @securityWorkspaceSuite,
+  @securityWorkspaceParitySuite
 ]
 
 var @result = @runSuites(@suites)
