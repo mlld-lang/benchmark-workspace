@@ -1,12 +1,13 @@
 ---
 id: BK-correlate-factsources-verify
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T18:30:32Z
 type: task
 priority: 2
 assignee: Adam
+updated: 2026-05-14T22:59:59Z
 ---
 # [BK] Verify correlate:true preserves through structured-factsources shelf round-trip
 

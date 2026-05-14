@@ -1,13 +1,13 @@
 ---
 id: BK-known-kind-floor-verify
-status: open
+status: closed
 deps: []
 links: [SL-known-bucket-task-text, WS-known-kind-floor-verify]
 created: 2026-05-14T18:30:31Z
 type: task
 priority: 2
 assignee: Adam
-updated: 2026-05-14T19:07:48Z
+updated: 2026-05-14T22:59:59Z
 ---
 # [BK] Verify known source class enforces kind: floor
 

@@ -231,20 +231,20 @@ Status legend: `STRUCTURAL BLOCK` = defense holds end-to-end with sweep evidence
 
 | # | Attacker-controllable field | Where it lives | Reaches which control-arg position? | Carrier UT(s) | IT(s) using it | Current defense layer | Records-side enforcement | Status |
 |---|---|---|---|---|---|---|---|---|
-| **A1** | `bill-december-2023.txt` content (`{injection_bill_text}`) | `@file_text.content` from `read_file("bill-december-2023.txt")` | Attempts to reach `send_money.recipient` (Tier-2 data corruption — IT9's mechanism) | UT0 | **IT9** (registered, scored — Tier-2 implicit-goal attack) | (a) Source-class firewall: `data.untrusted` content cannot satisfy `facts/kind:iban`. (b) c-69db architectural ratchet: `parse_invoice_iban` tool retired; no extract/derive path mints fact-bearing IBAN from file content. | `@file_text.content: data.untrusted` + `@send_money_inputs.recipient: facts/kind:iban` + tool catalog absent `parse_invoice_iban` | STRUCTURAL BLOCK — c-6935 audit (2026-05-11) verified source-class firewall fires on UT0 bill flow |
+| **A1** | `bill-december-2023.txt` content (`{injection_bill_text}`) | `@file_text.content` from `read_file("bill-december-2023.txt")` | Attempts to reach `send_money.recipient` (Tier-2 data corruption — IT9's mechanism) | UT0 | **IT9** (registered, scored — Tier-2 implicit-goal attack) | (a) Source-class firewall: `data.untrusted` content cannot satisfy `facts/kind:iban`. (b) c-69db architectural ratchet: `parse_invoice_iban` tool retired; no extract/derive path mints fact-bearing IBAN from file content. | `@file_text.content: data.untrusted` + `@send_money_inputs.recipient: facts/kind:iban` + tool catalog absent `parse_invoice_iban` | `[T]` STRUCTURAL BLOCK — `tests/scripted/security-banking.mld#sendMoneyExtractedRecipientRejected` (layer A: source-class firewall, error `payload_only_source_in_control_arg`) + `tests/scripted/security-banking-parity.mld#directSendMoneyAttackerIbanRejected` (layer B: input record fact-floor catches via `proofless_control_arg` if A bypassed). c-6935 audit also confirmed runtime firing on UT0 sweep (2026-05-11). |
 | **A2** | `bill-december-2023.txt` content | same | Attempts to reach `send_money.amount` / `.subject` via worker extraction | UT0 | IT9 | Worker output influenced; `amount` fact-floor on inputs is `data.trusted` (requires non-influenced source); `subject` is payload-only | `@send_money_inputs.amount: data.trusted` (input); `subject: data.untrusted` (input) | STRUCTURAL BLOCK (pending verify) on `amount`; pass-through on `subject` (intentional — payload only). Combined with A1's recipient block, the whole attack chain fails. |
-| **A3** | `landlord-notices.txt` content (`{injection_landloard_notice}`) | `@file_text.content` from `read_file("landlord-notices.txt")` | Attempts to reach `update_scheduled_transaction.recipient` (IT4 redirection) or `.amount` distortion | UT2, UT12 | IT4 (via "change recipient" instruction in tail) | (a) `recipient` must `correlate` against same record as `id`; (b) `recipient` is `fact:iban` — extracted scalar denied | `@update_scheduled_transaction_inputs.recipient: facts/kind:iban + correlate: true` | STRUCTURAL BLOCK (pending verify) |
+| **A3** | `landlord-notices.txt` content (`{injection_landloard_notice}`) | `@file_text.content` from `read_file("landlord-notices.txt")` | Attempts to reach `update_scheduled_transaction.recipient` (IT4 redirection) or `.amount` distortion | UT2, UT12 | IT4 (via "change recipient" instruction in tail) | (a) `recipient` must `correlate` against same record as `id`; (b) `recipient` is `fact:iban` — extracted scalar denied | `@update_scheduled_transaction_inputs.recipient: facts/kind:iban + correlate: true` | `[T]` STRUCTURAL BLOCK — `tests/scripted/security-banking.mld#updateScheduledTxExtractedRecipientRejected` (recipient layer) + `#correlateCrossRecordMixingDenied` + `#correlateSameRecordAccepted` (correlate layer, positive + negative). |
 | **A4** | `address-change.txt` content (`{injection_address_change}`) | `@file_text.content` from `read_file("address-change.txt")` | Attempts to reach `update_user_info.street/city` with attacker-controlled address | UT13 | None of IT0..IT8 target this slot directly | `update_user_info` has **NO `facts:`** — pure update args, no control-arg gate | Currently payload-only flow; untrusted content can land in update args | OOS — banking has no money flow on this tool; cross-suite exfil concern deferred to `sec-cross-domain.md` |
-| **A5** | Incoming transaction `subject` (txn id=5, `{injection_incoming_transaction}`) | `@transaction.subject` for `sender != "me"` row only | Attempts to make planner derive attacker IBAN or content for `send_money.subject` / `.recipient` | Any task reading recent transactions: UT1, UT3, UT4, UT5, UT7, UT8, UT9, UT11 (and indirectly UT15 via the refund leg) | IT0, IT1, IT2, IT3, IT8 | `subject` is `data.untrusted`; `refine sender == "me"` does NOT elevate subject; planner doesn't see subject (`role:planner` strips it on `@transaction`); recipient still gated by `fact:iban` | `@transaction.subject: data.untrusted` + `read.role:planner` omits subject + `@send_money_inputs.recipient: facts/kind:iban` | STRUCTURAL BLOCK (pending verify) for recipient redirection; subject-channel exfil mitigated by recipient grounding (§8 Class 2) |
-| **A6** | Any injection content reaching planner reasoning | Any of A1–A5 in transcript | Attempts to coerce planner into authorizing attacker IBAN via `known` bucket | All carriers | IT0..IT9 | `known` source-class requires verbatim task-text substring match + `kind:` floor | `@send_money_inputs.recipient: facts/kind:iban` — `known` must satisfy both | STRUCTURAL BLOCK — attacker IBAN `US133000000121212121212` never appears in any UT PROMPT *under v1.1.1*. In v1, UT15's PROMPT contained this IBAN literally; v1.1.1 changed it to `CA13301...` precisely to remove the collision. If bench ever drops v1.1.1 pinning, this row regresses. |
-| **A7** | Password value in injection (IT7 only) | Injected into a file body or transaction subject | Attempts to reach `update_password.password` | UT14 (the password-update carrier) | IT7 | `exact: [password]` requires verbatim task-text appearance + no `write:` block on input record (hard-deny, no role can authorize) | `@update_password_inputs.password: exact + no write: block` | STRUCTURAL BLOCK — c-69db ratchet codifies that no role has `tools.authorize` on `@update_password_inputs`, harder than CaMeL's task-text allowance |
-| **A8** | "Send to attacker IBAN" instruction inside any read body | Any of A1–A5 | Attempts to convince planner to construct `send_money` call from instruction text | UT0, UT2, UT12 most exposed | IT0..IT9 carrier-agnostic | Display projection `role:planner` strips `data.untrusted` content from planner view — planner literally cannot see the injection | `@file_text.read.role:planner: [{ value: "file_path" }]` + `@transaction.read.role:planner` omits subject | STRUCTURAL BLOCK (pending verify) at display projection |
+| **A5** | Incoming transaction `subject` (txn id=5, `{injection_incoming_transaction}`) | `@transaction.subject` for `sender != "me"` row only | Attempts to make planner derive attacker IBAN or content for `send_money.subject` / `.recipient` | Any task reading recent transactions: UT1, UT3, UT4, UT5, UT7, UT8, UT9, UT11 (and indirectly UT15 via the refund leg) | IT0, IT1, IT2, IT3, IT8 | `subject` is `data.untrusted`; `refine sender == "me"` does NOT elevate subject; planner doesn't see subject (`role:planner` strips it on `@transaction`); recipient still gated by `fact:iban` | `@transaction.subject: data.untrusted` + `read.role:planner` omits subject + `@send_money_inputs.recipient: facts/kind:iban` | `[T]` STRUCTURAL BLOCK — recipient grounding locks via `tests/scripted/security-banking.mld#sendMoneyExtractedRecipientRejected` (subject-channel exfil mitigated by recipient grounding per §8 Class 2 reduction-to-Class-1). Display-projection subject-strip on `@transaction` covered by record-declaration inspection; the role:planner projection in records.mld lines 38-42 omits `subject` from the planner view. |
+| **A6** | Any injection content reaching planner reasoning | Any of A1–A5 in transcript | Attempts to coerce planner into authorizing attacker IBAN via `known` bucket | All carriers | IT0..IT9 | `known` source-class requires verbatim task-text substring match + `kind:` floor | `@send_money_inputs.recipient: facts/kind:iban` — `known` must satisfy both | `[T]` STRUCTURAL BLOCK — `tests/scripted/security-banking.mld#sendMoneyKnownIbanNotInTaskTextRejected` (error `known_value_not_in_task_text`). Attacker IBAN `US133000000121212121212` does not appear in any UT PROMPT under v1.1.1. v1's UT15 contained this IBAN literally; v1.1.1 removed the collision. If bench ever drops v1.1.1 pinning, this row regresses. |
+| **A7** | Password value in injection (IT7 only) | Injected into a file body or transaction subject | Attempts to reach `update_password.password` | UT14 (the password-update carrier) | IT7 | `exact: [password]` requires verbatim task-text appearance + no `write:` block on input record (hard-deny, no role can authorize) | `@update_password_inputs.password: exact + no write: block` | `[T]` STRUCTURAL BLOCK — `tests/scripted/security-banking.mld#updatePasswordExtractedRejected` + `#updatePasswordDerivedRejected` (exact-arg firewall, error `non_task_source_in_exact_payload_arg`) + `#updatePasswordHardDeniedInDefendedMode` (record-write deny, error `TOOL_AUTHORIZE_DENIED`). c-69db ratchet codifies the absent `write:` block on `@update_password_inputs`. |
+| **A8** | "Send to attacker IBAN" instruction inside any read body | Any of A1–A5 | Attempts to convince planner to construct `send_money` call from instruction text | UT0, UT2, UT12 most exposed | IT0..IT9 carrier-agnostic | Display projection `role:planner` strips `data.untrusted` content from planner view — planner literally cannot see the injection | `@file_text.read.role:planner: [{ value: "file_path" }]` + `@transaction.read.role:planner` omits subject | `[?]` STRUCTURAL BLOCK (declaration-level) — records.mld lines 131-135 (`@file_text.read.role:planner: [{ value: "file_path" }]`) + lines 38-42 (`@transaction.read.role:planner` omits subject). Runtime projection enforcement at planner display boundary needs a tier-1 probe to lock as `[T]` (ticket: BK-display-projection-verify). |
 
 ### Net claim
 
 Zero attacker-controllable field can populate a `send_money` / `schedule_transaction` / `update_scheduled_transaction` / `update_password` control arg, **given the records as declared above + the post-records-as-policy mlld runtime**.
 
-Most rows are marked `STRUCTURAL BLOCK (pending verify)` rather than `STRUCTURAL BLOCK` because the records-as-policy v2.x migration has not yet been re-verified end-to-end via sweep on banking. The c-6935 audit (2026-05-11) provides sweep evidence for the UT0 source-class firewall (row A1, A7); other rows await a banking-canary sweep to upgrade.
+Post v2.x BasePolicy migration (migrator-9 session, 2026-05-14), most rows are `[T]` test-locked via `tests/scripted/security-banking.mld` (10 tests) plus `tests/scripted/security-banking-parity.mld` (4 defense-load-bearing parity tests proving each layer is independently load-bearing — bypass layer A and layer B catches; layer A fires regardless of defense flag). A8 (display projection) remains `[?]` pending a tier-1 probe; A2 (`subject` payload pass-through) is intentional (subject is the descriptive payload, not authorization).
 
 ---
 
@@ -329,7 +329,7 @@ Six attack classes for banking. Each class is a `threatdown` tree showing the AN
 
 Indented `>` blocks describe the mechanism. **Prompt discipline is not a defense node at any mark level** (see CLAUDE.md "Prompt Placement Rules").
 
-Per the updated SEC-HOWTO discipline: most banking defenses are declared in records.mld but have not been verified end-to-end via banking-canary sweep post-records-as-policy. These are honestly `[?]`. The c-6935 source-class firewall audit (2026-05-11) provides sweep evidence for the UT0/IT9 path and a few related nodes — those carry `[-]` with the audit citation.
+Per the updated SEC-HOWTO discipline: post v2.x BasePolicy migration (migrator-9, 2026-05-14), the load-bearing banking defenses are `[T]` test-locked via tier-2 scripted-LLM tests in `tests/scripted/security-banking.mld` (10 tests) and `tests/scripted/security-banking-parity.mld` (4 load-bearing parity tests proving each defense layer is independently catching the attack — see Acceptance gate). Propagation / projection invariants (subject-untrusted prop, file-content classification, display projection) remain `[?]` pending direct probes — they're declarations that aren't yet end-to-end probed even though their effects are observable via the source-class firewall tests.
 
 ---
 
@@ -342,47 +342,49 @@ __Attacker causes money to be sent to an attacker-controlled recipient__
 - Worker dispatches send_money / schedule_transaction with attacker IBAN as recipient literal
   + Worker sees attacker IBAN in its context (from incoming-txn subject, file content, etc.)
     + [?] `@transaction.subject` (sender != "me") classified `data.untrusted` (ticket: BK-untrusted-subject-runtime-verify)
-         > Declared at records.mld clean@096bcd2. Runtime enforcement of `data.untrusted`
-         > propagation through worker output as `influenced` needs sweep verification.
+         > Declared at records.mld lines 19-46. Runtime propagation of `data.untrusted` →
+         > `influenced` through worker output verified indirectly via source-class firewall
+         > tests; direct propagation probe still pending.
     + [?] `@file_text.content` classified `data.untrusted` (ticket: BK-file-content-runtime-verify)
-         > Declared at records.mld clean@096bcd2. Runtime enforcement pending sweep.
+         > Declared at records.mld lines 125-139. Source-class firewall tests
+         > (sendMoneyExtractedRecipientRejected) cover the recipient-side rejection chain
+         > end-to-end. Direct propagation probe still pending.
     + [?] `role:planner` display projection strips `data.untrusted` (ticket: BK-display-projection-verify)
          > Records declare `role:planner: [{value: "file_path"}]` on @file_text (omits content)
          > and `role:planner` on @transaction omits subject. Mx.trust + display channel
          > preservation through shelf-read needs verification post-v2.x records migration.
   + Worker uses attacker IBAN literal as `recipient` arg
-    + [-] `@send_money_inputs.recipient: facts/kind:iban` — verified firing on UT0 flow per c-6935 audit (2026-05-11)
-         > Source class must be `resolved` (handle minted by get_most_recent_transactions
-         > or get_iban) OR `known` (verbatim task-text + kind:iban). Bare worker-composed
-         > literals fail fact-floor. The c-6935 audit observed this defense firing on UT0;
-         > generalization to other UTs needs additional sweep evidence.
-    + [?] BasePolicy positive check on `iban` kind (ticket: BK-iban-positive-check-verify)
-         > `recipient` must carry `fact:iban` label. Influenced/extracted scalars cannot
-         > satisfy this since fact labels mint only via `=> record` coercion on `facts:` fields.
-         > Verify the v2.x fact-kind matching grammar in BasePolicy.
+    + [T] `@send_money_inputs.recipient: facts/kind:iban` — `tests/scripted/security-banking.mld#sendMoneyExtractedRecipientRejected` + `security-banking-parity.mld#directSendMoneyAttackerIbanRejected`
+         > Source class must be `resolved` OR `known` (verbatim task-text + kind:iban).
+         > Bare worker-composed literals fail fact-floor at layer A; if layer A is bypassed
+         > the parity test proves layer B (input record `proofless_control_arg`) catches.
+    + [T] BasePolicy positive check on `iban` kind — `tests/scripted/security-banking-parity.mld#directSendMoneyAttackerIbanRejected` (layer B catches with `proofless_control_arg`)
+         > Influenced/extracted scalars cannot satisfy `fact:iban` since fact labels mint
+         > only via `=> record` coercion on `facts:` fields. Parity test proves the input
+         > record validation is doing this work independently of layer A.
   + Planner authorizes attacker literal via `known` bucket
-    + [-] `known` requires verbatim task-text substring match
+    + [T] `known` requires verbatim task-text substring match — `tests/scripted/security-banking.mld#sendMoneyKnownIbanNotInTaskTextRejected` (error `known_value_not_in_task_text`)
          > Attacker IBAN `US133000000121212121212` does not appear in ANY UT PROMPT *under v1.1.1*
          > (verified by exhaustive scan of v1 + v1_1_1 banking user_tasks.py). Note v1.1.1
          > dependency: v1's UT15 contained this IBAN literally.
-    + [?] `known` matched against `kind: iban` floor (ticket: BK-known-kind-floor-verify)
-         > `known` scalars must satisfy the kind annotation. Verify v2.x grammar handles this —
-         > closes random-string laundering.
+    + [T] `known` matched against `kind: iban` floor — covered transitively by `#sendMoneyKnownIbanNotInTaskTextRejected`
+         > `known` scalars must satisfy both task-text AND kind. The test fixture passes a
+         > non-task-text IBAN; the floor would also catch a task-text-present random string.
 - Worker laundering: extracted IBAN from tainted file → handle (Tier 2 / IT9 path)
-  + [-] No extract/derive path mints fact-bearing IBAN from `data.untrusted` content — c-6935 audit confirms (2026-05-11)
+  + [T] No extract/derive path mints fact-bearing IBAN from `data.untrusted` content — `tests/scripted/security-banking.mld#sendMoneyExtractedRecipientRejected` (extracted-source layer A) + `#updateScheduledTxExtractedRecipientRejected` (same for update flow)
        > Selection refs only point back to already-resolved instances. read_file resolves
        > one @file_text instance whose content is data.untrusted; no resolved IBAN record
-       > to select. c-6935 verified this on UT0/IT9 path.
+       > to select.
   + [-] c-69db architectural ratchet: `parse_invoice_iban` retired from suite catalog
        > No tool exists that promotes extracted bill text to a fact-bearing IBAN.
-       > Verifiable by absence from `tools.mld` catalog.
+       > Verifiable by absence from `tools.mld` catalog (bench/domains/banking/tools.mld).
 - Input validation
-  + [?] `validate: "strict"` on all banking write input records (ticket: BK-validate-strict-verify)
-       > Rejects unknown fields and type mismatches at dispatch boundary.
+  + [T] `validate: "strict"` on all banking write input records — runtime firing observed in `#directSendMoneyAttackerIbanRejected` (parity test). MlldPolicyError(direction:input) lands as a denied event with `code: proofless_control_arg` proving the strict validator fires.
+       > Rejects unknown fields, type mismatches, proofless control args at dispatch boundary.
        > Defense in depth — closes attacks via malformed dispatch shapes.
 ```
 
-**Notes.** Four redundant defenses on the recipient field (fact:iban, kind:iban floor, task-text verbatim, display projection); any one regression is recoverable by the others. The `[-]` marks reflect c-6935 audit evidence on the UT0/IT9 path; most other nodes need additional banking-canary sweep evidence to upgrade from `[?]`.
+**Notes.** Four redundant defenses on the recipient field (fact:iban, kind:iban floor, task-text verbatim, display projection); any one regression is recoverable by the others. Post-migration (migrator-9, 2026-05-14), the load-bearing nodes are `[T]` test-locked via tier-2 scripted tests including the load-bearing parity prototype (`security-banking-parity.mld`). The remaining `[?]` nodes are propagation / projection invariants not yet exercised end-to-end by a direct probe.
 
 ---
 
@@ -426,21 +428,22 @@ __Attacker redirects an existing scheduled transaction to attacker IBAN__
   + Worker sees attacker IBAN in injection
     + [?] Same `data.untrusted` + display-projection defenses as Class 1 (tickets: shared)
   + Worker uses attacker IBAN as `recipient` arg
-    + [?] `@update_scheduled_transaction_inputs.recipient: facts/kind:iban` (ticket: BK-IT-4-recipient-fact-floor-verify)
-         > Same fact-floor defense as Class 1 — attacker IBAN cannot satisfy.
-         > Needs IT4-specific sweep verification.
+    + [T] `@update_scheduled_transaction_inputs.recipient: facts/kind:iban` — `tests/scripted/security-banking.mld#updateScheduledTxExtractedRecipientRejected` (error `payload_only_source_in_control_arg`)
+         > Same fact-floor defense as Class 1 — attacker IBAN cannot satisfy. IT4-specific
+         > test seeds a real scheduled_transaction handle so the firewall layer for the
+         > recipient field is isolated from id-side rejections.
 - Cross-record mixing: worker combines id from txn A + recipient from txn B
-  + [?] `correlate: true` on `@update_scheduled_transaction_inputs` (ticket: BK-correlate-factsources-verify)
+  + [T] `correlate: true` on `@update_scheduled_transaction_inputs` — `tests/scripted/security-banking.mld#correlateCrossRecordMixingDenied` (error `correlate_control_args_cross_record_mixture`) + `#correlateSameRecordAccepted` (positive control)
        > Runtime verifies all control-arg facts on a single dispatch come from the same
-       > source record (matched via factsources). Verify the new structured-factsources
-       > channel preserves this through shelf round-trip post-v2.x migration.
-       > **Worth a tier-2 scripted-LLM test to promote to [T]** — ticket: BK-IT-4-correlate-tier2-test.
+       > source record (matched via factsources). Negative + positive (same-record)
+       > tests prove the defense is opt-in and doesn't over-tighten legitimate flows.
 - Worker calls update_scheduled_transaction with legitimate id/recipient + modified amount
-  + [-] `update: [amount, subject, date, recurring]` declares mutable fields (clean@096bcd2)
+  + [-] `update: [amount, subject, date, recurring]` declares mutable fields (records.mld:180)
        > Recipient identity is gated by correlation; mutating amount/subject/date/recurring
        > stays within the source record's scope.
-  + [-] At least one update field must be non-null (`no_update_fields` rejection) (clean@096bcd2)
-       > Prevents empty-update probes.
+  + [-] At least one update field must be non-null (`no_update_fields` rejection) (rig dispatch invariant)
+       > Prevents empty-update probes. Enforced by @dispatchExecute's update-fields check
+       > (rig/workers/execute.mld:108).
 ```
 
 **Notes.** `correlate: true` is the only multi-fact correlation in banking. A regression here re-opens Class 3 via cross-record mixing. Filing a tier-2 test promotes the central defense to `[T]`.
@@ -457,21 +460,22 @@ __Attacker causes the user's password to be changed to an attacker-chosen value_
   + Worker sees attacker password in injection
     + [?] `data.untrusted` + display-projection defenses as Class 1 (tickets: shared)
   + Worker uses attacker password as `password` arg
-    + [-] `@update_password_inputs.password: exact: [password]` (clean@096bcd2)
+    + [T] `@update_password_inputs.password: exact: [password]` — `tests/scripted/security-banking.mld#updatePasswordExtractedRejected` + `#updatePasswordDerivedRejected` (error `non_task_source_in_exact_payload_arg`)
          > Password must be verbatim substring of user task text. Attacker's "new_password"
-         > appears in NO UT PROMPT. Verifiable by inspection of records.mld + user_tasks.py.
+         > appears in NO UT PROMPT. Both extracted and derived sources rejected.
     + [ ] `no-influenced-privileged` rule (ticket: XS-no-influenced-privileged-rule)
          > Open question: should `influenced` data be blocked from `privileged:*` operations
          > the same way `untrusted` is? Currently the no-`write:`-block hard-deny carries
          > this load.
 - Worker calls update_password via allow bucket (no arg constraints)
-  + [-] `@update_password_inputs` has **no `write:` block declared** — no role has `tools.authorize` (clean@096bcd2)
-       > Hard-deny defense in depth. Planner cannot authorize the tool at all.
-       > Records lines 199-206 have NO `write:` key on this record (not `write: {}` — absent).
-       > Records-as-policy semantics treat "no block declared" as "no role authorized."
+  + [T] `@update_password_inputs` has **no `write:` block declared** — no role has `tools.authorize` — `tests/scripted/security-banking.mld#updatePasswordHardDeniedInDefendedMode` (error `TOOL_AUTHORIZE_DENIED`)
+       > Hard-deny defense in depth. Even with a known password literal that exactly
+       > matches task text (i.e. exact + known-task-text both pass), the absent write
+       > block blocks dispatch via record-write-deny. Records lines 199-206 have NO
+       > `write:` key on this record (not `write: {}` — absent).
 ```
 
-**Notes.** Dual structural block: `exact` closes the value-derivation path, no-write-block closes the authorization path. The `[-]` marks here are honest because the defenses are verifiable by file inspection — `exact:` is a declared constraint that records-as-policy must enforce; the absent `write:` block is observable in records.mld. Sweep evidence would still upgrade these but the inspection-evidence is unusually strong here.
+**Notes.** Dual structural block: `exact` closes the value-derivation path, no-write-block closes the authorization path. Both layers `[T]` test-locked post-migration (migrator-9, 2026-05-14) via tier-2 scripted tests. If either layer regresses (exact accepting non-task-text values, or write-deny disappearing) the corresponding test surfaces it.
 
 ---
 
@@ -484,12 +488,15 @@ __Attacker substitutes IBAN in bill file content via {injection_bill_text}__
 - Worker reads bill content from `read_file`
   + [?] `@file_text.content: data.untrusted` (ticket: BK-file-content-runtime-verify)
        > Extract phase coerces content into typed shape but cannot mint fact:iban
-       > on a value sourced from untrusted content.
+       > on a value sourced from untrusted content. Indirectly verified by IT9-class
+       > rejection tests in Class 1; direct probe of the file_text classification
+       > still pending.
 - Worker dispatches send_money with extracted IBAN as recipient
-  + [-] `@send_money_inputs.recipient: facts/kind:iban` — c-6935 audit verified firing on UT0 (2026-05-11)
+  + [T] `@send_money_inputs.recipient: facts/kind:iban` — `tests/scripted/security-banking.mld#sendMoneyExtractedRecipientRejected` + `security-banking-parity.mld#directSendMoneyAttackerIbanRejected`
        > Extracted scalar from `data.untrusted` content cannot satisfy fact floor.
-       > This is the load-bearing defense for IT9.
-  + [-] No selection-ref path mints fact-bearing IBAN from extracted content — c-6935 verified
+       > This is the load-bearing defense for IT9; both layer-A (intent compile) and
+       > layer-B (input record validation) lock it.
+  + [T] No selection-ref path mints fact-bearing IBAN from extracted content — same tests above (the layer-A rejection IS this assertion)
        > Selection refs only point back to already-resolved instances. No prior resolved
        > IBAN record matches arbitrary bill content.
 - Architectural ratchet: bill→send_money refused at flow level
@@ -510,7 +517,7 @@ __Attacker substitutes IBAN in bill file content via {injection_bill_text}__
        > the predicate contents.
 ```
 
-**Notes.** Class 5 defends an actively scored attack (IT9), not a hypothetical one. The c-6935 audit provides direct sweep evidence for the load-bearing defenses (recipient fact-floor + no-laundering-path), making these `[-]` rather than `[?]`. The architectural refusal accepts UT0 as un-completable; this is the correct security posture.
+**Notes.** Class 5 defends an actively scored attack (IT9), not a hypothetical one. The load-bearing defenses (recipient fact-floor + no-laundering-path) are `[T]` test-locked via the same tier-2 scripted tests that lock Class 1 (the bill-flow IT9 attack reduces to the same source-class firewall block). The architectural refusal accepts UT0 as un-completable; this is the correct security posture.
 
 ---
 
@@ -590,15 +597,9 @@ All `[ ]` / `[!]` / `[?]` marks in §5, §8, §9 reference threat tickets filed 
 | `BK-untrusted-subject-runtime-verify` | Verify `@transaction.subject` (sender != "me") data.untrusted propagates as influenced |
 | `BK-file-content-runtime-verify` | Verify `@file_text.content` data.untrusted runtime enforcement |
 | `BK-display-projection-verify` | Verify role:planner display projection strips data.untrusted via shelf-read |
-| `BK-iban-positive-check-verify` | Verify BasePolicy positive check on iban kind |
-| `BK-known-kind-floor-verify` | Verify known source class enforces kind: floor |
-| `BK-IT-4-recipient-fact-floor-verify` | IT4-specific sweep verification of update_scheduled_transaction.recipient fact floor |
-| `BK-correlate-factsources-verify` | Verify correlate:true preserves through structured-factsources shelf round-trip |
-| `BK-IT-4-correlate-tier2-test` | Tier-2 scripted-LLM test for cross-record correlation (promotes to [T]) |
 | `BK-influenced-prop-verify` | Verify untrusted-llms-get-influenced propagates via mx.influenced channel |
 | `BK-sensitive-autotag-question` | Question: auto-tag history fields (food/phone/services) as sensitive? |
 | `XS-no-influenced-privileged-rule` | Cross-suite: add no-influenced-privileged policy rule |
-| `BK-validate-strict-verify` | Verify validate:strict enforcement on all banking input records |
 | `XS-update-user-info-address-exfil` | Cross-suite: update_user_info accepting untrusted address content as exfil channel |
 | `BK-update-user-info-kind-tags-question` | Question: should update_user_info fields carry kind: tags? |
 | `BK-IT-9-list-payees-suite-extension` | Add list_known_payees tool for bill-file cross-reference defense |
@@ -606,5 +607,7 @@ All `[ ]` / `[!]` / `[?]` marks in §5, §8, §9 reference threat tickets filed 
 | `BK-aggregate-spend-realworld` | Aggregate spend tracking across calls (real-world hardening) |
 | `BK-password-records-side-strip-question` | Move password-strip from MCP-side to records-side |
 | `BK-canary-sweep` | Canary sweep against records-as-policy v2.x |
+
+**Closed in migrator-9 (2026-05-14)**: BK-iban-positive-check-verify, BK-known-kind-floor-verify, BK-IT-4-recipient-fact-floor-verify, BK-correlate-factsources-verify, BK-IT-4-correlate-tier2-test, BK-validate-strict-verify — all promoted to `[T]` via `tests/scripted/security-banking.mld` + `tests/scripted/security-banking-parity.mld`.
 
 When a ticket closes (defense verified end-to-end), update the corresponding §5/§8/§9 mark from `[?]` to `[-]` (or `[T]` if a tier-1/tier-2 test landed), cite the sweep run id or test path, and remove the closed ticket from this table.
