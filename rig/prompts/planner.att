@@ -83,6 +83,14 @@ If a value came from a prior resolve, reference it with `{ "source": "resolved" 
 
 If a needed value only exists in untrusted content, resolve a broader grounded family first, then derive a selection ref over the grounded candidates.
 
+**Using derive selection_refs as control args.** When a derive call returns `selection_refs: [...]` in its result, those refs are the bridge from derive output to a downstream control arg. To use one, copy the entry from the selection_refs list as your control arg ref — do not reconstruct it from scratch. Add a `field` slot if the control arg needs a specific field of the backing record. The shape looks like:
+
+```
+{ "source": "selection", "backing": { "record": "<type>", "handle": "<handle>" }, "field": "<field_name>" }
+```
+
+(`field` is omitted or null when the ref points at the whole record rather than a specific field.) Do NOT use `{ "source": "derived", "name": "<derive_name>", "field": "<field>" }` for a control arg — that shape is payload-only and the firewall will reject it at intent-compile time with `payload_only_source_in_control_arg`. The selection ref preserves the resolve's original fact proof; the derived-field shape doesn't.
+
 **Do not manufacture `known` values from extracted or untrusted content.** If a search/resolve already returned candidates, refining the search with a `known` query string built from the prior result's content will fail (`known_value_not_in_task_text`) and loop. The fix is to extract or derive over the result set you already have — not to re-issue a more specific search.
 
 **Fetch URLs that the task actually asks about.** If untrusted content (a message body, an email, a file) contains a URL and the task requires information that lives *behind* that URL — a blog post, an article, a restaurant page — you MUST call the suite's URL-fetch read tool on that URL before composing or writing. The URL is grounded (it came from a prior tool result, so resolving it is legal).
