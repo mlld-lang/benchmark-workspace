@@ -1,12 +1,13 @@
 ---
 id: c-dee1
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-13T11:34:08Z
 type: feature
 priority: 2
 assignee: Adam
+updated: 2026-05-14T17:15:38Z
 ---
 # Reader-set propagation primitive for messaging/calendar records
 
@@ -64,3 +65,7 @@ Medium — design work, not immediate. After records refine migration + `?` fiel
 - CaMeL ref: `~/dev/camel-prompt-injection/src/camel/capabilities/readers.py`, `utils.py:can_readers_read_value`
 - `bench/domains/workspace/records.mld` — current `@email_msg`, `@calendar_event` shapes
 
+
+## Notes
+
+**2026-05-14T17:15:38Z** Closed 2026-05-14: reader-set propagation likely subsumed by §2.5 content-derived aggregation + §2.4 LLM-pass invariants. The structured-channel model handles content-flow through messaging/calendar records via meet over input mx.trust states. If a reader-set primitive is still needed post-migration (e.g., for explicit per-recipient scoping), file fresh under the new schema.

@@ -1,6 +1,6 @@
 ---
 id: c-a6c0
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-02T01:02:03Z
@@ -8,6 +8,7 @@ type: bug
 priority: 1
 assignee: Adam
 tags: [security, influenced-propagation, phase-a]
+updated: 2026-05-14T17:15:38Z
 ---
 # Phase A1 incomplete: untrusted-llms-get-influenced rule does not fire at rig worker @llmCall sites despite policy attached
 
@@ -75,3 +76,5 @@ H3. mlld's policy handling for runtime-constructed objects (`@agent.basePolicy` 
 **2026-05-02T01:20:15Z** Filed mlld runtime ticket: ~/mlld/mlld/.tickets/m-c713.md — root-cause investigation needs to happen on the mlld side. Repros at ~/mlld/mlld/tmp/repro-rig-basepolicy-exact.mld (and 6 sibling files) all show the rule firing correctly in synthetic settings. Only the real rig environment fails. Until m-c713 is resolved, the A1 patch (with { policy: @agent.basePolicy } at extract/derive @llmCall sites) is correct in spirit but does not actually add 'influenced' to worker output. SHOULD-FAIL classifications dependent on this rule (SL-UT4, SL-UT19, WS-UT13) remain unenforced.
 
 **2026-05-02T01:31:32Z** Sharpened diagnosis (with help from user pointing out SDK vs CLI): the gap is that the SDK invocation path does NOT fire `untrusted-llms-get-influenced` while the CLI path DOES. Same mlld file, same call site, only the entry point differs. Bench runs go through SDK exclusively, so the A1 patch is structurally correct but produces no effect. Updated mlld m-c713 with the SDK-vs-CLI reproduction at ~/mlld/clean/tmp/phaseA-verify/sdk-probe.mld + /tmp/sdk-probe.py. Earlier hypotheses about rig's @opencode dispatch and JS-boundary stripping were wrong.
+
+**2026-05-14T17:15:38Z** Closed 2026-05-14: spec-label-structure §2.4 LLM-pass invariants address this structurally — 'influenced flips on iff input has trust:untrusted' is now the channel-level invariant, not a rule that must fire at specific call sites. The Phase A1 gap is dissolved by the new model. If post-migration verification shows the invariant doesn't hold at rig worker @llmCall sites, file a new ticket against the new architecture.

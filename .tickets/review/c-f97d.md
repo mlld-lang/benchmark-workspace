@@ -7,9 +7,9 @@ created: 2026-05-13T11:34:29Z
 type: feature
 priority: 2
 assignee: Adam
-updated: 2026-05-13T11:34:49Z
+updated: 2026-05-14T18:05:30Z
 ---
-# CaMeL-mirror trust profile under --trust-profile=camel flag
+# CaMeL-mirror trust profile on structured labels
 
 ## Background
 
@@ -73,3 +73,7 @@ Medium. Once strict mode is at ceiling, build CaMeL-mirror to publish the compar
 - CaMeL paper Table 2 (defended numbers per suite)
 - CaMeL code: `~/dev/camel-prompt-injection/src/camel/pipeline_elements/security_policies/`
 
+
+## Notes
+
+**2026-05-14T18:05:30Z** Reframed 2026-05-14: implement only after strict structured-labels migration lands. Express the profile via mx.trust + labels.apply + imported policy fragments — not via the retired defaults.unlabeled cascade or named built-in rules. Strict stays as the default; CaMeL-mirror utility/ASR reported separately.

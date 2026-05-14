@@ -1,6 +1,6 @@
 ---
 id: c-7eb6
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-26T17:06:30Z
@@ -8,6 +8,7 @@ type: chore
 priority: 3
 assignee: Adam
 tags: [c-3438, b-detector, revisit]
+updated: 2026-05-14T17:15:07Z
 ---
 # Revisit (B) no-progress detector — never fired across sweeps; remove if still unused after handoff
 
@@ -51,3 +52,5 @@ Recommend removal during the upcoming structurally_infeasible
 work (c-5ef9 / c-3438). The detector was wired with the right
 intent but the empirical pattern it was watching for doesn't
 appear under the current rig architecture.
+
+**2026-05-14T17:15:07Z** Closed 2026-05-14: no-progress detector across post-bench-grind-24 sweeps still hasn't fired in a load-bearing way. Cluster I masking fix gives the planner enough error detail to self-exit; c-5ef9 tracks the structurally_infeasible tracker fix as the next layer for clean-exit discipline. Remove the detector if/when the c-5ef9 work lands.

@@ -1,6 +1,6 @@
 ---
 id: c-55dd
-status: open
+status: closed
 deps: []
 links: [c-e562, c-63fe]
 created: 2026-05-01T17:23:20Z
@@ -8,7 +8,7 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [travel, framework, mcp-timeout, resolve-batch]
-updated: 2026-05-01T17:42:40Z
+updated: 2026-05-14T18:05:13Z
 ---
 # [TR-UT19, framework] resolve_batch hits 5-min MCP timeout on large multi-domain batches
 
@@ -54,3 +54,5 @@ Hypothesis: the second batch's payload size (ratings + price ranges + reviews fo
 Reopening c-63fe is warranted — symptom reproduces on local single-task. Don't bump mcp_timeout; investigate the actual disconnect.
 
 Reproduction: tmp/ut19-local/run.log (defended.142.jsonl) — local Mac, 48GB RAM, fresh process, MLLD_HEAP=8g, single task.
+
+**2026-05-14T18:05:13Z** Closed 2026-05-14 (ticket-review pass): Duplicate of the active c-63fe MCP/memory/resolve-batch umbrella.

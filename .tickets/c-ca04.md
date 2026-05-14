@@ -1,12 +1,13 @@
 ---
 id: c-ca04
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-10T20:47:41Z
 type: bug
 priority: 2
 assignee: Adam
+updated: 2026-05-14T18:05:14Z
 ---
 # [SL-UT4] Slack UT4 regression: baseline-PASS → post-bac4 FAIL (2-run consistent vs pre-migration baseline)
 
@@ -39,3 +40,5 @@ OPEN — needs transcript-grounded diagnosis. NOT pre-existing 'stochastic' clas
 ## Notes
 
 **2026-05-13T11:35:24Z** Defer until records refine migration + full re-sweep lands. Re-verify UT4 status post-migration. If still failing after Tier 1 work, this remains OPEN; if recovered, close.
+
+**2026-05-14T18:05:13Z** Closed 2026-05-14 (ticket-review pass): STATUS has Slack UT4 in PASS; re-open only on post-migration sweep regression.

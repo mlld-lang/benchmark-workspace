@@ -1,6 +1,6 @@
 ---
 id: c-cb4a
-status: open
+status: closed
 deps: []
 links: [c-63fe, c-4e09, c-8e02]
 created: 2026-04-27T01:00:29Z
@@ -8,7 +8,7 @@ type: task
 priority: 2
 assignee: Adam
 tags: [agentdojo, host, grading, preventive]
-updated: 2026-04-27T01:01:59Z
+updated: 2026-05-14T18:05:14Z
 ---
 # Extend agentdojo post-env normalizer to banking + slack (preventive)
 
@@ -49,3 +49,7 @@ Low. Gate-only change. Function is read-mostly and only mutates state in a speci
 - c-4e09 (closed): travel/workspace eval-mismatch survey
 - c-8e02: TR-UT2 read-only resolves mutate env (related class)
 
+
+## Notes
+
+**2026-05-14T18:05:14Z** Closed 2026-05-14 (ticket-review pass): Preventive only; no current banking/slack failure shape needs the extension.

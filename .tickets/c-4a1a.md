@@ -1,6 +1,6 @@
 ---
 id: c-4a1a
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-05T14:06:55Z
@@ -8,6 +8,7 @@ type: task
 priority: 2
 assignee: Adam
 tags: [rig, planner-signal, probe-grounded]
+updated: 2026-05-14T18:05:14Z
 ---
 # Extract/derive null_fields + rehearse blocked_extract_fields signals
 
@@ -59,3 +60,5 @@ The witty-comet UT2 trace showed the planner reaching the right outcome eventual
 - probe tmp/probe-banking-date-extracted/probe.mld reproduces the rehearse signal end-to-end with full {arg,source,name,field} hint
 
 Effect: banking UT2 3/3 PASS local post-prompt (was 1/2 pre-prompt). Worker LLM tests 24/24 on rerun. Cloud sweep verification next.
+
+**2026-05-14T18:05:14Z** Closed 2026-05-14 (ticket-review pass): Substantially implemented per ticket notes (null_fields + blocked_extract_fields shipped; banking UT2 3/3 post-prompt; 10 zero-LLM invariant tests pass).

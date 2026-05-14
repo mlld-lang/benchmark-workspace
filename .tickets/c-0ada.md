@@ -1,6 +1,6 @@
 ---
 id: c-0ada
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-26T21:43:08Z
@@ -8,6 +8,7 @@ type: bug
 priority: 2
 assignee: Adam
 tags: [travel, compose, worker-output, mlld-bug]
+updated: 2026-05-14T17:15:38Z
 ---
 # [Travel UT10] Compose worker emits literal '[object Object]' as text
 
@@ -37,3 +38,5 @@ Defer: looks mlld-side; user instructed to defer mlld bugs in bench-grind-10.
 Verified spike-side. Will see if UT10 stabilizes in the next sweep.
 
 This is NOT a mlld bug per se — `validate: "demote"` correctly demotes a type mismatch by attempting String coercion. The bug is in the LLM not following the JSON schema. The detection-and-retry shape is the appropriate fix layer.
+
+**2026-05-14T17:15:38Z** Closed 2026-05-14: compose worker '[object Object]' literal addressed in spirit by this session's compose anti-fabrication rule (commit 10d861a) + JSON-enforcement strengthening (commit 4b4b894). c-0ada/c-5f4d tracks the post-snapshot structural replacement of the prompt rule with output-validator enforcement. Close c-0ada as superseded by 10d861a; c-5f4d remains for the structural follow-up.

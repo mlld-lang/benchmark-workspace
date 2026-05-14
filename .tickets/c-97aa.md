@@ -1,12 +1,13 @@
 ---
 id: c-97aa
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-13T11:34:49Z
 type: feature
 priority: 2
 assignee: Adam
+updated: 2026-05-14T17:15:07Z
 ---
 # Surface specific mlld policy rule + field through rig execution_log
 
@@ -43,3 +44,7 @@ P2 — investigation/debugging quality, not utility-blocking. Helps future failu
 - `rig/runtime.mld` `@toolCallError`
 - `rig/workers/planner.mld` execution_log construction
 
+
+## Notes
+
+**2026-05-14T17:15:06Z** Closed 2026-05-14: done by Cluster I masking fix (commit 4d2b0c0). @buildPhaseErrorLogEntry + @buildPhaseErrorResult helpers in rig/workers/planner.mld surface mlld's structured policy-error envelope (code, field, hint, message) to the planner's next-turn input. Regression test at tests/rig/phase-error-envelope.mld registered in master gate (266/0/4).

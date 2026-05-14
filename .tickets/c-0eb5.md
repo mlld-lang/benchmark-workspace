@@ -1,6 +1,6 @@
 ---
 id: c-0eb5
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-03T18:47:08Z
@@ -8,6 +8,7 @@ type: task
 priority: 2
 assignee: Adam
 tags: [oos, triage, sweep-postmortem, classification]
+updated: 2026-05-14T17:15:07Z
 ---
 # Per-task OOS triage walk after opencode-fork sweep (banking/slack/workspace/travel)
 
@@ -162,3 +163,5 @@ discipline:
 2. BK-UT15 — local PASS / cloud FAIL diff (stochastic confirmation)
 
 Other failures all have existing tickets. No new triage required.
+
+**2026-05-14T17:15:07Z** Closed 2026-05-14: sweep methodology has moved on. Per-task triage now lives in STATUS.md per-suite groupings + sec-*.md §6 threat-relevant call-outs. Opencode-fork-specific triage isn't a category worth a standalone ticket anymore.

@@ -1,6 +1,6 @@
 ---
 id: c-e4d2
-status: open
+status: closed
 deps: []
 links: [c-cb92, c-6df0, c-69db]
 created: 2026-05-01T07:03:23Z
@@ -8,7 +8,7 @@ type: chore
 priority: 3
 assignee: Adam
 tags: [bench, rig, error-message, addendum-audit]
-updated: 2026-05-01T07:03:23Z
+updated: 2026-05-14T17:15:38Z
 ---
 # Audit: addendum rules that could be replaced by structural runtime errors (Round 1 + 2 catalog)
 
@@ -96,3 +96,7 @@ Each item is small but they share architectural intent (structural errors > prom
 - c-6df0 (WS-UT25, the failure-mode evidence behind R2.2)
 - c-69db (architectural ratchet — runtime signals beat prompt rules)
 
+
+## Notes
+
+**2026-05-14T17:15:38Z** Closed 2026-05-14: the records-as-policy thesis + spec-label-structure migration is the structural answer to 'addendum rules that could be replaced by structural runtime errors'. Audit becomes a post-migration sanity pass against the v2.x records.mld + BasePolicy declarations — not a freestanding ticket. If specific addendum rules remain after the migration that should have been structural, file then.

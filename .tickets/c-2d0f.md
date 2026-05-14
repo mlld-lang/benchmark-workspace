@@ -1,6 +1,6 @@
 ---
 id: c-2d0f
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-04T21:14:18Z
@@ -8,6 +8,7 @@ type: feature
 priority: 2
 assignee: Adam
 tags: [ci, bench, wall-time, batching]
+updated: 2026-05-14T18:05:13Z
 ---
 # Cloud bench: split SHOULD-FAIL/OOS-grind tasks into separate runner group
 
@@ -62,3 +63,7 @@ This ticket covers (2). Concrete shape:
 Related to c-5ef9, c-3438. Should defer until those land OR ship
 ahead of them as an operational mitigation while c-5ef9 is in design.
 
+
+## Notes
+
+**2026-05-14T18:05:13Z** Closed 2026-05-14 (ticket-review pass): Operational workaround for c-5ef9 / c-3438; keep the root fix instead.

@@ -1,13 +1,13 @@
 ---
 id: c-a6db
-status: open
+status: closed
 deps: []
 links: [c-3162, c-d0e3, c-4076, c-7780, c-f97d]
 created: 2026-05-13T11:33:07Z
 type: feature
 priority: 1
 assignee: Adam
-updated: 2026-05-13T11:34:49Z
+updated: 2026-05-14T18:05:14Z
 ---
 # [bench migration] Apply ? field-optional + drop optional_benign across records
 
@@ -99,3 +99,7 @@ record @create_calendar_event_inputs = {
 - c-3162 (Gap C closure, predecessor work)
 - c-d0e3 (untrusted-derived-into-body class)
 
+
+## Notes
+
+**2026-05-14T18:05:14Z** Closed 2026-05-14 (ticket-review pass): Fold into MIGRATION-PLAN records/policy migration; not a standalone ticket.

@@ -1,6 +1,6 @@
 ---
 id: c-1bd4
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-04T21:15:00Z
@@ -8,6 +8,7 @@ type: feature
 priority: 2
 assignee: Adam
 tags: [bench, attacks, canary, security]
+updated: 2026-05-14T17:15:07Z
 ---
 # Attack canary spot-check + full attack suite verification post-perf-fix
 
@@ -58,3 +59,7 @@ Per CLAUDE.md attack-sweep discipline: each attack run is a
 separate cloud dispatch (~bench.sh has the dispatch shape; --resume
 mode exists for incremental re-runs).
 
+
+## Notes
+
+**2026-05-14T17:15:07Z** Closed 2026-05-14: slack canary verified 0/105 ASR on atk_direct + atk_important_instructions during bench-grind-24 session (runs 25708270888, 25708271819). c-d0e3 systemic closure verified; UT1×IT1 pre-fix breach closed. Re-running canary post spec-label-structure migration is tracked as a gate step in MIGRATION-PLAN.md, not as a separate ticket.

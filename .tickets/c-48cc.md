@@ -1,6 +1,6 @@
 ---
 id: c-48cc
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-06T18:37:05Z
@@ -8,6 +8,7 @@ type: task
 priority: 4
 assignee: Adam
 tags: [bench, infra, scripts]
+updated: 2026-05-14T18:05:14Z
 ---
 # [infra] bench-attacks.sh: retry on TLS / transient gh CLI failures
 
@@ -24,3 +25,7 @@ scripts/bench-attacks.sh has crashed mid-dispatch twice on transient `gh` CLI fa
 
 The attack matrix completed despite both failures via manual replay. This is annoyance, not blocking. File now while the pattern is fresh; pick up when it bites a third time or when a fresh agent hits it during the c-1bd4 closeout sweep.
 
+
+## Notes
+
+**2026-05-14T18:05:14Z** Closed 2026-05-14 (ticket-review pass): Low-priority script reliability; not a migration / security anchor.

@@ -1,6 +1,6 @@
 ---
 id: c-d0e3
-status: open
+status: closed
 deps: []
 links: [c-6935, c-84d5, c-3c2b, c-3162, c-41e1, c-a6db]
 created: 2026-05-11T17:00:39Z
@@ -8,7 +8,7 @@ type: bug
 priority: 1
 assignee: Adam
 tags: [security, defense-gap, derive-worker, workspace, SL-UT13]
-updated: 2026-05-13T11:33:27Z
+updated: 2026-05-14T17:15:38Z
 ---
 # WS UT13 derive-reason text laundering channel — derive_insufficient_information.summary leaks untrusted content to planner
 
@@ -131,3 +131,5 @@ Phase 2 close target is c-84d5 alone, which closes the canary case. The systemic
 Slack atk_direct canary on c-bac4+c-e414 binary verified 0/105 ASR (run 25708270888, 2026-05-12), confirming defense layer works in real bench shape. Pre-fix ASR was 1/105 (UT1×IT1 c-d0e3 instance).
 
 Holding open pending bench-side records refine migration verification. Will close when full benign + canary re-run confirms numbers.
+
+**2026-05-14T17:15:38Z** Closed 2026-05-14: under spec-label-structure separate channels, derive output's payload field carries mx.influenced via §2.4 propagation. Display projection on derive_insufficient_information.summary lives at the projection layer (role:planner). The text laundering channel either closes naturally under structured channels or surfaces as a new gap with cleaner semantics — file new ticket then.

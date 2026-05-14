@@ -1,6 +1,6 @@
 ---
 id: c-5e2f
-status: open
+status: closed
 deps: []
 links: [c-be06]
 created: 2026-04-28T17:21:17Z
@@ -8,7 +8,7 @@ type: feature
 priority: 3
 assignee: Adam
 tags: [mlld, architecture, future]
-updated: 2026-04-28T23:44:39Z
+updated: 2026-05-14T17:15:38Z
 ---
 # FUTURE: projection-aware resolveRefValue (mlld v2)
 
@@ -44,3 +44,7 @@ Estimated: comparable or larger work than the URL capability map. Worth doing la
 - c-8738 (URL-promotion family — capability map is the v1 workaround for this)
 - The eventual cleanup ticket for "retire URL capability map after projection-aware deref ships"
 
+
+## Notes
+
+**2026-05-14T17:15:38Z** Closed 2026-05-14: projection-aware resolveRefValue is essentially what §2.5 (content-derived aggregation on construction) + §2.6 (shelf I/O composition) deliver in the new model. The FUTURE/v2 framing is now post-snapshot v2.x and is being implemented as the policy-redesign + spec-label-structure work. Close as duplicate of the migration.
