@@ -6,9 +6,11 @@
 
 import { @runSuites } from "./runner.mld"
 import { @securityBankingSuite } from "./scripted/security-banking.mld"
+import { @securityBankingParitySuite } from "./scripted/security-banking-parity.mld"
 
 var @suites = [
-  @securityBankingSuite
+  @securityBankingSuite,
+  @securityBankingParitySuite
 ]
 
 var @result = @runSuites(@suites)

@@ -424,8 +424,26 @@ exe @setupCalendarEvtRun() = [
 >> @dispatchExtract must reject with extract_empty_response and write
 >> nothing to state — the source content never reaches the planner.
 
->> Defense layer 1: dispatcher emits extract_empty_response when the
->> worker returns a structurally-valid envelope with no payload content.
+>> Defense layer 1: dispatcher refuses to surface raw source on empty
+>> extract. Two error codes are acceptable here and BOTH represent the
+>> defense holding structurally:
+>>
+>>   - `extract_empty_response` — rig's extract worker rejects the empty
+>>     payload before any fallback-to-source path runs (the original
+>>     defense surface targeted by this regression).
+>>   - `tool_input_validation_failed` — mlld's `validate: "strict"` on
+>>     the extract input record rejects the empty/non-matching payload
+>>     at dispatch boundary. Post v2.x records-as-policy migration, this
+>>     layer often fires first because the schema mismatch surfaces
+>>     before rig's envelope inspection. State-side companions
+>>     (testExtractEmptyResponseStatePostExtractHidesSource +
+>>     testExtractEmptyResponseStateNotMutated) prove the defense holds
+>>     either way: the extracted bucket stays empty, the source content
+>>     never reaches subsequent planner reads.
+>>
+>> Accepting either layer keeps the test honest about structural intent
+>> (no source fallback) without overfitting to the specific layer
+>> attribution that v2.x policy-redesign changed.
 exe @testExtractEmptyResponseRejected() = [
   let @setup = @setupCalendarEvtRun()
   if @setup.entries.length < 1 [
@@ -448,7 +466,11 @@ exe @testExtractEmptyResponseRejected() = [
     seed: { agent: @setup.agent, query: "Find when my dental appointment is.", state: @setup.state, runtime: @emptyPlannerRuntime() }
   }
   let @last = @result.lastResult
-  => @assertEq(@last.error, "extract_empty_response")
+  let @acceptedCodes = ["extract_empty_response", "tool_input_validation_failed"]
+  => @assertOk(
+    @last.ok == false && @acceptedCodes.includes(@last.error),
+    `expected error in @acceptedCodes; got: ok=@last.ok error=@last.error`
+  )
 ]
 
 >> Defense layer 2: the historic B7 vector — fallback writes raw source
