@@ -58,6 +58,44 @@ clean/
 
 **D. SERIOUSLY. DON'T BLAME THE MODEL OR "NONDETERMINISM" OR "FLAKINESS"** Read the agent transcripts. No GUESSES as to WHY tests fail without EVIDENCE. 
 
+## Three-tier separation: where changes live (and why it matters)
+
+Cardinal Rule B says "rig is generic, bench is specific." The full picture is three tiers — mlld, rig, bench — and confusing them is the single most common source of regressions in this project. Before making ANY change, name which tier it lands in. If the answer feels like "two of them," you've probably found a missing primitive in mlld; file a ticket instead of bridging.
+
+### mlld (`~/mlld/mlld/`) — runtime + primitives
+
+The interpreter. Value-metadata channels (`mx.trust` / `mx.influenced` / `mx.labels` / `mx.factsources`). Coerce-record runtime. Shelf primitives. Policy enforcer. LLM bridge. Authoritative on how values carry state through coerce / shelf / dispatch / projection.
+
+**What goes in mlld:** anything about value-metadata mechanics, descriptor channels, runtime label propagation, coercion semantics, shelf storage, policy-rule firing, exec-invocation envelope shape. If a bench probe surfaces a wrong descriptor on a value or a runtime-side gap, the fix is mlld-side. File `~/mlld/mlld/.tickets/m-XXXX` with a probe in `clean/tmp/<probe-dir>/`.
+
+**What does NOT go in mlld:** suite-specific records, BasePolicy stanzas for a particular suite, prompt education, attack-tree authoring. mlld is generic; it doesn't know about hotels or transactions.
+
+### rig (`clean/rig/`) — framework + agent plumbing
+
+The planner session, worker dispatchers (resolve / extract / derive / execute / compose / advice / blocked), policy synthesis from tool catalog, display projection wrappers, intent compilation, lifecycle event emission, generic phase prompts (`rig/prompts/*.att`). Authoritative on the phase model and the source-class vocabulary.
+
+**What goes in rig:** anything domain-agnostic that any suite could use. Worker dispatch contracts, planner discipline rules, generic prompt education, error envelope shape, lifecycle events, generic auth/intent compile primitives.
+
+**What does NOT go in rig:** any specific suite's records, tools, or addendums. No mention of `iban`, `hotel`, `channel_id`, `transaction`, `email`. The "would this rule be true in a completely different domain?" test from Prompt Placement Rules applies — if no, it's bench-side.
+
+### bench (`clean/bench/`) — the actual benchmark integration
+
+Suite-specific records, tools, optional bridges, optional classifiers, suite addendums, agent entrypoints. Per-suite `records.mld` + `tools.mld` + `agents/<suite>.mld`. Per-suite prompt addendums (`bench/domains/<suite>/prompts/`). Per-suite threat models (`sec-*.md`).
+
+**What goes in bench:** anything specific to one of the four suites. The records that express the suite's threat model. The tools that the suite ships. The prompts that teach the planner about the suite's domain workflow patterns.
+
+**What does NOT go in bench:** generic worker dispatch, generic policy synthesis, generic prompt rules. Those are rig. Generic value-metadata mechanics are mlld.
+
+### Tier-boundary checklist (run before every non-trivial change)
+
+1. Is this about how a value carries trust state through coerce / shelf / dispatch / projection? → **mlld**.
+2. Is this about how a phase worker dispatches, what shape an envelope carries, or how the planner reads errors? → **rig**.
+3. Is this about a specific suite's threat model, records declarations, tool catalog, or domain workflow? → **bench**.
+
+If a change feels like it must live in two tiers, stop. You've probably found a missing primitive in mlld. File the ticket; don't bridge tiers in bench with a workaround. Tier-bleeding fixes compound — every workaround is a debt the next migration has to revert.
+
+The `/migrate` skill (`.claude/skills/migrate/SKILL.md`) expands this further with examples and migration-time discipline. Read it before doing structural work that touches multiple tiers.
+
 ## Current Focus
 
 See STATUS.md for current results and per-task classification, and HANDOFF.md for session context. Use `/rig` at the start of each session to load all required context docs.
@@ -115,7 +153,28 @@ The framework wires addendums via:
 
 **Test:** Would removing this rule cause wrong reasoning for a CLASS of tasks in this suite? If yes, it belongs here. If it only helps one task, it's overfitting. Use the smallest worker scope that catches the failure — a derive arithmetic rule belongs in `deriveAddendum`, not `plannerAddendum`, unless the planner needs to know it to construct the right `goal:`.
 
-**Approval rule:** Every prompt change at this layer — tool descriptions/instructions, suite addendums (any worker), planner.att, worker prompt templates — needs explicit user approval before being written to a file. Show the proposed text, the rationale, and the test plan; do not edit until the user says go. Even small nudges like adding one sentence to a tool's `instructions:` field require approval. The reason: prompts are load-bearing and stochastic — a one-line tweak can shift behavior across many tasks in unpredictable ways. The user reviews to catch overfitting, eval-shaping, or other classes of error that aren't visible to the agent making the change.
+**Iterating prompts — discipline, not blanket approval.**
+
+We're running these benchmarks for security, not utility per se. That changes the prompt-iteration calculus: utility hits don't justify benchmark cheating, but the line between "overfitting" and "general usability nudge" has nuance worth respecting.
+
+**Mindful by default. Minimal always.** Claude has a strong tendency to write prompts much longer and more explainy than they need to be, and to lift example wording straight from evals. Don't. Every line you add must earn its place. Read the existing prompt twice before drafting an addition. Ask: is this new line saying something that isn't already implied by another line? If not, don't add it.
+
+**Borderline acceptable (when general + last resort):**
+- Style nudges that could plausibly be a user preference — comma-formatting on thousands, matching the user's date/time formatting, conventions for naming an event, ASCII-vs-Unicode dash, etc. These are acceptable IF (a) the rule is stated generically (no eval-shaped examples), (b) you've exhausted structural / data-flow / mlld-side fixes first, and (c) the rule would still be useful in a non-benchmark deployment.
+
+**NOT acceptable:**
+- **Semantic security instructions.** "Don't send to attacker IBANs," "refuse this dangerous request," "be careful about X." Prompts are not a security mechanism. If a defense exists only because a prompt rule tells the LLM not to do something, it isn't a defense. Fix the structural enforcement (record primitive, display projection, policy rule, source-class firewall) instead.
+- **Lazy prompt patches that paper over data-flow bugs.** If the planner is doing the wrong thing because tainted content leaked into its context, the fix is the data flow, not a sentence telling the planner to be more careful.
+- **Things that belong in mlld.** System-injected text like `<tool_notes>`, `<shelf_notes>`, default error messages from `@phaseToolDocs`, etc. — if you find yourself wanting to add a prompt rule to compensate for confusing or wrong text that mlld is injecting into the LLM call, file an mlld ticket instead. Bench-side prompt patches for mlld-side issues are tier-bleeding.
+
+**Never acceptable:**
+- **Examples shaped like the actual evals.** Don't include hotel names, IBAN values, channel ids, file names, contact emails, or any literal taken from the benchmark fixtures. Don't include numeric examples that match a specific task's expected output. Generic placeholders are fine ("e.g. `Hotel: <name>`"); concrete eval payloads are not.
+- **Task-id-specific logic of any kind.** Already in CLAUDE.md Cardinal Rule A; reaffirmed here because prompts are where this temptation is highest.
+- **Evaluator-shaped rules.** "Output X in format Y because that's what the checker expects" — close the file, you're not allowed to read the checker.
+
+**Escape hatch (the unblocker).** If you're considering a prompt change and there is even a sliver of question about whether it might violate one of the above, proceed with your best judgment AND file a P0 ticket titled `USER REVIEW: {short description}`. Body: the diff, the rationale, the alternatives considered, your honest read on what risk level it carries. The user reviews these later and either confirms or asks for revert. This unblocks forward progress while keeping a review trail on borderline calls.
+
+The escape hatch is for borderline cases, not a free pass. If you're 100% sure the change is in one of the NOT/NEVER categories, don't make it. If you're 100% sure it's clean (e.g., fixing a syntax bug in a prompt template, removing a redundant sentence), just do it without ceremony. The ticket-trail is for the middle band where reasonable agents could disagree.
 
 ### Layer 3: Tool descriptions and `instructions:` fields
 
@@ -405,6 +464,27 @@ All 97 AgentDojo tasks count toward the denominator regardless of category. The 
 **E. Always report utility against full benchmark denominators.** The canonical numbers are pass-count over the *full* AgentDojo task count (workspace=40, banking=16, slack=21, travel=20 = 97 total). Categories are descriptive (what's failing and why), not prescriptive (what to skip). Don't goalpost-shift to "in-scope" denominators — the comparison number against CaMeL or our own prior sweeps is always against 97.
 
 These conventions mean: every failing task that isn't decisively PASS / SHOULD-FAIL / BAD-EVAL traces to a specific OPEN or FLAKY ticket; every actionable fix has its own ticket linked to the failures it closes; every ticket is current; ticket history is the audit log of what we know about each task; no ticket carries a guess as if it were a finding; and progress numbers stay honest against the full benchmark.
+
+### Threat-model tickets (sec-*.md)
+
+Tickets generated from sec-banking.md / sec-slack.md / sec-workspace.md / sec-travel.md / sec-cross-domain.md threat-model marks live in `.tickets/threats/`. File via `tk create --dir threats --id <id> ...`.
+
+This keeps the threat-model surface (every `[ ]` / `[!]` / `[?]` mark in a sec-doc — typically dozens per suite) separate from the bench-failure work queue so `tk ready` doesn't drown in defense-verification tasks, and `tk ls --dir=threats` gives the threat-only view.
+
+**Naming convention** (so threat tickets are easy to scan at a glance):
+
+| Pattern | Use | Example |
+|---|---|---|
+| `<SS>-UT-<N>-<slug>` | Ticket tied to a specific user task | `BK-UT-15-correlate-verify` |
+| `<SS>-IT-<N>-<slug>` | Ticket tied to a specific injection task | `BK-IT-9-source-class-firewall-sweep` |
+| `<SS>-<slug>` | Suite-level defense/policy ticket not tied to one task | `BK-display-projection-verify` |
+| `XS-<slug>` | Cross-suite ticket (lives in `sec-cross-domain.md`) | `XS-update-user-info-address-exfil` |
+
+Suite two-char codes: **BK** banking · **SL** slack · **WS** workspace · **TR** travel · **XS** cross-suite.
+
+Each threat ticket body carries the §-section reference back to the sec-doc it came from (`§5 row A1`, `§8 Class 3`, `§9 question 4`) so the doc and ticket cross-reference. When a `[?]` mark transitions to `[-]` or `[T]` after the ticket's verification probe lands, close the ticket with a note pointing at the sweep run id / test path, and update the sec-doc's mark inline.
+
+Threat tickets and bench-failure tickets live in *different directories* — bench tickets at `.tickets/`, threat tickets at `.tickets/threats/`. Rules A–E above apply to bench tickets only; threat tickets follow the convention here. A defense gap discovered during attack-run audit that traces to a specific bench failure may warrant *both* — a bench-failure ticket (rule A) and a linked threat ticket (this section).
 
 ## Deferred: Logging Refactor (ticket c-3edc)
 
