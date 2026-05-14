@@ -26,6 +26,7 @@ import {
   @adviceVisibleState
 } from "../runtime.mld"
 import { @composeAttestation } from "../records.mld"
+import { @noInfluencedAdvice } from "@mlld/policy"
 
 >> ── Module-scope policy ──
 >>
@@ -34,8 +35,13 @@ import { @composeAttestation } from "../records.mld"
 >> label. Per mlld-security-fundamentals.md §3, declaring the
 >> policy in the same module as the wrapper is the canonical pattern
 >> for catching denials reliably across module boundaries.
+>>
+>> Post-v2.x: the rule is imported as a stock fragment from
+>> @mlld/policy instead of the retired named-rule-list shape.
+>> spec-policy §9.1 maps no-influenced-advice → labels.rules:
+>> { "influenced+op:advice": { deny: "advice from influenced data" } }.
 
-policy @adviceGatePolicy = { defaults: { rules: ["no-influenced-advice"] } }
+policy @adviceGatePolicy = union(@noInfluencedAdvice)
 
 >> ── Prompt template ──
 

@@ -17,10 +17,45 @@
       "fetchedAt": "2026-04-26T12:13:41.989Z",
       "registryVersion": "1.4.3",
       "sourceUrl": "https://raw.githubusercontent.com/mlld-lang/modules/2b49163e4055f866e377c3d8f3deefc3ce377ba9/opencode/index.mld"
+    },
+    "@mlld/policy": {
+      "version": "latest",
+      "resolved": "c0bf06c699cf29403ed74d79faafd4fffc8a37dfdfea0eeadc5241e8c0fb5e75",
+      "source": "@mlld/policy",
+      "integrity": "sha256:c0bf06c699cf29403ed74d79faafd4fffc8a37dfdfea0eeadc5241e8c0fb5e75",
+      "fetchedAt": "2026-05-14T20:15:51.351Z"
+    },
+    "@mlld/policy/standard": {
+      "version": "latest",
+      "resolved": "c1c36dbd78c5d42db94dd1382fc46ea5d468258b1ae1899a91f11ff581dfad55",
+      "source": "@mlld/policy/standard",
+      "integrity": "sha256:c1c36dbd78c5d42db94dd1382fc46ea5d468258b1ae1899a91f11ff581dfad55",
+      "fetchedAt": "2026-05-14T20:15:51.361Z"
+    },
+    "@mlld/policy/url-defense": {
+      "version": "latest",
+      "resolved": "a6ee71700ca67300684df77fff1818d037f2f3be8d06db677fd32f9ba74eab9d",
+      "source": "@mlld/policy/url-defense",
+      "integrity": "sha256:a6ee71700ca67300684df77fff1818d037f2f3be8d06db677fd32f9ba74eab9d",
+      "fetchedAt": "2026-05-14T20:15:51.378Z"
+    },
+    "@mlld/patterns/url": {
+      "version": "latest",
+      "resolved": "55d63f69b31e00d2733e7b3aab3a139df03dcc6524f9931e3ba6d93ffdd32429",
+      "source": "@mlld/patterns/url",
+      "integrity": "sha256:55d63f69b31e00d2733e7b3aab3a139df03dcc6524f9931e3ba6d93ffdd32429",
+      "fetchedAt": "2026-05-14T20:15:51.382Z"
+    },
+    "@mlld/sanitizers/url": {
+      "version": "latest",
+      "resolved": "1c791a42d42d1333d9448d094dd29b587f40c5618116e7b33bd146cee499f461",
+      "source": "@mlld/sanitizers/url",
+      "integrity": "sha256:1c791a42d42d1333d9448d094dd29b587f40c5618116e7b33bd146cee499f461",
+      "fetchedAt": "2026-05-14T20:15:51.389Z"
     }
   },
   "metadata": {
     "createdAt": "2026-04-24T02:14:18.887Z",
-    "updatedAt": "2026-04-26T12:13:41.989Z"
+    "updatedAt": "2026-05-14T20:15:51.389Z"
   }
 }

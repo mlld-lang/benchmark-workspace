@@ -295,7 +295,14 @@ exe role:planner @buildOptionalMeetingPolicy() = [
 var @syntheticPolicy = @synthesizedPolicy(@tools, null)
 var @plannerAuth = @syntheticPolicy.authorizations.can_authorize["role:planner"] ?? []
 var @denyList = @syntheticPolicy.authorizations.deny ?? []
-var @defaultRules = @syntheticPolicy.defaults.rules ?? []
+>> Post-v2.x: named rules retire. The equivalent shape lives in
+>> labels.{rules, apply, args} + dataflow.{enrich, check}. Surface
+>> the typed-channel presence as the new defaultRules-equivalent.
+var @labelRules = @syntheticPolicy.labels.rules ?? {}
+var @labelApply = @syntheticPolicy.labels.apply ?? {}
+var @labelArgs = @syntheticPolicy.labels.args ?? {}
+var @policyDataflow = @syntheticPolicy.dataflow ?? {}
+var @dataflowChecks = @policyDataflow.check ?? []
 
 var @catalogSendEmailEntry = @mxEntry(@tools.mx.entries, "send_email")
 var @catalogAllowlistedEntry = @mxEntry(@policySectionTools.mx.entries, "allowlisted_send_email")
@@ -538,14 +545,22 @@ exe @testCollectionRoundtrip() = [
 ]
 
 exe @testSynthesizedPolicyShape() = [
+  >> Post-v2.x asserts: typed-channel presence replaces named-rule strings.
+  >>   no-send-to-unknown        → labels.args."exfil:send".recipient
+  >>   untrusted-llms-get-influenced → labels.apply."trust:untrusted+llm"
+  >>   no-novel-urls             → dataflow.check (URL pattern)
+  let @exfilSendArgs = @labelArgs["exfil:send"] ?? {}
+  let @recipientAccepts = @exfilSendArgs.recipient ?? []
+  let @applyKeys = @labelApply.mx.keys
+  let @hasUntrustedLlmApply = @applyKeys.includes("trust:untrusted+llm")
   let @ok =
-    @defaultRules.includes("no-send-to-unknown") &&
-    @defaultRules.includes("untrusted-llms-get-influenced") &&
-    @defaultRules.includes("no-novel-urls") &&
+    @recipientAccepts.length > 0 &&
+    @hasUntrustedLlmApply &&
+    @dataflowChecks.length > 0 &&
     @plannerAuth.includes("send_email") &&
     @plannerAuth.includes("schedule_meeting") &&
     @denyList.includes("update_password")
-  => @assertOk(@ok, `rules=@defaultRules deny=@denyList planner=@plannerAuth`)
+  => @assertOk(@ok, `recipient_accepts=@recipientAccepts apply_keys=@applyKeys dataflow_checks=@dataflowChecks.length deny=@denyList`)
 ]
 
 exe @testPolicySections() = [

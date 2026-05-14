@@ -246,7 +246,7 @@ matchSet = mx.labels
          ∪ (mx.influenced            ? {"influenced"}      : ∅)
 ```
 
-This lets a rule key like `"trust:untrusted+influenced"` match without storing those tokens. Trying to write `untrusted` or `trust:untrusted` into `mx.labels` is rejected by the runtime — use `mx.trust` (set via `var untrusted @x`, record `data.untrusted:`, or `labels.apply`) instead.
+This lets a rule key like `"trust:untrusted+influenced"` match without storing those tokens. The reserved tokens `untrusted`, `trusted`, `trust:*`, and `influenced` are **routed to their own channels, never stored in `mx.labels`** — `var untrusted @x`, record `data.untrusted:`, and `labels.apply: { ...: [{ add: "trust:untrusted" }] }` all set `mx.trust`; nothing puts these tokens in `mx.labels`.
 
 For objects and arrays, `@value.mx.labels` is a conservative aggregate summary: it may include labels found on descendant fields. Field reads remain field-local. A label that only appears on `@value.bad` must not smear onto `@value.clean`. Runtime policy code uses separate self, aggregate, field/index, and proof metadata channels rather than treating public `.mx.labels` as a policy-input primitive.
 
@@ -505,7 +505,7 @@ policy @p = {
 ### 2.8 Other top-level sections
 
 - **`capabilities`** — structural Plane-1 operation gates. `allow`/`deny` for command, MCP, filesystem, and network patterns; `danger` marks capabilities requiring explicit opt-in (e.g., `@keychain`); `network: { allow: [...] }` for domain-level egress control. Never overridable by guards.
-- **`credentials`** — caller-side credential mappings, e.g. `claude: "ANTHROPIC_API_KEY"` or `github: { from: "@keychain", as: "GITHUB_TOKEN" }`. Inline at call sites: `using creds:claude`. (Renamed from `auth:` to avoid collision with `authorizations:`.)
+- **`credentials`** — caller-side credential mappings. Short form maps an env var: `claude: "ANTHROPIC_API_KEY"`. Long form names a backend via `from:` (`"keychain"`, `"keychain:service/account"`, or `"env:VAR"`) plus `as:`, e.g. `github: { from: "keychain:github/token", as: "GITHUB_TOKEN" }`. Inline at call sites: `using creds:claude`. (Renamed from `auth:` to avoid collision with `authorizations:`.)
 - **`urls`** — URL-defense configuration consumed by `@urlDefense` and equivalent `dataflow:` rules. `urls: { allowConstruction: ["github.com"] }` lists host patterns the LLM is permitted to construct from scratch even when not present in input. Plane-1 enforcement (it composes with `dataflow.check`); cannot be punched through with privileged guards.
 - **`default_box`** — references a defined box whose configuration is used when no local box is declared. Replaces the retired `policy.env:`. A local `box ... with { ... } [...]` declaration replaces the default entirely; there's no envelope/intersection semantic.
 
@@ -1286,7 +1286,7 @@ The checks compose this way:
 
 Without this control-arg framing, "untrusted data → privileged op" becomes indistinguishable from "LLM-composed email body → privileged op," which would force you to either ban LLM payload (useless) or accept attacker-controlled targets (insecure). Splitting control args from payload args is what makes both safety and usefulness possible at once.
 
-The legacy `with { controlArgs: [...] }` shape on exes is still accepted during migration but emits a deprecation warning. New code declares control args via the input record's `facts:` section.
+Declare control args via the input record's `facts:` section. The earlier `with { controlArgs: [...] }` shape on exes is retired; use `inputs: @record` on the tool catalog entry instead.
 
 **Positive checks depend on tool metadata.** When a tool catalog entry binds an input record via `inputs: @r`, the runtime derives effective control args from `@r`'s `facts:` and effective source args from the same field set on read tools. The positive-check fragments (`@noSendToUnknown`, `@noDestroyUnknown`, `@noUnknownExtractionSources`) consume that metadata via the `labels.args:` floor (or kind-derived/per-record `accepts:` when more specific) to know which args carry security responsibility. Without a bound input record, taint checks fall back to all-arg scope and positive checks fall back to field-name heuristics (`fact:*.email` for sends, `fact:*.id` for deletes). The bound-record path is the supported, recommended shape; heuristics are a fallback for unannotated tools.
 
@@ -1890,7 +1890,7 @@ Each worker is a framework-provided tool the planner calls. Each has its own nar
 
 **Extract** — reads tainted content from explicitly selected sources. Uses only `extract:r` tools. Source scope is framework-enforced via `sourceArgs` and `@noUnknownExtractionSources`. Output is contract-pinned via developer-supplied records with `@cast(@raw, @contract)`. Writes typed results to planner-selected extracted slots. The right home for proposal-style outputs (`*_payload` for single downstream writes, `*_proposal` for multi-step tasks where the planner reviews before authorizing).
 
-**Execute** — performs exactly one concrete write under compiled per-step authorization. The planner passes authorization intent referencing handles from prior resolve calls. The framework checks `policy.authorizations.can_authorize[role:planner]`, calls `@policy.build` to compile the intent, and dispatches the worker with the single authorized write tool plus compiled policy. No shelf scope. Pre-resolved typed inputs from the framework. Recommended return shape: `-> { status, tool, result_handles?, summary }` (frameworks may pick a different envelope; the structural property is that it's `->` from the worker, not the schema).
+**Execute** — performs exactly one concrete write under compiled per-step authorization. The planner passes authorization intent referencing in-call handles (for same-call resolve→execute pairs) or addresses / fact-bearing values from shelves (for cross-call references — handles are per-call ephemeral and dead in a new mint table). The framework checks `policy.authorizations.can_authorize[role:planner]`, calls `@policy.build` to compile the intent, and dispatches the worker with the single authorized write tool plus compiled policy. No shelf scope. Pre-resolved typed inputs from the framework. Recommended return shape: `-> { status, tool, result_handles?, summary }` (frameworks may pick a different envelope; the structural property is that it's `->` from the worker, not the schema).
 
 One write per execute dispatch. Multi-step tasks are a planner-managed sequence of single-action execute calls. Authorization reasoning, blast radius, and recovery stay simple this way.
 
@@ -1951,9 +1951,9 @@ The planner sees `<authorization_notes>` — auto-injected docs for tools it can
 
 `authorizations.can_authorize` (policy-level) and `write.<role>.tools.authorize` (record-level, §4.5) are **two separate authorization gates that compose conjunctively**, not aliases of each other. A planner authorization must pass *both* — the record's per-role authorize capability, and (when defined) the policy's role/tool authorization map. A worker submit is allowed by provided catalog membership by default; under `records_require_tool_approval_per_role: true`, it must also pass the record's per-role `tools.submit` capability.
 
-The record-side `write:` is the contract that travels with the record. Catalogs may also carry legacy `can_authorize` defaults at the entry level, but these are ignored when the entry has an `inputs:` record (the record-side declaration is authoritative). Policy-side `authorizations` is the right home for cross-cutting `deny` rules and for granting roles that a record's authors didn't anticipate.
+The record-side `write:` is the contract that travels with the record. Tool catalog entries can also declare `can_authorize` for non-record-backed tools; for record-backed tools the input record's `write.<role>.tools.authorize` is authoritative. Policy-side `authorizations` is the right home for cross-cutting `deny` rules and for authorizing **non-record-backed** tools (legacy or unannotated). For record-backed tools, policy cannot bypass a missing `write.<role>.tools.authorize` on the record — both gates must pass.
 
-Note also: `authorizations.can_authorize` is the public authoring surface. The parser accepts a few legacy shapes (top-level `can_authorize`, `authorizations.authorizable`) and normalizes them internally. Author new policies as `authorizations.can_authorize`.
+`authorizations.can_authorize` is the public authoring surface for new policies.
 
 Composition: when both policy and a tool's catalog/record declare role lists for the same tool, the runtime intersects them. Adding a role at one layer and not the other does not silently grant.
 
@@ -2130,7 +2130,7 @@ Composition is **restrictive by default**. The most restrictive wins:
 
 - `labels.risks` — union (semantic-label → risk-category mappings merge)
 - `labels.rules` — union of denies; intersection of allows per label-set key; per-rule `locked` is sticky
-- `labels.args` — **intersection** of accept lists per `(op-class, arg)` so composition stays restrictive (an arg must satisfy every policy's accept list). One-sided declarations pass through unchanged. The precedence chain (per-record `accepts:` > kind-derived > `labels.args:`) still applies at dispatch.
+- `labels.args` — **conjunctive composition of requirement clauses**: when multiple policies declare accepts for the same `(op-class, arg)`, the runtime appends each accept list as a separate clause and requires every clause to pass at dispatch. Net effect: composition stays restrictive — a stricter policy cannot be loosened by a permissive one. One-sided declarations pass through unchanged. The precedence chain (per-record `accepts:` > kind-derived > `labels.args:`) still applies.
 - `labels.apply` — union of entries; combo-keyed and label-keyed forms merge per their own rules
 - `labels.{enrich,transform,check}` — pipelines concatenate; entries run in declaration order with `locked` sticky per-entry
 - `labels.locked` — sticky (any source locked → result locked)
@@ -2515,7 +2515,7 @@ exe role:worker @executeSendEmail(intent, query) = [
 ]
 ```
 
-The full chain: planner sees handles and addresses (no content). Picks one. Emits bucketed intent with the handle in `resolved`. `@policy.build` validates and compiles. Worker dispatches with proof intact; positive checks pass; `correlate-control-args` verifies single-source.
+The full chain: the planner sees handles and addresses (no content). It picks one. For a same-call resolve→execute pair, the planner emits the in-call **handle** in `resolved`. For cross-call references (where the resolved value lives on a shelf), it emits the **address** (`<record>:<key>`) instead — the framework dereferences the address against the shelf to recover the live fact-bearing value, then mints a fresh handle for the worker dispatch. Either way `@policy.build` validates and compiles, and the worker dispatches with proof intact; positive checks pass; `correlate-control-args` verifies single-source.
 
 ### I. URL exfiltration defense
 

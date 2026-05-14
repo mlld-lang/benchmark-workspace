@@ -21,72 +21,76 @@ import {
   @correlatedControlArgsCheck
 } from "./runtime.mld"
 import { @runPlannerSession } from "./workers/planner.mld"
+import { @standard, @urlDefense } from "@mlld/policy"
 
+>> @standard ships labels.{rules, apply, args} for secret/sensitive/
+>> trust:untrusted exfil + destructive + privileged blocking, the
+>> trust:untrusted+llm → influenced apply rule, and the labels.args:
+>> floor for exfil:send / destructive:targeted / extract:r / tool:r.
+>> @urlDefense ships dataflow.{enrich, check} for novel-URL defense.
+>>
+>> Rig overlay adds atop @standard:
+>>   labels.risks                    — operation→risk-category map from tool catalog
+>>   labels.rules.influenced.deny    — additively widen @standard's influenced+advice
+>>                                     deny to also block destructive + exfil
+>>   labels.{trusted_tool_output,user_originated}.satisfies
+>>                                   — promote custom labels to fact-equivalent for
+>>                                     positive checks (transitional alias per
+>>                                     spec-label-structure §9.9)
+>>   authorizations                  — per-tool planner-authorize / worker-submit
+>>   capabilities                    — runtime allow list
+>>
+>> The advice gate (rig/workers/advice.mld) declares its own module-scope
+>> policy with the @noInfluencedAdvice fragment. synthesizedPolicy doesn't
+>> add it here — its rule fires automatically on advice-labeled exes
+>> called from that module.
+>>
+>> facts.requirements is auto-derived from labels.args plus kind-tagged
+>> fact fields on input records (records.mld). Rig no longer synthesizes
+>> per-tool fact requirements.
+>>
+>> Per the policy redesign migration (MIGRATION-POLICY-REDESIGN.md):
+>> @policy.build accepts the new-schema basePolicy data shape directly —
+>> no need to declare `policy @p = union(...)` at module scope. Verified
+>> via tmp/policy-spike/probe-policy-build-data.mld.
 exe @synthesizedPolicy(tools, overridePolicy, options) = [
-  let @rules = [
-    "no-secret-exfil",
-    "no-sensitive-exfil",
-    "no-untrusted-destructive",
-    "no-untrusted-privileged",
-    "no-send-to-unknown",
-    "no-destroy-unknown",
-    "untrusted-llms-get-influenced",
-    "no-unknown-extraction-sources"
-  ]
-  let @policyRules = when [
-    @hasNovelUrlRisk(@tools) => @rules.concat(["no-novel-urls"])
-    * => @rules
-  ]
-  >> The advice gate (rig/workers/advice.mld) declares its own
->>   module-scope policy with `no-influenced-advice` enabled. The
->>   rule fires automatically on `advice`-labeled exes called from
->>   that module — synthesizedPolicy doesn't need to add it here. See
->>   how-we-defend-advice.md for the layering rationale.
-  let @baseInfluencedDeny = ["destructive", "exfil"]
   let @operations = @synthesizedOperations(@tools)
-  >> facts.requirements is auto-derived by mlld policy.build from
-  >> kind-tagged fact fields on input records (records.mld). See
-  >> SECURITY-RIG-WRONG-RECORD-BYPASS.md for the design. Rig no longer
-  >> synthesizes per-tool fact requirements — kinds + accepts on
-  >> record fact fields are the source of truth.
-  let @basePolicy = {
-    defaults: {
-      rules: @policyRules,
-      unlabeled: "untrusted"
-    },
+  let @stdRules = @standard.labels.rules
+  let @widenedInfluencedDeny = @stdRules.influenced.deny.concat(["destructive", "exfil"])
+  let @rigLabels = {
+    ...@stdRules,
+    influenced: { deny: @widenedInfluencedDeny }
+  }
+  let @baseShape = {
+    labeling: { unlabeled: "untrusted" },
     capabilities: {
       allow: ["cmd:*", "sh", "js", "node", "fs:r:**", "fs:w:**", "network"]
     },
-    operations: @operations,
     labels: {
-      influenced: { deny: @baseInfluencedDeny },
-      trusted_tool_output: { satisfies: ["fact:*"] },
-      user_originated: { satisfies: ["fact:*"] }
+      risks: @operations,
+      rules: @rigLabels,
+      apply: @standard.labels.apply,
+      args: @standard.labels.args,
+      "trusted_tool_output": { satisfies: ["fact:*"] },
+      "user_originated":     { satisfies: ["fact:*"] }
     },
     authorizations: @synthesizedAuthorizations(@tools)
   }
-  if !@overridePolicy.isDefined() [ => @basePolicy ]
-  let @extraRules = for @rule in (@overridePolicy.defaults.rules ?? []) when !@basePolicy.defaults.rules.includes(@rule) => @rule
-  let @extraDeny = for @toolName in (@overridePolicy.authorizations.deny ?? []) when !@basePolicy.authorizations.deny.includes(@toolName) => @toolName
-  let @overrideOperations = @overridePolicy.operations ?? {}
+  let @withUrl = when [
+    @hasNovelUrlRisk(@tools) => { ...@baseShape, dataflow: @urlDefense.dataflow }
+    * => @baseShape
+  ]
+  if !@overridePolicy.isDefined() [ => @withUrl ]
   let @overrideLabels = @overridePolicy.labels ?? {}
+  let @overrideAuth = @overridePolicy.authorizations ?? {}
+  let @existingDeny = @withUrl.authorizations.deny ?? []
+  let @extraDeny = for @t in (@overrideAuth.deny ?? []) when !@existingDeny.includes(@t) => @t
   => {
-    defaults: {
-      ...@basePolicy.defaults,
-      rules: @basePolicy.defaults.rules.concat(@extraRules)
-    },
-    capabilities: @basePolicy.capabilities,
-    operations: {
-      ...@basePolicy.operations,
-      ...@overrideOperations
-    },
-    labels: {
-      ...@basePolicy.labels,
-      ...@overrideLabels
-    },
+    ...@withUrl,
+    labels: { ...@withUrl.labels, ...@overrideLabels },
     authorizations: {
-      ...@basePolicy.authorizations,
-      deny: @basePolicy.authorizations.deny.concat(@extraDeny)
+      ...@withUrl.authorizations,
+      deny: @existingDeny.concat(@extraDeny)
     }
   }
 ]
