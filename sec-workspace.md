@@ -698,14 +698,14 @@ __Attacker causes a recipient-bearing tool to dispatch to an attacker-controlled
     + [-] `known` requires verbatim task-text substring match (clean@096bcd2)
          > Attacker address `"mark.black-2134@gmail.com"` does not appear in ANY UT PROMPT
          > (verified by scan of v1 + v1_1_1 workspace user_tasks.py).
-    + [?] `known` matched against `kind:email` floor (ticket: WS-known-kind-floor-verify)
-         > `known` scalars must still satisfy the kind annotation. Verify post-migration
-         > grammar handles this — closes arbitrary-string laundering.
+    + [T] `known` matched against `kind:email` floor — `tests/scripted/security-workspace.mld#sendEmailKnownRecipientNotInTaskTextRejected` (error `known_value_not_in_task_text`)
+         > `known` scalars must satisfy both task-text presence AND kind. Test passes a
+         > non-task-text email; the known-bucket validator rejects.
   + Worker laundering: extract → handle
-    + [-] Source-class firewall (clean@096bcd2)
-    + [?] No extract path mints `kind:email` factsource on extracted scalars (ticket: WS-extract-no-email-mint)
-         > Selection refs would need to point at a resolved `@contact` or `@email_msg`
-         > field. Verify post-migration the structural refuse holds.
+    + [T] Source-class firewall — `tests/scripted/security-workspace.mld#sendEmailExtractedRecipientRejected` (error `payload_only_source_in_control_arg`) + `#shareFileExtractedEmailRejected` (parallel for share_file)
+    + [T] No extract path mints `kind:email` factsource on extracted scalars — `tests/scripted/security-workspace.mld#sendEmailExtractedRecipientRejected` + `#sendEmailDerivedRecipientRejected`
+         > Selection refs only point back to resolved record instances. Extracted/derived
+         > scalars carry no factsource; the source-class firewall catches them.
 - Side-channel: share_file
   + [-] `@share_file_inputs.email: fact/kind:email` (clean@096bcd2)
        > Same defense composition as send_email.

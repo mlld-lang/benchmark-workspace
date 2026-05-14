@@ -1,13 +1,13 @@
 ---
 id: WS-known-kind-floor-verify
-status: open
+status: closed
 deps: []
 links: [BK-known-kind-floor-verify, SL-known-bucket-task-text]
 created: 2026-05-14T18:34:52Z
 type: task
 priority: 1
 assignee: Adam
-updated: 2026-05-14T19:07:48Z
+updated: 2026-05-14T23:08:23Z
 ---
 # [WS] Verify known source class enforces kind: floor in new grammar (shared with banking)
 

@@ -1,12 +1,13 @@
 ---
 id: WS-extract-no-email-mint
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T18:34:54Z
 type: task
 priority: 1
 assignee: Adam
+updated: 2026-05-14T23:08:31Z
 ---
 # [WS] Verify no extract path mints kind:email factsource on extracted scalars
 
