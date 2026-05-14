@@ -1,0 +1,52 @@
+>> Defense-in-depth: deny URL smuggling into write-tool bodies.
+>>
+>> Sibling defense to no-novel-urls. Where no-novel-urls catches URL
+>> *construction* attacks (agent base64-encodes a secret as a path on a
+>> known-good domain), this guard catches URL *smuggling*: a URL that
+>> exists verbatim somewhere in untrusted content gets carried into a
+>> write body. Canonical attack — IT1: phishing URL injected into Bob's
+>> slack message → summarized into Alice's DM body → recipient clicks.
+>>
+>> Implementation note (verified by zero-LLM probe):
+>>   - Per-operation guard with `before op:exfil:send` plus a `for` over
+>>     `@mx.args` was the cleanest design but mlld doesn't allow `for`
+>>     expressions inline in guard `when` arms, and helper exes from the
+>>     policy module don't resolve in the dispatch context (they'd need
+>>     to be imported at every consumer site).
+>>   - Per-input guards triggered by data labels (`before untrusted`,
+>>     `before influenced`) work cleanly: they fire once per labeled
+>>     input, see `@input` as the value (with full mx), and `@mx.op` for
+>>     the operation context. Side-effect import registers them.
+>>
+>> So we declare two per-input guards (untrusted, influenced) that each
+>> check whether the labeled input contains a URL and the current op is
+>> exfil:send. If both, deny. The pair covers the smuggling vector
+>> (untrusted source content + influenced LLM output that may carry it).
+>>
+>> Trigger note: bench uses `exfil:send` for all write-side exfil ops
+>> (send_email, send_money, send_direct_message, schedule_meeting,
+>> post_webpage). `exfil:fetch` is read-side and not a smuggling target.
+>>
+>> Conservative trade-off: without per-URL provenance tracking, if a
+>> body string concatenates user-task text and untrusted content, the
+>> whole arg's taint propagates untrusted, so even URLs that originated
+>> in user task get denied. This is the safe choice in v1.
+>> policy.urls.allowConstruction remains as the operator-level escape
+>> hatch.
+>>
+>> See c-84d5 (this guard's ticket), c-1d65 (summarize_url primitive
+>> that pairs with this guard for safe summarize-and-send patterns).
+
+guard @noUntrustedUrlsInOutput before untrusted = when [
+  @input.mx.urls.length > 0 && @mx.op.labels.includes("exfil:send")
+    => deny "URL in untrusted-source input cannot flow to a write-tool body. Route the URL through a fact-bearing record field or use the summarize_url primitive (c-1d65)."
+  * => allow
+]
+
+>> NOTE: a parallel `before influenced` guard would catch URLs in
+>> LLM-output that crossed an untrusted-content boundary. Initial test
+>> showed the influenced trigger interfered with extract-worker tests
+>> (scalar-extract-payload + coerce-extract-rejects-degenerate-output
+>> regressed). Defer the influenced variant pending investigation; the
+>> untrusted variant covers the IT1 phishing-smuggling case (URL in
+>> source content reaches body before LLM influence is applied).

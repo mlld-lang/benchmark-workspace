@@ -1,0 +1,17 @@
+{
+  "lockfileVersion": 1,
+  "modules": {
+    "@mlld/claude": {
+      "version": "latest",
+      "resolved": "7dbf35be5331d9959eb73feaf93d3edb081b8bffd9ccd0c61eed6ca33c35b89a",
+      "source": "registry://@mlld/claude@3.3.3",
+      "integrity": "sha256:7dbf35be5331d9959eb73feaf93d3edb081b8bffd9ccd0c61eed6ca33c35b89a",
+      "fetchedAt": "2026-05-11T23:02:01.822Z",
+      "registryVersion": "3.3.3"
+    }
+  },
+  "metadata": {
+    "createdAt": "2026-05-11T23:02:01.543Z",
+    "updatedAt": "2026-05-11T23:02:01.822Z"
+  }
+}
