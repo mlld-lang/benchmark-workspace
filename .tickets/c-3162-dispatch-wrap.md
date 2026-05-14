@@ -1,6 +1,6 @@
 ---
 id: c-3162-dispatch-wrap
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T20:30:06Z
@@ -8,6 +8,7 @@ type: task
 priority: 1
 assignee: Adam
 tags: [rig, migration, c-3162, policy-deny-envelope]
+updated: 2026-05-14T22:29:39Z
 ---
 # Wrap @callToolWithPolicy throw in @dispatchExecute structured-return
 

@@ -168,7 +168,16 @@ exe role:planner @compileForDispatch(agent, state, decision, query) = [
 >> structure; see migration-plan.md §1 for context. `with { read: "role:X" }`
 >> at call-site only affects projection — does NOT activate the write
 >> context (verified via probe; error: WRITE_DENIED_NO_ROLE persists).
-exe role:worker @dispatchExecute(agent, state, decision, query) = [
+>>
+>> Body split for c-3162-dispatch-wrap: the outer @dispatchExecute is a
+>> direct-when so a policy throw bubbling from the inner @callToolWithPolicy
+>> chain (e.g. labels.influenced.deny → exfil for slack/banking/workspace
+>> IT0-class attacks) is captured as a denied event and converted to a
+>> structured policy-denied envelope. Crossing exe boundaries converts
+>> a denied event into an uncatchable MlldDirectiveError, so the catch
+>> must live in the outer exe that calls dispatchImpl (probe-confirmed
+>> in tmp/c-3162-dispatch-wrap/probe-exe-wraps-dispatch.mld).
+exe role:worker @dispatchExecuteImpl(agent, state, decision, query) = [
   let @prep = @compileForDispatch(@agent, @state, @decision, @query)
   if !@prep.ok [
     => @plannerValidationFailure(@prep.failure.error, @prep.failure.payload, @prep.failure.issues)
@@ -222,6 +231,31 @@ exe role:worker @dispatchExecute(agent, state, decision, query) = [
     },
     session_id: null
   }
+]
+
+>> Outer @dispatchExecute: direct-when body so a policy denial bubbling
+>> from @dispatchExecuteImpl's deep call chain (@callToolWithPolicy →
+>> @callToolWithOptionalPolicy → @toolEntry(...) with { policy }) surfaces
+>> as a `denied` event in this exe scope. We convert it to the same
+>> {ok:false, error:"policy_denied", code, message, ...} envelope shape
+>> that mlld's input-validation path already produces, so downstream
+>> @toolCallError + @settlePhaseDispatch handle both denial paths
+>> uniformly.
+exe role:worker @dispatchExecute(agent, state, decision, query) = when [
+  denied => {
+    state: @state,
+    ok: false,
+    error: "policy_denied",
+    stage: "dispatch_policy",
+    code: @mx.guard.code ?? "POLICY_DENIED",
+    message: @mx.guard.reason ?? "Operation denied by policy",
+    reason: @mx.guard.reason ?? null,
+    filter: @mx.guard.filter ?? null,
+    decision: @mx.guard.decision ?? null,
+    guard: @mx.guard,
+    session_id: null
+  }
+  * => @dispatchExecuteImpl(@agent, @state, @decision, @query)
 ]
 
 export { @executePrompt, @coerceExecuteAttestation, @compileForDispatch, @dispatchExecute }

@@ -16,7 +16,7 @@ Temporary task tracker for the v2.x migration. Lives until migration ships, then
 
 **Branch**: `policy-structured-labels-migration` on `clean@0cd3d8c`. Base `clean@096bcd2`. mlld source `~/mlld/mlld @ f90d47e77` (`policy-redesign`).
 
-**Zero-LLM gate**: YELLOW. BasePolicy syntax migrated, `tests/rig/policy-build-catalog-arch.mld` passes 20/20 isolated. `tests/rig/c-3162-dispatch-denial.mld` fails because new `labels.rules.influenced.deny` correctly fires but throw not wrapped in `@dispatchExecute` — ticket **c-3162-dispatch-wrap** is the P0 next-session unblocker.
+**Zero-LLM gate**: GREEN (264 pass / 0 fail / 2 xfail / 2 xpass-pending-flip). c-3162-dispatch-wrap landed (migrator-9): `@dispatchExecute` body split into outer direct-when wrapper + inner `@dispatchExecuteImpl`. Outer wrapper catches labels-flow throws via `denied =>` and surfaces structured envelope `{ ok:false, error:"policy_denied", code, message, ... }` that `@toolCallError` handles uniformly. `tests/rig/phase-error-envelope.mld` temporarily disabled pending mlld ticket `m-input-policy-uncatchable` (input-validation throws bypass denied-event channel on policy-redesign branch — see ticket).
 
 **Bench utility**: 53/97 baseline (migrator-7 sweep 2026-05-12, runs `25710915492` et al). No new sweep this session.
 
@@ -76,7 +76,7 @@ Order: **banking → slack → workspace → travel.** Don't start the next suit
 - [x] `rig/workers/advice.mld` → `union(@noInfluencedAdvice)` import.
 - [x] Rig overlay preserves additive widening of `labels.rules.influenced.deny` (`+["destructive","exfil"]` atop `@standard`'s `["advice"]`) and `trusted_tool_output` / `user_originated` `satisfies` transitional alias.
 - [x] `tests/rig/policy-build-catalog-arch.mld` re-asserts against new schema (20/20).
-- [ ] **c-3162-dispatch-wrap** — wrap `@callToolWithPolicy` in `@dispatchExecute` with `when [denied => ...]` arm. P0. Reference: `mlld-security-fundamentals.md` §3.8 + `rig/workers/advice.mld:110` (`@adviceGate` pattern).
+- [x] **c-3162-dispatch-wrap** (migrator-9) — `@dispatchExecute` split into outer direct-when wrapper + `@dispatchExecuteImpl` inner. `denied =>` arm at outer level catches labels-flow throws, converts to structured `{ ok:false, error:"policy_denied", code, message, reason, filter, decision, guard }` envelope. `tests/rig/c-3162-dispatch-denial.mld` 2/2 pass. Probe trail: `tmp/c-3162-dispatch-wrap/probe-{influenced-deny,with-policy-inline,bracket-block,exe-wraps-dispatch}.mld`. Constraint discovered: input-validation throws (`input_type_mismatch`, `proofless_control_arg`, etc.) do NOT raise denied events on policy-redesign branch — filed mlld `m-input-policy-uncatchable`. `tests/rig/phase-error-envelope.mld` disabled in index.mld pending fix.
 
 ### Suite 1: Banking
 
