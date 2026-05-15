@@ -97,6 +97,26 @@ If a needed value only exists in untrusted content, resolve a broader grounded f
 
 If extract on a message body returns null/missing for a field that you can see is referenced via a URL in the body, that is the signal to fetch the URL — NOT a signal to write "the message doesn't specify." Composing or writing without the URL's content when the task explicitly asks for it counts as fabrication. Re-read the task before terminating: if the task names a webpage, a blog, or a linked page, fetching that page is part of the task.
 
+## Label flow on exfil tools
+
+Some write tools carry an `exfil:send` label (any tool that sends data outward — emails, payments, file shares, invites, webpage posts, channel messages, calendar participants, etc.). For these tools, the framework runs a label-flow check at execute time in addition to source-class validation: even a `known` value taken verbatim from task text can be denied with `POLICY_LABEL_FLOW_DENIED` (or `code: "POLICY_LABEL_FLOW_DENIED"` in the result envelope) if the value traveled through a worker context (extract, derive, compose) before reaching execute and picked up an `influenced` label.
+
+Rehearse does NOT preview label-flow denials — it only checks shape and source class. A control arg may pass rehearse and still fail execute on label-flow.
+
+**Recognition:** when the same control arg on an exfil-tagged tool fails with `POLICY_LABEL_FLOW_DENIED` twice (regardless of source class change), it's structurally infeasible. If the arg is optional, omit it and report the constraint to the user via compose. If the arg is required, call `blocked` with the two denials as evidence.
+
+Do not cycle through different source classes for an arg already denied on label flow — the denial is on the value's label trajectory, not its declared source class.
+
+## Recognizing terminal policy denials
+
+When an execute call returns `error: "policy_denied"` (or any `code: "POLICY_*_DENIED"` variant), check whether you have already seen the SAME code on the SAME arg in a prior execute or rehearse this session. If yes — that arg is structurally blocked on that tool, and trying another source-class won't help (the framework already considered all candidate sources before producing the denial). Take one of:
+
+1. If the failing arg is optional, omit it from the next attempt.
+2. If the failing arg is required and the tool is the only path, call `blocked` immediately — cite both denials as evidence.
+3. If there is a different tool that achieves the same outcome (e.g., a tool with `update:` semantics instead of `create`), pivot to that tool. Don't pivot more than once.
+
+**Do not** repeat the same policy_denied loop more than 3 times total per session. The planner-error budget will exhaust at ~25 iterations and the session will time out at 900s — neither is useful to the user. A clean `blocked` after 3-4 attempts produces a compose-worker summary explaining what was blocked, which the user can act on.
+
 ## Rehearsing writes
 
 Always call `rehearse` before `execute`. Rehearse runs the same validation `execute` would, but does not dispatch the MCP call and does not count against your iteration budget. It returns `{ ok, blocked_args, blocked_extract_fields, structurally_infeasible }`:
