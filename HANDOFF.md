@@ -108,11 +108,12 @@ Worker LLM gate (`mlld tests/live/workers/run.mld`) passed 24/24 in isolation �
 
 **This needs investigation before merge.** Local probe killed after first result; standalone re-run of UT4 confirmed via `MLLD_TRACE=effects`. Phase 4.b cloud benign sweep was dispatched after workaround: branch pushed via HTTPS using gh CLI credential helper (`git push https://github.com/mlld-lang/benchmark-workspace.git -c credential.helper="!gh auth git-credential"`). SSH agent failure remains — user should fix locally for normal git operations.
 
-**Three dispatch footguns surfaced this session** — folded into `scripts/bench.sh` + `scripts/bench-attacks.sh`:
+**Four dispatch footguns surfaced this session** — folded into `scripts/bench.sh` + `scripts/bench-attacks.sh` + `bench/docker/Dockerfile` + `.github/workflows/bench-image.yml`:
 
 1. `gh workflow run` defaults to **main ref**, not the current local branch. Added `BENCH_REF` env var.
 2. `bench-run.yml` pulls `:main` image tag by default, not branch-specific. Added `BENCH_IMAGE_TAG` env var.
 3. `bench-image.yml` defaults `mlld_ref: '2.1.0'` — the **policy-redesign mlld branch isn't in the image** under that default. Symptom: `Module 'policy' not found in mlld's registry` for every task (16/16 infra-err on banking dispatch 25895313552). Fix: dispatch `bench-image.yml -f mlld_ref=policy-redesign` so the COPY-from-mlld-prebuilt layer uses the migration runtime. Must dispatch `mlld-prebuild.yml -f mlld_ref=policy-redesign` first.
+4. `bench/docker/Dockerfile` hardcoded `COPY --from=ghcr.io/mlld-lang/mlld-prebuilt:2.1.0` even when `MLLD_REF` build-arg was passed — Docker buildx doesn't support variable expansion in `COPY --from`. Fixed by parameterizing with `MLLD_PREBUILT_TAG` ARG + named multi-stage (`FROM ghcr.io/.../mlld-prebuilt:${MLLD_PREBUILT_TAG} AS mlld-src` then `COPY --from=mlld-src`). bench-image.yml passes `MLLD_PREBUILT_TAG=${{ inputs.mlld_ref }}` to the build.
 
 **Correct dispatch sequence for the migration branch**:
 
