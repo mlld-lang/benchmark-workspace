@@ -106,7 +106,33 @@ Worker LLM gate (`mlld tests/live/workers/run.mld`) passed 24/24 in isolation �
 - The c-3162-dispatch-wrap split into outer + inner exes (commit `618a6ae`). The outer direct-when wraps the impl in a call that re-enters dispatch with the same args — possible self-reference under recursive checks.
 - Bench-side `f168037` (refine sender == "me") interacting with v2.x §4.2 in a way that breaks the trusted-amount path that canonical 6 depends on.
 
-**This needs investigation before merge.** Local probe killed after first result; standalone re-run of UT4 confirmed via `MLLD_TRACE=effects`. Phase 4.b cloud benign sweep was dispatched (see below) after workaround: branch pushed via HTTPS using gh CLI credential helper (`git push https://github.com/mlld-lang/benchmark-workspace.git -c credential.helper="!gh auth git-credential"`). SSH agent failure remains — user should fix locally for normal git operations.
+**This needs investigation before merge.** Local probe killed after first result; standalone re-run of UT4 confirmed via `MLLD_TRACE=effects`. Phase 4.b cloud benign sweep was dispatched after workaround: branch pushed via HTTPS using gh CLI credential helper (`git push https://github.com/mlld-lang/benchmark-workspace.git -c credential.helper="!gh auth git-credential"`). SSH agent failure remains — user should fix locally for normal git operations.
+
+**Three dispatch footguns surfaced this session** — folded into `scripts/bench.sh` + `scripts/bench-attacks.sh`:
+
+1. `gh workflow run` defaults to **main ref**, not the current local branch. Added `BENCH_REF` env var.
+2. `bench-run.yml` pulls `:main` image tag by default, not branch-specific. Added `BENCH_IMAGE_TAG` env var.
+3. `bench-image.yml` defaults `mlld_ref: '2.1.0'` — the **policy-redesign mlld branch isn't in the image** under that default. Symptom: `Module 'policy' not found in mlld's registry` for every task (16/16 infra-err on banking dispatch 25895313552). Fix: dispatch `bench-image.yml -f mlld_ref=policy-redesign` so the COPY-from-mlld-prebuilt layer uses the migration runtime. Must dispatch `mlld-prebuild.yml -f mlld_ref=policy-redesign` first.
+
+**Correct dispatch sequence for the migration branch**:
+
+```bash
+# 1. mlld-prebuild for policy-redesign branch (tags ghcr.io/mlld-lang/mlld-prebuilt:policy-redesign)
+gh workflow run mlld-prebuild.yml -f mlld_ref=policy-redesign
+# wait ~2-3 min
+
+# 2. bench-image referencing the policy-redesign mlld + tagged for the migration test
+gh workflow run bench-image.yml --ref policy-structured-labels-migration \
+  -f mlld_ref=policy-redesign -f tag=migration-test
+# wait ~1-2 min
+
+# 3. Dispatch sweep with branch ref + branch image tag
+BENCH_REF=policy-structured-labels-migration BENCH_IMAGE_TAG=migration-test scripts/bench.sh
+# wait ~45-50 min
+
+# 4. Attack matrix later (same env vars)
+BENCH_REF=policy-structured-labels-migration BENCH_IMAGE_TAG=migration-test scripts/bench-attacks.sh
+```
 
 **Next session action**: re-run the canonical 6 probe and grep the planner transcripts for the actual error code. Then bisect by reverting each recent runtime/orchestration change to identify which one introduced the regression.
 - **mlld**: `policy-redesign` @ `f90d47e77` — runtime is the migration target.
