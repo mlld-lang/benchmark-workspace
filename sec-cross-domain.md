@@ -216,11 +216,10 @@ __A defense rule applies to a primitive that exists in multiple suites__
        > via hard-deny. A policy rule would generalize: any future suite with a
        > `privileged:*` operation inherits the defense without per-suite re-declaration.
 - Known-source-class kind: floor
-  + [?] Each suite verifies known-source-class enforces kind: floor in BasePolicy
-       > Per-suite tickets: BK-known-kind-floor-verify, SL-known-bucket-task-text,
-       > WS-known-kind-floor-verify. Filed per-suite because each suite has its own
-       > sweep verification path; the rule itself is BasePolicy-level (single
-       > implementation, applies everywhere).
+  + [T] Each suite verifies known-source-class enforces kind: floor in BasePolicy — `tests/scripted/security-banking.mld#sendMoneyKnownIbanNotInTaskTextRejected` + `security-slack.mld#knownEmailNotInTaskTextRejected` + `security-workspace.mld#sendEmailKnownRecipientNotInTaskTextRejected` + `security-travel.mld#reserveHotelKnownNotInTaskTextRejected` (all four suites covered)
+       > BasePolicy-level rule, but verification surface is per-suite (each suite has
+       > its own kind: tag and task-text). Migrator-9 confirms uniform firing across
+       > all four suites — the rule is generic and consistently enforced.
 - PII sensitivity labels
   + [ ] Add sensitive/secret labels to PII fields across suites (ticket: XS-pii-sensitivity-labels)
        > Travel @user_info has passport/credit_card/bank candidates; banking @user_account
