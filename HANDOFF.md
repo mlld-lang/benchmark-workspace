@@ -15,9 +15,17 @@ Mlld-dev landed the upstream fix (`policy-redesign` @ `131ee18f9`: `guard-denial
 
 **ASR polarity correction**: the workspace × atk:direct canaries from migrator-9 earlier (runs `25897257784` + `25897258859`) returning **240/240 security=false = 0% ASR = 100% defended**. Not alarming. STATUS already records this correctly via `0/105` framing; documenting here so the compaction artifact doesn't re-poison.
 
-**Sweep dispatched 2026-05-15 ~04:18 UTC** (runs `25899937481` workspace-a + `25899938486` banking, more to follow per 2-at-a-time batching) against bench-image `migration-test` tag built on `policy-redesign` mlld + clean `d1354f7`. This is the verification sweep for utility recovery against the fixed mlld. Expected: utility recovers from regression-baseline 48/97 toward migrator-7 baseline 53/97 (or better, since the planner now sees structured `tool_input_validation_failed` envelopes instead of looping on bare throws).
+**Sweep #1 dispatched 2026-05-15 ~04:18 UTC** completed partial (workspace-a + banking only; workspace-b/slack/travel failed image freshness due to a mid-dispatch push). Results: workspace-a 5/20, banking 4/16. Transcript audit revealed the dominant cause: mlld policy-redesign tightened recursion detection so nested @opencode calls from worker dispatch (planner @opencode → MCP → worker @opencode) throw "Circular reference detected: executable '@opencode' calls itself recursively" at `rig/runtime.mld:34`. Planner reasoning across BK UT0/UT4/UT11/UT13 + WS UT0/UT3 explicitly cites this framework error.
 
-**Next step after sweep**: confirm utility, then dispatch attack matrix.
+**Fix landed: `llm/lib/opencode/index.mld:420`** — declared `exe llm, recursive @opencode(prompt, config)`. The comma-separated label-list syntax is required; documented form `exe recursive llm @foo` fails to parse on policy-redesign (filed mlld `m-e43b`). Zero-LLM gate stays 266/0; worker LLM 23/24 (one extract flake, within normal variance).
+
+**Sweep #3 dispatched 2026-05-15 ~04:48 UTC** with c073855 fix applied (banking `25900898755` + workspace-a `25900897512` in flight at handoff write time). Expected: substantial utility recovery from 48/97 since the recursion bug was blocking the trust-laundering workers (extract/derive/compose) that the canonical-6 tasks depend on for legal untrusted→trusted flow.
+
+**Phase 4.a probe verification — `096bcd2` disposition**: re-classified from "likely-no-op-under-v2.x" to **merge-code**. Probe (`tmp/probe-trusted-field/probe-derive-trust.mld`) under reverted overlay shows `payload.amount.mx.taint = ["untrusted"]` post-coerce on policy-redesign HEAD; with overlay applied returns `["trusted"]`. §4.2 + §2.4 do not auto-propagate trust on derive payload; the schema-level overlay remains load-bearing.
+
+**Defended-utility parity tests added (a2e0423)**: each `tests/scripted/security-<suite>-parity.mld` now has the four-corner box including `testDefendedAgentLegitimate*Completes`. Closes a discipline gap (per `feedback_security_utility_pairing` memory): 100% security would be meaningless if it passed by rejecting legit calls too. 57 → 61 scripted tests passing.
+
+**Next step after sweep**: confirm utility recovery, then dispatch attack matrix (`scripts/bench-attacks.sh`).
 
 ## What this session did
 
