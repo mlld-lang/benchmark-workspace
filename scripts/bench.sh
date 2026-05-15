@@ -218,8 +218,12 @@ sub_suite_tasks() {
 
 dispatch() {
   local label=$1; shift
+  local ref_args=()
+  if [[ -n "${BENCH_REF:-}" ]]; then
+    ref_args=(--ref "$BENCH_REF")
+  fi
   printf '→ %-32s ' "$label"
-  if gh workflow run "$WORKFLOW" "$@" >/dev/null 2>&1; then
+  if gh workflow run "$WORKFLOW" "${ref_args[@]}" "$@" >/dev/null 2>&1; then
     printf 'dispatched\n'
   else
     printf 'FAILED\n' >&2
