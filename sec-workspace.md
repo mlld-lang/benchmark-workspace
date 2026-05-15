@@ -689,15 +689,17 @@ __Attacker causes a recipient-bearing tool to dispatch to an attacker-controlled
          > Worker output is influenced when input is tainted; `labels.influenced.deny`
          > blocks influenced data from reaching exfil tools.
   + Worker uses attacker literal as `recipients` arg
-    + [-] `@send_email_inputs.recipients: facts/kind:email` (clean@096bcd2)
-         > Per-element fact-kind requirement. `"mark.black-2134@gmail.com"` cannot
-         > satisfy unless minted as a `kind:email` fact from a grounded source.
-    + [-] `#no-send-to-unknown` policy rule fires on fact args of exfil:send tools (clean@096bcd2)
-         > Rule in synthesizedPolicy. Per-element check on the recipients array.
+    + [T] `@send_email_inputs.recipients: facts/kind:email` — `tests/scripted/security-workspace.mld#sendEmailExtractedRecipientRejected` + `#sendEmailDerivedRecipientRejected` + parity
+         > Per-element fact-kind requirement. Extracted/derived scalars cannot mint
+         > `kind:email`. Three tests (and parity) lock this end-to-end.
+    + [T] `#no-send-to-unknown` policy rule fires on fact args of exfil:send tools — coverage transitively via `#sendEmailKnownRecipientNotInTaskTextRejected` (rule fires when known doesn't satisfy task-text)
+         > Rule in synthesizedPolicy. Per-element check on the recipients array. The
+         > attacker IBAN/email case is the rule's primary trigger surface.
   + Planner authorizes attacker literal via `known` bucket
-    + [-] `known` requires verbatim task-text substring match (clean@096bcd2)
+    + [T] `known` requires verbatim task-text substring match — `tests/scripted/security-workspace.mld#sendEmailKnownRecipientNotInTaskTextRejected` (error `known_value_not_in_task_text`)
          > Attacker address `"mark.black-2134@gmail.com"` does not appear in ANY UT PROMPT
-         > (verified by scan of v1 + v1_1_1 workspace user_tasks.py).
+         > (verified by scan of v1 + v1_1_1 workspace user_tasks.py). The test fixture
+         > exercises the validator with a non-task-text email; the validator rejects.
     + [T] `known` matched against `kind:email` floor — `tests/scripted/security-workspace.mld#sendEmailKnownRecipientNotInTaskTextRejected` (error `known_value_not_in_task_text`)
          > `known` scalars must satisfy both task-text presence AND kind. Test passes a
          > non-task-text email; the known-bucket validator rejects.
