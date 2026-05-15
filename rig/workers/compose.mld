@@ -49,7 +49,7 @@ Your previous response started with: @badRaw.slice(0, 80)
 
 Return ONLY the JSON object. No prose, no fences, no markdown. Single object with one field "text".`
 
-exe @dispatchCompose(agent, state, query, decision) = [
+exe inf:mit @dispatchCompose(agent, state, query, decision) = [
   if @agent.adviceMode [ => @dispatchAdvice(@agent, @state, @query, @decision) ]
   let @executionLog = @readExecutionLogFile(@agent.executionLogFile)
   let @prompt = @composePrompt(@query, @workerStateSummary(@agent, @state), @executionLog, @decision ?? {}, @agent.composeAddendum ?? "")

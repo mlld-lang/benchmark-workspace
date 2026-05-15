@@ -1,0 +1,162 @@
+>> rig/mint.mld — user-literal minting tool surface.
+>>
+>> See SKILL.md "Three-tier separation" — this module is rig (generic);
+>> the universal user-literal-grounding mechanism is suite-agnostic.
+>>
+>> Implements `@mintUserLiteral`, a framework-internal tool the planner calls
+>> to convert a task-text literal into a `src:user`-labeled handle. The
+>> structural defense pattern: agent-visible code (the planner) cannot mint
+>> `src:user` directly; it must go through this wrapper, which:
+>>   1. Verifies the value appears as a token-bounded substring of the
+>>      session's user-task text, after case+whitespace normalization,
+>>      with a min-length floor of 3 chars.
+>>   2. Delegates to mlld's built-in `@mintUserValueHandle` (capability-gated
+>>      runtime primitive) to mint the handle.
+>>   3. Returns either the minted handle or a structured error envelope the
+>>      planner can react to (no opaque rehearse rejections).
+>>
+>> Verifier scope per migration design call (migrator-10): all user-role
+>> messages in the current session. For AgentDojo, that's a single PROMPT
+>> string; for multi-turn deployments the slot generalizes to an array.
+>>
+>> Why this lives in rig (not bench): the value-grounding mechanism is
+>> universal across suites. Every defended agent benefits from the same
+>> structural verification, so the tool is union'd into the planner's
+>> catalog automatically by rig.
+
+import { @user_value, @mint_user_literal_inputs } from "./records.mld"
+import { @writeRecordsToShelf, @recordHandles } from "./runtime.mld"
+import { @compileToolArgs } from "./intent.mld"
+import { @plannerValidationFailure } from "./planner_inputs.mld"
+
+>> ── Verifier ────────────────────────────────────────────────────────
+>>
+>> Token-bounded substring match. JS because regex with escape, native
+>> whitespace normalization, and word-boundary respect are exactly the
+>> kind of string manipulation `mlld qs` recommends keeping in JS — it
+>> does not need .mx metadata.
+>>
+>> Boundary definition: start-of-string, end-of-string, or whitespace.
+>> Values may contain internal spaces ("Hawaii vacation plans") so we
+>> cannot rely on token-equality; we test that the value appears as a
+>> contiguous span with whitespace/edge boundaries on each side.
+
+exe @verifyUserLiteral(value, query) = js {
+  if (typeof value !== 'string' || typeof query !== 'string') {
+    return { ok: false, reason: 'value or query is not a string' };
+  }
+  const normValue = value.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (normValue.length < 3) {
+    return { ok: false, reason: 'value shorter than min length (3 chars)' };
+  }
+  const normQuery = query.toLowerCase().replace(/\s+/g, ' ');
+  const escaped = normValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(^|\\s)${escaped}(\\s|$)`);
+  return { ok: re.test(normQuery), reason: re.test(normQuery) ? null : 'no token-bounded match in user task text' };
+}
+
+>> ── Mint tool ───────────────────────────────────────────────────────
+>>
+>> Returns either the minted handle (a StructuredValue<HandleWrapper>
+>> carrying mx.labels: ["src:user:msg:0"]) or a structured error envelope
+>> with code/field/hint/message that the dispatcher surfaces to the
+>> planner. The planner can read the error and either rephrase or pivot
+>> to a different source class.
+
+exe @mintUserLiteral(value, query) = [
+  let @verified = @verifyUserLiteral(@value, @query ?? "")
+  if !@verified.ok [
+    => {
+      ok: false,
+      error: "mint_user_literal_value_not_found",
+      code: "MINT_USER_LITERAL_NOT_FOUND",
+      field: "value",
+      reason: @verified.reason,
+      hint: `'@value' was not found as a token-bounded substring in the user task text (case+whitespace normalized). If this value came from a tool call, use the resolved handle directly. If you misquoted the user, copy the value verbatim.`,
+      message: `mint_user_literal: value '@value' not present in user messages`
+    }
+  ]
+  >> Refinement segments record the provenance scope: "msg" for user-message
+  >> origin, "0" for the canonical-session-message index (AgentDojo single
+  >> prompt). Multi-turn deployments may extend this to track which message.
+  let @handle = @mintUserValueHandle(@value, { refine: ["msg", "0"] })
+  => { ok: true, handle: @handle, value: @value }
+]
+
+>> ── Tool surface ────────────────────────────────────────────────────
+>>
+>> Placeholder exe for the catalog entry — never called directly.
+>> rigTransform dispatch goes to @dispatchMintUserLiteral.
+exe @mint_user_literal_placeholder(value) = [
+  => { error: "rigTransform_should_not_be_called_directly", tool: "mint_user_literal" }
+]
+
+>> Dispatcher: verify + mint + write to shelf. Returns a resolve-shaped
+>> envelope with the @user_value record's handle for the planner.
+>>
+>> Diverges from the standard rigTransform branch in resolve.mld:
+>> dispatchFindReferencedUrls / dispatchGetWebpageViaRef receive
+>> pre-validated record-handle descriptors via @compileRecordArgs. The
+>> mint_user_literal tool takes a plain {source:"known", value:"..."} ref
+>> (not a record handle), so the dispatcher takes @decision directly and
+>> runs @compileToolArgs internally.
+exe role:worker @dispatchMintUserLiteral(agent, state, tool, decision, query, deltaOnly) = [
+  let @argsCheck = @compileToolArgs(@agent, @state, @tool, @decision.args ?? {}, @query)
+  if !@argsCheck.ok [
+    => @plannerValidationFailure(@argsCheck.error ?? "tool_arg_validation_failed", @argsCheck, @argsCheck.issues)
+  ]
+  let @value = @argsCheck.args.value
+  let @result = @mintUserLiteral(@value, @query)
+  if !@result.ok [
+    => {
+      error: @result.error,
+      code: @result.code,
+      field: @result.field,
+      hint: @result.hint,
+      summary: @result.message,
+      reason: @result.reason
+    }
+  ]
+  let @recordValue = { value: @result.handle } as record @user_value
+  let @recordType = "user_value"
+  let @records = @writeRecordsToShelf(@agent, @recordType, @user_value, [@recordValue])
+  let @handles = @recordHandles(@records)
+  => {
+    state: when [ @deltaOnly => null * => @state ],
+    state_delta: {},
+    result: {
+      status: "resolved",
+      record_type: @recordType,
+      count: 1,
+      handles: @handles,
+      summary: `Minted user_value handle @handles[0] (verified literal '@value' against user task text).`
+    },
+    session_id: null
+  }
+]
+
+>> ── Tool catalog entry (auto-injected into every suite) ────────────
+>>
+>> Framework-universal tool surface. Suite-agnostic mint tool that every
+>> defended agent gets automatically. The agent's rigInternalTools field
+>> exposes this entry alongside agent.tools; @phaseToolEntry /
+>> @phaseCatalog look up keyed entries in both.
+
+var tools @rigInternalTools = {
+  mint_user_literal: {
+    mlld: @mint_user_literal_placeholder,
+    inputs: @mint_user_literal_inputs,
+    returns: @user_value,
+    rigTransform: "mint_user_literal",
+    labels: ["resolve:r", "tool:r", "mint:r"],
+    description: "Verify a literal value from the user's task text and mint a src:user-labeled handle. Use this to convert a task-text literal (an email address, name, file path, or exact phrase) into a handle suitable for use as a control argument in subsequent execute calls. Pass the literal verbatim as {source:'known', value:'...'}. The framework verifies token-bounded substring match against the user task text (case + whitespace normalized) and returns a user_value handle. On verification failure, returns a structured error envelope — re-check the literal or pivot to a resolved-record handle. Reference the minted result via {source:'resolved', record:'user_value', handle:'<handle>', field:'value'}."
+  }
+}
+
+export {
+  @verifyUserLiteral,
+  @mintUserLiteral,
+  @mint_user_literal_placeholder,
+  @dispatchMintUserLiteral,
+  @rigInternalTools
+}

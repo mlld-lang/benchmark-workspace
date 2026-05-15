@@ -123,7 +123,7 @@ exe @validateSelectionRefs(agent, sources, refs) = [
   ]
 ]
 
-exe @dispatchDerive(agent, state, decision, query) = [
+exe inf:mit @dispatchDerive(agent, state, decision, query) = [
   let @sourceCheck = @validatePlannerSourcesArray(@decision.sources ?? [], ["resolved", "selection", "extracted", "derived"])
   if !@sourceCheck.ok [ => @plannerValidationFailure("planner_source_validation_failed", @sourceCheck, @sourceCheck.issues) ]
   >> Pair-resolve once per source so the bail check and the typed_sources

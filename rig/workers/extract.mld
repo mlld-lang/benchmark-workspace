@@ -174,7 +174,7 @@ exe @containsSelectionRef(inputValue) = js {
   return hasSelection(inputValue);
 }
 
-exe @dispatchExtract(agent, state, decision, query) = [
+exe inf:mit @dispatchExtract(agent, state, decision, query) = [
   if @decision.tool.isDefined() [
     let @tool = @phaseToolEntry(@agent, "extract", @decision.tool)
     if !@tool [

@@ -1,3 +1,4 @@
+import { @rigInternalTools } from "./mint.mld"
 import {
   @toolCatalogObject,
   @toolKind,
@@ -39,8 +40,13 @@ import { @standard, @urlDefense, @noNovelUrl } from "@mlld/policy"
 >>
 >> Rig overlay adds atop @standard:
 >>   labels.risks                    — operation→risk-category map from tool catalog
->>   labels.rules.influenced.deny    — additively widen @standard's influenced+advice
->>                                     deny to also block destructive + exfil
+>>   labels.rules."influenced+!influenced:mitigated"
+>>                                   — deny destructive + exfil for raw influenced
+>>                                     values; mitigated values (worker output with
+>>                                     inf:mit on extract/derive/compose dispatch)
+>>                                     pass. @standard's `influenced: deny:["advice"]`
+>>                                     stays untouched so the advice gate remains
+>>                                     strict regardless of mitigation claim.
 >>   labels.{trusted_tool_output,user_originated}.satisfies
 >>                                   — promote custom labels to fact-equivalent for
 >>                                     positive checks (transitional alias per
@@ -64,10 +70,14 @@ import { @standard, @urlDefense, @noNovelUrl } from "@mlld/policy"
 exe @synthesizedPolicy(tools, overridePolicy, options) = [
   let @operations = @synthesizedOperations(@tools)
   let @stdRules = @standard.labels.rules
-  let @widenedInfluencedDeny = @stdRules.influenced.deny.concat(["destructive", "exfil"])
+  >> Negated combo rule: deny destructive/exfil only for raw influenced
+>> values. Worker output with influenced:mitigated (set by inf:mit on
+>> extract/derive/compose dispatchers via standard library apply rule)
+>> passes. @standard's `influenced: deny:["advice"]` stays in place via
+>> spread, so the advice gate remains strict regardless of mitigation.
   let @rigLabels = {
     ...@stdRules,
-    influenced: { deny: @widenedInfluencedDeny }
+    "influenced+!influenced:mitigated": { deny: ["destructive", "exfil"] }
   }
   let @baseShape = {
     labeling: { unlabeled: "untrusted" },
@@ -175,6 +185,7 @@ exe @validateConfig(config) = [
     harness: @config.harness ?? @defaultHarness(@config.model),
     records: @config.records,
     tools: @config.tools,
+    rigInternalTools: @rigInternalTools,
     routedTools: @routeToolCatalog(@config.tools),
     toolsCollection: @runtimeCollection,
     basePolicy: @basePolicy,

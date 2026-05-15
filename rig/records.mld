@@ -40,6 +40,11 @@ record @extractAttestation = {
 >>      schema-level blanket trust with conditional input-aware trust
 >>      propagation, so derive output trust tracks input cleanliness.
 >>
+>> Phase 4.a probe verification (2026-05-15): reverting this declaration
+>> on policy-redesign mlld @ 131ee18f9 shows payload.amount.mx.taint =
+>> ["untrusted"] post-coerce — overlay is load-bearing, NOT no-op.
+>> Disposition: merge-code. Probe: tmp/probe-trusted-field/probe-derive-trust.mld.
+>>
 >> Other fields stay `data.untrusted` because the planner reads them
 >> directly (status, name, reason are surfaced in tool-call returns).
 record @deriveAttestation = {
@@ -92,11 +97,51 @@ record @url_capability = {
   write: { role:worker: { shelves: true } }
 }
 
+>> ── User-literal mint surface (m-7d15 + m-5828 + m-f4f5 follow-on) ──
+>>
+>> @mint_user_literal_inputs is the planner's contract for the
+>> mintUserLiteral framework tool. The planner calls it with a literal
+>> value claimed to come from the user's task text. The dispatcher
+>> verifies via substring check against @planner.query (passed as a
+>> dispatcher param), then mints via @mintUserValueHandle (capability-
+>> gated primitive) and writes a @user_value record onto the planner's
+>> shelf. The planner references the result via the standard
+>> { source: "resolved", record: "user_value", handle, field: "value" }
+>> ref shape.
+>>
+>> The verifier itself stays in the dispatcher (NOT a record check:
+>> action) because session-corpus verification needs @planner.query —
+>> session-ambient state that @input deliberately does not expose, per
+>> mlld-dev disposition on m-8e37.
+>>
+>> The src:user label arrives on the field via the mint, not via
+>> record-level labels: declarations. Record-level src:user would bypass
+>> the capability gate (any author could stamp it). Going through
+>> @mintUserValueHandle is the disciplined path.
+
+record @mint_user_literal_inputs = {
+  data: { untrusted: [value: string] },
+  validate: "strict",
+  write: { role:planner: { tools: { authorize: true } } }
+}
+
+record @user_value = {
+  facts: [value: { type: handle, kind: "user_literal" }],
+  key: value,
+  read: {
+    role:planner: [{ handle: "value" }],
+    role:worker: [{ value: "value" }]
+  },
+  write: { role:worker: { shelves: true } }
+}
+
 export {
   @resolveAttestation,
   @extractAttestation,
   @deriveAttestation,
   @executeAttestation,
   @composeAttestation,
-  @url_capability
+  @url_capability,
+  @mint_user_literal_inputs,
+  @user_value
 }

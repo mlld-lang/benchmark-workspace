@@ -439,12 +439,19 @@ exe @phaseCatalog(agent, phase) = [
     key: @name,
     value: @tool
   }
-  let @directPhaseCatalog = @pairsToObject(@pairs)
+  >> Include rig-internal tools (small plain object — cheap to walk).
+  let @rigInternals = @agent.rigInternalTools ?? {}
+  let @rigPairs = for @name, @tool in @rigInternals when @toolInPhase(@tool, @phase) => {
+    key: @name,
+    value: @tool
+  }
+  let @allPairs = @pairs.concat(@rigPairs)
+  let @directPhaseCatalog = @pairsToObject(@allPairs)
   >> Prefer direct phase filtering from the merged planner catalog on
   >> `agent.tools`. The routed slices are still available as a fallback,
   >> but imported nested routed objects have proven much heavier to walk
   >> than the flat keyed planner catalog.
-  if @pairs.length > 0 [
+  if @allPairs.length > 0 [
     => @directPhaseCatalog
   ]
   if @agent.routedTools.isDefined() && @agent.routedTools[@phase].isDefined() [
@@ -473,6 +480,12 @@ exe @phaseToolEntry(agent, phase, toolName) = [
   let @directCatalog = @toolCatalogObject(@agent.tools)
   if @directCatalog[@name].isDefined() && @toolInPhase(@directCatalog[@name], @phase) [
     => @directCatalog[@name]
+  ]
+  >> Fall back to rig-internal tools (mint_user_literal, etc.). These are
+  >> a small plain object — keyed lookup is cheap and avoids walking the
+  >> suite tools collection.
+  if @agent.rigInternalTools.isDefined() && @agent.rigInternalTools[@name].isDefined() && @toolInPhase(@agent.rigInternalTools[@name], @phase) [
+    => @agent.rigInternalTools[@name]
   ]
   let @catalog = @phaseCatalog(@agent, @phase)
   => when [
