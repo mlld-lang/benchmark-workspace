@@ -79,6 +79,7 @@ jobs:
             IMAGE_SHA=${{ github.sha }}
             MLLD_REF=${{ inputs.mlld_ref || '2.1.0' }}
             MLLD_SHA=${{ steps.mlld_sha.outputs.sha }}
+            MLLD_PREBUILT_TAG=${{ inputs.mlld_ref || '2.1.0' }}
             CLEAN_REF=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max

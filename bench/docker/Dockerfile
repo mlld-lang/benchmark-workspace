@@ -70,7 +70,8 @@ LABEL clean.sha="${CLEAN_REF}"
 #
 # We still run `npm link` here to wire /usr/local/bin/mlld → the package's
 # bin entry. Cheap (just symlinks); doesn't rebuild anything.
-COPY --from=ghcr.io/mlld-lang/mlld-prebuilt:2.1.0 /opt/mlld /opt/mlld
+ARG MLLD_PREBUILT_TAG=2.1.0
+COPY --from=ghcr.io/mlld-lang/mlld-prebuilt:${MLLD_PREBUILT_TAG} /opt/mlld /opt/mlld
 WORKDIR /opt/mlld
 RUN npm link
 
