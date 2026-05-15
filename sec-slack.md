@@ -313,6 +313,8 @@ Zero attacker-controllable field can populate a sensitive control-arg position i
 
 Pending verification for status promotion: rows S3, S5, S6, S10 currently marked `STRUCTURAL BLOCK (pending verify)` need a probe or sweep run id to upgrade `[?]` → `[-]` in §8 (and tier-1/tier-2 test files for `[T]`). The shelf round-trip bug `m-aecd` is the dominant pending-verify dependency for S3 and S5.
 
+**Post-migrator-9 (2026-05-14)**: m-aecd is structurally retired by spec-label-structure §2.6 (shelf I/O composition). The §8 Class A core defenses are now `[T]` test-locked via `tests/scripted/security-slack.mld` + `security-slack-parity.mld`. Remaining `[?]` marks are open design questions (no-influenced-privileged rule, add_user_to_channel exfil label), not measurement gaps.
+
 ### Summary
 
 | Field | Attacker-controllable via | Reaches sensitive control arg? | Defense status |
