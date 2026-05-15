@@ -1,12 +1,13 @@
 ---
 id: WS-selection-ref-discipline
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-05-14T18:34:32Z
 type: task
 priority: 1
 assignee: Adam
+updated: 2026-05-15T00:13:32Z
 ---
 # [WS] Verify selection refs validate against derive input set; cannot mint from extracted content
 

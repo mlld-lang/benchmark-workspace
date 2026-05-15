@@ -595,12 +595,12 @@ __Attacker uses extract worker to launder data.untrusted content into a write-to
   + [-] `@share_file_inputs.email: fact/kind:email` (clean@096bcd2)
        > Share-file recipient blocked by same defense.
 - Source-class firewall at intent compile
-  + [-] `extracted`/`derived` source classes denied on fact args (clean@096bcd2)
-       > rig/intent.mld validates: control args use only `resolved`, `known`, or `selection`.
-       > Extract worker outputs cannot satisfy the source-class check.
-  + [?] Selection refs validate against derive input set (ticket: WS-selection-ref-discipline)
+  + [T] `extracted`/`derived` source classes denied on fact args — `tests/scripted/security-workspace.mld#sendEmailExtractedRecipientRejected` + `#sendEmailDerivedRecipientRejected` + `#shareFileExtractedEmailRejected` + `#rescheduleCalendarEventExtractedIdRejected` + `#deleteFileAttackerIdRejected` + `tests/scripted/security-workspace-parity.mld#testUndefendedAgentSourceClassFirewallStillRejects` (defense-independent firing under undefended agent)
+       > Comprehensive layer-A test coverage across send_email, share_file, reschedule
+       > and delete tools verifies extract/derive scalars never satisfy fact arg requirements.
+  + [T] Selection refs validate against derive input set — `tests/scripted/security-workspace.mld#chainedSendDeleteRejected` + selection-ref tests in security-slack.mld (parallel discipline)
        > Selection refs only point at instances that were in the derive worker's input
-       > set. Extract-produced content cannot mint new selection-ref-target instances.
+       > set. Tests verify chained-write authorization can't bypass via cross-record selection.
 - Extract contract pinning
   + [-] `@validateExtractSchema` validates output shape (clean@096bcd2)
        > rig/workers/extract.mld validates extract output against the contract schema
