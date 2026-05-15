@@ -417,7 +417,19 @@ exe @runOpencodeSh(prompt, dir, model, agent, variant, bypass, inlineConfig, doR
 >>   consumes `text` events as they arrive; @raw still holds the full NDJSON.
 >> - Uses a `sh { }` block so interpolated values flow as bash env vars and
 >>   survive unescaped (see ticket m-8694 for the `cmd` block escaping bug).
-exe llm @opencode(prompt, config) = [
+>> `recursive` is required because the bench pipeline calls @opencode at two
+>> nesting levels: the outer planner runs as opencode (spawned by Python), and
+>> each worker phase dispatch calls @opencode again for its own LLM call.
+>> Mlld's policy-redesign branch tightened recursion detection to fire on any
+>> exe re-entering itself in the call stack — without `recursive`, the worker-
+>> level invocation throws "Circular reference detected" at rig/runtime.mld:34
+>> and the planner observes a string error it cannot route around. The two
+>> levels are bounded by MLLD_RECURSION_DEPTH (default 64); a bench planner
+>> session never approaches that depth (one outer planner + ≤1 worker call
+>> per phase iteration). Worker tests in `tests/live/workers/run.mld` pass
+>> without this because they invoke worker exes directly with no outer
+>> @opencode in scope; the bench is what surfaces the nested path.
+exe llm, recursive @opencode(prompt, config) = [
   let @cfg = @config ? @config : {}
   let @dir = @cfg.dir ? @cfg.dir : @root
   let @model = @cfg.model ? @cfg.model : "openrouter/z-ai/glm-5.1"
