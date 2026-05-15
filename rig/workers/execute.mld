@@ -249,7 +249,27 @@ exe role:worker @dispatchExecuteImpl(agent, state, decision, query) = [
 >> that mlld's input-validation path already produces, so downstream
 >> @toolCallError + @settlePhaseDispatch handle both denial paths
 >> uniformly.
+>> Input-validation denials (mlld MlldPolicyError direction:"input") flow
+>> through this same denied arm post-m-input-policy-uncatchable. Classify
+>> them as `tool_input_validation_failed` to preserve the planner-facing
+>> envelope shape (code/field/hint/message at the top level) the planner
+>> already learned to interpret. Other denials remain `policy_denied`.
 exe role:worker @dispatchExecute(agent, state, decision, query) = when [
+  denied && @mx.guard.direction == "input" => {
+    state: @state,
+    ok: false,
+    error: "tool_input_validation_failed",
+    stage: "dispatch_input",
+    code: @mx.guard.code ?? "input_validation_failed",
+    field: @mx.guard.field ?? null,
+    hint: @mx.guard.hint ?? null,
+    message: @mx.guard.reason ?? "Input validation failed",
+    reason: @mx.guard.reason ?? null,
+    direction: @mx.guard.direction,
+    tool: @mx.guard.tool ?? null,
+    guard: @mx.guard,
+    session_id: null
+  }
   denied => {
     state: @state,
     ok: false,

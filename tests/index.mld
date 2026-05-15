@@ -47,13 +47,12 @@ import { @policyBuildCatalogArchSuite } from "./rig/policy-build-catalog-arch.ml
 import { @toolMetadataSuite } from "./rig/tool-metadata.mld"
 import { @executeWorkerPolicySuite } from "./rig/execute-worker-policy.mld"
 import { @c3162DispatchSuite } from "./rig/c-3162-dispatch-denial.mld"
->> phase-error-envelope DISABLED pending mlld ticket m-input-policy-uncatchable.
->> Post v2.x policy-redesign, MlldPolicyError(direction:input) no longer fires
->> a denied event nor returns an envelope on non-LLM-traced dispatch. The test
->> bails at module load because `var @envBadAmount = @dispatchExecute(...)`
->> propagates the throw past the new outer `when [denied =>]` arm.
->> Re-enable once mlld surfaces input-policy denials uniformly with label-flow.
->> import { @phaseErrorEnvelopeSuite } from "./rig/phase-error-envelope.mld"
+>> Re-enabled 2026-05-15 after mlld m-input-policy-uncatchable fix
+>> (guard-denial-handler unwraps MlldWhenExpressionError.cause chain).
+>> The outer `when [denied =>]` arm in execute.mld now catches input-policy
+>> throws and classifies @mx.guard.direction == "input" as
+>> tool_input_validation_failed with full code/field/hint/message envelope.
+import { @phaseErrorEnvelopeSuite } from "./rig/phase-error-envelope.mld"
 import { @numericCoercionSuite } from "./rig/numeric-coercion.mld"
 import { @thinArrowAndDisplaySuite } from "./rig/thin-arrow-and-display.mld"
 import { @shelfIntegrationSuite } from "./rig/shelf-integration.mld"
@@ -79,6 +78,7 @@ var @suites = [
   @toolMetadataSuite,
   @executeWorkerPolicySuite,
   @c3162DispatchSuite,
+  @phaseErrorEnvelopeSuite,
   @numericCoercionSuite,
   @thinArrowAndDisplaySuite,
   @shelfIntegrationSuite,
