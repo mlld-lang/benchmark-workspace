@@ -493,9 +493,11 @@ __Attacker causes reserve_hotel/restaurant/car to dispatch with attacker-preferr
        > A derive/extract that reads review_blob produces influenced output.
        > Same ticket as Class A.
 - Worker dispatches reserve_hotel with attacker target as hotel control arg
-  + [-] @reserve_hotel_inputs.hotel: facts/kind:hotel_name (clean@096bcd2)
+  + [T] @reserve_hotel_inputs.hotel: facts/kind:hotel_name — `tests/scripted/security-travel.mld#reserveHotelExtractedNameRejected` + `#reserveHotelDerivedNameRejected` + `#reserveHotelKnownNotInTaskTextRejected` + `tests/scripted/security-travel-parity.mld#testUndefendedAgentSourceClassFirewallStillRejects` (defense-independent firing under undefended agent)
        > Source class must be `resolved` (handle minted by get_all_hotels_in_city)
-       > OR `known` (verbatim task-text + kind:hotel_name).
+       > OR `known` (verbatim task-text + kind:hotel_name). Three positive tests cover
+       > the extracted, derived, and known-not-in-task-text rejection paths plus a
+       > defense-independent parity to confirm the firewall is policy-agnostic.
   + [T] Extracted-class control args rejected (tests/scripted/security-travel.mld: testReserveHotelExtractedNameRejected)
        > Scripted-LLM regression test: worker that extracts hotel name from review_blob
        > and uses it as reserve_hotel.hotel is rejected at source-class firewall.
