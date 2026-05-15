@@ -10,7 +10,11 @@
 #
 # See .github/workflows/bench-image.yml for the canonical build.
 
+ARG MLLD_PREBUILT_TAG=2.1.0
+FROM ghcr.io/mlld-lang/mlld-prebuilt:${MLLD_PREBUILT_TAG} AS mlld-src
+
 FROM ubuntu:24.04
+ARG MLLD_PREBUILT_TAG
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PATH="/root/.local/bin:/opt/opencode-bin/bin:${PATH}"
@@ -70,8 +74,7 @@ LABEL clean.sha="${CLEAN_REF}"
 #
 # We still run `npm link` here to wire /usr/local/bin/mlld → the package's
 # bin entry. Cheap (just symlinks); doesn't rebuild anything.
-ARG MLLD_PREBUILT_TAG=2.1.0
-COPY --from=ghcr.io/mlld-lang/mlld-prebuilt:${MLLD_PREBUILT_TAG} /opt/mlld /opt/mlld
+COPY --from=mlld-src /opt/mlld /opt/mlld
 WORKDIR /opt/mlld
 RUN npm link
 
