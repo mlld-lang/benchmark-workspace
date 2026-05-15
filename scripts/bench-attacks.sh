@@ -122,8 +122,13 @@ dispatch_attack() {
     args+=(-f "tasks=$raw_tasks")
   fi
 
+  local ref_args=()
+  if [[ -n "${BENCH_REF:-}" ]]; then
+    ref_args=(--ref "$BENCH_REF")
+  fi
+
   printf '→ %-13s × %-23s ' "$sub" "$attack"
-  if gh workflow run "$WORKFLOW" "${args[@]}" >/dev/null 2>&1; then
+  if gh workflow run "$WORKFLOW" "${ref_args[@]}" "${args[@]}" >/dev/null 2>&1; then
     printf 'dispatched\n'
   else
     printf 'FAILED\n' >&2
