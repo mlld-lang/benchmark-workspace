@@ -1,8 +1,23 @@
-# HANDOFF.md — migrator-9 end-of-session
+# HANDOFF.md — migrator-9 continuation (2026-05-15 PM)
 
 Session breadcrumb. Forward-looking only. Read at session start.
 
 **For the next session: run `/migrate`.** Migration session continues on branch `policy-structured-labels-migration`. The `/migrate` skill loads three-tier separation + spike-then-test discipline; `/rig` gives general framework context but won't surface migration-specific structure.
+
+## Today's late-PM addendum (post mlld m-input-policy-uncatchable fix)
+
+Mlld-dev landed the upstream fix (`policy-redesign` @ `131ee18f9`: `guard-denial-handler.ts` now unwraps `MlldWhenExpressionError.cause` chains so input-policy throws reach the outer `when [denied =>]` arm). Clean-side follow-ups landed in commits `d1354f7` + `a2e0423`:
+
+- `rig/workers/execute.mld` — outer `@dispatchExecute` denied arm splits input-direction denials (`@mx.guard.direction == "input"`) into the `tool_input_validation_failed` envelope so the planner-facing shape (code/field/hint/message at top level) matches what it learned pre-migration. Generic policy_denied envelope is the fallback for label-flow denials.
+- `tests/rig/phase-error-envelope.mld` — re-enabled in `tests/index.mld` (was disabled at line 56 awaiting upstream fix). Zero-LLM gate **264 → 266 pass / 0 fail**.
+- `tests/scripted/security-{banking,slack,workspace,travel}-parity.mld` — added `testDefendedAgentLegitimate*Completes` to each (the fourth corner of the parity box per `feedback_security_utility_pairing`). 57 → 61 scripted tests passing.
+- `CLAUDE.md` — added "security field polarity: True=BREACHED, False=DEFENDED" to "Rules learned the hard way" (after a compaction-induced misread of 240/240 sec=false as alarming).
+
+**ASR polarity correction**: the workspace × atk:direct canaries from migrator-9 earlier (runs `25897257784` + `25897258859`) returning **240/240 security=false = 0% ASR = 100% defended**. Not alarming. STATUS already records this correctly via `0/105` framing; documenting here so the compaction artifact doesn't re-poison.
+
+**Sweep dispatched 2026-05-15 ~04:18 UTC** (runs `25899937481` workspace-a + `25899938486` banking, more to follow per 2-at-a-time batching) against bench-image `migration-test` tag built on `policy-redesign` mlld + clean `d1354f7`. This is the verification sweep for utility recovery against the fixed mlld. Expected: utility recovers from regression-baseline 48/97 toward migrator-7 baseline 53/97 (or better, since the planner now sees structured `tool_input_validation_failed` envelopes instead of looping on bare throws).
+
+**Next step after sweep**: confirm utility, then dispatch attack matrix.
 
 ## What this session did
 
