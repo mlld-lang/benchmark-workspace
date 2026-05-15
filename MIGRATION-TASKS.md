@@ -26,13 +26,19 @@ Temporary task tracker for the v2.x migration. Lives until migration ships, then
 
 **Mark inventory** (Phase 1 sec-doc maturity, 5-mark scheme):
 
-| Doc | [T] | [-] | [?] | [!] | [ ] |
-|---|---|---|---|---|---|
-| sec-banking | 0 | 11 | 22 | 1 | 3 |
-| sec-slack | 5 | 40 | 16 | 5 | 4 |
-| sec-workspace | 0 | 60 | 22 | 20 | 7 |
-| sec-travel | 16 | 26 | 9 | 4 | 2 |
-| sec-cross-domain | 0 | 6 | 3 | 1 | 6 |
+| Doc | [T] (start → migrator-9 end) |
+|---|---|
+| sec-banking | 0 → ≈28 line-occurrences (16 distinct marks promoted) |
+| sec-slack | 5 → 13 line-occurrences (4 distinct marks promoted) |
+| sec-workspace | 0 → 11 line-occurrences (7 distinct marks promoted) |
+| sec-travel | 16 → 17 line-occurrences (1 mark refreshed with parity citation) |
+| sec-cross-domain | 0 → 1 |
+
+Substantial bulk-promotion remains for slack/workspace/travel/cross-domain marks
+that have test-surface coverage but haven't yet been individually edited with
+the test-path citation. Mechanical work for the next session.
+
+12 threat tickets closed migrator-9 (6 banking + 4 slack + 2 workspace).
 
 ---
 
