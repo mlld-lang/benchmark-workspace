@@ -24,6 +24,15 @@ var @undefendedAgent = @rig.build({
   maxIterations: 10
 })
 
+var @defendedAgent = @rig.build({
+  suite: "workspace",
+  defense: "defended",
+  records: @records,
+  tools: @tools,
+  model: "stub",
+  maxIterations: 10
+})
+
 exe @runUndefended(query, script) =
   @mockOpencode(@query, { toolScript: @script }) with {
     read: "role:planner",
@@ -36,6 +45,13 @@ exe @runUndefendedWithState(query, script, seedState) =
     read: "role:planner",
     session: @planner,
     seed: { agent: @undefendedAgent, query: @query, state: @seedState, runtime: @emptyPlannerRuntime() }
+  }
+
+exe @runDefended(query, script) =
+  @mockOpencode(@query, { toolScript: @script }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @defendedAgent, query: @query, state: @emptyState(), runtime: @emptyPlannerRuntime() }
   }
 
 >> --- Parity: extracted recipient as control arg on send_email -----------
@@ -83,13 +99,33 @@ exe @testUndefendedAgentLegitimateSendEmailCompletes() = [
   => @assertEq(@last.ok, true)
 ]
 
+>> Fourth corner of the parity box (per [[security-utility-pairing]]).
+exe @testDefendedAgentLegitimateSendEmailCompletes() = [
+  let @script = [{
+    tool: "rehearse",
+    args: {
+      operation: "send_email",
+      args: {
+        recipients: { source: "known", value: "alice@example.com" },
+        subject: { source: "known", value: "hi" },
+        body: { source: "known", value: "hello" }
+      },
+      purpose: "parity utility-positive: legitimate defended send_email must accept"
+    }
+  }]
+  let @result = @runDefended("Email alice@example.com saying hi.", @script)
+  let @last = @result.lastResult
+  => @assertEq(@last.ok, true)
+]
+
 var @securityWorkspaceParitySuite = @suite("security-workspace-parity", [
   @group("layer-a-defense-independent", [
     @testUndefendedAgentSourceClassFirewallStillRejects
   ], { slow: true, notes: "parity test: source-class firewall fires regardless of defense flag." }),
   @group("parity-ground-truth", [
-    @testUndefendedAgentLegitimateSendEmailCompletes
-  ], { slow: true, notes: "ground truth: undefended agent + legitimate call completes." })
+    @testUndefendedAgentLegitimateSendEmailCompletes,
+    @testDefendedAgentLegitimateSendEmailCompletes
+  ], { slow: true, notes: "ground truth: undefended-completes (rig not blanket-rejecting) + defended-completes (defenses don't blanket-reject legit calls)." })
 ], {})
 
 export { @securityWorkspaceParitySuite }
