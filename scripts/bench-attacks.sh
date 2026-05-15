@@ -126,6 +126,9 @@ dispatch_attack() {
   if [[ -n "${BENCH_REF:-}" ]]; then
     ref_args=(--ref "$BENCH_REF")
   fi
+  if [[ -n "${BENCH_IMAGE_TAG:-}" ]]; then
+    args+=(-f "image_tag=$BENCH_IMAGE_TAG")
+  fi
 
   printf '→ %-13s × %-23s ' "$sub" "$attack"
   if gh workflow run "$WORKFLOW" "${ref_args[@]}" "${args[@]}" >/dev/null 2>&1; then
