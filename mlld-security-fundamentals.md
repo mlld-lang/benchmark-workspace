@@ -1194,6 +1194,18 @@ Derivation order on positive checks:
 
 Kind tags don't affect minting — a value from `record @contact = { facts: [email: { type: string, kind: "email" }] }` still carries `fact:@contact.email`. The kind tag is consumed downstream by input-record derivation rules, not by the output record.
 
+#### Bare-value lifted match
+
+When the planner passes a bare string (or a structured ref that resolves to a bare value) into an authority fact arg, the runtime searches the in-scope resolved records for a fact-backed value whose data equals the bare value. If exactly one such record is found, its proof labels are "lifted" onto the bare value at the check site — the value satisfies the arg's accepts list as if the planner had passed the structured ref directly.
+
+This is the path that makes the common pattern work: planner resolves a `search_contacts(query: "Sarah")` call, the resolved contact has `fact:@contact.email`, then the planner passes `recipients: ["sarah.connor@gmail.com"]` (bare string array) to `send_email`. The runtime sees no labels on the bare string, runs `findUniqueFactBackedValueMatch`, finds the contact record, lifts `fact:@contact.email`, and the value passes.
+
+The lifted-match path is silent — there's no planner-facing log entry showing it fired. This means diagnoses of "why did this succeed?" can mis-attribute to the planner's explicit ref shape when the actual proof path was lift. A useful diagnostic when a recovery is unclear: check whether the value exists in a pre-existing fact-backed record. If yes, the success is likely lift-mediated and not load-bearing on whatever ref shape the planner emitted.
+
+The lifted match is bounded: it requires a *unique* fact-backed match. If multiple records contain the same value (e.g., the same email in both a contact and an email_msg.sender field), lift declines and the value is treated as proofless. This prevents an attacker who plants the value across multiple records from using lift as a free proof channel — proof must be unambiguous to flow.
+
+A `mint_user_literal`-minted `user_value` handle is one fact-backed record whose value field can be lifted into matches; without per-record `accepts:` overrides admitting `fact:@user_value.value`, kind-tagged authority fields (e.g., `kind: "email"`) reject lifted user_value attestations because `fact:@user_value.value` isn't a `kind: "email"` fact path. Per-record `accepts:` on the input field is the v2.x lever for "this authority arg accepts user-task-minted handles" — see §4.5 sections on `accepts:`.
+
 ### 4.7 Dispatch validation order
 
 When a tool declared with `inputs: @r` is dispatched, the runtime walks `@r`'s sections in this order:
