@@ -19,7 +19,6 @@ import {
   @buildUrlCapabilityValue
 } from "../transforms/url_refs.mld"
 import { @url_capability } from "../records.mld"
-import { @dispatchMintUserLiteral } from "../mint.mld"
 
 exe @resolvePrompt(query, decision, toolDocs, stateSummary) = template "../prompts/resolve.att"
 
@@ -167,12 +166,6 @@ exe role:worker @dispatchResolve(agent, state, decision, query, deltaOnly) = [
   >> per-transform handler manages state mutation and capability map writes.
   let @rigTransform = @tool.rigTransform
   if @rigTransform.isDefined() [
-    >> mint_user_literal takes plain {source:"known"} refs, not record
-    >> handles — its dispatcher runs @compileToolArgs internally instead
-    >> of @compileRecordArgs. Branch early to avoid the record-args path.
-    if @rigTransform == "mint_user_literal" [
-      => @dispatchMintUserLiteral(@agent, @state, @tool, @decision, @query, @deltaOnly ?? false)
-    ]
     let @recordArgsCheck = @compileRecordArgs(@agent, @tool.recordArgs ?? {}, @decision.args ?? {})
     if !@recordArgsCheck.ok [
       => @plannerValidationFailure(

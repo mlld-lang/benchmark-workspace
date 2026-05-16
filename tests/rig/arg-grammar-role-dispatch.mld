@@ -1,0 +1,196 @@
+>> clean/tests/rig/arg-grammar-role-dispatch.mld
+>>
+>> Phase F.1 coverage for spec-arg-grammar-simplification — role-based
+>> arg compilation + mint_user_literal end-to-end.
+>>
+>> Invariants under test:
+>>   - bare values accepted on filter (read) args
+>>   - bare values accepted on payload (write data) args
+>>   - bare values rejected on authority (write fact) args with
+>>     bare_literal_in_authority_arg
+>>   - resolved-handle ref accepted on authority arg
+>>   - exact: payload still requires task-text verification (both bare
+>>     and {source:"known"} paths)
+>>   - mint_user_literal end-to-end: in-task → handle; not-in-task →
+>>     structured error envelope
+
+import { @assertOk, @assertEq, @assertContains } from "../assert.mld"
+import { @suite, @group, @runSuites } from "../runner.mld"
+import { @records, @tools } from "../fixtures.mld"
+import { @rigBuild } from "../../rig/index.mld"
+import { @user_value } from "../../rig/records.mld"
+import { @compileToolArgs, @roleForArg } from "../../rig/intent.mld"
+import { @callTool, @emptyState, @shelfRecords } from "../../rig/runtime.mld"
+import { @planner, @plannerTools } from "../../rig/workers/planner.mld"
+import { @emptyPlannerRuntime } from "../../rig/session.mld"
+
+var @builtAgent = @rigBuild({
+  suite: "fixture-c-tests",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @tools
+})
+
+exe @withShelf(rawAgent, plannerShelf) = [
+  => { ...@rawAgent, plannerShelf: @plannerShelf }
+]
+
+>> --- Role classification ---
+
+exe @testFilterRoleOnReadTool() = [
+  => @assertEq(@roleForArg(@tools.get_note, "note_id"), "filter")
+]
+
+exe @testAuthorityRoleOnWriteFact() = [
+  => @assertEq(@roleForArg(@tools.send_email, "recipients"), "authority")
+]
+
+exe @testPayloadRoleOnWriteData() = [
+  => @assertEq(@roleForArg(@tools.send_email, "subject"), "payload")
+]
+
+exe @testPayloadTaskVerifiedRoleOnExactArg() = [
+  => @assertEq(@roleForArg(@tools.update_password, "password"), "payload-task-verified")
+]
+
+>> --- Bare-value acceptance per role ---
+
+exe role:worker @testBareFilterAccepted() = [
+  let @r = @compileToolArgs(@builtAgent, @emptyState(), @tools.get_note, { note_id: "note_42" }, "Look up note_42 please.")
+  => @assertOk(@r.ok, `compile ok=@r.ok issues=@r.issues`)
+]
+
+exe role:worker @testBarePayloadAccepted() = [
+  let @r = @compileToolArgs(
+    @builtAgent,
+    @emptyState(),
+    @tools.send_email,
+    { body: "Hello", subject: "Greetings", recipients: [{ source: "known", value: "team@example.com" }] },
+    "Send a note to team@example.com please."
+  )
+  => @assertOk(@r.ok, `compile ok=@r.ok issues=@r.issues`)
+]
+
+exe role:worker @testBareAuthorityRejected() = [
+  let @r = @compileToolArgs(
+    @builtAgent,
+    @emptyState(),
+    @tools.send_email,
+    { recipients: ["sarah@example.com"], subject: "Hi", body: "Hello" },
+    "Send a note to my team."
+  )
+  >> Outer error: array_arg_element_invalid (recipients is array). Inner
+  >> issue carries the load-bearing bare_literal_in_authority_arg code.
+  let @inner = @r.issues[0].issues[0]
+  => @assertEq(@inner.error, "bare_literal_in_authority_arg")
+]
+
+>> --- exact: task-text verification ---
+
+exe role:worker @testBareExactInTaskAccepted() = [
+  let @r = @compileToolArgs(
+    @builtAgent,
+    @emptyState(),
+    @tools.update_password,
+    { password: "hunter2" },
+    "Set my password to hunter2 please."
+  )
+  => @assertOk(@r.ok, `compile ok=@r.ok issues=@r.issues`)
+]
+
+exe role:worker @testBareExactNotInTaskRejected() = [
+  let @r = @compileToolArgs(
+    @builtAgent,
+    @emptyState(),
+    @tools.update_password,
+    { password: "notInTask" },
+    "Some unrelated task entirely."
+  )
+  => @assertEq(@r.issues[0].error, "known_value_not_in_task_text")
+]
+
+>> Structured known on exact: also runs @knownInTask (C.5 — closes
+>> pre-existing gap where structured known bypassed task-text check).
+exe role:worker @testStructuredKnownExactNotInTaskRejected() = [
+  let @r = @compileToolArgs(
+    @builtAgent,
+    @emptyState(),
+    @tools.update_password,
+    { password: { source: "known", value: "notInTask" } },
+    "Some unrelated task entirely."
+  )
+  => @assertEq(@r.issues[0].error, "known_value_not_in_task_text")
+]
+
+>> --- mint_user_literal end-to-end ---
+
+exe llm @runMint(prompt, config) = [
+  => @callTool(@plannerTools.mint_user_literal, @plannerTools, "mint_user_literal", @config.args)
+]
+
+exe role:worker @testMintUserLiteralInTask() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @result = @runMint("test", { args: { value: "Sarah Connor" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Forward the report to Sarah Connor please.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @entries = @shelf.read(@ps.user_value)
+  let @ok = @result.status == "resolved" &&
+    @result.record_type == "user_value" &&
+    @result.handles.length == 1 &&
+    @entries.length == 1
+  => @assertOk(@ok, `status=@result.status record_type=@result.record_type handles=@result.handles shelf=@entries.length`)
+]
+
+exe role:worker @testMintUserLiteralNotInTask() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @result = @runMint("test", { args: { value: "Stranger Danger" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Forward the report to Sarah Connor please.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  => @assertEq(@result.error, "mint_user_literal_value_not_found")
+]
+
+>> --- Suite assembly ---
+
+var @argGrammarRoleDispatchSuite = @suite("arg-grammar-role-dispatch", [
+  @group("role-classification", [
+    @testFilterRoleOnReadTool,
+    @testAuthorityRoleOnWriteFact,
+    @testPayloadRoleOnWriteData,
+    @testPayloadTaskVerifiedRoleOnExactArg
+  ], {}),
+  @group("bare-value-acceptance", [
+    @testBareFilterAccepted,
+    @testBarePayloadAccepted,
+    @testBareAuthorityRejected
+  ], {}),
+  @group("exact-task-text-verification", [
+    @testBareExactInTaskAccepted,
+    @testBareExactNotInTaskRejected,
+    @testStructuredKnownExactNotInTaskRejected
+  ], {}),
+  @group("mint-user-literal", [
+    @testMintUserLiteralInTask,
+    @testMintUserLiteralNotInTask
+  ], {})
+], {})
+
+export { @argGrammarRoleDispatchSuite }
+
+var @result = @runSuites([@argGrammarRoleDispatchSuite])
+show @result.report
+if @result.timingLines.length > 0 [
+  show ""
+  for @tl in @result.timingLines => show `  @tl`
+]
+show ""
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+if @result.fails.length > 0 [ bail "suite failed" ]

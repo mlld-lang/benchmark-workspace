@@ -60,6 +60,8 @@ import { @shelfIntegrationSuite } from "./rig/shelf-integration.mld"
 >> detector for any future mlld churn that re-breaks the syntactically-
 >> null = semantically-null invariant at any rig surface.
 import { @nullConformanceSuite } from "./rig/null-conformance.mld"
+>> Phase F.1 — role-based arg compilation + mint_user_literal end-to-end.
+import { @argGrammarRoleDispatchSuite } from "./rig/arg-grammar-role-dispatch.mld"
 
 var @suites = [
   @templateSuite,
@@ -88,7 +90,8 @@ var @suites = [
   @namedStateAndCollectionSuite,
   @identityContractsSuite,
   @proofChainFirewallSuite,
-  @workerDispatchSuite
+  @workerDispatchSuite,
+  @argGrammarRoleDispatchSuite
 ]
 
 var @result = @runSuites(@suites)

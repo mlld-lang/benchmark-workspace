@@ -1,4 +1,3 @@
-import { @rigInternalTools } from "./mint.mld"
 import { @user_value } from "./records.mld"
 import {
   @toolCatalogObject,
@@ -190,7 +189,6 @@ exe @validateConfig(config) = [
     harness: @config.harness ?? @defaultHarness(@config.model),
     records: @mergedRecords,
     tools: @config.tools,
-    rigInternalTools: @rigInternalTools,
     routedTools: @routeToolCatalog(@config.tools),
     toolsCollection: @runtimeCollection,
     basePolicy: @basePolicy,
