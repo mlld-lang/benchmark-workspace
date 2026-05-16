@@ -198,7 +198,12 @@ record @send_email_inputs = {
 record @create_calendar_event_inputs = {
   facts: [participants?: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] }],
   data: {
-    trusted: [title: string, start_time: string, end_time: string, location: string?],
+    trusted: [
+      title:      { type: string,  accepts: ["known", "src:user", "influenced:mitigated"] },
+      start_time: { type: string,  accepts: ["known", "src:user", "influenced:mitigated"] },
+      end_time:   { type: string,  accepts: ["known", "src:user", "influenced:mitigated"] },
+      location:   { type: string?, accepts: ["known", "src:user", "influenced:mitigated"] }
+    ],
     untrusted: [description: string?]
   },
   labels: ["execute:w", "tool:w", "calendar:w"],
@@ -232,7 +237,10 @@ record @cancel_calendar_event_inputs = {
 record @calendar_reschedule_inputs = {
   facts: [event_id: { type: handle, kind: "calendar_event_id" }],
   data: {
-    trusted: [new_start_time: string, new_end_time: string?]
+    trusted: [
+      new_start_time: { type: string,  accepts: ["known", "src:user", "influenced:mitigated"] },
+      new_end_time:   { type: string?, accepts: ["known", "src:user", "influenced:mitigated"] }
+    ]
   },
   update: [new_start_time, new_end_time],
   validate: "strict",

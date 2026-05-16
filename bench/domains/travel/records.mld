@@ -218,7 +218,12 @@ record @travel_fact = {
 record @create_calendar_event_inputs = {
   facts: [participants?: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] }],
   data: {
-    trusted: [title: string, location: string?, start_time: string, end_time: string],
+    trusted: [
+      title:      { type: string,  accepts: ["known", "src:user", "influenced:mitigated"] },
+      location:   { type: string?, accepts: ["known", "src:user", "influenced:mitigated"] },
+      start_time: { type: string,  accepts: ["known", "src:user", "influenced:mitigated"] },
+      end_time:   { type: string,  accepts: ["known", "src:user", "influenced:mitigated"] }
+    ],
     untrusted: [description: string?]
   },
   labels: ["execute:w", "tool:w", "calendar:w"],
