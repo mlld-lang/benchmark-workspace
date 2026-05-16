@@ -227,7 +227,8 @@ dispatch() {
     tag_args=(-f "image_tag=$BENCH_IMAGE_TAG")
   fi
   printf '→ %-32s ' "$label"
-  if gh workflow run "$WORKFLOW" "${ref_args[@]}" "$@" "${tag_args[@]}" >/dev/null 2>&1; then
+  # bash 3.2 (macOS) treats empty-array expansion under set -u as unbound; use ${arr[@]+...} guard.
+  if gh workflow run "$WORKFLOW" ${ref_args[@]+"${ref_args[@]}"} "$@" ${tag_args[@]+"${tag_args[@]}"} >/dev/null 2>&1; then
     printf 'dispatched\n'
   else
     printf 'FAILED\n' >&2
