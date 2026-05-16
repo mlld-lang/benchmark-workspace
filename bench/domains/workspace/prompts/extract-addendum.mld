@@ -1,0 +1,8 @@
+>> Workspace suite addendum for the extract worker prompt.
+>> Loaded by the workspace agent and passed to @rig.run as extractAddendum.
+
+var @workspaceExtractAddendum = ::
+**Location field canonicalization (exception to verbatim-preservation).** When extracting a `location` field, return the noun phrase only — strip leading determiners ("the", "a", "an"). Source phrases like "at the [place]", "meet at the [place]", or "in the [place]" become just "[place]" in the extracted value. This rule applies *only* to the `location` field, scoped narrower than the general verbatim-preservation rule above. Other fields (title, subject, filename, quoted strings) continue to preserve verbatim per the base rule.
+::
+
+export { @workspaceExtractAddendum }
