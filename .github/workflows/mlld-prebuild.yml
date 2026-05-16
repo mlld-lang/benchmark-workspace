@@ -8,7 +8,7 @@ name: mlld-prebuild
 # (~30s for the no-op check; ~2-3 min if a rebuild is actually needed).
 #
 # Output:
-#   ghcr.io/mlld-lang/mlld-prebuilt:<ref>     (e.g. :2.1.0 — moving tag)
+#   ghcr.io/mlld-lang/mlld-prebuilt:<ref>     (e.g. :policy-redesign — moving tag)
 #   ghcr.io/mlld-lang/mlld-prebuilt:sha-<sha> (immutable pin)
 
 on:
@@ -16,7 +16,7 @@ on:
     inputs:
       mlld_ref:
         description: 'mlld ref (branch, tag, or sha)'
-        default: '2.1.0'
+        default: 'policy-redesign'
         required: false
 
 permissions:
@@ -42,7 +42,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          REF="${{ inputs.mlld_ref || '2.1.0' }}"
+          REF="${{ inputs.mlld_ref || 'policy-redesign' }}"
           SHA=$(gh api repos/mlld-lang/mlld/commits/$REF -q .sha)
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "mlld@$REF HEAD=$SHA"
@@ -50,7 +50,7 @@ jobs:
       - name: Inspect existing prebuilt image
         id: existing
         run: |
-          REF="${{ inputs.mlld_ref || '2.1.0' }}"
+          REF="${{ inputs.mlld_ref || 'policy-redesign' }}"
           IMG="${{ env.IMAGE }}:$REF"
           BAKED=""
           if docker pull "$IMG" >/dev/null 2>&1; then
@@ -77,7 +77,7 @@ jobs:
         with:
           repository: mlld-lang/mlld
           path: mlld
-          ref: ${{ inputs.mlld_ref || '2.1.0' }}
+          ref: ${{ inputs.mlld_ref || 'policy-redesign' }}
 
       - name: Set up Buildx
         if: steps.existing.outputs.skip != 'true'
@@ -91,10 +91,10 @@ jobs:
           file: clean/bench/docker/Dockerfile.mlld
           push: true
           tags: |
-            ${{ env.IMAGE }}:${{ inputs.mlld_ref || '2.1.0' }}
+            ${{ env.IMAGE }}:${{ inputs.mlld_ref || 'policy-redesign' }}
             ${{ env.IMAGE }}:sha-${{ steps.head_sha.outputs.sha }}
           labels: |
             mlld.sha=${{ steps.head_sha.outputs.sha }}
-            mlld.ref=${{ inputs.mlld_ref || '2.1.0' }}
+            mlld.ref=${{ inputs.mlld_ref || 'policy-redesign' }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max

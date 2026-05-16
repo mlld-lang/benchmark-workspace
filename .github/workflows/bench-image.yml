@@ -14,7 +14,7 @@ on:
     inputs:
       mlld_ref:
         description: 'mlld runtime ref (branch, tag, or sha)'
-        default: '2.1.0'
+        default: 'policy-redesign'
         required: false
       tag:
         description: 'Image tag suffix (e.g., main, sha-abc1234)'
@@ -50,7 +50,7 @@ jobs:
       - name: Capture mlld SHA from prebuilt image
         id: mlld_sha
         run: |
-          REF="${{ inputs.mlld_ref || '2.1.0' }}"
+          REF="${{ inputs.mlld_ref || 'policy-redesign' }}"
           IMG="ghcr.io/mlld-lang/mlld-prebuilt:$REF"
           docker pull "$IMG" >/dev/null
           SHA=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$IMG")
@@ -77,9 +77,9 @@ jobs:
             ${{ steps.tags.outputs.sha }}
           build-args: |
             IMAGE_SHA=${{ github.sha }}
-            MLLD_REF=${{ inputs.mlld_ref || '2.1.0' }}
+            MLLD_REF=${{ inputs.mlld_ref || 'policy-redesign' }}
             MLLD_SHA=${{ steps.mlld_sha.outputs.sha }}
-            MLLD_PREBUILT_TAG=${{ inputs.mlld_ref || '2.1.0' }}
+            MLLD_PREBUILT_TAG=${{ inputs.mlld_ref || 'policy-redesign' }}
             CLEAN_REF=${{ github.sha }}
           cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max

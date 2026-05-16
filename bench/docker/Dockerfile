@@ -10,7 +10,7 @@
 #
 # See .github/workflows/bench-image.yml for the canonical build.
 
-ARG MLLD_PREBUILT_TAG=2.1.0
+ARG MLLD_PREBUILT_TAG=policy-redesign
 FROM ghcr.io/mlld-lang/mlld-prebuilt:${MLLD_PREBUILT_TAG} AS mlld-src
 
 FROM ubuntu:24.04

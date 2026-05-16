@@ -118,7 +118,7 @@ jobs:
           if [ -z "$BAKED_MLLD_SHA" ] || [ -z "$BAKED_MLLD_REF" ]; then
             echo "::warning::image lacks mlld labels — likely an older build, rebuilding to be safe"
             echo "stale=true" >> "$GITHUB_OUTPUT"
-            echo "ref=2.1.0" >> "$GITHUB_OUTPUT"
+            echo "ref=policy-redesign" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
