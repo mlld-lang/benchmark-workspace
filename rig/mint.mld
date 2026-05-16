@@ -25,40 +25,38 @@ import { @writeRecordsToShelf, @recordHandles } from "./runtime.mld"
 
 >> ── Verifier ────────────────────────────────────────────────────────
 >>
->> Token-bounded substring match. JS because regex with escape, native
->> whitespace normalization, and word-boundary respect are exactly the
->> kind of string manipulation `mlld qs` recommends keeping in JS — it
->> does not need .mx metadata.
+>> Token-bounded substring match. Native mlld — string manipulation
+>> doesn't touch .mx metadata so JS isn't necessary. mlld's .match() /
+>> .replaceAll() with regex literals + lookahead support is sufficient.
 >>
->> Boundary definition: start-of-string, end-of-string, or whitespace.
->> Values may contain internal spaces ("Hawaii vacation plans") so we
->> cannot rely on token-equality; we test that the value appears as a
->> contiguous span with whitespace/edge boundaries on each side.
+>> Boundary chars: whitespace and quote/paren/bracket are always boundary
+>> chars on both sides — users naturally wrap literals in those.
+>> Sentence-terminator punctuation (. , ; : ! ?) is a close boundary ONLY
+>> when followed by whitespace or end-of-string; this preserves the partial-
+>> substring smuggling defense (e.g. mint "12" against task "meet at 12:30"
+>> must reject — `:` is not a token boundary because it's followed by a
+>> digit, not whitespace). Within-word punctuation `.` `@` `_` `-` `/` is
+>> never a boundary char because it appears inside legitimate identifiers
+>> (emails, file paths, URLs).
+>>
+>> Pattern composed via double-quoted string + @var interpolation (NOT
+>> backtick template) — backtick templates eat `<` and `>` because mlld
+>> reads them as alligator-bracket file-embed syntax. Confirmed by
+>> mlld-dev 2026-05-15.
 
-exe @verifyUserLiteral(value, query) = js {
-  if (typeof value !== 'string' || typeof query !== 'string') {
-    return { ok: false, reason: 'value or query is not a string' };
-  }
-  const normValue = value.trim().toLowerCase().replace(/\s+/g, ' ');
-  if (normValue.length < 3) {
-    return { ok: false, reason: 'value shorter than min length (3 chars)' };
-  }
-  const normQuery = query.toLowerCase().replace(/\s+/g, ' ');
-  const escaped = normValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Boundary chars: whitespace and quote/paren/bracket are always boundary
-  // chars on both sides — users naturally wrap literals in those. Sentence-
-  // terminator punctuation (. , ; : ! ?) is a close boundary ONLY when
-  // followed by whitespace or end-of-string; this preserves the partial-
-  // substring smuggling defense (e.g. mint "12" against task "meet at 12:30"
-  // must reject — `:` is not a token boundary because it's followed by a
-  // digit, not whitespace). Within-word punctuation `.` `@` `_` `-` `/` is
-  // never a boundary char because it appears inside legitimate identifiers
-  // (emails, file paths, URLs).
-  const openBoundary = `(^|[\\s'"\`(\\[{<])`;
-  const closeBoundary = `(?:[\\s'"\`)\\]}>]|[.,;:!?](?=\\s|$)|$)`;
-  const re = new RegExp(`${openBoundary}${escaped}${closeBoundary}`);
-  return { ok: re.test(normQuery), reason: re.test(normQuery) ? null : 'no token-bounded match in user task text' };
-}
+exe @verifyUserLiteral(value, query) = [
+  let @normValue = @value.trim().toLowerCase().replaceAll(/\s+/g, " ")
+  let @normQuery = @query.toLowerCase().replaceAll(/\s+/g, " ")
+  let @escaped = @normValue.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  let @pattern = "(^|[\\s'\"`(\\[{<])@escaped(?:[\\s'\"`)\\]}>]|[.,;:!?](?=\\s|$)|$)"
+  let @matched = @normQuery.match(@pattern)
+  => when [
+    @value == null || @query == null => { ok: false, reason: "value or query is not a string" }
+    @normValue.length < 3 => { ok: false, reason: "value shorter than min length (3 chars)" }
+    @matched != null => { ok: true, reason: null }
+    * => { ok: false, reason: "no token-bounded match in user task text" }
+  ]
+]
 
 >> ── Mint pipeline ───────────────────────────────────────────────────
 >>
