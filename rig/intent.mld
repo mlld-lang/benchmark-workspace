@@ -1,5 +1,6 @@
 import {
   @pairsToObject,
+  @toolKind,
   @toolControlArgs,
   @toolPayloadArgs,
   @toolExactArgs,
@@ -40,22 +41,53 @@ exe @argNameList(values) = [
   => for @value in (@values ?? []) => @name(@value)
 ]
 
+>> Phase C (spec-arg-grammar-simplification): role classifies an arg by
+>> combining tool kind (read vs write) and input-record-field
+>> classification (facts vs data). Roles:
+>>   - filter                 — read tool arg (bare values become acceptable in C.2)
+>>   - authority              — write tool fact arg (proof ref required)
+>>   - payload                — write tool data arg (bare values accepted)
+>>   - payload-task-verified  — write tool data arg in `exact:` (task-text-required)
+>>   - unknown                — arg not in this tool's contract
+>>
+>> Legacy callers can still ask via @isControlClassRole(role): true for
+>> filter + authority (the union of today's "control"). Phase C.2 wires
+>> per-role dispatch (bare-value acceptance differs between filter and
+>> authority).
 exe @toolArgMeta(tool, argName) = [
   let @arg = @name(@argName)
+  let @kind = @toolKind(@tool)
   let @controlArgs = @argNameList(@toolControlArgs(@tool))
   let @payloadArgs = @argNameList(@toolPayloadArgs(@tool))
   let @exactArgs = @argNameList(@toolExactArgs(@tool))
+  let @isControl = @controlArgs.includes(@arg)
+  let @isPayload = @payloadArgs.includes(@arg)
+  let @isExact = @exactArgs.includes(@arg)
   let @role = when [
-    @controlArgs.includes(@arg) => "control"
-    @payloadArgs.includes(@arg) => "payload"
+    !@isControl && !@isPayload => "unknown"
+    @kind == "read" && @isControl => "filter"
+    @kind == "write" && @isControl => "authority"
+    @kind == "write" && @isPayload && @isExact => "payload-task-verified"
+    @kind == "write" && @isPayload => "payload"
+    @isControl => "filter"
+    @isPayload => "payload"
     * => "unknown"
   ]
   => {
     arg: @arg,
     role: @role,
-    exact: @exactArgs.includes(@arg),
-    control_count: @controlArgs.length
+    exact: @isExact,
+    control_count: @controlArgs.length,
+    tool_kind: @kind
   }
+]
+
+>> Filter (read) and authority (write fact) share today's control-class
+>> semantics: ref must be resolved/known/selection, not extracted/derived.
+>> Phase C.2 introduces a single divergence — authority rejects bare
+>> values, filter accepts them.
+exe @isControlClassRole(role) = [
+  => @role == "filter" || @role == "authority"
 ]
 
 exe @roleForArg(tool, argName) = [
@@ -593,12 +625,21 @@ exe @resolveRefValue(agent, state, ref) = [
     }
   ]
 
+  let @src = @refSource(@ref)
   => when [
-    @refSource(@ref) == "extracted" => @resolveNamedValue(@state, "extracted", @ref)
-    @refSource(@ref) == "derived" => @resolveNamedValue(@state, "derived", @ref)
-    @refSource(@ref) == "known" => { ok: true, source: "known", value: @ref.value }
-    @refSource(@ref) == "allow" => { ok: true, source: "allow", value: true }
-    * => { ok: false, error: "unsupported_ref_source", source: @refSource(@ref) }
+    @src == "extracted" => @resolveNamedValue(@state, "extracted", @ref)
+    @src == "derived" => @resolveNamedValue(@state, "derived", @ref)
+    @src == "known" => { ok: true, source: "known", value: @ref.value }
+    @src == "allow" => { ok: true, source: "allow", value: true }
+    >> Phase C.2 (spec-arg-grammar-simplification): bare values — primitives
+    >> or objects without a .source field — flow through as `source: null`.
+    >> The compiler decides per role whether bare is acceptable for this arg:
+    >> filter/payload accept, authority rejects with bare_literal_in_
+    >> authority_arg, payload-task-verified runs @knownInTask. A non-null but
+    >> unrecognized source value (e.g. typo) still hits the unsupported_ref_
+    >> source rejection below.
+    @src == null => { ok: true, source: null, value: @ref, isBare: true }
+    * => { ok: false, error: "unsupported_ref_source", source: @src }
   ]
 ]
 
@@ -653,8 +694,9 @@ exe @compileScalarRefWithMeta(agent, state, tool, argMeta, ref, query) = [
   if @role == "unknown" [ => { ok: false, arg: @arg, error: "unknown_tool_arg" } ]
 
   let @exactArg = @argMeta.exact
+  let @isControlClass = @isControlClassRole(@role)
   let @controlResolved = when [
-    @role != "control" => null
+    !@isControlClass => null
     @refSource(@ref) == "selection" => @resolveControlRefValue(@agent, @ref)
     @refSource(@ref) == "resolved" && @ref.handle.isDefined() => @resolveControlRefValue(@agent, @ref)
     * => null
@@ -664,6 +706,66 @@ exe @compileScalarRefWithMeta(agent, state, tool, argMeta, ref, query) = [
     * => @resolveRefValue(@agent, @state, @ref)
   ]
   if !@resolved.ok [ => { ...@resolved, arg: @arg } ]
+
+  >> Phase C.2: bare value handling. The planner emitted a value with no
+  >> source-class wrapping; route per role BEFORE any @ref.record/field
+  >> access (bare values are primitives — accessing .record on a string
+  >> errors).
+  >>   - authority      → reject (write authority requires proof)
+  >>   - payload-task-verified → check @knownInTask, accept if value is in task
+  >>   - filter, payload → accept as bare value
+  if @resolved.isBare == true [
+    if @role == "authority" [
+      => {
+        ok: false,
+        arg: @arg,
+        error: "bare_literal_in_authority_arg",
+        value: @resolved.value,
+        hint: "Authority args (write tool fact fields) require a proof ref. For values from the user's task text, call mint_user_literal({ value: <value> }) first and reference the returned handle. For values from prior resolves, use { source: \"resolved\", record: \"<type>\", handle: \"<handle>\", field: \"<field>\" }."
+      }
+    ]
+    if @role == "payload-task-verified" [
+      if !@knownInTask(@query, @resolved.value) [
+        => {
+          ok: false,
+          arg: @arg,
+          error: "known_value_not_in_task_text",
+          value: @resolved.value,
+          hint: "This arg requires task-text grounding (field marked exact:). The value must appear verbatim in the user's task."
+        }
+      ]
+      => {
+        ok: true,
+        arg: @arg,
+        role: @role,
+        source_class: "known",
+        auth_bucket: "known",
+        auth_value: { value: @resolved.value, source: "task" },
+        value: @resolved.value,
+        backing_refs: [],
+        flat_eq: @resolved.value,
+        flat_attestations: ["known"]
+      }
+    ]
+    if @role == "filter" || @role == "payload" [
+      => {
+        ok: true,
+        arg: @arg,
+        role: @role,
+        source_class: "bare",
+        value: @resolved.value,
+        backing_refs: [],
+        flat_eq: @constraintEqValue(@resolved.value),
+        flat_attestations: []
+      }
+    ]
+    => {
+      ok: false,
+      arg: @arg,
+      error: "bare_value_unsupported_role",
+      role: @role
+    }
+  ]
 
   let @resolvedRecord = when [
     @refSource(@ref) == "selection" => @ref.backing.record
@@ -696,7 +798,12 @@ exe @compileScalarRefWithMeta(agent, state, tool, argMeta, ref, query) = [
   ]
 
   if @resolved.source == "known" [
-    if !@knownInTask(@query, @resolved.value) && @role == "control" [
+    >> Phase C.5: knownInTask fires for filter/authority (control class) AND
+    >> for payload-task-verified (exact-marked data fields). Structured
+    >> {source:"known",...} refs on exact: args must verify against task text,
+    >> mirroring the bare-value path. Pure payload bypasses (no task-text
+    >> grounding required).
+    if !@knownInTask(@query, @resolved.value) && (@isControlClass || @role == "payload-task-verified") [
       => {
         ok: false,
         arg: @arg,
@@ -706,7 +813,7 @@ exe @compileScalarRefWithMeta(agent, state, tool, argMeta, ref, query) = [
       }
     ]
     => when [
-      @role == "control" || @exactArg => {
+      @isControlClass || @exactArg => {
         ok: true,
         arg: @arg,
         role: @role,
@@ -732,7 +839,7 @@ exe @compileScalarRefWithMeta(agent, state, tool, argMeta, ref, query) = [
   ]
 
   if @resolved.source == "resolved" [
-    if @role == "control" && !@ref.handle.isDefined() && @ref.source != "selection" [
+    if @isControlClass && !@ref.handle.isDefined() && @ref.source != "selection" [
       let @available = for @r in @resolvedEntries(@agent, @ref.record) => @stateHandleFromAddress(@r)
       let @exampleHandle = @available[0] ?? "<handle>"
       => {
@@ -761,10 +868,10 @@ exe @compileScalarRefWithMeta(agent, state, tool, argMeta, ref, query) = [
     >> input-record fact fields. Core derives policy.facts.requirements
     >> automatically from records in scope. See SECURITY-RIG-WRONG-RECORD-BYPASS.md.
     => when [
-      @role == "control" => {
+      @isControlClass => {
         ok: true,
         arg: @arg,
-        role: "control",
+        role: @role,
         source_class: "resolved",
         auth_bucket: "resolved",
         auth_value: @resolved.value,
@@ -787,7 +894,7 @@ exe @compileScalarRefWithMeta(agent, state, tool, argMeta, ref, query) = [
   ]
 
   if @resolved.source == "extracted" || @resolved.source == "derived" [
-    if @role == "control" [
+    if @isControlClass [
       => {
         ok: false,
         arg: @arg,

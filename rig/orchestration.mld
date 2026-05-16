@@ -1,4 +1,5 @@
 import { @rigInternalTools } from "./mint.mld"
+import { @user_value } from "./records.mld"
 import {
   @toolCatalogObject,
   @toolKind,
@@ -176,6 +177,10 @@ exe @validateConfig(config) = [
     @defense == "defended" => @synthesizedPolicy(@config.tools, @overrides.policy, {})
     * => null
   ]
+  >> Merge framework-universal records (@user_value for mint_user_literal)
+  >> into the suite's records map so the planner shelf gets a slot for
+  >> them. Suite records always win on key collision.
+  let @mergedRecords = { user_value: @user_value, ...@config.records }
   => {
     ok: true,
     suite: @config.suite,
@@ -183,7 +188,7 @@ exe @validateConfig(config) = [
     model: @config.model,
     workerModel: @config.workerModel ?? null,
     harness: @config.harness ?? @defaultHarness(@config.model),
-    records: @config.records,
+    records: @mergedRecords,
     tools: @config.tools,
     rigInternalTools: @rigInternalTools,
     routedTools: @routeToolCatalog(@config.tools),

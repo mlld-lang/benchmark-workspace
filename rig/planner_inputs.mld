@@ -232,10 +232,24 @@ exe @plannerValidateAllowedSource(path, ref, allowedSources) = [
   ]
 ]
 
+>> Phase C.3 (spec-arg-grammar-simplification): bare values pass through
+>> at the per-arg layer. Whether a bare value is acceptable depends on the
+>> arg's role (filter/payload accept, authority rejects, payload-task-
+>> verified runs @knownInTask) — that decision needs tool metadata which
+>> this validator does not see, so it deliberately defers to
+>> @compileScalarRefWithMeta. Structured refs still get shape-checked here
+>> so malformed refs (typo'd source class, missing required fields) fail
+>> fast before the compiler sees them.
 exe @plannerValidateArgValue(path, argValue) = [
   => when [
     @typeof(@argValue) == "array" => [
-      let @results = for @item in @argValue => @plannerValidateRef(@plannerIndexedPath(@path, @mx.for.index), @item)
+      let @results = for @item in @argValue [
+        let @itemPath = @plannerIndexedPath(@path, @mx.for.index)
+        => when [
+          @isStructuredRef(@item) => @plannerValidateRef(@itemPath, @item)
+          * => { ok: true }
+        ]
+      ]
       let @groups = for @entry in @results when !@entry.ok => @entry.issues ?? []
       let @issues = @plannerFlattenIssues(@groups)
       => when [
@@ -243,6 +257,7 @@ exe @plannerValidateArgValue(path, argValue) = [
         * => { ok: false, issues: @issues }
       ]
     ]
+    !@isStructuredRef(@argValue) => { ok: true }
     * => @plannerValidateRef(@path, @argValue)
   ]
 ]

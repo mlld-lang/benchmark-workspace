@@ -91,21 +91,12 @@ exe @mint_user_literal_placeholder(value) = [
   => { error: "rigTransform_should_not_be_called_directly", tool: "mint_user_literal" }
 ]
 
->> Dispatcher: verify + mint + write to shelf. Returns a resolve-shaped
->> envelope with the @user_value record's handle for the planner.
->>
->> Diverges from the standard rigTransform branch in resolve.mld:
->> dispatchFindReferencedUrls / dispatchGetWebpageViaRef receive
->> pre-validated record-handle descriptors via @compileRecordArgs. The
->> mint_user_literal tool takes a plain {source:"known", value:"..."} ref
->> (not a record handle), so the dispatcher takes @decision directly and
->> runs @compileToolArgs internally.
-exe role:worker @dispatchMintUserLiteral(agent, state, tool, decision, query, deltaOnly) = [
-  let @argsCheck = @compileToolArgs(@agent, @state, @tool, @decision.args ?? {}, @query)
-  if !@argsCheck.ok [
-    => @plannerValidationFailure(@argsCheck.error ?? "tool_arg_validation_failed", @argsCheck, @argsCheck.issues)
-  ]
-  let @value = @argsCheck.args.value
+>> Core verify + mint + shelf-write. Takes a bare value. Shared by both
+>> the rigTransform-style dispatcher (Phase D removes) and the planner-tier
+>> dispatcher (added in Phase B). Returns a resolve-shaped envelope:
+>>   success: { state, state_delta, result: { status, record_type, count, handles, summary }, session_id }
+>>   error:   { error, code, field, hint, summary, reason }
+exe role:worker @coreMintUserLiteral(agent, state, value, query, deltaOnly) = [
   let @result = @mintUserLiteral(@value, @query)
   if !@result.ok [
     => {
@@ -135,6 +126,37 @@ exe role:worker @dispatchMintUserLiteral(agent, state, tool, decision, query, de
   }
 ]
 
+>> rigTransform-style dispatcher (legacy path via resolve.mld rigTransform
+>> branch). The planner emits `resolve({tool:"mint_user_literal", args:
+>> {value: {source:"known", value:"..."}}})`; @compileToolArgs unwraps the
+>> source-class ref to a bare string. Phase D removes this path.
+exe role:worker @dispatchMintUserLiteral(agent, state, tool, decision, query, deltaOnly) = [
+  let @argsCheck = @compileToolArgs(@agent, @state, @tool, @decision.args ?? {}, @query)
+  if !@argsCheck.ok [
+    => @plannerValidationFailure(@argsCheck.error ?? "tool_arg_validation_failed", @argsCheck, @argsCheck.issues)
+  ]
+  => @coreMintUserLiteral(@agent, @state, @argsCheck.args.value, @query, @deltaOnly)
+]
+
+>> Planner-tier dispatcher (Phase B path). Called from @mintUserLiteralWorker
+>> with the planner's already-coerced input. Args arrive as bare values per
+>> @mint_user_literal_inputs (data.untrusted: [value: string]); no source-class
+>> wrapping, no record-handle args.
+exe role:worker @dispatchMintUserLiteralPlanner(agent, state, decision, query, deltaOnly) = [
+  let @value = @decision.args.value
+  if !@value.isDefined() [
+    => {
+      error: "missing_value",
+      code: "MINT_USER_LITERAL_MISSING_VALUE",
+      field: "value",
+      hint: "mint_user_literal requires a non-null value field.",
+      summary: "mint_user_literal: missing value",
+      reason: "value field is required"
+    }
+  ]
+  => @coreMintUserLiteral(@agent, @state, @value, @query, @deltaOnly)
+]
+
 >> ── Tool catalog entry (auto-injected into every suite) ────────────
 >>
 >> Framework-universal tool surface. Suite-agnostic mint tool that every
@@ -157,6 +179,8 @@ export {
   @verifyUserLiteral,
   @mintUserLiteral,
   @mint_user_literal_placeholder,
+  @coreMintUserLiteral,
   @dispatchMintUserLiteral,
+  @dispatchMintUserLiteralPlanner,
   @rigInternalTools
 }

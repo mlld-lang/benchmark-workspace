@@ -79,7 +79,9 @@ exe @testWrappedArgNameRoleClassification() = [
   let @plain = @roleForArg(@tools.get_note, "note_id")
   let @dataWrapped = @roleForArg(@tools.get_note, { data: "note_id" })
   let @mxWrapped = @roleForArg(@tools.get_note, { mx: { data: "note_id" } })
-  let @ok = @plain == "control" && @dataWrapped == "control" && @mxWrapped == "control"
+  >> get_note is a read tool — note_id classifies as "filter" under the
+  >> Phase C role taxonomy (was "control" pre-spec-arg-grammar-simplification).
+  let @ok = @plain == "filter" && @dataWrapped == "filter" && @mxWrapped == "filter"
   => @assertOk(@ok, `plain=@plain data=@dataWrapped mx=@mxWrapped`)
 ]
 

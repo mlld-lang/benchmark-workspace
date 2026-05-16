@@ -31,12 +31,13 @@ import {
   @phaseState
 } from "../lifecycle.mld"
 import { @planner, @emptyPlannerRuntime, @emptyState } from "../session.mld"
-import { @url_capability } from "../records.mld"
+import { @url_capability, @mint_user_literal_inputs } from "../records.mld"
 import { @dispatchResolve } from "./resolve.mld"
 import { @dispatchExtract } from "./extract.mld"
 import { @dispatchDerive } from "./derive.mld"
 import { @dispatchExecute, @compileForDispatch } from "./execute.mld"
 import { @dispatchCompose } from "./compose.mld"
+import { @dispatchMintUserLiteralPlanner } from "../mint.mld"
 import "../diagnostics.mld"
 
 record @planner_resolve_inputs = {
@@ -1159,6 +1160,51 @@ exe @blockedWorker(input) = [
   => @result
 ]
 
+>> mint_user_literal worker (Phase B / spec-arg-grammar-simplification).
+>> Sibling of resolve/extract/derive/execute — planner emits a top-level
+>> mint_user_literal({value: "..."}) action; the worker verifies the
+>> literal against user-task text, mints a src:user-labeled handle via
+>> @mintUserValueHandle, and writes a @user_value record onto the planner
+>> shelf. Dispatcher (mint.mld @dispatchMintUserLiteralPlanner) carries
+>> role:worker so shelf-write capabilities resolve. On verifier failure
+>> the planner sees a structured error envelope (code/field/hint/message)
+>> and can re-quote or pivot.
+exe @mintUserLiteralWorker(input) = [
+  let @coerced = @input ?? {}
+  let @value = @coerced.value
+  let @decision = {
+    phase: "resolve",
+    tool: "mint_user_literal",
+    args: { value: @value },
+    purpose: null
+  }
+  let @toolCtx = @plannerToolContext("resolve", @decision)
+  if !@toolCtx.ok [
+    -> @toolCtx.result
+    => @toolCtx.result
+  ]
+  let @phaseResult = @dispatchMintUserLiteralPlanner(@toolCtx.agent, @toolCtx.state, @decision, @toolCtx.query, false)
+  let @settled = @settlePhaseDispatch(@toolCtx, @phaseResult, @decision)
+  let @resolvedHandles = for @handle in @arrayItems(@phaseResult.result.handles ?? []) => @stringValue(@handle)
+  let @result = when [
+    @settled.terminal.isDefined() => { status: "blocked", reason: "planner_error_budget_exhausted" }
+    @phaseResult.error.isDefined() => @buildPhaseErrorResult(@phaseResult, "resolve", @settled)
+    * => {
+      status: "resolved",
+      tool: "mint_user_literal",
+      record_type: @phaseResult.result.record_type,
+      count: @phaseResult.result.count,
+      handles: @resolvedHandles,
+      records: @plannerResolvedRecords(@toolCtx.agent, @phaseResult.result.record_type, @resolvedHandles),
+      summary: @phaseResult.result.summary,
+      budget_warning: @settled.budget_warning,
+      progress_warning: @settled.progress_warning
+    }
+  ]
+  -> @result
+  => @result
+] => record @planner_tool_result
+
 var tools @terminalTools = {
   compose: {
     mlld: @composeWorker,
@@ -1210,6 +1256,12 @@ var tools @plannerTools = {
     inputs: @planner_execute_inputs,
     labels: ["tool:w"],
     description: "Perform a write operation (send email, create event, update record, etc.). Target values must come from prior resolves or exact task text."
+  },
+  mint_user_literal: {
+    mlld: @mintUserLiteralWorker,
+    inputs: @mint_user_literal_inputs,
+    labels: ["tool:w"],
+    description: "Verify a literal value from the user's task text and mint a src:user-labeled handle suitable for use as a write-authority arg in subsequent execute calls. Pass the value verbatim: mint_user_literal({value: \"alice@example.com\"}). The framework verifies token-bounded substring match against the user task text (case + whitespace normalized) and returns a user_value handle. On verification failure, returns a structured error envelope — re-check the literal or pivot to a resolved-record handle. Reference the minted result via {source:'resolved', record:'user_value', handle:'<handle>', field:'value'}."
   },
   compose: {
     mlld: @composeWorker,
