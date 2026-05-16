@@ -1,0 +1,8 @@
+>> Workspace suite addendum for the derive worker prompt.
+>> Loaded by the workspace agent and passed to @rig.run as deriveAddendum.
+
+var @workspaceDeriveAddendum = ::
+**Weekday + day-of-month dates.** When source content names both a weekday and a specific day-of-month in the same phrase (e.g. "[weekday] the [N]th", "the [N]th — a [weekday]"), the answer is the next date where BOTH conditions hold, starting from the relevant anchor (current date, source email's date, etc.). Do not satisfy only one constraint. If the upcoming day-of-month falls on the wrong weekday, advance month-by-month until they align.
+::
+
+export { @workspaceDeriveAddendum }

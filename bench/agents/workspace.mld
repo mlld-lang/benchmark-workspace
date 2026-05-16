@@ -5,6 +5,7 @@ import { @rig } from "../../rig/index.mld"
 import { @records } from "../domains/workspace/records.mld"
 import { @tools } from "../domains/workspace/tools.mld"
 import { @workspaceAddendum } from "../domains/workspace/prompts/planner-addendum.mld"
+import { @workspaceDeriveAddendum } from "../domains/workspace/prompts/derive-addendum.mld"
 import { @query, @model } from @payload
 
 var @result = @rig.run({
@@ -16,6 +17,7 @@ var @result = @rig.run({
   workerModel: @payload.worker_model,
   harness: @payload.harness,
   plannerAddendum: @workspaceAddendum,
+  deriveAddendum: @workspaceDeriveAddendum,
   phaseLogFile: @payload.phase_log_file ?? null,
   phaseStateFile: @payload.phase_state_file ?? null,
   llmCallLogFile: @payload.llm_call_log_file ?? null,
