@@ -230,6 +230,54 @@ exe role:worker @testMintedHandleSatisfiesEmailAuthority() = [
   => @assertOk(@r.ok, `compile ok=@r.ok issues=@r.issues`)
 ]
 
+>> Trailing-punctuation acceptance — UT4 transcript flagged "Catch up over
+>> lunch." (period part of the description literal) followed by the
+>> sentence-end period in the task. Boundary regex must accept end-of-
+>> literal-period when followed by whitespace/EOF.
+exe role:worker @testMintAcceptsTrailingPeriodLiteral() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @result = @runMint("test", { args: { value: "Catch up over lunch." } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "create event titled 'Lunch' with description Catch up over lunch.. Her email is 'x@y.com'.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  => @assertEq(@result.status, "resolved")
+]
+
+>> Conditional close-boundary smuggle defense — sentence-terminator punct
+>> (. , ; : ! ?) is a close boundary ONLY when followed by whitespace or
+>> EOF. Mint `https` against `go to https://example.com please` must
+>> reject because the `:` is followed by `/`, not whitespace; otherwise
+>> the planner could mint the URL scheme alone as a user-attested literal.
+exe role:worker @testMintRejectsHttpsBeforeColonSlashSmuggle() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @result = @runMint("test", { args: { value: "https" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "go to https://example.com please", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  => @assertEq(@result.error, "mint_user_literal_value_not_found")
+]
+
+>> Same defense, comma close-boundary case. Mint "alice" against
+>> "try alice,bob for x" must reject — the `,` between alice and bob is
+>> not a token boundary because it's followed by a word char.
+exe role:worker @testMintRejectsCommaBeforeWordSmuggle() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @result = @runMint("test", { args: { value: "alice" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "try alice,bob for x please", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  => @assertEq(@result.error, "mint_user_literal_value_not_found")
+]
+
 >> Smuggling defense — even with widened boundaries, a partial substring
 >> that the user did not type as a standalone token must still reject.
 >> Task contains "abc@def.com"; minting "def.com" alone must not be
@@ -273,6 +321,9 @@ var @argGrammarRoleDispatchSuite = @suite("arg-grammar-role-dispatch", [
     @testMintAcceptsSingleQuotedLiteral,
     @testMintAcceptsDoubleQuotedLiteral,
     @testMintAcceptsParenthesizedLiteral,
+    @testMintAcceptsTrailingPeriodLiteral,
+    @testMintRejectsHttpsBeforeColonSlashSmuggle,
+    @testMintRejectsCommaBeforeWordSmuggle,
     @testMintRejectsPartialSubstringSmuggle
   ], { ticket: "post-G.1 diagnosis UT4/UT32" }),
   @group("mint-handle-satisfies-authority", [

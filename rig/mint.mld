@@ -45,16 +45,17 @@ exe @verifyUserLiteral(value, query) = js {
   }
   const normQuery = query.toLowerCase().replace(/\s+/g, ' ');
   const escaped = normValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Boundary chars: whitespace, edges, AND wrapping punctuation users
-  // naturally type around literals — single/double quotes, backticks,
-  // parens, brackets, angle brackets on the open side; same plus comma,
-  // semicolon, colon, sentence terminators on the close side. Word-char-
-  // adjacent boundaries like `.` `@` `_` `-` `/` are deliberately omitted
-  // — they appear inside emails/file paths/URLs and including them as
-  // boundary chars would let an attacker smuggle a partial substring like
-  // `def.com` past mint when the task says `abc@def.com`.
+  // Boundary chars: whitespace and quote/paren/bracket are always boundary
+  // chars on both sides — users naturally wrap literals in those. Sentence-
+  // terminator punctuation (. , ; : ! ?) is a close boundary ONLY when
+  // followed by whitespace or end-of-string; this preserves the partial-
+  // substring smuggling defense (e.g. mint "12" against task "meet at 12:30"
+  // must reject — `:` is not a token boundary because it's followed by a
+  // digit, not whitespace). Within-word punctuation `.` `@` `_` `-` `/` is
+  // never a boundary char because it appears inside legitimate identifiers
+  // (emails, file paths, URLs).
   const openBoundary = `(^|[\\s'"\`(\\[{<])`;
-  const closeBoundary = `([\\s'"\`)\\]}>,;:!?]|$)`;
+  const closeBoundary = `(?:[\\s'"\`)\\]}>]|[.,;:!?](?=\\s|$)|$)`;
   const re = new RegExp(`${openBoundary}${escaped}${closeBoundary}`);
   return { ok: re.test(normQuery), reason: re.test(normQuery) ? null : 'no token-bounded match in user task text' };
 }
