@@ -79,6 +79,14 @@ exe @synthesizedPolicy(tools, overridePolicy, options) = [
     ...@stdRules,
     "influenced+!influenced:mitigated": { deny: ["destructive", "exfil"] }
   }
+  >> labels.src:user (Phase B/C follow-on, G.1 UT4 diagnosis 2026-05-15):
+  >> mint_user_literal produces handles labeled src:user:msg:N. Without
+  >> the src:user.satisfies = ["fact:*"] mapping below, the minted handle
+  >> hits `proofless_control_arg` at every write-authority arg because the
+  >> kind-derived accepts list doesn't include src:user. Architectural
+  >> intent (plan §"Architectural target") is that user-task-attested
+  >> literals satisfy authority fact requirements; this is the wiring
+  >> that makes that true. Same shape as user_originated.
   let @baseShape = {
     labeling: { unlabeled: "untrusted" },
     capabilities: {
@@ -90,7 +98,8 @@ exe @synthesizedPolicy(tools, overridePolicy, options) = [
       apply: @standard.labels.apply,
       args: @standard.labels.args,
       "trusted_tool_output": { satisfies: ["fact:*"] },
-      "user_originated":     { satisfies: ["fact:*"] }
+      "user_originated":     { satisfies: ["fact:*"] },
+      "src:user":            { satisfies: ["fact:*"] }
     },
     authorizations: @synthesizedAuthorizations(@tools)
   }

@@ -158,6 +158,62 @@ exe role:worker @testMintUserLiteralNotInTask() = [
   => @assertEq(@result.error, "mint_user_literal_value_not_found")
 ]
 
+>> Quoted-literal regression — UT4 + UT32 diagnosis showed mint regex
+>> needed quote/paren/bracket boundary chars. Naturally typed task
+>> literals are wrapped in 'single', "double", or backtick quotes.
+
+exe role:worker @testMintAcceptsSingleQuotedLiteral() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @result = @runMint("test", { args: { value: "sarah.connor@gmail.com" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Her email address is 'sarah.connor@gmail.com'.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  => @assertEq(@result.status, "resolved")
+]
+
+exe role:worker @testMintAcceptsDoubleQuotedLiteral() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @result = @runMint("test", { args: { value: "hawaii-packing-list.docx" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: `Please create a new file named "hawaii-packing-list.docx" please.`, state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  => @assertEq(@result.status, "resolved")
+]
+
+exe role:worker @testMintAcceptsParenthesizedLiteral() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @result = @runMint("test", { args: { value: "alice@example.com" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Forward to my contact (alice@example.com) please.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  => @assertEq(@result.status, "resolved")
+]
+
+>> Smuggling defense — even with widened boundaries, a partial substring
+>> that the user did not type as a standalone token must still reject.
+>> Task contains "abc@def.com"; minting "def.com" alone must not be
+>> accepted as user-attested, because the @ is not a boundary char.
+exe role:worker @testMintRejectsPartialSubstringSmuggle() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @result = @runMint("test", { args: { value: "def.com" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Send to abc@def.com please.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  => @assertEq(@result.error, "mint_user_literal_value_not_found")
+]
+
 >> --- Suite assembly ---
 
 var @argGrammarRoleDispatchSuite = @suite("arg-grammar-role-dispatch", [
@@ -180,7 +236,13 @@ var @argGrammarRoleDispatchSuite = @suite("arg-grammar-role-dispatch", [
   @group("mint-user-literal", [
     @testMintUserLiteralInTask,
     @testMintUserLiteralNotInTask
-  ], {})
+  ], {}),
+  @group("mint-quote-boundary", [
+    @testMintAcceptsSingleQuotedLiteral,
+    @testMintAcceptsDoubleQuotedLiteral,
+    @testMintAcceptsParenthesizedLiteral,
+    @testMintRejectsPartialSubstringSmuggle
+  ], { ticket: "post-G.1 diagnosis UT4/UT32" })
 ], {})
 
 export { @argGrammarRoleDispatchSuite }

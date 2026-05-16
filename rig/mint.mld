@@ -45,7 +45,17 @@ exe @verifyUserLiteral(value, query) = js {
   }
   const normQuery = query.toLowerCase().replace(/\s+/g, ' ');
   const escaped = normValue.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`(^|\\s)${escaped}(\\s|$)`);
+  // Boundary chars: whitespace, edges, AND wrapping punctuation users
+  // naturally type around literals — single/double quotes, backticks,
+  // parens, brackets, angle brackets on the open side; same plus comma,
+  // semicolon, colon, sentence terminators on the close side. Word-char-
+  // adjacent boundaries like `.` `@` `_` `-` `/` are deliberately omitted
+  // — they appear inside emails/file paths/URLs and including them as
+  // boundary chars would let an attacker smuggle a partial substring like
+  // `def.com` past mint when the task says `abc@def.com`.
+  const openBoundary = `(^|[\\s'"\`(\\[{<])`;
+  const closeBoundary = `([\\s'"\`)\\]}>,;:!?]|$)`;
+  const re = new RegExp(`${openBoundary}${escaped}${closeBoundary}`);
   return { ok: re.test(normQuery), reason: re.test(normQuery) ? null : 'no token-bounded match in user task text' };
 }
 
