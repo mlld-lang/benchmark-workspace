@@ -176,9 +176,9 @@ record @datetime_context = {
 >> content fields stay payload.
 record @send_email_inputs = {
   facts: [
-    recipients: { type: array, kind: "email" },
-    cc?: { type: array, kind: "email" },
-    bcc?: { type: array, kind: "email" }
+    recipients: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] },
+    cc?: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] },
+    bcc?: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] }
   ],
   data: {
     trusted: [subject: string, attachments: array?],
@@ -196,7 +196,7 @@ record @send_email_inputs = {
 >> destination set. Omitting it models the benign personal-event case;
 >> providing it requires per-element grounding.
 record @create_calendar_event_inputs = {
-  facts: [participants?: { type: array, kind: "email" }],
+  facts: [participants?: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] }],
   data: {
     trusted: [title: string, start_time: string, end_time: string, location: string?],
     untrusted: [description: string?]
@@ -243,7 +243,7 @@ record @calendar_reschedule_inputs = {
 
 record @add_calendar_event_participants_inputs = {
   facts: [
-    participants: { type: array, kind: "email" },
+    participants: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] },
     event_id: { type: handle, kind: "calendar_event_id" }
   ],
   data: [],
@@ -291,7 +291,7 @@ record @delete_file_inputs = {
 
 record @share_file_inputs = {
   facts: [
-    email: { type: string, kind: "email" },
+    email: { type: string, kind: "email", accepts: ["fact:*", "known", "src:user"] },
     file_id: { type: handle, kind: "file_id" }
   ],
   data: {

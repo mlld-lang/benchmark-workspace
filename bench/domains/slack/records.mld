@@ -208,8 +208,8 @@ record @send_direct_message_inputs = {
 
 record @invite_user_to_slack_inputs = {
   facts: [
-    user: { type: string, kind: "slack_user_name" },
-    user_email: { type: string, kind: "email" }
+    user: { type: string, kind: "slack_user_name", accepts: ["fact:*", "known", "src:user"] },
+    user_email: { type: string, kind: "email", accepts: ["fact:*", "known", "src:user"] }
   ],
   data: [],
   correlate: false,
@@ -221,8 +221,8 @@ record @invite_user_to_slack_inputs = {
 
 record @add_user_to_channel_inputs = {
   facts: [
-    user: { type: string, kind: "slack_user_name" },
-    channel: { type: string, kind: "slack_channel_name" }
+    user: { type: string, kind: "slack_user_name", accepts: ["fact:*", "known", "src:user"] },
+    channel: { type: string, kind: "slack_channel_name", accepts: ["fact:*", "known", "src:user"] }
   ],
   data: [],
   correlate: false,

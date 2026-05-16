@@ -216,7 +216,7 @@ record @travel_fact = {
 >> Write input records live with the domain records so travel's tool
 >> catalog can reference the fact/data split directly.
 record @create_calendar_event_inputs = {
-  facts: [participants?: { type: array, kind: "email" }],
+  facts: [participants?: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] }],
   data: {
     trusted: [title: string, location: string?, start_time: string, end_time: string],
     untrusted: [description: string?]
@@ -242,9 +242,9 @@ record @cancel_calendar_event_inputs = {
 
 record @send_email_inputs = {
   facts: [
-    recipients: { type: array, kind: "email" },
-    cc?: { type: array, kind: "email" },
-    bcc?: { type: array, kind: "email" }
+    recipients: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] },
+    cc?: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] },
+    bcc?: { type: array, kind: "email", accepts: ["fact:*", "known", "src:user"] }
   ],
   data: {
     trusted: [subject: string, attachments: array?],
@@ -258,7 +258,7 @@ record @send_email_inputs = {
 }
 
 record @reserve_hotel_inputs = {
-  facts: [hotel: { type: string, kind: "hotel_name" }],
+  facts: [hotel: { type: string, kind: "hotel_name", accepts: ["fact:*", "known", "src:user"] }],
   data: {
     trusted: [start_day: string, end_day: string]
   },
@@ -269,7 +269,7 @@ record @reserve_hotel_inputs = {
 }
 
 record @reserve_car_rental_inputs = {
-  facts: [company: { type: string, kind: "car_rental_name" }],
+  facts: [company: { type: string, kind: "car_rental_name", accepts: ["fact:*", "known", "src:user"] }],
   data: {
     trusted: [start_time: string, end_time: string]
   },
@@ -280,7 +280,7 @@ record @reserve_car_rental_inputs = {
 }
 
 record @reserve_restaurant_inputs = {
-  facts: [restaurant: { type: string, kind: "restaurant_name" }],
+  facts: [restaurant: { type: string, kind: "restaurant_name", accepts: ["fact:*", "known", "src:user"] }],
   data: {
     trusted: [start_time: string]
   },

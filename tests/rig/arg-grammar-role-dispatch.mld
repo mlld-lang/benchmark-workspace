@@ -230,6 +230,73 @@ exe role:worker @testMintedHandleSatisfiesEmailAuthority() = [
   => @assertOk(@r.ok, `compile ok=@r.ok issues=@r.issues`)
 ]
 
+>> Dispatch-layer regression — per-record accepts: on a scalar kind:"email"
+>> fact field admits user_value-minted handles end-to-end (rehearse).
+>> Probe-confirmed (tmp/probe-accepts-precedence/) that per-record
+>> accepts: ["fact:*","known","src:user"] overrides kind-derived and lets
+>> the mint handle satisfy authority. Without it, share_file.email-style
+>> args reject with proofless_control_arg.
+
+record @testShareInputs = {
+  facts: [
+    email: { type: string, kind: "email", accepts: ["fact:*", "known", "src:user"] },
+    file_id: { type: handle, kind: "file_id" }
+  ],
+  data: { trusted: [permission: string] },
+  correlate: false,
+  validate: "strict",
+  write: { role:planner: { tools: { authorize: true } } }
+}
+exe @testShareStub(email, file_id, permission) = [ => { ok: true } ]
+var tools @testShareTools = {
+  test_share: {
+    mlld: @testShareStub,
+    inputs: @testShareInputs,
+    labels: ["execute:w", "tool:w", "exfil:send"],
+    can_authorize: "role:planner",
+    description: "share-file-shape probe with per-record accepts"
+  }
+}
+var @testShareAgent = @rigBuild({
+  suite: "test-share-accepts",
+  defense: "defended",
+  model: "stub",
+  records: @records,
+  tools: @testShareTools
+})
+exe llm @testRunRehearse(prompt, config) = [
+  => @callTool(@plannerTools.rehearse, @plannerTools, "rehearse", @config.args)
+]
+
+exe role:worker @testMintedHandleSatisfiesScalarEmailAuthorityViaAccepts() = [
+  let @sh = @shelfRecords(@testShareAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@testShareAgent, @ps)
+  let @mintResult = @runMint("test", { args: { value: "john.doe@gmail.com" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Share with john.doe@gmail.com please. file_xyz.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @handle = @mintResult.handles[0]
+  let @emailRef = { source: "resolved", record: "user_value", handle: @handle, field: "value" }
+  let @rehearse = @testRunRehearse("test", {
+    args: {
+      operation: "test_share",
+      args: {
+        email: @emailRef,
+        file_id: { source: "known", value: "file_xyz" },
+        permission: "read"
+      },
+      purpose: "test per-record accepts admits user_value on scalar kind:email"
+    }
+  }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Share with john.doe@gmail.com please. file_xyz.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  => @assertOk(@rehearse.ok, `rehearse.ok=@rehearse.ok error=@rehearse.error issues=@rehearse.issues`)
+]
+
 >> Trailing-punctuation acceptance — UT4 transcript flagged "Catch up over
 >> lunch." (period part of the description literal) followed by the
 >> sentence-end period in the task. Boundary regex must accept end-of-
@@ -327,8 +394,9 @@ var @argGrammarRoleDispatchSuite = @suite("arg-grammar-role-dispatch", [
     @testMintRejectsPartialSubstringSmuggle
   ], { ticket: "post-G.1 diagnosis UT4/UT32" }),
   @group("mint-handle-satisfies-authority", [
-    @testMintedHandleSatisfiesEmailAuthority
-  ], { ticket: "post-G.1 UT4 recovery — src:user satisfies fact:* wiring" })
+    @testMintedHandleSatisfiesEmailAuthority,
+    @testMintedHandleSatisfiesScalarEmailAuthorityViaAccepts
+  ], { ticket: "UT4 recovery + UT32 satisfies-via-per-record-accepts migration" })
 ], {})
 
 export { @argGrammarRoleDispatchSuite }

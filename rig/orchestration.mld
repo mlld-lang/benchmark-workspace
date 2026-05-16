@@ -79,14 +79,19 @@ exe @synthesizedPolicy(tools, overridePolicy, options) = [
     ...@stdRules,
     "influenced+!influenced:mitigated": { deny: ["destructive", "exfil"] }
   }
-  >> labels.src:user (Phase B/C follow-on, G.1 UT4 diagnosis 2026-05-15):
-  >> mint_user_literal produces handles labeled src:user:msg:N. Without
-  >> the src:user.satisfies = ["fact:*"] mapping below, the minted handle
-  >> hits `proofless_control_arg` at every write-authority arg because the
-  >> kind-derived accepts list doesn't include src:user. Architectural
-  >> intent (plan §"Architectural target") is that user-task-attested
-  >> literals satisfy authority fact requirements; this is the wiring
-  >> that makes that true. Same shape as user_originated.
+  >> labels.X.satisfies retired in v2.x — the redesigned records contract
+  >> moved this role to per-record `accepts:` declarations (path 1) and
+  >> kind-derived auto-accepts (path 2). The pre-existing
+  >> trusted_tool_output / user_originated satisfies entries (from v1
+  >> transitional patches c-4076 / c-7780) had been silently dead since
+  >> the v2.x compiler shipped — their intent is now covered by
+  >> kind-derived: reserve_hotel.hotel (kind:hotel_name) accepts
+  >> fact:@hotel.name automatically; update_scheduled_transaction.recipient
+  >> (kind:iban) accepts fact:@transaction.recipient automatically. No
+  >> replacement is needed in synthesizedPolicy — per-record accepts:
+  >> declarations on input records carry the cases that kind-derived
+  >> doesn't (e.g., user_value handles satisfying authority kinds for
+  >> user-typeable arg names — see bench/domains/*/records.mld accepts:).
   let @baseShape = {
     labeling: { unlabeled: "untrusted" },
     capabilities: {
@@ -96,10 +101,7 @@ exe @synthesizedPolicy(tools, overridePolicy, options) = [
       risks: @operations,
       rules: @rigLabels,
       apply: @standard.labels.apply,
-      args: @standard.labels.args,
-      "trusted_tool_output": { satisfies: ["fact:*"] },
-      "user_originated":     { satisfies: ["fact:*"] },
-      "src:user":            { satisfies: ["fact:*"] }
+      args: @standard.labels.args
     },
     authorizations: @synthesizedAuthorizations(@tools)
   }
