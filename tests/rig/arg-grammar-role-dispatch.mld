@@ -198,6 +198,38 @@ exe role:worker @testMintAcceptsParenthesizedLiteral() = [
   => @assertEq(@result.status, "resolved")
 ]
 
+>> src:user-labeled minted handle satisfies kind:"email" authority arg.
+>> This is the rig synthesizedPolicy "src:user": { satisfies: ["fact:*"] }
+>> wiring — without it, mint_user_literal-produced handles hit
+>> proofless_control_arg on every write-authority arg even when the
+>> verifier confirmed the literal is from the user's task text.
+>> Verified end-to-end via UT4 recovery on G.1 patched-opencode dispatch
+>> (2026-05-15): mint → user_value handle → add_calendar_event_participants.
+
+exe role:worker @testMintedHandleSatisfiesEmailAuthority() = [
+  let @sh = @shelfRecords(@builtAgent.records)
+  shelf @ps from @sh with { versioned: true, projection_cache: ["role:planner"] }
+  let @agent = @withShelf(@builtAgent, @ps)
+  let @mintResult = @runMint("test", { args: { value: "alice@example.com" } }) with {
+    read: "role:planner",
+    session: @planner,
+    seed: { agent: @agent, query: "Send to alice@example.com please.", state: @emptyState(), runtime: @emptyPlannerRuntime() }
+  }
+  let @handle = @mintResult.handles[0]
+  let @r = @compileToolArgs(
+    @agent,
+    @emptyState(),
+    @tools.send_email,
+    {
+      recipients: [{ source: "resolved", record: "user_value", handle: @handle, field: "value" }],
+      subject: "Hi",
+      body: "Hello"
+    },
+    "Send to alice@example.com please."
+  )
+  => @assertOk(@r.ok, `compile ok=@r.ok issues=@r.issues`)
+]
+
 >> Smuggling defense — even with widened boundaries, a partial substring
 >> that the user did not type as a standalone token must still reject.
 >> Task contains "abc@def.com"; minting "def.com" alone must not be
@@ -242,7 +274,10 @@ var @argGrammarRoleDispatchSuite = @suite("arg-grammar-role-dispatch", [
     @testMintAcceptsDoubleQuotedLiteral,
     @testMintAcceptsParenthesizedLiteral,
     @testMintRejectsPartialSubstringSmuggle
-  ], { ticket: "post-G.1 diagnosis UT4/UT32" })
+  ], { ticket: "post-G.1 diagnosis UT4/UT32" }),
+  @group("mint-handle-satisfies-authority", [
+    @testMintedHandleSatisfiesEmailAuthority
+  ], { ticket: "post-G.1 UT4 recovery — src:user satisfies fact:* wiring" })
 ], {})
 
 export { @argGrammarRoleDispatchSuite }
