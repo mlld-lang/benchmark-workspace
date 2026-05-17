@@ -11,6 +11,7 @@ import {
   @isObjectValue,
   @isHistoryRefObject,
   @parseStringifiedHistoryRefs,
+  @looksLikeStructuredActionAttempt,
   @validateStructuredAction,
   @validateHistoryRefs,
   @historyPathLookup,
@@ -432,6 +433,41 @@ exe @runAgent(query, plannerTools, basePolicy, modelName, harnessOverride, adden
     let @content = @plannerSession(@query, @plannerTools, @writeTools, @basePolicy, @modelName, @harnessOverride, @addendum, @state.historyText)
     let @parsed = @parseStructuredAction(@content)
     if !@parsed.ok [
+      let @structuredAttempt = @looksLikeStructuredActionAttempt(@content)
+      if @structuredAttempt [
+        let @step = {
+          done: false,
+          kind: "invalid_action",
+          action: { action: "invalid_action" },
+          result: {
+            ok: false,
+            status: @parsed.status ?? "invalid_action",
+            error: "planner returned malformed structured action; retry with exactly one raw valid JSON object"
+          }
+        }
+        let @stepIndex = @state.history.length
+        let @stepLine = @historyLine(@step, @stepIndex)
+        let @nextHistory = @state.history.concat([@step])
+        let @nextHistoryText = when [
+          @state.historyText == "none" => @stepLine
+          * => `@state.historyText
+@stepLine`
+        ]
+        if @nextHistory.length >= 24 [
+          done {
+            content: "The agent reached the structured action iteration limit before completing the task.",
+            blocked: true,
+            debug: {
+              architecture: "proof-agent-v2",
+              planner_model: @modelName,
+              action_loop: "iteration_limit",
+              step_history: @nextHistory,
+              last_decision: { action: "invalid_action" }
+            }
+          }
+        ]
+        continue { history: @nextHistory, historyText: @nextHistoryText }
+      ]
       done {
         content: @content,
         debug: {

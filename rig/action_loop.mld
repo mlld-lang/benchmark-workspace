@@ -96,6 +96,14 @@ exe @parseStructuredAction(raw) = js {
   return { ok: false, status: "no_structured_action" };
 }
 
+exe @looksLikeStructuredActionAttempt(raw) = js {
+  const text = typeof raw === "string" ? raw.trim() : String(raw ?? "").trim();
+  if (!text) return false;
+  return /```(?:json)?/i.test(text) ||
+    /"action"\s*:/i.test(text) ||
+    /^\{\s*action\s*:/i.test(text);
+}
+
 exe @validateStructuredAction(parsed, plannerTools, writeTools) = [
   if !@parsed.ok [
     => { ok: false, status: @parsed.status ?? "invalid_action" }
@@ -437,6 +445,7 @@ export {
   @isObjectValue,
   @isHistoryRefObject,
   @parseStringifiedHistoryRefs,
+  @looksLikeStructuredActionAttempt,
   @validateStructuredAction,
   @historyPathLookup,
   @compileSingleHistoryRef,

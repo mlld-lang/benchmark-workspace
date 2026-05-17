@@ -3,6 +3,7 @@ import { @suite, @group } from "./runner.mld"
 import { @executeAuthorizedIntent, @parseExecuteRequest } from "../rig/workers.mld"
 import {
   @parseStructuredAction,
+  @looksLikeStructuredActionAttempt,
   @validateStructuredAction,
   @historyPathLookup,
   @compileHistoryRefs,
@@ -232,6 +233,21 @@ exe @testParseStructuredFinalAction() = [
 exe @testParseMalformedActionFailsClosed() = [
   let @parsed = @parseStructuredAction("I should probably call a tool.")
   => @assertEq({ ok: @parsed.ok, status: @parsed.status }, { ok: false, status: "no_structured_action" })
+]
+
+exe @testMalformedStructuredAttemptIsRetryable() = [
+  let @malformed = '```json
+{"action":"execute" "intent":{"tool":"send"}}
+```'
+  => @assertEq({
+    parsedOk: @parseStructuredAction(@malformed).ok,
+    looksStructured: @looksLikeStructuredActionAttempt(@malformed),
+    plainProseStructured: @looksLikeStructuredActionAttempt("I should probably call a tool.")
+  }, {
+    parsedOk: false,
+    looksStructured: true,
+    plainProseStructured: false
+  })
 ]
 
 exe @testUnknownPlannerToolDenied() = [
@@ -527,6 +543,7 @@ var @architectureProofSuite = @suite("architecture-proof", [
   @group("structured-actions", [
     @testParseStructuredFinalAction,
     @testParseMalformedActionFailsClosed,
+    @testMalformedStructuredAttemptIsRetryable,
     @testUnknownPlannerToolDenied,
     @testUnknownWriteToolDenied,
     @testDispatchFinalReturnsDone,
