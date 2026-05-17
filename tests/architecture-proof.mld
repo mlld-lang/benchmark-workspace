@@ -4,6 +4,9 @@ import { @executeAuthorizedIntent, @parseExecuteRequest } from "../rig/workers.m
 import {
   @parseStructuredAction,
   @looksLikeStructuredActionAttempt,
+  @taskLooksWriteRequested,
+  @finalClaimsCompletion,
+  @historyHasSuccessfulExecute,
   @validateStructuredAction,
   @historyPathLookup,
   @compileHistoryRefs,
@@ -247,6 +250,31 @@ exe @testMalformedStructuredAttemptIsRetryable() = [
     parsedOk: false,
     looksStructured: true,
     plainProseStructured: false
+  })
+]
+
+exe @testUnexecutedWriteCompletionClaimIsRetryable() = [
+  let @history = [{
+    done: false,
+    kind: "observe",
+    result: { ok: true }
+  }, {
+    done: false,
+    kind: "execute",
+    result: { ok: true, status: "executed" }
+  }]
+  => @assertEq({
+    writeTask: @taskLooksWriteRequested("Create an event for tomorrow."),
+    completion: @finalClaimsCompletion("Task completed."),
+    refusal: @finalClaimsCompletion("Cannot create the event because it is blocked."),
+    hasExecute: @historyHasSuccessfulExecute(@history),
+    emptyHasExecute: @historyHasSuccessfulExecute([])
+  }, {
+    writeTask: true,
+    completion: true,
+    refusal: false,
+    hasExecute: true,
+    emptyHasExecute: false
   })
 ]
 
@@ -544,6 +572,7 @@ var @architectureProofSuite = @suite("architecture-proof", [
     @testParseStructuredFinalAction,
     @testParseMalformedActionFailsClosed,
     @testMalformedStructuredAttemptIsRetryable,
+    @testUnexecutedWriteCompletionClaimIsRetryable,
     @testUnknownPlannerToolDenied,
     @testUnknownWriteToolDenied,
     @testDispatchFinalReturnsDone,

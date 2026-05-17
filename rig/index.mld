@@ -12,6 +12,9 @@ import {
   @isHistoryRefObject,
   @parseStringifiedHistoryRefs,
   @looksLikeStructuredActionAttempt,
+  @taskLooksWriteRequested,
+  @finalClaimsCompletion,
+  @historyHasSuccessfulExecute,
   @validateStructuredAction,
   @validateHistoryRefs,
   @historyPathLookup,
@@ -426,64 +429,60 @@ exe @dispatchLocalExecute(parsed, plannerTools, writeTools, task, basePolicy, hi
   }
 ]
 
+exe @invalidActionStep(status, error, action) = [
+  => {
+    done: false,
+    kind: "invalid_action",
+    action: @action ?? { action: "invalid_action" },
+    result: {
+      ok: false,
+      status: @status ?? "invalid_action",
+      error: @error
+    }
+  }
+]
+
+exe @unstructuredFinalStep(content) = [
+  => {
+    done: true,
+    kind: "model_final_or_unstructured",
+    content: @content
+  }
+]
+
 exe @runAgent(query, plannerTools, basePolicy, modelName, harnessOverride, addendum, writeTools) = [
   let @initial = { history: [], historyText: "none" }
   let @loopResult = loop(24) [
     let @state = @input ?? @initial
     let @content = @plannerSession(@query, @plannerTools, @writeTools, @basePolicy, @modelName, @harnessOverride, @addendum, @state.historyText)
     let @parsed = @parseStructuredAction(@content)
-    if !@parsed.ok [
-      let @structuredAttempt = @looksLikeStructuredActionAttempt(@content)
-      if @structuredAttempt [
-        let @step = {
-          done: false,
-          kind: "invalid_action",
-          action: { action: "invalid_action" },
-          result: {
-            ok: false,
-            status: @parsed.status ?? "invalid_action",
-            error: "planner returned malformed structured action; retry with exactly one raw valid JSON object"
-          }
-        }
-        let @stepIndex = @state.history.length
-        let @stepLine = @historyLine(@step, @stepIndex)
-        let @nextHistory = @state.history.concat([@step])
-        let @nextHistoryText = when [
-          @state.historyText == "none" => @stepLine
-          * => `@state.historyText
-@stepLine`
-        ]
-        if @nextHistory.length >= 24 [
-          done {
-            content: "The agent reached the structured action iteration limit before completing the task.",
-            blocked: true,
-            debug: {
-              architecture: "proof-agent-v2",
-              planner_model: @modelName,
-              action_loop: "iteration_limit",
-              step_history: @nextHistory,
-              last_decision: { action: "invalid_action" }
-            }
-          }
-        ]
-        continue { history: @nextHistory, historyText: @nextHistoryText }
-      ]
-      done {
-        content: @content,
-        debug: {
-          architecture: "proof-agent-v2",
-          planner_model: @modelName,
-          action_loop: "model_final_or_unstructured",
-          step_history: @state.history
-        }
-      }
+    let @structuredAttempt = @looksLikeStructuredActionAttempt(@content)
+    let @unexecutedWriteClaim = @taskLooksWriteRequested(@query) && @finalClaimsCompletion(@content) && !@historyHasSuccessfulExecute(@state.history)
+    let @unstructuredMode = when [
+      @parsed.ok => "parsed"
+      @structuredAttempt => "retry"
+      @unexecutedWriteClaim => "retry"
+      * => "final"
     ]
-    let @historyRefValidation = @validateHistoryRefs(@parsed.action, @state.history)
+    let @historyRefValidation = when [
+      @parsed.ok => @validateHistoryRefs(@parsed.action, @state.history)
+      * => { ok: true }
+    ]
     let @resolvedAction = when [
-      @historyRefValidation.ok && @parsed.action.action != "execute" => @resolveLocalHistoryRefs(@parsed.action, @state.history)
+      @parsed.ok && @historyRefValidation.ok && @parsed.action.action != "execute" => @resolveLocalHistoryRefs(@parsed.action, @state.history)
+      @parsed.ok => @parsed.action
       * => @parsed.action
     ]
     let @step = when [
+      @unstructuredMode == "retry" => @invalidActionStep(
+        @parsed.status ?? "invalid_action",
+        when [
+          @unexecutedWriteClaim => "planner claimed a write was complete before execute returned success; retry with the required execute action"
+          * => "planner returned malformed structured action; retry with exactly one raw valid JSON object"
+        ],
+        { action: "invalid_action" }
+      )
+      @parsed.ok == false => @unstructuredFinalStep(@content)
       !@historyRefValidation.ok => {
         done: false,
         kind: @parsed.action.action ?? "unknown",
@@ -524,6 +523,41 @@ exe @runAgent(query, plannerTools, basePolicy, modelName, harnessOverride, adden
 @stepLine`
     ]
     if @step.done [
+      let @unexecutedFinalWriteClaim = @step.kind == "final" && @taskLooksWriteRequested(@query) && @finalClaimsCompletion(@step.content) && !@historyHasSuccessfulExecute(@state.history)
+      if @unexecutedFinalWriteClaim [
+        let @retryStep = {
+          done: false,
+          kind: "invalid_action",
+          action: @parsed.action,
+          result: {
+            ok: false,
+            status: "invalid_action",
+            error: "planner claimed a write was complete before execute returned success; retry with the required execute action"
+          }
+        }
+        let @retryStepIndex = @state.history.length
+        let @retryStepLine = @historyLine(@retryStep, @retryStepIndex)
+        let @retryHistory = @state.history.concat([@retryStep])
+        let @retryHistoryText = when [
+          @state.historyText == "none" => @retryStepLine
+          * => `@state.historyText
+@retryStepLine`
+        ]
+        if @retryHistory.length >= 24 [
+          done {
+            content: "The agent reached the structured action iteration limit before completing the task.",
+            blocked: true,
+            debug: {
+              architecture: "proof-agent-v2",
+              planner_model: @modelName,
+              action_loop: "iteration_limit",
+              step_history: @retryHistory,
+              last_decision: @parsed.action
+            }
+          }
+        ]
+        continue { history: @retryHistory, historyText: @retryHistoryText }
+      ]
       done {
         content: @step.content,
         blocked: @step.blocked ?? false,
