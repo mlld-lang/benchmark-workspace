@@ -69,6 +69,19 @@ The Slack suite showed that URL provenance deserves a standard recipe:
 
 This currently requires local helper code. It would be useful to present the desired mlld-native shape even if the primitive is still evolving.
 
+### Add sign/verify as the missing-authority recovery pattern
+
+Sign/verify is the clean way to recover utility when a benchmark asks the agent to treat file, webpage, or app-resource content as task authority:
+
+- sign benign task-start resource bytes outside the attacked runtime state;
+- expose resource content to the planner as a handle, not as authority;
+- make the planner call a verification tool such as `verify_user_attestation`;
+- append verified content to execution context only when `@sigVerify.handle` returns `verified:true`;
+- keep `@sigVerify.value` framework-only and out of agent tool catalogs;
+- require failed-verification and unsafe-unverified-append canaries before moving a task out of `*-FAIL`.
+
+This should be documented as a primitive-backed recovery path, not as semantic prompt defense. The transcript acceptance criterion is `read -> verify_user_attestation -> execute`.
+
 ### Separate reference depth from field modeling rules
 
 The record sections are correct, but the load-bearing modeling rule should be repeated in every relevant section:

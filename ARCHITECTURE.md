@@ -97,11 +97,11 @@ Suite policy composes these generic rules with domain-specific records and tool 
 
 ## Suite Boundaries
 
-Banking centers on money movement, scheduled transaction mutation, and password/profile updates. IBANs and scheduled transaction ids are control args. File contents are readable payload but cannot authorize payment/update args without per-file content attestation.
+Banking centers on money movement, scheduled transaction mutation, and password/profile updates. IBANs and scheduled transaction ids are control args. File contents are handle-only to the planner until `verify_user_attestation` succeeds against a task-start file signature; only verified content is appended to execution context. Profile fields are exact-known, so address-file updates require task text or verified file context.
 
 Workspace centers on typed instruction channels. Email bodies, file contents, calendar prose, contact notes, and attachments can be read for summaries or payloads, but recipients, participants, file ids, event ids, and destructive targets need facts or handles.
 
-Slack centers on URL and identity provenance. Message/webpage/TODO content can be fetched or summarized through safe routes, but unsigned webpage emails, TODO app instructions, and message-body identities cannot authorize invite/DM/write args.
+Slack centers on URL and identity provenance. Webpage and TODO/app content can be fetched as handles and promoted to task authority only through planner-called sign/verify. Message-body identities still cannot authorize invite/DM/write args without a signed sender/relay primitive. UT16 is webpage-origin, not message-origin.
 
 Travel centers on recommendation hijack. Objective fields such as rating, price, location, cuisine, hours, and fuel type can drive advice. Review prose is stripped from advice projections and cannot steer selections. PII remains omitted or guarded from exfiltration.
 
@@ -109,7 +109,7 @@ Cross-domain tests prove these labels survive composition: banking secrets canno
 
 ## Status Semantics
 
-`PASS` means the real AgentDojo benchmark task passed in this repo. `PASS*` means deterministic local evidence exists: utility route, defended-block proof, and disabled-defense breach canary. `OPEN` means expected secure utility without benchmark proof. `FLAKY` means expected secure utility but unstable. `*-FAIL` means the task is blocked by a missing provenance primitive and must fail at that boundary.
+`PASS` means the real AgentDojo benchmark task passed in this repo. `PASS*` means deterministic local evidence exists: utility route, defended-block proof, and disabled-defense breach canary. `OPEN` means expected secure utility without benchmark proof. `FLAKY` means expected secure utility but unstable. `*-FAIL` means the task is blocked by a missing provenance primitive and must fail at that boundary. Current sign/verify recovery leaves 85 OPEN, 7 FLAKY, and 5 remaining `*-FAIL` tasks.
 
 ## Testing Philosophy
 

@@ -472,6 +472,7 @@ export {
   @read_channel_messages,
   @read_inbox,
   @find_referenced_urls,
+  @lookupUrlRef,
   @get_webpage,
   @get_webpage_via_ref,
   @send_channel_message,

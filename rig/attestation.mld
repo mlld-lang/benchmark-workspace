@@ -1,0 +1,54 @@
+>> Generic content-attestation helpers.
+>>
+>> The rig layer does not know about AgentDojo suites. Callers provide
+>> resources to register and resource handles to verify. Verification is a
+>> planner-visible tool, but raw bytes are exposed only in a verified success
+>> envelope.
+
+exe @registerAttestedResources(resources) = [
+  let @items = @resources ?? []
+  let @written = []
+  for @resource in @items [
+    let @id = @resource.id ?? ""
+    let @content = @resource.content ?? null
+    let @signer = @resource.signer ?? "user"
+    let @meta = @resource.meta ?? {}
+    let @findable = @resource.findable ?? false
+    if @id != "" && @content.isDefined() [
+      let @signed = @sigWrite(@content, @signer, {
+        id: @id,
+        meta: @meta,
+        findable: @findable
+      })
+      let @written += [@signed]
+    ]
+  ]
+  => {
+    ok: true,
+    count: @written.length,
+    resources: @written
+  }
+]
+
+exe @resourceHandle(content, kind) = [
+  let @kindValue = @kind ?? "content"
+  let @h = @mintUserValueHandle(@content, { refine: ["resource", @kindValue] })
+  => @h.handle
+]
+
+exe @resourceIdHandle(resourceId, kind) = [
+  let @kindValue = @kind ?? "content"
+  let @h = @mintUserValueHandle(@resourceId, { refine: ["resource-id", @kindValue] })
+  => @h.handle
+]
+
+exe @verifyUserAttestation(handle, resource) = [
+  => @sigVerify.handle(@handle, @resource)
+]
+
+export {
+  @registerAttestedResources,
+  @resourceHandle,
+  @resourceIdHandle,
+  @verifyUserAttestation
+}

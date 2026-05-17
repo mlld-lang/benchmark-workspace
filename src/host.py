@@ -46,6 +46,92 @@ def _agent_entrypoint(env_name: str = "workspace") -> str:
     return str(AGENT_DIR / f"{env_name}.mld")
 
 
+def _resource_content_to_string(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "model_dump_json"):
+        try:
+            return value.model_dump_json()
+        except Exception:
+            pass
+    return str(value)
+
+
+def _attested_resource(resource_id: str, content: Any, *, kind: str, suite: str, task_id: str, query: str) -> dict[str, Any]:
+    return {
+        "id": resource_id,
+        "content": _resource_content_to_string(content),
+        "signer": "user",
+        "findable": False,
+        "meta": {
+            "type": kind,
+            "suite": suite,
+            "task": task_id,
+            "referenced_in_prompt": resource_id in query,
+        },
+    }
+
+
+def _collect_attested_resources(env_name: str, task_id: str, query: str) -> list[dict[str, Any]]:
+    """Register task-start resource attestations for content-origin tasks.
+
+    This is bench configuration, not rig logic: the host has access to the
+    benign AgentDojo environment, so it can sign the bytes the user/origin is
+    treated as having attested before injected state is applied.
+    """
+    try:
+        from date_shift import get_shifted_suite
+
+        suite = get_shifted_suite("v1.1.1", env_name)
+        env = suite.load_and_inject_default_environment({})
+    except Exception:
+        return []
+
+    query_text = query or ""
+    resources: list[dict[str, Any]] = []
+
+    filesystem = getattr(env, "filesystem", None)
+    files = getattr(filesystem, "files", None)
+    if isinstance(files, dict):
+        for file_path, content in sorted(files.items()):
+            file_id = str(file_path)
+            if file_id and file_id in query_text:
+                resources.append(
+                    _attested_resource(
+                        file_id,
+                        content,
+                        kind="file",
+                        suite=env_name,
+                        task_id=task_id,
+                        query=query_text,
+                    )
+                )
+
+    web = getattr(env, "web", None)
+    web_content = getattr(web, "web_content", None)
+    if isinstance(web_content, dict):
+        for url, content in sorted(web_content.items()):
+            url_id = str(url)
+            # Slack tasks can discover URLs through signed Slack message refs,
+            # so origin-attest the benign web corpus for that suite. Other
+            # suites only get prompt-mentioned URLs by default.
+            if env_name == "slack" or (url_id and url_id in query_text):
+                resources.append(
+                    _attested_resource(
+                        url_id,
+                        content,
+                        kind="url",
+                        suite=env_name,
+                        task_id=task_id,
+                        query=query_text,
+                    )
+                )
+
+    return resources
+
+
 class MlldInfrastructureError(RuntimeError):
     """Raised when the mlld agent never executed (import crash, OOM, etc.).
 
@@ -496,6 +582,7 @@ class MlldAgent:
         runner_mcp_config["phase_state_file"] = phase_state_file
 
         task_id = getattr(self, "_current_task_id", "user_task_0")
+        attested_resources = _collect_attested_resources(self._env_name, task_id, query)
         mcp_command = _build_local_mcp_command(runner_mcp_config)
 
         payload = {
@@ -509,6 +596,7 @@ class MlldAgent:
             "llm_call_log_file": llm_call_log_file,
             "execution_log_file": execution_log_file,
             "log_llm_calls": bool(self._debug),
+            "attested_resources": attested_resources,
         }
         if self._fast_model:
             payload["worker_model"] = self._fast_model

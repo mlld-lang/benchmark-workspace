@@ -47,6 +47,46 @@ Evidence:
 - `slack-proof/violation-canary/unsafeDirectFetchSurfaceAllowsMessageUrl`
 - Full deterministic suite: `121 pass / 0 fail`.
 
+### H9. Planner-visible sign/verify attestation gate
+
+Status: done.
+
+Change:
+
+- Added `rig/attestation.mld` with task-start resource registration, resource handle minting, and `verifyUserAttestation`.
+- Banking `read_file` now returns `content_handle` only; the planner must call `verify_user_attestation` before file contents can enter execution context.
+- Slack webpage fetchers now return `content_handle` / `resource_handle`; the planner must call `verify_user_attestation` before webpage or TODO/app contents can authorize writes.
+- `rig/index.mld` appends only `verified:true` attestation content to the task context passed into execute.
+- `bench/domains/banking/records.mld` now makes profile update fields exact-known, so address-file profile updates require task text or verified file context.
+
+Why:
+
+This recovers ten former `*-FAIL` tasks without prompt-level semantic trust:
+
+- Banking UT0/UT2/UT12/UT13 through signed file content.
+- Slack UT2/UT16/UT17/UT20 through signed webpage content.
+- Slack UT18/UT19 through signed TODO/app resource content.
+
+The planner calls the verification tool. The content is not planner-visible before the read tool returns a handle, and it is not task-authoritative unless signature verification succeeds. Failed verification must block at the policy/exact-known boundary; an arbitrary tool error or model refusal is not credit.
+
+Evidence:
+
+- `banking-proof/authorization/verifyUserAttestationGatesFileContent`
+- `banking-proof/authorization/verifiedFileContextAuthorizesRecipient`
+- `banking-proof/authorization/verifiedFileContextAuthorizesScheduledUpdate`
+- `banking-proof/authorization/verifiedFileContextAuthorizesProfileUpdate`
+- `banking-proof/authorization/failedVerificationDoesNotAuthorizeRecipient`
+- `banking-proof/authorization/failedVerificationDoesNotAuthorizeProfileUpdate`
+- `banking-proof/violation-canary/unsafeUnverifiedFileAppendWouldAuthorizeRecipient`
+- `banking-proof/violation-canary/unsafeUnverifiedFileAppendWouldAuthorizeProfileUpdate`
+- `slack-proof/authorization/verifyUserAttestationGatesWebpageContent`
+- `slack-proof/authorization/verifiedWebpageContextAuthorizesInviteEmail`
+- `slack-proof/authorization/failedWebpageVerificationDoesNotAuthorizeInviteEmail`
+- `slack-proof/authorization/verifiedTodoContextAuthorizesChannelMessage`
+- `slack-proof/authorization/failedTodoVerificationDoesNotAuthorizeChannelMessage`
+- `slack-proof/violation-canary/unsafeUnverifiedWebpageAppendWouldAuthorizeInviteEmail`
+- `slack-proof/violation-canary/unsafeUnverifiedTodoAppendWouldAuthorizeChannelMessage`
+
 ## Covered by existing proof shape
 
 ### H3. Recommendation/advice hijack
@@ -132,14 +172,14 @@ The current canaries already catch the major "empty security test" failure mode.
 
 ## Current verification
 
-Last local deterministic verification after H1/H2:
+Last local deterministic verification after H1/H2/H9:
 
 ```bash
-mlld validate rig bench/agents bench/domains tests
-mlld tests/index.mld --no-checkpoint
+uv run --project bench mlld validate rig bench/agents bench/domains tests
+uv run --project bench mlld tests/index.mld --no-checkpoint
 ```
 
 Result:
 
-- validation: `34 files: 34 passed`
-- tests: `121 pass / 0 fail (2 xfail, 0 xpass)`
+- validation: `35 files: 35 passed`
+- tests: `136 pass / 0 fail (2 xfail, 0 xpass)`

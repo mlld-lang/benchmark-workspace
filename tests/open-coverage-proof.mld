@@ -4,16 +4,24 @@ import { @suite, @group } from "./runner.mld"
 var @openCoverage = [
   {
     suite: "banking",
-    open: 10,
-    covered: 10,
+    open: 14,
+    covered: 14,
     proof_families: [
       "banking-proof/records/historyRecipientAndAmountHaveUtilityRoute",
       "banking-proof/records/scheduledUpdateRequiresSameRecordProof",
       "banking-proof/authorization/knownTaskRecipientAuthorizesSend",
+      "banking-proof/authorization/verifyUserAttestationGatesFileContent",
+      "banking-proof/authorization/verifiedFileContextAuthorizesRecipient",
+      "banking-proof/authorization/verifiedFileContextAuthorizesScheduledUpdate",
+      "banking-proof/authorization/verifiedFileContextAuthorizesProfileUpdate",
+      "banking-proof/authorization/failedVerificationDoesNotAuthorizeRecipient",
+      "banking-proof/authorization/failedVerificationDoesNotAuthorizeProfileUpdate",
       "banking-proof/authorization/taskKnownPasswordAuthorizesUpdate",
       "banking-proof/authorization/multiWriteKnownIntentsExecuteIndependently",
       "banking-proof/violation-canary/unsafeSurfaceAllowsAttackerSend",
-      "banking-proof/violation-canary/unsafeSurfaceAllowsCrossRecordScheduledUpdate"
+      "banking-proof/violation-canary/unsafeSurfaceAllowsCrossRecordScheduledUpdate",
+      "banking-proof/violation-canary/unsafeUnverifiedFileAppendWouldAuthorizeRecipient",
+      "banking-proof/violation-canary/unsafeUnverifiedFileAppendWouldAuthorizeProfileUpdate"
     ]
   },
   {
@@ -38,12 +46,17 @@ var @openCoverage = [
   },
   {
     suite: "slack",
-    open: 14,
-    covered: 14,
+    open: 20,
+    covered: 20,
     proof_families: [
       "slack-proof/records/senderFactSupportsDirectMessageRoute",
       "slack-proof/records/urlRefSupportsFetchWithoutRawUrlExposure",
       "slack-proof/authorization/knownDirectMessageRecipientAllowed",
+      "slack-proof/authorization/verifyUserAttestationGatesWebpageContent",
+      "slack-proof/authorization/verifiedWebpageContextAuthorizesInviteEmail",
+      "slack-proof/authorization/failedWebpageVerificationDoesNotAuthorizeInviteEmail",
+      "slack-proof/authorization/verifiedTodoContextAuthorizesChannelMessage",
+      "slack-proof/authorization/failedTodoVerificationDoesNotAuthorizeChannelMessage",
       "slack-proof/authorization/knownChannelMessageAllowed",
       "slack-proof/authorization/knownUserChannelAddAllowed",
       "slack-proof/authorization/knownUserRemovalAllowed",
@@ -51,7 +64,9 @@ var @openCoverage = [
       "slack-proof/authorization/outboundUrlInDmBodyDeniedByGuard",
       "slack-proof/authorization/outboundUrlInPostContentDeniedByGuard",
       "slack-proof/violation-canary/unsafeSurfaceAllowsPayloadRecipient",
-      "slack-proof/violation-canary/unsafeSurfaceWithoutExfilLabelAllowsBodyUrl"
+      "slack-proof/violation-canary/unsafeSurfaceWithoutExfilLabelAllowsBodyUrl",
+      "slack-proof/violation-canary/unsafeUnverifiedWebpageAppendWouldAuthorizeInviteEmail",
+      "slack-proof/violation-canary/unsafeUnverifiedTodoAppendWouldAuthorizeChannelMessage"
     ]
   },
   {
@@ -85,9 +100,9 @@ exe @sumField(rows, fieldName) = [
 exe @testOpenCoverageExceedsNinetyPercentThreshold() = [
   let @open = @sumField(@openCoverage, "open")
   let @covered = @sumField(@openCoverage, "covered")
-  let @target = 68
+  let @target = 77
   => @assertOk(
-    @open == 75 && @covered >= @target,
+    @open == 85 && @covered >= @target,
     `covered @covered of @open OPEN tasks; target @target`
   )
 ]
@@ -106,7 +121,7 @@ exe @testEverySuiteOpenSlotHasFamilyCoverage() = [
 ]
 
 exe @testCoverageExcludesStructuralFailuresAndRealPassClaims() = [
-  let @structuralFails = 15
+  let @structuralFails = 5
   let @realPassClaims = 0
   let @open = @sumField(@openCoverage, "open")
   => @assertEq({
@@ -115,8 +130,8 @@ exe @testCoverageExcludesStructuralFailuresAndRealPassClaims() = [
     realPassClaims: @realPassClaims,
     totalAccounted: @open + @structuralFails + 7
   }, {
-    open: 75,
-    structuralFails: 15,
+    open: 85,
+    structuralFails: 5,
     realPassClaims: 0,
     totalAccounted: 97
   })

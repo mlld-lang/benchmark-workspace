@@ -203,6 +203,7 @@ record @update_user_info_inputs = {
     ]
   },
   update: [first_name, last_name, street, city],
+  exact: [first_name, last_name, street, city],
   labels: ["tool:w", "profile:w", "update:w"],
   validate: "strict",
   write: {

@@ -39,6 +39,7 @@ This repo builds a defended mlld proof agent. The timeless rule is:
 | `known` | Exact value from the user task text, allowed only where the write input record permits it. |
 | Fact/kind | Metadata proving a value has authority and type, such as `kind: iban` or `kind: email`. |
 | Projection | Role-specific view of a record. Planner projections should omit instruction-bearing untrusted content. |
+| Sign/verify attestation | Resource content is signed at task start, exposed to the planner only as a handle, and promoted to task authority only after planner-called `verify_user_attestation` returns `verified:true`. |
 | Disabled-defense canary | A minimal unsafe variant that breaches when exactly one defense is removed. |
 
 ## Non-Negotiables
@@ -49,6 +50,7 @@ This repo builds a defended mlld proof agent. The timeless rule is:
 - Do not mark a task `PASS*` without all three proof pieces.
 - Do not run attack suites as security proof.
 - For `*-FAIL`, prove the data reaches the intended boundary and is blocked there.
+- For recovered file/web/TODO tasks, transcripts must show `read -> verify_user_attestation -> execute`. Unverified content entering task context is a security bug.
 - Read the agent transcript as the source of truth for failures. Start with the actual planner action, resolved records, policy input, guard decision, and tool result.
 - Preserve user or prior-agent changes. Do not revert unrelated files.
 
@@ -57,13 +59,13 @@ This repo builds a defended mlld proof agent. The timeless rule is:
 Validate mlld files:
 
 ```sh
-mlld validate rig tests/index.mld tests/*.mld bench/agents bench/domains llm/lib/opencode/index.mld
+uv run --project bench mlld validate rig bench/agents bench/domains tests
 ```
 
 Run the full deterministic proof index:
 
 ```sh
-mlld tests/index.mld --no-checkpoint
+uv run --project bench mlld tests/index.mld --no-checkpoint
 ```
 
 Run suite proofs in parallel:

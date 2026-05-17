@@ -134,3 +134,13 @@ handled separately.
   error points at the call parenthesis rather than explaining whether only
   certain tool-map calls are supported or whether the sibling key shape
   confused the parser.
+
+- **Sign/verify works well, but manual planner-loop handle plumbing is verbose.**
+  `@sigVerify.handle` is the right primitive, but because fp-proof uses a
+  manual structured planner loop rather than native projection handles, tool
+  wrappers had to explicitly mint resource handles with
+  `@mintUserValueHandle`, preserve handle-like objects through redacted
+  history, expose a planner-visible `verify_user_attestation` wrapper, and
+  append only `verified:true` content into execute context. A canonical
+  "signed resource reader" helper would reduce custom glue and make transcript
+  audits easier.

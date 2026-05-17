@@ -343,12 +343,20 @@ exe @historyLine(step, stepIndex) = js {
     "raw",
     "review_blob"
   ]);
+  function isHandleLike(value) {
+    return value && typeof value === "object" && typeof value.handle === "string";
+  }
   function safeValue(value) {
     if (Array.isArray(value)) return value.map((item) => safeValue(item));
     if (!value || typeof value !== "object") return value;
     const out = {};
+    const verifiedEnvelope = value.verified === true && typeof value.content === "string";
     for (const [key, fieldValue] of Object.entries(value)) {
-      out[key] = redactedKeys.has(key) ? "[redacted]" : safeValue(fieldValue);
+      if (redactedKeys.has(key) && !(verifiedEnvelope && key === "content")) {
+        out[key] = isHandleLike(fieldValue) ? fieldValue : "[redacted]";
+      } else {
+        out[key] = safeValue(fieldValue);
+      }
     }
     return out;
   }
@@ -364,8 +372,12 @@ exe @historyLine(step, stepIndex) = js {
       }
       return;
     }
+    const verifiedEnvelope = value.verified === true && typeof value.content === "string";
     for (const [key, fieldValue] of Object.entries(value)) {
-      if (redactedKeys.has(key)) continue;
+      if (redactedKeys.has(key) && !(verifiedEnvelope && key === "content")) {
+        if (isHandleLike(fieldValue)) collectRefs(fieldValue, path.concat(key), refs);
+        continue;
+      }
       collectRefs(fieldValue, path.concat(key), refs);
     }
   }
