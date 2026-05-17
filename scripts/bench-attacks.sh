@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Dispatch the defended attack sweep across the 5 sub-suites in batches of 2.
+# Dispatch the defended attack sweep across the 5 sub-suites.
 #
 # Sub-suite layout (same as scripts/bench.sh):
 #
@@ -22,6 +22,7 @@
 #   scripts/bench-attacks.sh cycle3             # system_message + tool_knowledge (10 jobs)
 #   scripts/bench-attacks.sh single <attack>    # one attack × all 5 sub-suites (5 jobs)
 #   scripts/bench-attacks.sh single <attack> <suite>  # narrow to one sub-suite (1 job)
+#   MAX_CONCURRENT=30 scripts/bench-attacks.sh  # dispatch the whole matrix without batching
 #
 # Capacity math:
 #   Full matrix = 30 dispatches. At MAX_CONCURRENT=2 = 15 batches.
@@ -29,10 +30,10 @@
 #   planner navigates poisoned content with more iterations). Total wall
 #   ~2-3 hr for the full matrix. Fits an overnight window.
 #
-# Rate-limit posture: matches scripts/bench.sh — at most 2 bench-run
-# jobs in flight simultaneously, polling for capacity between dispatches.
-# Avoids the 5k+ HTTP 429s a 4+ way fan-out would generate against
-# Together AI's per-model GLM-5.1 capacity.
+# Default rate-limit posture matches scripts/bench.sh: at most 2 bench-run
+# jobs in flight, polling for capacity between dispatches. fp-proof's lower
+# resource usage can support full cloud fan-out; set MAX_CONCURRENT high
+# when intentionally running the full benign/attack suites in parallel.
 #
 # Pre-flight: c-63fe MCP "Not connected" issue was fixed in opencode
 # (commit d10bb76). With that in the prebuilt opencode binary the
@@ -42,7 +43,7 @@ set -euo pipefail
 
 WORKFLOW=bench-run.yml
 GRIND_FILE="bench/grind-tasks.json"
-MAX_CONCURRENT=2
+MAX_CONCURRENT=${MAX_CONCURRENT:-2}
 
 # Per-sub-suite shape. Workspace-a/b stay at 32x64 because attacks
 # concentrate planner iterations and we want headroom; benign runs

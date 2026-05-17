@@ -25,8 +25,7 @@
 #   scripts/bench.sh --fast                   # full sweep, grind tasks excluded
 #   scripts/bench.sh --grind                  # all suites' grind tasks on ONE runner
 #   scripts/bench.sh --grind workspace        # single suite's grind set
-#   scripts/bench.sh --all-parallel           # legacy: dispatch all at once
-#                                             # (only when you can afford 4-way pressure)
+#   scripts/bench.sh --all-parallel           # dispatch all sub-suites at once
 #
 # Aliases: workspace expands to workspace-a workspace-b. Single-letter
 # aliases (w, b, s, t) work too.
@@ -36,9 +35,9 @@
 #   --fast  — every task EXCEPT grind set. Batched 2-at-a-time.
 #   --grind — only the grind set. When multiple suites, batches into ONE
 #             cross-suite dispatch via src/run.py multi-suite mode.
-#   --all-parallel — opt-in legacy: dispatch all sub-suites simultaneously.
-#             Useful only when you have a higher Together AI tier or
-#             dedicated capacity. Default is rate-limit-aware batching.
+#   --all-parallel — dispatch all sub-suites simultaneously. Use this for
+#             proof-branch full cloud sweeps when you want wall-clock speed;
+#             use targeted local canaries for iteration.
 #
 # The grind set per suite lives in bench/grind-tasks.json — single source
 # of truth. Update it when classification changes.
@@ -51,7 +50,7 @@ GRIND_FILE="bench/grind-tasks.json"
 # How many bench-run jobs to allow in flight at once. 2 is the empirical
 # headroom under Tier 4 Together AI for GLM-5.1 — see today's 429
 # investigation in HANDOFF.md. Set higher only with dedicated capacity.
-MAX_CONCURRENT=2
+MAX_CONCURRENT=${MAX_CONCURRENT:-2}
 
 # Per-target shape. Workspace splits into halves of 20 tasks each, so all
 # 5 sub-suites are roughly 16-21 tasks. Measured peak memory across recent
