@@ -5,14 +5,14 @@ import { @llmCall, @parseIfString, @parseExecuteRequest, @executeAuthorizedInten
 import { @registerAttestedResources, @verifyUserAttestationValue } from "../../rig/attestation.mld"
 import { @resolveTools, @extractTools, @writeTools, @lookupUrlRef } from "../domains/slack/tools.mld"
 import { @slackPolicy, @slackResolvedFactBridge } from "../domains/slack/policy.mld"
-import { @directUrlFetchGate } from "../domains/slack/url_policy.mld"
+import { @directUrlFetchGate, @expandUrlAttestedResources, @urlFromRequest, @urlRefFromRequest } from "../domains/slack/url_policy.mld"
 
 var @query = @payload.query ?? ""
 var @plannerModel = @payload.model ?? "togetherai/zai-org/GLM-5.1"
 var @workerModel = @payload.worker_model ?? "cerebras/gpt-oss-120b"
 var @harness = @payload.harness ?? ""
 var @attestationScope = @payload.attestation_scope ?? ""
-var @attestationSetup = @registerAttestedResources(@payload.attested_resources ?? [])
+var @attestationSetup = @registerAttestedResources(@expandUrlAttestedResources(@payload.attested_resources ?? []))
 var @attestationCount = @attestationSetup.count ?? 0
 
 exe recursive @resolve(request) = [
@@ -32,12 +32,7 @@ exe recursive @resolve(request) = [
 ]
 
 exe recursive @extract_webpage(request) = [
-  let @webRaw = @parseIfString(@request ?? {})
-  let @requestObj = when [
-    @webRaw.request.isDefined() => @parseIfString(@webRaw.request)
-    * => @webRaw
-  ]
-  let @url = @requestObj.url ?? @requestObj.resource ?? @requestObj["resource/url"] ?? ""
+  let @url = @urlFromRequest(@request)
   let @gate = @directUrlFetchGate(@url, @query)
   if !@gate.ok [
     => @gate
@@ -50,12 +45,7 @@ exe recursive @extract_webpage(request) = [
 ]
 
 exe recursive @extract_webpage_via_ref(request) = [
-  let @webRefRaw = @parseIfString(@request ?? {})
-  let @requestObj = when [
-    @webRefRaw.request.isDefined() => @parseIfString(@webRefRaw.request)
-    * => @webRefRaw
-  ]
-  let @ref_id = @requestObj.ref_id ?? @requestObj.source_url_ref ?? ""
+  let @ref_id = @urlRefFromRequest(@request)
   let @refLookup = @lookupUrlRef(@ref_id)
   => {
     source_url_ref: @ref_id,
@@ -65,21 +55,21 @@ exe recursive @extract_webpage_via_ref(request) = [
 ]
 
 exe recursive @verify_user_attestation(request) = [
-  let @verifyRaw = @parseIfString(@request ?? {})
-  let @requestObj = when [
-    @verifyRaw.request.isDefined() => @parseIfString(@verifyRaw.request)
-    * => @verifyRaw
-  ]
-  let @ref_id = @requestObj.ref_id ?? @requestObj.source_url_ref ?? ""
+  let @ref_id = @urlRefFromRequest(@request)
   if @ref_id != "" [
     let @verifyLookup = @lookupUrlRef(@ref_id)
     if !@verifyLookup.ok [
-      => { verified: false, id: @ref_id, reason: @verifyLookup.error }
+      let @fallbackGate = @directUrlFetchGate(@ref_id, @query)
+      if !@fallbackGate.ok [
+        => { verified: false, id: @ref_id, reason: @verifyLookup.error }
+      ]
+      let @fallbackPage = @extractTools.get_webpage(@ref_id)
+      => @verifyUserAttestationValue(@fallbackPage.content, @fallbackPage.url, @attestationScope)
     ]
     let @page = @extractTools.get_webpage_via_ref(@ref_id)
     => @verifyUserAttestationValue(@page.content, @verifyLookup.url, @attestationScope)
   ]
-  let @resource = @requestObj.resource ?? @requestObj.url ?? @requestObj["resource/url"] ?? @requestObj.id ?? ""
+  let @resource = @urlFromRequest(@request)
   if @resource == "" [
     => { verified: false, id: "", reason: "missing_resource" }
   ]

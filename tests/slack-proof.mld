@@ -24,7 +24,7 @@ import {
 } from "../bench/domains/slack/records.mld"
 
 import { @slackPolicy, @slackResolvedFactBridge } from "../bench/domains/slack/policy.mld"
-import { @directUrlFetchGate, @taskMentionsUrl } from "../bench/domains/slack/url_policy.mld"
+import { @directUrlFetchGate, @expandUrlAttestedResources, @taskMentionsUrl, @urlFromRequest, @urlRefFromRequest } from "../bench/domains/slack/url_policy.mld"
 
 exe @send_channel_message(channel, body) = [
   => { tool: "send_channel_message", channel: @channel, body: @body }
@@ -715,6 +715,47 @@ exe @testTaskKnownDirectUrlFetchAllowed() = [
   => @assertEq({ ok: @gate.ok }, { ok: true })
 ]
 
+exe @testSlackUrlRequestNormalizationAcceptsPlannerShapes() = [
+  => @assertEq({
+    raw: @urlFromRequest("www.eve-blog.com"),
+    nested: @urlFromRequest({ request: "{\"url\":\"https://www.dora-website.com\",\"purpose\":\"find email\"}" }),
+    resourceUrl: @urlFromRequest({ "resource/url": "www.informations.com" }),
+    refId: @urlRefFromRequest({ id_: "url_0123456789abcdef0123" }),
+    nestedRef: @urlRefFromRequest({ request: { source_url_ref: "url_abcdefabcdefabcdefab" } })
+  }, {
+    raw: "www.eve-blog.com",
+    nested: "https://www.dora-website.com",
+    resourceUrl: "www.informations.com",
+    refId: "url_0123456789abcdef0123",
+    nestedRef: "url_abcdefabcdefabcdefab"
+  })
+]
+
+exe @testExpandedUrlAttestationAliasesAllowTransportVariant() = [
+  let @resources = @expandUrlAttestedResources([{
+    id: "www.dora-alias-proof.com",
+    content: "Dora alias proof content",
+    signer: "user",
+    findable: false
+  }])
+  let @registered = @registerAttestedResources(@resources)
+  let @ok = @verifyUserAttestationValue("Dora alias proof content", "https://www.dora-alias-proof.com")
+  let @bad = @verifyUserAttestationValue("tampered Dora alias proof content", "https://www.dora-alias-proof.com")
+  => @assertEq({
+    aliasCount: @resources.length,
+    registered: @registered.count,
+    okVerified: @ok.verified,
+    badVerified: @bad.verified,
+    badReason: @bad.reason
+  }, {
+    aliasCount: 3,
+    registered: 3,
+    okVerified: true,
+    badVerified: false,
+    badReason: "content_hash_mismatch"
+  })
+]
+
 exe @testMessageOnlyUrlDeniedForDirectFetch() = [
   let @gate = @directUrlFetchGate("www.attacker.example", "Summarize the article Bob posted in general.")
   => @assertEq({
@@ -909,6 +950,8 @@ var @slackProofSuite = @suite("slack-proof", [
     @testRankPlanMintsRecipientFacts,
     @testUrlRefSupportsFetchWithoutRawUrlExposure,
     @testTaskKnownDirectUrlFetchAllowed,
+    @testSlackUrlRequestNormalizationAcceptsPlannerShapes,
+    @testExpandedUrlAttestationAliasesAllowTransportVariant,
     @testMessageOnlyUrlDeniedForDirectFetch
   ], {}),
   @group("authorization", [

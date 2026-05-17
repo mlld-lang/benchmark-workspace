@@ -14,6 +14,109 @@ exe @normalizeUrlForTask(inputValue) = js {
     .replace(/\/+$/, "");
 }
 
+exe @urlFromRequest(inputValue) = js {
+  function parse(value) {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return trimmed;
+    }
+  }
+  const raw = parse(inputValue ?? {});
+  const request = raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw, "request")
+    ? parse(raw.request)
+    : raw;
+  if (typeof request === "string") {
+    return request.trim().replace(/[.,;:!?]+$/, "");
+  }
+  if (!request || typeof request !== "object") return "";
+  return String(
+    request.url ??
+    request.resource ??
+    request["resource/url"] ??
+    request.id ??
+    ""
+  ).trim().replace(/[.,;:!?]+$/, "");
+}
+
+exe @urlRefFromRequest(inputValue) = js {
+  function parse(value) {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return trimmed;
+    }
+  }
+  const raw = parse(inputValue ?? {});
+  const request = raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw, "request")
+    ? parse(raw.request)
+    : raw;
+  if (!request || typeof request !== "object") return "";
+  return String(
+    request.ref_id ??
+    request.source_url_ref ??
+    request.id_ ??
+    request.id ??
+    ""
+  ).trim();
+}
+
+exe @urlAttestationAliases(resource) = js {
+  const raw = String(resource ?? "").trim().replace(/[.,;:!?]+$/, "").replace(/\/+$/, "");
+  if (!raw) return [];
+  const noScheme = raw.replace(/^https?:\/\//i, "");
+  const noWww = noScheme.replace(/^www\./i, "");
+  const variants = [
+    raw,
+    noScheme,
+    `www.${noWww}`,
+    `http://${noScheme}`,
+    `https://${noScheme}`,
+    `http://www.${noWww}`,
+    `https://www.${noWww}`
+  ];
+  return [...new Set(variants.filter(Boolean))];
+}
+
+exe @expandUrlAttestedResources(resources) = js {
+  const rows = Array.isArray(resources) ? resources : [];
+  const out = [];
+  const seen = new Set();
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const id = String(row.id ?? "").trim();
+    const aliases = /^(?:https?:\/\/|www\.)/i.test(id)
+      ? (function aliasesFor(rawId) {
+          const raw = rawId.replace(/[.,;:!?]+$/, "").replace(/\/+$/, "");
+          const noScheme = raw.replace(/^https?:\/\//i, "");
+          const noWww = noScheme.replace(/^www\./i, "");
+          return [...new Set([
+            raw,
+            noScheme,
+            `www.${noWww}`,
+            `http://${noScheme}`,
+            `https://${noScheme}`,
+            `http://www.${noWww}`,
+            `https://www.${noWww}`
+          ].filter(Boolean))];
+        })(id)
+      : [id];
+    for (const alias of aliases) {
+      const key = `${row.scope ?? ""}\n${alias}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...row, id: alias });
+    }
+  }
+  return out;
+}
+
 exe @taskMentionsUrl(url, task) = js {
   const rawUrl = String(url ?? "").trim().replace(/[.,;:!?]+$/, "");
   if (!rawUrl) return false;
@@ -53,4 +156,12 @@ exe @directUrlFetchGate(url, task) = [
   ]
 ]
 
-export { @normalizeUrlForTask, @taskMentionsUrl, @directUrlFetchGate }
+export {
+  @normalizeUrlForTask,
+  @urlFromRequest,
+  @urlRefFromRequest,
+  @urlAttestationAliases,
+  @expandUrlAttestedResources,
+  @taskMentionsUrl,
+  @directUrlFetchGate
+}
