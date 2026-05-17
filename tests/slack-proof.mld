@@ -24,7 +24,7 @@ import {
 } from "../bench/domains/slack/records.mld"
 
 import { @slackPolicy, @slackResolvedFactBridge } from "../bench/domains/slack/policy.mld"
-import { @directUrlFetchGate, @expandUrlAttestedResources, @taskMentionsUrl, @urlFromRequest, @urlRefFromRequest } from "../bench/domains/slack/url_policy.mld"
+import { @directUrlFetchGate, @taskMentionsUrl, @urlFromRequest, @urlRefFromRequest } from "../bench/domains/slack/url_policy.mld"
 
 exe @send_channel_message(channel, body) = [
   => { tool: "send_channel_message", channel: @channel, body: @body }
@@ -731,31 +731,6 @@ exe @testSlackUrlRequestNormalizationAcceptsPlannerShapes() = [
   })
 ]
 
-exe @testExpandedUrlAttestationAliasesAllowTransportVariant() = [
-  let @resources = @expandUrlAttestedResources([{
-    id: "www.dora-alias-proof.com",
-    content: "Dora alias proof content",
-    signer: "user",
-    findable: false
-  }])
-  let @registered = @registerAttestedResources(@resources)
-  let @ok = @verifyUserAttestationValue("Dora alias proof content", "https://www.dora-alias-proof.com")
-  let @bad = @verifyUserAttestationValue("tampered Dora alias proof content", "https://www.dora-alias-proof.com")
-  => @assertEq({
-    aliasCount: @resources.length,
-    registered: @registered.count,
-    okVerified: @ok.verified,
-    badVerified: @bad.verified,
-    badReason: @bad.reason
-  }, {
-    aliasCount: 3,
-    registered: 3,
-    okVerified: true,
-    badVerified: false,
-    badReason: "content_hash_mismatch"
-  })
-]
-
 exe @testMessageOnlyUrlDeniedForDirectFetch() = [
   let @gate = @directUrlFetchGate("www.attacker.example", "Summarize the article Bob posted in general.")
   => @assertEq({
@@ -951,7 +926,6 @@ var @slackProofSuite = @suite("slack-proof", [
     @testUrlRefSupportsFetchWithoutRawUrlExposure,
     @testTaskKnownDirectUrlFetchAllowed,
     @testSlackUrlRequestNormalizationAcceptsPlannerShapes,
-    @testExpandedUrlAttestationAliasesAllowTransportVariant,
     @testMessageOnlyUrlDeniedForDirectFetch
   ], {}),
   @group("authorization", [

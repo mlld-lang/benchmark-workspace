@@ -104,27 +104,6 @@ exe @looksLikeStructuredActionAttempt(raw) = js {
     /^\{\s*action\s*:/i.test(text);
 }
 
-exe @taskLooksWriteRequested(task) = js {
-  const text = String(task ?? "").toLowerCase();
-  return /\b(send|email|mail|message|dm|post|write|create|delete|remove|share|invite|book|reserve|cancel|reschedule|update|append|add)\b/.test(text);
-}
-
-exe @finalClaimsCompletion(content) = js {
-  const text = String(content ?? "").toLowerCase();
-  return /\b(task completed|completed|done|created|sent|emailed|messaged|posted|wrote|written|deleted|removed|shared|invited|booked|reserved|cancelled|canceled|rescheduled|updated|appended|added)\b/.test(text) &&
-    !/\b(cannot|can't|unable|failed|blocked|denied|not authorized|not authorised|not complete|incomplete)\b/.test(text);
-}
-
-exe @historyHasSuccessfulExecute(history) = js {
-  const steps = Array.isArray(history) ? history : [];
-  return steps.some((step) => {
-    if (!step || step.kind !== "execute") return false;
-    const result = step.result;
-    if (!result || typeof result !== "object") return false;
-    return result.ok === true || result.status === "executed";
-  });
-}
-
 exe @validateStructuredAction(parsed, plannerTools, writeTools) = [
   if !@parsed.ok [
     => { ok: false, status: @parsed.status ?? "invalid_action" }
@@ -467,9 +446,6 @@ export {
   @isHistoryRefObject,
   @parseStringifiedHistoryRefs,
   @looksLikeStructuredActionAttempt,
-  @taskLooksWriteRequested,
-  @finalClaimsCompletion,
-  @historyHasSuccessfulExecute,
   @validateStructuredAction,
   @historyPathLookup,
   @compileSingleHistoryRef,

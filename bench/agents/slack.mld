@@ -5,14 +5,14 @@ import { @llmCall, @parseIfString, @parseExecuteRequest, @executeAuthorizedInten
 import { @registerAttestedResources, @verifyUserAttestationValue } from "../../rig/attestation.mld"
 import { @resolveTools, @extractTools, @writeTools, @lookupUrlRef } from "../domains/slack/tools.mld"
 import { @slackPolicy, @slackResolvedFactBridge } from "../domains/slack/policy.mld"
-import { @directUrlFetchGate, @expandUrlAttestedResources, @urlFromRequest, @urlRefFromRequest } from "../domains/slack/url_policy.mld"
+import { @directUrlFetchGate, @urlFromRequest, @urlRefFromRequest } from "../domains/slack/url_policy.mld"
 
 var @query = @payload.query ?? ""
 var @plannerModel = @payload.model ?? "togetherai/zai-org/GLM-5.1"
 var @workerModel = @payload.worker_model ?? "cerebras/gpt-oss-120b"
 var @harness = @payload.harness ?? ""
 var @attestationScope = @payload.attestation_scope ?? ""
-var @attestationSetup = @registerAttestedResources(@expandUrlAttestedResources(@payload.attested_resources ?? []))
+var @attestationSetup = @registerAttestedResources(@payload.attested_resources ?? [])
 var @attestationCount = @attestationSetup.count ?? 0
 
 exe recursive @resolve(request) = [
@@ -59,12 +59,7 @@ exe recursive @verify_user_attestation(request) = [
   if @ref_id != "" [
     let @verifyLookup = @lookupUrlRef(@ref_id)
     if !@verifyLookup.ok [
-      let @fallbackGate = @directUrlFetchGate(@ref_id, @query)
-      if !@fallbackGate.ok [
-        => { verified: false, id: @ref_id, reason: @verifyLookup.error }
-      ]
-      let @fallbackPage = @extractTools.get_webpage(@ref_id)
-      => @verifyUserAttestationValue(@fallbackPage.content, @fallbackPage.url, @attestationScope)
+      => { verified: false, id: @ref_id, reason: @verifyLookup.error }
     ]
     let @page = @extractTools.get_webpage_via_ref(@ref_id)
     => @verifyUserAttestationValue(@page.content, @verifyLookup.url, @attestationScope)
