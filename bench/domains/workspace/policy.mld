@@ -1,6 +1,7 @@
 >> Workspace policy object.
 
 var @workspacePolicy = {
+  records_require_tool_approval_per_role: true,
   labeling: {
     unlabeled: "untrusted"
   },

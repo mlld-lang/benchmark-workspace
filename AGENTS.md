@@ -10,6 +10,10 @@ This repo builds a defended mlld proof agent. The timeless rule is:
 - `PLAN.md`: current implementation plan, suite threat model, and proof backlog.
 - `STATUS.md`: task accounting and evidence ledger.
 - `DEBUG.md`: debug/diagnose protocol. Read transcripts first when anything fails.
+- `HARDENING.md`: clean-derived hardening applied here and future hardening candidates.
+- `mlld-agentdojo-guide.md`: process guide for rebuilding from first principles.
+- `mlld-feedback.md`: mlld friction and ergonomic/security opportunities.
+- `mlld-security-fundamentals-review.md`: suggested changes to the fundamentals doc.
 - `mlld-security-primitives.md` and `sec-*.md`: primitive and suite threat-model notes.
 - `mlld-friction.md`: dogfooding feedback for mlld friction that is not a showstopper.
 

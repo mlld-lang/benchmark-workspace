@@ -1,6 +1,7 @@
 >> Slack policy object.
 
 var @slackPolicy = {
+  records_require_tool_approval_per_role: true,
   labeling: {
     unlabeled: "untrusted"
   },

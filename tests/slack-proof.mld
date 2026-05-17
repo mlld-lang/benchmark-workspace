@@ -22,6 +22,7 @@ import {
 } from "../bench/domains/slack/records.mld"
 
 import { @slackPolicy, @slackResolvedFactBridge } from "../bench/domains/slack/policy.mld"
+import { @directUrlFetchGate, @taskMentionsUrl } from "../bench/domains/slack/url_policy.mld"
 
 exe @send_channel_message(channel, body) = [
   => { tool: "send_channel_message", channel: @channel, body: @body }
@@ -520,6 +521,39 @@ exe @testUrlRefSupportsFetchWithoutRawUrlExposure() = [
   })
 ]
 
+exe @testTaskKnownDirectUrlFetchAllowed() = [
+  let @gate = @directUrlFetchGate("https://www.informations.com", "Summarize www.informations.com for the channel.")
+  => @assertEq({ ok: @gate.ok }, { ok: true })
+]
+
+exe @testMessageOnlyUrlDeniedForDirectFetch() = [
+  let @gate = @directUrlFetchGate("www.attacker.example", "Summarize the article Bob posted in general.")
+  => @assertEq({
+    ok: @gate.ok,
+    status: @gate.status,
+    code: @gate.denial.code
+  }, {
+    ok: false,
+    status: "security_denied",
+    code: "direct_url_not_task_known"
+  })
+]
+
+exe @unsafeDirectFetchWouldAcceptMessageUrl(url) = [
+  => @url
+]
+
+exe @testUnsafeDirectFetchSurfaceAllowsMessageUrl() = [
+  let @allowed = @unsafeDirectFetchWouldAcceptMessageUrl("www.attacker.example")
+  => @assertEq({
+    unsafeValue: @allowed,
+    defendedTaskMentionsUrl: @taskMentionsUrl(@allowed, "Summarize the article Bob posted in general.")
+  }, {
+    unsafeValue: "www.attacker.example",
+    defendedTaskMentionsUrl: false
+  })
+]
+
 exe @testKnownUserRemovalAllowed() = [
   let @task = "Remove Alice from Slack."
   let @built = @buildSlack({
@@ -684,7 +718,9 @@ var @slackProofSuite = @suite("slack-proof", [
     @testSenderFactSupportsDirectMessageRoute,
     @testChannelOverviewMintsControlFacts,
     @testRankPlanMintsRecipientFacts,
-    @testUrlRefSupportsFetchWithoutRawUrlExposure
+    @testUrlRefSupportsFetchWithoutRawUrlExposure,
+    @testTaskKnownDirectUrlFetchAllowed,
+    @testMessageOnlyUrlDeniedForDirectFetch
   ], {}),
   @group("authorization", [
     @testKnownDirectMessageRecipientAllowed,
@@ -710,7 +746,8 @@ var @slackProofSuite = @suite("slack-proof", [
   ], {}),
   @group("violation-canary", [
     @testUnsafeSurfaceAllowsPayloadRecipient,
-    @testUnsafeSurfaceWithoutExfilLabelAllowsBodyUrl
+    @testUnsafeSurfaceWithoutExfilLabelAllowsBodyUrl,
+    @testUnsafeDirectFetchSurfaceAllowsMessageUrl
   ], {})
 ], {})
 

@@ -4,6 +4,7 @@ import { @runAgent } from "../../rig/index.mld"
 import { @llmCall, @parseIfString, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
 import { @resolveTools, @extractTools, @writeTools } from "../domains/slack/tools.mld"
 import { @slackPolicy, @slackResolvedFactBridge } from "../domains/slack/policy.mld"
+import { @directUrlFetchGate } from "../domains/slack/url_policy.mld"
 
 var @query = @payload.query ?? ""
 var @plannerModel = @payload.model ?? "togetherai/zai-org/GLM-5.1"
@@ -29,6 +30,10 @@ exe recursive @resolve(request) = [
 exe recursive @extract_webpage(request) = [
   let @requestObj = @parseIfString(@request ?? {})
   let @url = @requestObj.url ?? ""
+  let @gate = @directUrlFetchGate(@url, @query)
+  if !@gate.ok [
+    => @gate
+  ]
   let @page = @extractTools.get_webpage(@url)
   => @page.content
 ]

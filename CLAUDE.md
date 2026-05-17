@@ -1,81 +1,105 @@
-# fp — agent benchmark workspace
+# fp-proof benchmark workspace
 
-This repo is a clean scaffold for redesigning the **rig** agent framework
-on top of mlld, with AgentDojo as the evaluation benchmark.
+`fp-proof` is the current defended AgentDojo proof agent for mlld. The rig is intentionally small: records, policy, projections, and guards carry the security model; the planner chooses structured actions.
 
-The plumbing is in place. The architecture is intentionally not.
+Read these first:
+
+- `AGENTS.md` for timeless orientation.
+- `ARCHITECTURE.md` for the implemented architecture.
+- `DEBUG.md` for transcript-first diagnosis.
+- `STATUS.md` for task status and evidence rules.
+- `HARDENING.md` for clean-derived hardening.
+- `mlld-agentdojo-guide.md` for the rebuild/development process.
+
+## Cardinal rules
+
+**No benchmark cheating.** Do not read AgentDojo checker bodies. Do not add task-id-specific behavior. Do not shape prompts around expected answers.
+
+**Rig stays generic.** `rig/` must not know AgentDojo suites, task ids, fixture names, or expected outputs. Suite contracts live in `bench/`.
+
+**Prompts are not defenses.** Prompts may explain how to use the interface. Security must come from records, projections, policy, guards, role/write gates, and deterministic wrapper checks.
+
+**Read transcripts before diagnosing.** Final JSONL rows and MCP calls are symptoms. The OpenCode transcript is the definitive source for why the agent failed or stopped.
+
+**SHOULD-FAIL must fail structurally.** A failure only counts if the route is blocked by a named primitive: fact/kind proof, exact-known check, projection, policy, guard, write-role denial, correlation, or missing provenance primitive.
 
 ## Layout
 
-```
-fp/
-  setup                      # symlinks .mlld-sdk and runs uv sync
-  .env.example               # MLLD_SDK_PATH
-  mlld-config.json           # resolvers, trusted domains
-  rig/
-    agentdojo-mcp/           # canonical MCP server over vanilla agentdojo (from PyPI)
-  src/                       # Python host
-    run.py                   # CLI entrypoint
-    host.py                  # MlldAgent — invokes mlld, reads back env state
-    agentdojo_runner.py      # suite loader / env setup / grading orchestration
-    agentdojo_{agents_base,grading,judge,ground_truth,results}.py
-    bench_mcp_extras.py      # domain helper tools (get_email_by_id, etc.)
-    date_shift.py            # AgentDojo date-shifted suites
-    fetch_run.py / remote.py / opencode_debug.py
-  bench/
-    pyproject.toml           # uv project; agentdojo>=0.1.35, mcp, mlld-sdk
-    docker/                  # remote-run images
-    agents/                  # (empty — to be designed)
-    domains/                 # (empty — to be designed)
-    tests/                   # (empty)
-  tests/
-    runner.mld               # @suite, @group, @runSuites
-    assert.mld               # @assertOk, @assertEq, deep-eq helpers
-    _template.mld            # copy this for a new suite
-    index.mld                # top-level entrypoint; imports all suites
-    lib/                     # (empty)
-  scripts/
-    bench.sh                 # GH workflow dispatch — full / fast / grind
-    bench-attacks.sh         # attack-sweep dispatch matrix
-  .github/workflows/         # bench-image, bench-run, mlld-prebuild, opencode-prebuild
+```text
+fp-proof/
+  rig/                    Generic structured-action defended runtime.
+  bench/agents/           Suite entrypoints and minor suite notes.
+  bench/domains/          Suite records, tools, policies, bridge config.
+  llm/                    Provider wrappers.
+  src/                    AgentDojo host, runner, grading, cloud fetch/debug helpers.
+  tests/                  LLM-free proof suites and disabled-defense canaries.
+  scripts/                Cloud benign and attack dispatch helpers.
+  .github/workflows/      bench-image, bench-run, mlld/opencode prebuilds, runner probe.
 ```
 
-## What's deliberately absent
-
-- No `rig/*.mld` design files. The framework is being rebuilt from first
-  principles against current mlld primitives.
-- No bench domain implementations (`bench/agents/`, `bench/domains/`).
-  These attach the redesigned rig to AgentDojo suites; they come after
-  the framework shape stabilizes.
-- No test suites against the old rig.
-- No `bench/grind-tasks.json` yet — `scripts/bench.sh` needs it before
-  it can be invoked.
-
-## Running things
+## Local commands
 
 ```bash
-./setup                              # one-time: symlink mlld SDK, uv sync
-mlld tests/index.mld --no-checkpoint # run the test framework against the template suite
+# Static validation
+mlld validate rig bench/agents bench/domains tests
+
+# Full deterministic proof gate
+mlld tests/index.mld --no-checkpoint
+
+# Single local benign task
+PYTHONPATH=src uv run --project bench python3 src/run.py \
+  -s workspace -t user_task_11 -p 1 -d defended --harness opencode --debug
+
+# Local attack slice
+PYTHONPATH=src uv run --project bench python3 src/run.py \
+  -s slack -t user_task_0 --attack direct -p 1 -d defended --harness opencode --debug
 ```
 
-The Python host runs once there's a bench agent entrypoint to call. See
-`src/run.py --help`.
+Run proof tests before live sweeps. Use live runs to verify model/tool behavior, not to discover basic data-flow or security questions.
 
-## Design notes
+## Cloud workflow wiring
 
-- `rig/agentdojo-mcp/` is infrastructure: it serves vanilla AgentDojo
-  tools over MCP. It knows nothing about records, labels, or trust —
-  those concerns belong to whatever wrapping layer the redesigned rig
-  defines.
-- `src/` is mostly suite/grading machinery from AgentDojo's Python world.
-  The `host.py` ↔ mlld contract (how Python invokes a per-suite mlld
-  agent and reads back env state) is the seam you'll want to look at
-  when the rig redesign defines its entrypoint shape.
-- `mlld-security-fundamentals.md` (at repo root) is the current mlld
-  security model reference. Read this before making framework design
-  decisions.
-- `sec-{banking,slack,travel,workspace,cross-domain}.md` are per-suite
-  threat-model writeups for the AgentDojo domains. They describe the
-  attack surface each suite presents, independent of any particular rig
-  shape — useful when designing how the framework should defend each
-  domain.
+Workflows are in `.github/workflows/` and are active on the `proof` branch:
+
+- `bench-image.yml` builds `ghcr.io/mlld-lang/benchmark-workspace:proof`.
+- `bench-run.yml` runs one benign or attack suite dispatch.
+- `mlld-prebuild.yml` refreshes the mlld runtime prebuilt image.
+- `opencode-prebuild.yml` refreshes the opencode prebuilt image.
+- `runner-probe.yml` verifies Namespace runner labels.
+
+Local dispatch scripts support `BENCH_REF=proof` and optional `BENCH_IMAGE_TAG`.
+
+```bash
+# Benign cloud sweep, batched to respect provider limits
+BENCH_REF=proof scripts/bench.sh
+
+# One suite or sub-suite
+BENCH_REF=proof scripts/bench.sh slack
+BENCH_REF=proof scripts/bench.sh workspace-a
+
+# Attack cycles, batched two jobs at a time
+BENCH_REF=proof scripts/bench-attacks.sh cycle1
+BENCH_REF=proof scripts/bench-attacks.sh cycle2
+BENCH_REF=proof scripts/bench-attacks.sh cycle3
+```
+
+Cloud run helpers:
+
+```bash
+gh run list --workflow=bench-run.yml --limit 20
+uv run --project bench python3 src/fetch_run.py <run-id>
+python3 src/opencode_debug.py --home runs/<run-id>/opencode sessions
+python3 src/opencode_debug.py --home runs/<run-id>/opencode parts --session <session> --limit 300
+```
+
+`bench-run.yml` checks image freshness against the dispatched branch SHA and mlld prebuilt SHA, rebuilds when stale, and uploads artifacts for `fetch_run.py`.
+
+## Status semantics
+
+- `PASS`: actual AgentDojo task passed in this repo.
+- `PASS*`: deterministic proof triple exists, but no benchmark pass claim.
+- `OPEN`: expected secure utility route without benchmark pass.
+- `FLAKY`: expected utility route but unstable.
+- `*-FAIL`: missing provenance primitive; must fail at the intended security boundary.
+
+Do not promote statuses without evidence. Attack suite results are regression signals, not the primary proof of security.

@@ -155,7 +155,7 @@ exe role:planner @compileAuthorization(intent, writeTools, task, basePolicy) = [
   ]
 ]
 
-exe recursive @executeAuthorizedIntent(intent, writeTools, task, basePolicy) = [
+exe role:worker, recursive @executeAuthorizedIntent(intent, writeTools, task, basePolicy) = [
   let @parsed = @parseIfString(@intent)
   let @toolName = @parsed.tool
   if !@toolName [

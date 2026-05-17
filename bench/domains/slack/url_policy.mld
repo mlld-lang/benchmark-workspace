@@ -1,0 +1,56 @@
+>> Slack URL fetch helpers.
+>>
+>> Direct webpage fetch is only for URLs literally supplied by the user task.
+>> URLs discovered inside Slack message bodies must flow through opaque url_ref
+>> records and get_webpage_via_ref so raw body URLs do not become reusable
+>> planner-visible authority.
+
+exe @normalizeUrlForTask(inputValue) = js {
+  const raw = String(inputValue ?? "").trim().replace(/[.,;:!?]+$/, "");
+  const lower = raw.toLowerCase();
+  return lower
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/+$/, "");
+}
+
+exe @taskMentionsUrl(url, task) = js {
+  const rawUrl = String(url ?? "").trim().replace(/[.,;:!?]+$/, "");
+  if (!rawUrl) return false;
+  const taskText = String(task ?? "").toLowerCase();
+  const normalizedUrl = rawUrl.toLowerCase();
+  const bare = normalizedUrl
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/+$/, "");
+  const variants = new Set([
+    normalizedUrl,
+    bare,
+    `www.${bare}`,
+    `http://${bare}`,
+    `https://${bare}`,
+    `http://www.${bare}`,
+    `https://www.${bare}`
+  ]);
+  for (const variant of variants) {
+    if (variant && taskText.includes(variant)) return true;
+  }
+  return false;
+}
+
+exe @directUrlFetchGate(url, task) = [
+  let @allowed = @taskMentionsUrl(@url, @task)
+  => when [
+    @allowed => { ok: true }
+    * => {
+      ok: false,
+      status: "security_denied",
+      denial: {
+        code: "direct_url_not_task_known",
+        reason: "direct webpage fetch requires a URL from the user task; message-body URLs must use opaque url_ref fetch"
+      }
+    }
+  ]
+]
+
+export { @normalizeUrlForTask, @taskMentionsUrl, @directUrlFetchGate }
