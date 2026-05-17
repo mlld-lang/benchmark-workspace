@@ -1,0 +1,179 @@
+>> Pure travel-domain objective candidate mergers.
+>>
+>> These helpers have no AgentDojo task knowledge and no tool side effects.
+>> They merge raw travel read-tool outputs into objective candidate tables:
+>> facts for candidate names, trusted scalar fields for ratings/prices/hours,
+>> and no review prose.
+
+exe @nameListFromRaw(raw) = js {
+  const text = Array.isArray(raw) ? raw.join("\n") : String(raw ?? "");
+  return text
+    .split(/\n|,/)
+    .map((part) => part.trim())
+    .map((part) => part.replace(/^[A-Za-z -]+(?:Names?|Companies in [^:]+|in [^:]+):\s*/i, "").trim())
+    .filter(Boolean);
+}
+
+exe @objectiveDict(raw, valueField) = js {
+  const out = {};
+  const put = (name, value) => {
+    const key = String(name ?? "").trim();
+    if (!key) return;
+    if (!out[key]) out[key] = {};
+    out[key][valueField] = String(value ?? "").trim();
+  };
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      if (!item || typeof item !== "object") continue;
+      const name = item.name ?? item.hotel ?? item.restaurant ?? item.company;
+      const value = item[valueField] ?? item.value ?? item.address ?? item.price_range ?? item.price_per_person ?? item.price_per_day ?? "";
+      put(name, value);
+    }
+    return out;
+  }
+
+  if (raw && typeof raw === "object") {
+    for (const [name, value] of Object.entries(raw)) {
+      put(name, Array.isArray(value) ? value.join(", ") : value);
+    }
+    return out;
+  }
+
+  let currentName = null;
+  let currentParts = [];
+  const flush = () => {
+    if (currentName !== null) {
+      put(currentName, currentParts.join(", ").replace(/\s+/g, " ").trim());
+    }
+    currentName = null;
+    currentParts = [];
+  };
+
+  for (const line of String(raw ?? "").split(/\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const match = trimmed.match(/^\s*([^:]+):\s*'?([\s\S]*?)'?\s*$/);
+    if (match) {
+      flush();
+      currentName = match[1].trim();
+      const rest = String(match[2] ?? "").trim();
+      if (rest) currentParts.push(rest);
+      continue;
+    }
+    if (currentName !== null) {
+      currentParts.push(trimmed.replace(/^-\s*/, ""));
+    }
+  }
+  flush();
+  return out;
+}
+
+exe @ratingDict(raw) = js {
+  const out = {};
+  const put = (name, value) => {
+    const key = String(name ?? "").trim();
+    if (!key) return;
+    const text = typeof value === "string" ? value : JSON.stringify(value ?? "");
+    const ratingMatch = text.match(/Rating:\s*([0-9.]+)/i);
+    const rating = ratingMatch ? ratingMatch[1] : (
+      value && typeof value === "object" ? (value.rating ?? value.score ?? value.stars ?? null) : null
+    );
+    if (!out[key]) out[key] = {};
+    if (rating != null) out[key].rating = String(rating);
+  };
+
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    for (const [name, value] of Object.entries(raw)) put(name, value);
+    return out;
+  }
+
+  const chunks = String(raw ?? "")
+    .split(/\n(?=[^:\n]+:\s*')/)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
+  for (const chunk of chunks) {
+    const match = chunk.match(/^\s*([^:]+):\s*'?([\s\S]*?)'?\s*$/);
+    if (match) put(match[1], match[2]);
+  }
+  return out;
+}
+
+exe @mergeByName(namesRaw, city, sources) = js {
+  const names = Array.isArray(namesRaw) ? namesRaw : String(namesRaw ?? "")
+    .split(/\n|,/)
+    .map((part) => part.trim())
+    .map((part) => part.replace(/^[A-Za-z -]+(?:Names?|Companies in [^:]+|in [^:]+):\s*/i, "").trim())
+    .filter(Boolean);
+  const sourceList = Array.isArray(sources) ? sources : [];
+  return names.map((name) => {
+    const item = { name, city };
+    for (const src of sourceList) {
+      if (!src || typeof src !== "object") continue;
+      const fields = src[name] || {};
+      for (const [key, value] of Object.entries(fields)) {
+        if (value !== null && value !== undefined && value !== "") item[key] = value;
+      }
+    }
+    return item;
+  });
+}
+
+exe @hotelObjectiveItems(namesRaw, pricesRaw, ratingsRaw, addressesRaw, city) = [
+  let @names = @nameListFromRaw(@namesRaw)
+  let @prices = @objectiveDict(@pricesRaw, "price_range")
+  let @ratings = @ratingDict(@ratingsRaw)
+  let @addresses = @objectiveDict(@addressesRaw, "address")
+  let @merged = @mergeByName(@names, @city, [@prices, @ratings, @addresses])
+  => @rankHotelsByRatingThenHighPrice(@merged)
+]
+
+exe @rankHotelsByRatingThenHighPrice(items) = js {
+  const parseRating = (item) => {
+    const value = Number.parseFloat(String(item?.rating ?? ""));
+    return Number.isFinite(value) ? value : Number.NEGATIVE_INFINITY;
+  };
+  const parseMaxPrice = (item) => {
+    const nums = String(item?.price_range ?? "").match(/[0-9]+(?:\.[0-9]+)?/g) || [];
+    const values = nums.map(Number).filter(Number.isFinite);
+    return values.length ? Math.max(...values) : Number.NEGATIVE_INFINITY;
+  };
+  return [...(Array.isArray(items) ? items : [])].sort((a, b) => {
+    const ratingDelta = parseRating(b) - parseRating(a);
+    if (ratingDelta !== 0) return ratingDelta;
+    const priceDelta = parseMaxPrice(b) - parseMaxPrice(a);
+    if (priceDelta !== 0) return priceDelta;
+    return String(a?.name ?? "").localeCompare(String(b?.name ?? ""));
+  });
+}
+
+exe @restaurantObjectiveItems(namesRaw, cuisineRaw, hoursRaw, pricesRaw, addressesRaw, ratingsRaw, dietaryRaw, city) = [
+  let @names = @nameListFromRaw(@namesRaw)
+  let @cuisine = @objectiveDict(@cuisineRaw, "cuisine_type")
+  let @hours = @objectiveDict(@hoursRaw, "operating_hours")
+  let @prices = @objectiveDict(@pricesRaw, "price_per_person")
+  let @addresses = @objectiveDict(@addressesRaw, "address")
+  let @ratings = @ratingDict(@ratingsRaw)
+  let @dietary = @objectiveDict(@dietaryRaw, "dietary_restrictions")
+  => @mergeByName(@names, @city, [@cuisine, @hours, @prices, @addresses, @ratings, @dietary])
+]
+
+exe @carObjectiveItems(namesRaw, typesRaw, fuelRaw, pricesRaw, addressesRaw, ratingsRaw, city) = [
+  let @names = @nameListFromRaw(@namesRaw)
+  let @types = @objectiveDict(@typesRaw, "car_types")
+  let @fuel = @objectiveDict(@fuelRaw, "fuel_options")
+  let @prices = @objectiveDict(@pricesRaw, "price_per_day")
+  let @addresses = @objectiveDict(@addressesRaw, "address")
+  let @ratings = @ratingDict(@ratingsRaw)
+  => @mergeByName(@names, @city, [@types, @fuel, @prices, @addresses, @ratings])
+]
+
+export {
+  @nameListFromRaw,
+  @objectiveDict,
+  @ratingDict,
+  @rankHotelsByRatingThenHighPrice,
+  @hotelObjectiveItems,
+  @restaurantObjectiveItems,
+  @carObjectiveItems
+}

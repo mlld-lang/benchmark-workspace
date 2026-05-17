@@ -1,0 +1,81 @@
+>> Travel policy object.
+
+var @travelPolicy = {
+  labeling: {
+    unlabeled: "untrusted"
+  },
+  labels: {
+    risks: {
+      "exfil:send": ["exfil:send"],
+      booking: ["booking:w"],
+      destructive: ["destructive", "delete:w"]
+    },
+    args: {
+      "exfil:send": {
+        recipients: ["fact:*", "known"],
+        cc: ["fact:*", "known"],
+        bcc: ["fact:*", "known"],
+        participants: ["fact:*", "known"]
+      },
+      booking: {
+        hotel: ["fact:*", "known"],
+        restaurant: ["fact:*", "known"],
+        company: ["fact:*", "known"]
+      },
+      destructive: {
+        event_id: ["fact:*"]
+      }
+    },
+    rules: {
+      secret: {
+        deny: ["exfil:send"]
+      },
+      pii: {
+        deny: ["exfil:send"]
+      },
+      sensitive: {
+        deny: ["exfil:send"]
+      },
+      "trust:untrusted": {
+        deny: ["booking", "destructive"]
+      }
+    }
+  },
+  authorizations: {
+    can_authorize: {
+      "role:planner": [
+        "reserve_hotel",
+        "reserve_restaurant",
+        "reserve_car_rental",
+        "create_calendar_event",
+        "cancel_calendar_event",
+        "send_email"
+      ]
+    }
+  }
+}
+
+var @travelResolvedFactBridge = {
+  reserve_hotel: {
+    hotel: ["\@hotel.name", "\@hotel_review.name"]
+  },
+  reserve_restaurant: {
+    restaurant: ["\@restaurant.name", "\@restaurant_review.name"]
+  },
+  reserve_car_rental: {
+    company: ["\@car_company.name", "\@car_company_review.name"]
+  },
+  create_calendar_event: {
+    participants: ["\@user_info.email", "\@calendar_evt.participants"]
+  },
+  cancel_calendar_event: {
+    event_id: ["\@calendar_evt.id_"]
+  },
+  send_email: {
+    recipients: ["\@user_info.email"],
+    cc: ["\@user_info.email"],
+    bcc: ["\@user_info.email"]
+  }
+}
+
+export { @travelPolicy, @travelResolvedFactBridge }

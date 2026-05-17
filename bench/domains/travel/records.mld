@@ -1,0 +1,267 @@
+>> Travel records.
+
+record @hotel = {
+  facts: [
+    name: { type: string, kind: "hotel_name" }
+  ],
+  data: {
+    trusted: [city: string?, price_range: string?, address: string?, rating: string?]
+  },
+  read: {
+    role:planner: [{ value: "name" }, city, price_range, address, rating],
+    role:worker: [{ value: "name" }, city, price_range, address, rating],
+    role:advice: [{ value: "name" }, city, price_range, address, rating]
+  }
+}
+
+record @hotel_review = {
+  facts: [
+    name: { type: string, kind: "hotel_name" }
+  ],
+  data: {
+    trusted: [rating: string?],
+    untrusted: [review_blob: string?]
+  },
+  read: {
+    role:planner: [{ value: "name" }, rating],
+    role:worker: [{ value: "name" }, rating, review_blob],
+    role:advice: [{ value: "name" }, rating]
+  }
+}
+
+record @restaurant = {
+  facts: [
+    name: { type: string, kind: "restaurant_name" }
+  ],
+  data: {
+    trusted: [
+      city: string?,
+      cuisine_type: string?,
+      dietary_restrictions: string?,
+      operating_hours: string?,
+      contact_information: string?,
+      price_per_person: string?,
+      address: string?,
+      rating: string?
+    ]
+  },
+  read: {
+    role:planner: [{ value: "name" }, city, cuisine_type, dietary_restrictions, operating_hours, price_per_person, address, rating],
+    role:worker: [{ value: "name" }, city, cuisine_type, dietary_restrictions, operating_hours, contact_information, price_per_person, address, rating],
+    role:advice: [{ value: "name" }, city, cuisine_type, dietary_restrictions, operating_hours, price_per_person, address, rating]
+  }
+}
+
+record @restaurant_review = {
+  facts: [
+    name: { type: string, kind: "restaurant_name" }
+  ],
+  data: {
+    trusted: [rating: string?],
+    untrusted: [review_blob: string?]
+  },
+  read: {
+    role:planner: [{ value: "name" }, rating],
+    role:worker: [{ value: "name" }, rating, review_blob],
+    role:advice: [{ value: "name" }, rating]
+  }
+}
+
+record @car_company = {
+  facts: [
+    name: { type: string, kind: "car_rental_name" }
+  ],
+  data: {
+    trusted: [
+      city: string?,
+      price_per_day: string?,
+      car_types: string?,
+      fuel_options: string?,
+      address: string?,
+      contact_information: string?,
+      rating: string?
+    ]
+  },
+  read: {
+    role:planner: [{ value: "name" }, city, price_per_day, car_types, fuel_options, address, rating],
+    role:worker: [{ value: "name" }, city, price_per_day, car_types, fuel_options, address, contact_information, rating],
+    role:advice: [{ value: "name" }, city, price_per_day, car_types, fuel_options, address, rating]
+  }
+}
+
+record @car_company_review = {
+  facts: [
+    name: { type: string, kind: "car_rental_name" }
+  ],
+  data: {
+    trusted: [rating: string?],
+    untrusted: [review_blob: string?]
+  },
+  read: {
+    role:planner: [{ value: "name" }, rating],
+    role:worker: [{ value: "name" }, rating, review_blob],
+    role:advice: [{ value: "name" }, rating]
+  }
+}
+
+record @user_info = {
+  facts: [
+    first_name: string?,
+    last_name: string?,
+    email: { type: string?, kind: "email" }
+  ],
+  data: {
+    trusted: [
+      phone_number: string?,
+      address: string?,
+      ID_number: string?,
+      passport_number: string?,
+      bank_account_number: string?,
+      credit_card_number: string?
+    ]
+  },
+  read: {
+    role:planner: [first_name, last_name, { value: "email" }, phone_number, address],
+    role:worker: [first_name, last_name, { value: "email" }, phone_number, address, ID_number],
+    role:advice: [first_name, last_name, { value: "email" }]
+  }
+}
+
+record @flight_info = {
+  data: {
+    trusted: [info_text: string]
+  },
+  read: {
+    role:planner: [info_text],
+    role:worker: [info_text],
+    role:advice: [info_text]
+  }
+}
+
+record @calendar_evt = {
+  key: id_,
+  facts: [
+    id_: { type: string, kind: "calendar_event_id" },
+    participants: { type: array, kind: "email" }
+  ],
+  data: {
+    trusted: [start_time: string?, end_time: string?, all_day: boolean?, status: string?],
+    untrusted: [title: string?, description: string?, location: string?]
+  },
+  read: {
+    role:planner: [{ value: "id_" }, { value: "participants" }, start_time, end_time, all_day, status],
+    role:worker: [{ value: "id_" }, { value: "participants" }, start_time, end_time, all_day, status, title, description, location],
+    role:advice: [{ value: "id_" }, { value: "participants" }, start_time, end_time, all_day, status]
+  }
+}
+
+record @reserve_hotel_inputs = {
+  facts: [
+    hotel: { type: string, kind: "hotel_name" }
+  ],
+  data: {
+    trusted: [start_day: string, end_day: string]
+  },
+  labels: ["tool:w", "booking:w"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @reserve_restaurant_inputs = {
+  facts: [
+    restaurant: { type: string, kind: "restaurant_name" }
+  ],
+  data: {
+    trusted: [start_time: string]
+  },
+  labels: ["tool:w", "booking:w"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @reserve_car_rental_inputs = {
+  facts: [
+    company: { type: string, kind: "car_rental_name" }
+  ],
+  data: {
+    trusted: [start_time: string, end_time: string]
+  },
+  labels: ["tool:w", "booking:w"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @create_calendar_event_inputs = {
+  facts: [
+    participants: { type: array, kind: "email" }
+  ],
+  data: {
+    trusted: [title: string, start_time: string, end_time: string, location: string?],
+    untrusted: [description: string?]
+  },
+  labels: ["tool:w", "calendar:w", "exfil:send"],
+  correlate: false,
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @cancel_calendar_event_inputs = {
+  facts: [
+    event_id: { type: string, kind: "calendar_event_id" }
+  ],
+  labels: ["tool:w", "calendar:w", "delete:w", "destructive"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @send_email_inputs = {
+  facts: [
+    recipients: { type: array, kind: "email" },
+    cc: { type: array, kind: "email" },
+    bcc: { type: array, kind: "email" }
+  ],
+  data: {
+    trusted: [attachments: array?],
+    untrusted: [subject: string, body: string]
+  },
+  labels: ["tool:w", "comm:w", "exfil:send"],
+  correlate: false,
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+export {
+  @hotel,
+  @hotel_review,
+  @restaurant,
+  @restaurant_review,
+  @car_company,
+  @car_company_review,
+  @user_info,
+  @flight_info,
+  @calendar_evt,
+  @reserve_hotel_inputs,
+  @reserve_restaurant_inputs,
+  @reserve_car_rental_inputs,
+  @create_calendar_event_inputs,
+  @cancel_calendar_event_inputs,
+  @send_email_inputs
+}

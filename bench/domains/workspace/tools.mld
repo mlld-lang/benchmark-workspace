@@ -1,0 +1,403 @@
+>> Workspace MCP wrappers.
+
+import tools from mcp "tools" as @mcp
+import { @normalize_date } from "./datetime.mld"
+
+import {
+  @contact,
+  @email_msg,
+  @calendar_evt,
+  @file_entry,
+  @datetime_context,
+  @normalized_datetime,
+  @send_email_inputs,
+  @delete_email_inputs,
+  @create_calendar_event_inputs,
+  @cancel_calendar_event_inputs,
+  @reschedule_calendar_event_inputs,
+  @add_calendar_event_participants_inputs,
+  @file_append_inputs,
+  @file_create_inputs,
+  @file_delete_inputs,
+  @share_file_inputs
+} from "./records.mld"
+
+exe resolve:r, tool:r, untrusted @get_unread_emails() = [
+  => @mcp.getUnreadEmails()
+] => record @email_msg
+
+exe resolve:r, tool:r, untrusted @get_sent_emails() = [
+  => @mcp.getSentEmails()
+] => record @email_msg
+
+exe resolve:r, tool:r, untrusted @get_received_emails() = [
+  => @mcp.getReceivedEmails()
+] => record @email_msg
+
+exe resolve:r, tool:r, untrusted @get_draft_emails() = [
+  => @mcp.getDraftEmails()
+] => record @email_msg
+
+exe resolve:r, tool:r, untrusted @search_emails(query, sender) = [
+  let @senderValue = @exists(@sender) ? @sender : null
+  => @mcp.searchEmails(@query, @senderValue)
+] => record @email_msg
+
+exe resolve:r, tool:r, untrusted @search_emails_any_sender(query) = [
+  => @mcp.searchEmailsAnySender(@query)
+] => record @email_msg
+
+exe extract:r, tool:r, untrusted @get_email_by_id(email_id) = [
+  => @mcp.getEmailById(@email_id)
+] => record @email_msg
+
+exe resolve:r, tool:r @search_contacts_by_name(query) = [
+  => @mcp.searchContactsByName(@query)
+] => record @contact
+
+exe resolve:r, tool:r @search_contacts_by_email(query) = [
+  => @mcp.searchContactsByEmail(@query)
+] => record @contact
+
+exe resolve:r, tool:r @get_current_day() = [
+  => { value: @mcp.getCurrentDay(), kind: "day" }
+] => record @datetime_context
+
+exe resolve:r, tool:r @get_current_datetime() = [
+  => { value: @mcp.getCurrentDatetime(), kind: "datetime" }
+] => record @datetime_context
+
+exe resolve:r, tool:r, untrusted @search_calendar_events(query, date) = [
+  let @dateValue = @exists(@date) ? @date : null
+  => @mcp.searchCalendarEvents(@query, @dateValue)
+] => record @calendar_evt
+
+exe resolve:r, tool:r, untrusted @get_day_calendar_events(day) = [
+  => @mcp.getDayCalendarEvents(@day)
+] => record @calendar_evt
+
+exe resolve:r, tool:r, untrusted @search_files_by_filename(filename) = [
+  => @mcp.searchFilesByFilename(@filename)
+] => record @file_entry
+
+exe resolve:r, tool:r, untrusted @list_files() = [
+  => @mcp.listFiles()
+] => record @file_entry
+
+exe resolve:r, tool:r, untrusted @search_files(query) = [
+  => @mcp.searchFiles(@query)
+] => record @file_entry
+
+exe extract:r, tool:r, untrusted @get_file_by_id(file_id) = [
+  => @mcp.getFileById(@file_id)
+] => record @file_entry
+
+exe @mcpEmailAttachments(attachments) = js {
+  if (attachments === null || attachments === undefined) return null;
+  const values = Array.isArray(attachments) ? attachments : [attachments];
+  return values.map((item) => {
+    if (item && typeof item === "object") {
+      if (item.type && item.file_id !== undefined) {
+        return { type: String(item.type), file_id: String(item.file_id) };
+      }
+      if (item.value !== undefined) return { type: "file", file_id: String(item.value) };
+      if (item.id_ !== undefined) return { type: "file", file_id: String(item.id_) };
+      if (item.id !== undefined) return { type: "file", file_id: String(item.id) };
+      if (item.file_id !== undefined) return { type: "file", file_id: String(item.file_id) };
+    }
+    if (typeof item === "string" || typeof item === "number") {
+      return { type: "file", file_id: String(item) };
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+exe @send_email(recipients, subject, body, attachments, cc, bcc) = [
+  let @attachmentsValue = @exists(@attachments) ? @mcpEmailAttachments(@attachments) : null
+  let @ccValue = @exists(@cc) ? @cc : []
+  let @bccValue = @exists(@bcc) ? @bcc : []
+  => @mcp.sendEmail(@recipients, @subject, @body, @attachmentsValue, @ccValue, @bccValue)
+]
+
+exe @delete_email(email_id) = [
+  => @mcp.deleteEmail(@email_id)
+]
+
+exe @create_calendar_event(title, start_time, end_time, description, participants, location) = [
+  let @descriptionValue = @exists(@description) ? @description : ""
+  let @participantsValue = @exists(@participants) ? @participants : []
+  let @locationValue = @exists(@location) ? @location : null
+  => @mcp.createCalendarEvent(@title, @start_time, @end_time, @descriptionValue, @participantsValue, @locationValue)
+]
+
+exe @cancel_calendar_event(event_id) = [
+  => @mcp.cancelCalendarEvent(@event_id)
+]
+
+exe @reschedule_calendar_event(event_id, new_start_time, new_end_time) = [
+  let @newEndTimeValue = @exists(@new_end_time) ? @new_end_time : null
+  => @mcp.rescheduleCalendarEvent(@event_id, @new_start_time, @newEndTimeValue)
+]
+
+exe @add_calendar_event_participants(event_id, participants) = [
+  => @mcp.addCalendarEventParticipants(@event_id, @participants)
+]
+
+exe @append_to_file(file_id, content) = [
+  => @mcp.appendToFile(@file_id, @content)
+]
+
+exe @create_file(filename, content) = [
+  => @mcp.createFile(@filename, @content)
+] => record @file_entry
+
+exe @delete_file(file_id) = [
+  => @mcp.deleteFile(@file_id)
+]
+
+exe @share_file(file_id, email, permission) = [
+  => @mcp.shareFile(@file_id, @email, @permission)
+]
+
+var tools @resolveTools = {
+  get_unread_emails: {
+    mlld: @get_unread_emails,
+    returns: @email_msg,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return unread emails. Planner sees sender/id/timestamp/read only; worker can inspect subject/body/attachments."
+  },
+  get_sent_emails: {
+    mlld: @get_sent_emails,
+    returns: @email_msg,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return sent emails."
+  },
+  get_received_emails: {
+    mlld: @get_received_emails,
+    returns: @email_msg,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return received emails."
+  },
+  get_draft_emails: {
+    mlld: @get_draft_emails,
+    returns: @email_msg,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return draft emails."
+  },
+  search_emails: {
+    mlld: @search_emails,
+    returns: @email_msg,
+    labels: ["resolve:r", "tool:r"],
+    description: "Search emails by query and optional sender."
+  },
+  search_emails_any_sender: {
+    mlld: @search_emails_any_sender,
+    returns: @email_msg,
+    labels: ["resolve:r", "tool:r"],
+    description: "Search emails across all senders with no sender filter."
+  },
+  search_contacts_by_name: {
+    mlld: @search_contacts_by_name,
+    returns: @contact,
+    labels: ["resolve:r", "tool:r"],
+    description: "Search contacts by person name."
+  },
+  search_contacts_by_email: {
+    mlld: @search_contacts_by_email,
+    returns: @contact,
+    labels: ["resolve:r", "tool:r"],
+    description: "Search contacts by email address."
+  },
+  get_current_day: {
+    mlld: @get_current_day,
+    returns: @datetime_context,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return today's date."
+  },
+  get_current_datetime: {
+    mlld: @get_current_datetime,
+    returns: @datetime_context,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return the current date and time."
+  },
+  normalize_date: {
+    mlld: @normalize_date,
+    returns: @normalized_datetime,
+    labels: ["resolve:r", "tool:r"],
+    description: "Normalize a natural-language date phrase against current_day. If weekday and day number disagree, returns the real date for the weekday plus a warning."
+  },
+  search_calendar_events: {
+    mlld: @search_calendar_events,
+    returns: @calendar_evt,
+    labels: ["resolve:r", "tool:r"],
+    description: "Search calendar events by query and optional YYYY-MM-DD date."
+  },
+  get_day_calendar_events: {
+    mlld: @get_day_calendar_events,
+    returns: @calendar_evt,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return all calendar events on one YYYY-MM-DD day."
+  },
+  search_files_by_filename: {
+    mlld: @search_files_by_filename,
+    returns: @file_entry,
+    labels: ["resolve:r", "tool:r"],
+    description: "Search files by exact or partial filename."
+  },
+  list_files: {
+    mlld: @list_files,
+    returns: @file_entry,
+    labels: ["resolve:r", "tool:r"],
+    description: "List cloud-drive files."
+  },
+  search_files: {
+    mlld: @search_files,
+    returns: @file_entry,
+    labels: ["resolve:r", "tool:r"],
+    description: "Search file contents by query. Planner cannot read file content."
+  }
+}
+
+var tools @extractTools = {
+  get_email_by_id: {
+    mlld: @get_email_by_id,
+    returns: @email_msg,
+    labels: ["extract:r", "tool:r"],
+    description: "Fetch one email by id for worker-only subject/body/attachment extraction."
+  },
+  get_file_by_id: {
+    mlld: @get_file_by_id,
+    returns: @file_entry,
+    labels: ["extract:r", "tool:r"],
+    description: "Fetch one file by id for worker-only content extraction."
+  }
+}
+
+var tools @writeTools = {
+  send_email: {
+    mlld: @send_email,
+    inputs: @send_email_inputs,
+    labels: ["tool:w", "execute:w", "comm:w", "exfil:send"],
+    description: "Send an email to grounded recipients. Body may summarize untrusted content; recipient controls must be grounded."
+  },
+  delete_email: {
+    mlld: @delete_email,
+    inputs: @delete_email_inputs,
+    labels: ["tool:w", "execute:w", "delete:w", "destructive"],
+    description: "Delete one grounded email by id."
+  },
+  create_calendar_event: {
+    mlld: @create_calendar_event,
+    inputs: @create_calendar_event_inputs,
+    labels: ["tool:w", "execute:w", "calendar:w", "exfil:send"],
+    description: "Create one calendar event. Participants, when present, must be grounded emails."
+  },
+  cancel_calendar_event: {
+    mlld: @cancel_calendar_event,
+    inputs: @cancel_calendar_event_inputs,
+    labels: ["tool:w", "execute:w", "calendar:w", "delete:w", "destructive"],
+    description: "Cancel one grounded calendar event."
+  },
+  reschedule_calendar_event: {
+    mlld: @reschedule_calendar_event,
+    inputs: @reschedule_calendar_event_inputs,
+    labels: ["tool:w", "execute:w", "calendar:w", "update:w"],
+    description: "Move one grounded calendar event to a new time."
+  },
+  add_calendar_event_participants: {
+    mlld: @add_calendar_event_participants,
+    inputs: @add_calendar_event_participants_inputs,
+    labels: ["tool:w", "execute:w", "calendar:w", "update:w", "exfil:send"],
+    description: "Add grounded participant emails to one grounded calendar event."
+  },
+  append_to_file: {
+    mlld: @append_to_file,
+    inputs: @file_append_inputs,
+    labels: ["tool:w", "execute:w", "file:w", "update:w"],
+    description: "Append payload content to one grounded file."
+  },
+  create_file: {
+    mlld: @create_file,
+    inputs: @file_create_inputs,
+    labels: ["tool:w", "execute:w", "file:w"],
+    description: "Create a new file with a task-grounded filename and payload content."
+  },
+  delete_file: {
+    mlld: @delete_file,
+    inputs: @file_delete_inputs,
+    labels: ["tool:w", "execute:w", "file:w", "delete:w", "destructive"],
+    description: "Delete one grounded file by id."
+  },
+  share_file: {
+    mlld: @share_file,
+    inputs: @share_file_inputs,
+    labels: ["tool:w", "execute:w", "file:w", "exfil:send"],
+    description: "Share one grounded file with one grounded email address."
+  }
+}
+
+var tools @workspaceTools = {
+  get_unread_emails: @resolveTools.get_unread_emails,
+  get_sent_emails: @resolveTools.get_sent_emails,
+  get_received_emails: @resolveTools.get_received_emails,
+  get_draft_emails: @resolveTools.get_draft_emails,
+  search_emails: @resolveTools.search_emails,
+  search_emails_any_sender: @resolveTools.search_emails_any_sender,
+  get_email_by_id: @extractTools.get_email_by_id,
+  search_contacts_by_name: @resolveTools.search_contacts_by_name,
+  search_contacts_by_email: @resolveTools.search_contacts_by_email,
+  get_current_day: @resolveTools.get_current_day,
+  get_current_datetime: @resolveTools.get_current_datetime,
+  normalize_date: @resolveTools.normalize_date,
+  search_calendar_events: @resolveTools.search_calendar_events,
+  get_day_calendar_events: @resolveTools.get_day_calendar_events,
+  search_files_by_filename: @resolveTools.search_files_by_filename,
+  list_files: @resolveTools.list_files,
+  search_files: @resolveTools.search_files,
+  get_file_by_id: @extractTools.get_file_by_id,
+  send_email: @writeTools.send_email,
+  delete_email: @writeTools.delete_email,
+  create_calendar_event: @writeTools.create_calendar_event,
+  cancel_calendar_event: @writeTools.cancel_calendar_event,
+  reschedule_calendar_event: @writeTools.reschedule_calendar_event,
+  add_calendar_event_participants: @writeTools.add_calendar_event_participants,
+  append_to_file: @writeTools.append_to_file,
+  create_file: @writeTools.create_file,
+  delete_file: @writeTools.delete_file,
+  share_file: @writeTools.share_file
+}
+
+export {
+  @resolveTools,
+  @extractTools,
+  @writeTools,
+  @workspaceTools,
+  @get_unread_emails,
+  @get_sent_emails,
+  @get_received_emails,
+  @get_draft_emails,
+  @search_emails,
+  @search_emails_any_sender,
+  @get_email_by_id,
+  @search_contacts_by_name,
+  @search_contacts_by_email,
+  @get_current_day,
+  @get_current_datetime,
+  @normalize_date,
+  @search_calendar_events,
+  @get_day_calendar_events,
+  @search_files_by_filename,
+  @list_files,
+  @search_files,
+  @get_file_by_id,
+  @send_email,
+  @delete_email,
+  @create_calendar_event,
+  @cancel_calendar_event,
+  @reschedule_calendar_event,
+  @add_calendar_event_participants,
+  @append_to_file,
+  @create_file,
+  @delete_file,
+  @share_file
+}

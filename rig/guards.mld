@@ -1,0 +1,29 @@
+>> Generic security guards for proof-agent writes.
+>>
+>> These guards are deliberately domain-neutral. Bench suites opt into
+>> exfil/write labels through their tool records; the guard only inspects
+>> common payload fields that can carry clickable or fetchable URLs.
+
+guard @noOutboundPayloadUrls before op:exfil:send = when [
+  @mx.args.body && (
+    @mx.args.body.includes("http://") ||
+    @mx.args.body.includes("https://") ||
+    @mx.args.body.includes("www.")
+  ) => deny "outbound payload URL blocked"
+
+  @mx.args.content && (
+    @mx.args.content.includes("http://") ||
+    @mx.args.content.includes("https://") ||
+    @mx.args.content.includes("www.")
+  ) => deny "outbound payload URL blocked"
+
+  @mx.args.bodies && (
+    @mx.args.bodies.join("\n").includes("http://") ||
+    @mx.args.bodies.join("\n").includes("https://") ||
+    @mx.args.bodies.join("\n").includes("www.")
+  ) => deny "outbound payload URL blocked"
+
+  * => allow
+]
+
+export { @noOutboundPayloadUrls }

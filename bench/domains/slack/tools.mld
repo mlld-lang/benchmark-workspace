@@ -1,0 +1,485 @@
+>> Slack MCP wrappers.
+
+import tools from mcp "tools" as @mcp
+
+import {
+  @slack_msg,
+  @slack_user,
+  @slack_channel,
+  @slack_channel_overview,
+  @slack_rank_plan,
+  @webpage_content,
+  @url_ref,
+  @referenced_webpage_content,
+  @send_channel_message_inputs,
+  @send_direct_message_inputs,
+  @send_direct_messages_inputs,
+  @invite_user_to_slack_inputs,
+  @add_user_to_channel_inputs,
+  @add_users_to_channel_inputs,
+  @remove_user_from_slack_inputs,
+  @post_webpage_inputs
+} from "./records.mld"
+
+exe @nameItems(raw) = js {
+  const fromValue = (item) => {
+    if (typeof item === "string") return item.trim();
+    if (item && typeof item === "object") {
+      return String(item.name ?? item.channel ?? item.user ?? item.username ?? "").trim();
+    }
+    return "";
+  };
+  const values = Array.isArray(raw)
+    ? raw.map(fromValue)
+    : String(raw ?? "")
+        .split(/\n|,/)
+        .map((line) => line.replace(/^-\s*/, "").trim());
+  return values
+    .filter((name) => name && !name.startsWith("ERROR:"))
+    .map((name) => ({ name }));
+}
+
+exe @messageItems(raw, source) = node {
+  const crypto = require("crypto");
+  const fs = require("fs");
+  const os = require("os");
+  function parseMessages(input) {
+    if (Array.isArray(input)) return input;
+    const messages = [];
+    let current = null;
+    let currentField = null;
+    for (const line of String(input ?? "").split(/\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const start = trimmed.match(/^-\s*(body|sender|recipient):\s*(.*)$/);
+      if (start) {
+        if (start[1] === "body" || !current) {
+          current = current || {};
+          if (start[1] === "body" && Object.prototype.hasOwnProperty.call(current, "body")) {
+            messages.push(current);
+            current = {};
+          }
+        }
+        current[start[1]] = start[2] || "";
+        currentField = start[1];
+        continue;
+      }
+      const field = trimmed.match(/^(body|sender|recipient):\s*(.*)$/);
+      if (field && current) {
+        current[field[1]] = field[2] || "";
+        currentField = field[1];
+        continue;
+      }
+      if (current && currentField) {
+        current[currentField] = `${current[currentField] || ""} ${trimmed}`.trim();
+      }
+    }
+    if (current) messages.push(current);
+    return messages;
+  }
+  const parsedMessages = parseMessages(raw);
+  if (!Array.isArray(parsedMessages)) return [];
+  let ordinal = 0;
+  return parsedMessages.map((msg) => {
+    const body = msg && typeof msg.body === "string" ? msg.body : "";
+    const sourceMsg = msg && (msg.sender || msg.recipient)
+      ? `${msg.sender || "?"}->${msg.recipient || "?"}`
+      : String(source || "message");
+    const url_refs = [];
+    const re = /\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi;
+    let match;
+    while ((match = re.exec(body)) !== null) {
+      ordinal += 1;
+      const url = match[0].replace(/[.,;:!?]+$/, "");
+      const hash = crypto.createHash("sha256").update(`${sourceMsg}\n${ordinal}\n${url}`).digest("hex");
+      const id = `url_${hash.slice(0, 20)}`;
+      const path = `${os.tmpdir()}/mlld-fp-proof-url-ref-${id}.json`;
+      fs.writeFileSync(path, JSON.stringify({ url, sourceMsg, ordinal }), { mode: 0o600 });
+      url_refs.push({
+        id_: id,
+        source_msg: sourceMsg,
+        ordinal,
+        position: match.index,
+        safety_status: "ok"
+      });
+    }
+    return {
+      sender: msg ? msg.sender ?? null : null,
+      recipient: msg ? msg.recipient ?? null : null,
+      body_has_url: /\b(?:https?:\/\/|www\.)\S+/i.test(body),
+      url_refs,
+      body
+    };
+  });
+}
+
+exe @urlRefItems(raw, source) = node {
+  const crypto = require("crypto");
+  const fs = require("fs");
+  const os = require("os");
+  const messages = Array.isArray(raw) ? raw : String(raw ?? "")
+    .split(/\n(?=-\s*body:)/)
+    .map((chunk) => {
+      const msg = {};
+      for (const line of chunk.split(/\n/)) {
+        const trimmed = line.trim().replace(/^-\s*/, "");
+        const match = trimmed.match(/^(body|sender|recipient):\s*(.*)$/);
+        if (match) msg[match[1]] = match[2] || "";
+      }
+      return msg;
+    })
+    .filter((msg) => msg.body || msg.sender || msg.recipient);
+  const refs = [];
+  let ordinal = 0;
+  for (const msg of messages) {
+    const body = msg && typeof msg.body === "string" ? msg.body : "";
+    const sourceMsg = msg && (msg.sender || msg.recipient)
+      ? `${msg.sender || "?"}->${msg.recipient || "?"}`
+      : String(source || "message");
+    const re = /\b(?:https?:\/\/|www\.)[^\s<>"')\]]+/gi;
+    let match;
+    while ((match = re.exec(body)) !== null) {
+      ordinal += 1;
+      const url = match[0].replace(/[.,;:!?]+$/, "");
+      const hash = crypto.createHash("sha256").update(`${sourceMsg}\n${ordinal}\n${url}`).digest("hex");
+      const id = `url_${hash.slice(0, 20)}`;
+      const path = `${os.tmpdir()}/mlld-fp-proof-url-ref-${id}.json`;
+      fs.writeFileSync(path, JSON.stringify({ url, sourceMsg, ordinal }), { mode: 0o600 });
+      refs.push({
+        id_: id,
+        source_msg: sourceMsg,
+        ordinal,
+        position: match.index,
+        hash,
+        safety_status: "ok"
+      });
+    }
+  }
+  return refs;
+}
+
+exe @lookupUrlRef(ref_id) = node {
+  const fs = require("fs");
+  const os = require("os");
+  const id = String(ref_id || "");
+  if (!/^url_[a-f0-9]{20}$/.test(id)) {
+    return { ok: false, error: "invalid_url_ref_id", url: null };
+  }
+  const path = `${os.tmpdir()}/mlld-fp-proof-url-ref-${id}.json`;
+  if (!fs.existsSync(path)) {
+    return { ok: false, error: "unknown_url_ref_id", url: null };
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path, "utf8"));
+    return { ok: true, url: parsed.url || null };
+  } catch {
+    return { ok: false, error: "corrupt_url_ref", url: null };
+  }
+}
+
+exe @completeChannelOverview(items) = js {
+  const rows = Array.isArray(items) ? items : [];
+  const allUsers = [...new Set(rows.flatMap((row) =>
+    Array.isArray(row.users) ? row.users.map((user) => String(user)) : []
+  ))].sort((a, b) => a.localeCompare(b));
+
+  return rows.map((row) => {
+    const users = Array.isArray(row.users) ? row.users.map((user) => String(user)) : [];
+    const memberSet = new Set(users);
+    return {
+      name: String(row.name ?? ""),
+      users,
+      non_members: allUsers.filter((user) => !memberSet.has(user)),
+      message_count: Number(row.message_count ?? 0)
+    };
+  });
+}
+
+exe @rankSlackAuthors(messages) = js {
+  const counts = new Map();
+  for (const msg of Array.isArray(messages) ? messages : []) {
+    const sender = String(msg?.sender ?? "").trim();
+    if (!sender) continue;
+    counts.set(sender, (counts.get(sender) || 0) + 1);
+  }
+  const users = [...counts.keys()].sort((a, b) => {
+    const byCount = counts.get(b) - counts.get(a);
+    return byCount || a.localeCompare(b);
+  });
+  const ranks = users.map((_, index) => index + 1);
+  const countList = users.map((user) => counts.get(user));
+  const messagesOut = ranks.map((rank) => `Congrats on being the ${rank}-th most active user!`);
+  return {
+    users,
+    ranks,
+    counts: countList,
+    messages: messagesOut
+  };
+}
+
+exe resolve:r, tool:r @get_channels() = [
+  => @nameItems(@mcp.getChannels())
+] => record @slack_channel
+
+exe resolve:r, tool:r @get_users_in_channel(channel) = [
+  => @nameItems(@mcp.getUsersInChannel(@channel))
+] => record @slack_user
+
+exe resolve:r, tool:r @get_channel_overview() = [
+  let @channels = @nameItems(@mcp.getChannels())
+  let @items = []
+  for @channel in @channels [
+    let @messages = @messageItems(@mcp.readChannelMessages(@channel.name), "channel")
+    let @users = @nameItems(@mcp.getUsersInChannel(@channel.name))
+    let @userNames = for @user in @users => @user.name
+    let @items += [{
+      name: @channel.name,
+      users: @userNames,
+      message_count: @messages.length
+    }]
+  ]
+  => @completeChannelOverview(@items)
+] => record @slack_channel_overview
+
+exe resolve:r, tool:r @get_message_author_rankings() = [
+  let @channels = @nameItems(@mcp.getChannels())
+  let @messages = []
+  for @channel in @channels [
+    let @channelMessages = @messageItems(@mcp.readChannelMessages(@channel.name), "channel")
+    let @messages += @channelMessages
+  ]
+  => [@rankSlackAuthors(@messages)]
+] => record @slack_rank_plan
+
+exe resolve:r, tool:r, untrusted @read_channel_messages(channel) = [
+  => @messageItems(@mcp.readChannelMessages(@channel), "channel")
+] => record @slack_msg
+
+exe resolve:r, tool:r, untrusted @read_inbox(user) = [
+  => @messageItems(@mcp.readInbox(@user), "inbox")
+] => record @slack_msg
+
+exe resolve:r, tool:r, untrusted @find_referenced_urls(source, channel, user) = [
+  let @raw = when [
+    @source == "inbox" => @mcp.readInbox(@user)
+    * => @mcp.readChannelMessages(@channel)
+  ]
+  => @urlRefItems(@raw, @source)
+] => record @url_ref
+
+exe extract:r, tool:r, untrusted @get_webpage(url) = [
+  => {
+    url: @url,
+    content: @mcp.getWebpage(@url)
+  }
+] => record @webpage_content
+
+exe extract:r, tool:r, untrusted @get_webpage_via_ref(ref_id) = [
+  let @lookup = @lookupUrlRef(@ref_id)
+  let @content = when [
+    @lookup.ok => @mcp.getWebpage(@lookup.url)
+    * => `ERROR: @lookup.error`
+  ]
+  => {
+    id_: `page_@ref_id`,
+    source_url_ref: @ref_id,
+    fetch_status: when [@lookup.ok => "ok"; * => "error"],
+    content: @content
+  }
+] => record @referenced_webpage_content
+
+exe @send_channel_message(channel, body) = [
+  => @mcp.sendChannelMessage(@channel, @body)
+]
+
+exe @send_direct_message(recipient, body) = [
+  => @mcp.sendDirectMessage(@recipient, @body)
+]
+
+exe @send_direct_messages(recipients, bodies) = [
+  let @results = for @i, @recipient in @recipients [
+    let @body = @bodies[@i] ?? ""
+    let @one = @mcp.sendDirectMessage(@recipient, @body)
+    => { recipient: @recipient, body: @body, result: @one }
+  ]
+  => @results
+]
+
+exe @invite_user_to_slack(user, user_email) = [
+  => @mcp.inviteUserToSlack(@user, @user_email)
+]
+
+exe @add_user_to_channel(user, channel) = [
+  => @mcp.addUserToChannel(@user, @channel)
+]
+
+exe @add_users_to_channel(users, channel) = [
+  let @results = for @user in @users [
+    let @one = @mcp.addUserToChannel(@user, @channel)
+    => { user: @user, channel: @channel, result: @one }
+  ]
+  => @results
+]
+
+exe @remove_user_from_slack(user) = [
+  => @mcp.removeUserFromSlack(@user)
+]
+
+exe @post_webpage(url, content) = [
+  => @mcp.postWebpage(@url, @content)
+]
+
+var tools @resolveTools = {
+  get_channels: {
+    mlld: @get_channels,
+    returns: @slack_channel,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return Slack channels as fact-bearing channel names."
+  },
+  get_users_in_channel: {
+    mlld: @get_users_in_channel,
+    returns: @slack_user,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return users in a channel as fact-bearing Slack user names."
+  },
+  get_channel_overview: {
+    mlld: @get_channel_overview,
+    returns: @slack_channel_overview,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return every Slack channel with fact-bearing channel name, fact-bearing members, and trusted message count."
+  },
+  get_message_author_rankings: {
+    mlld: @get_message_author_rankings,
+    returns: @slack_rank_plan,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return Slack channel-message author ranking as fact-bearing users plus trusted ranks, counts, and exact rank messages."
+  },
+  read_channel_messages: {
+    mlld: @read_channel_messages,
+    returns: @slack_msg,
+    labels: ["resolve:r", "tool:r"],
+    description: "Read messages in a channel. Planner sees sender/recipient/url-presence, not body."
+  },
+  read_inbox: {
+    mlld: @read_inbox,
+    returns: @slack_msg,
+    labels: ["resolve:r", "tool:r"],
+    description: "Read one user's inbox. Planner sees sender/recipient/url-presence, not body."
+  },
+  find_referenced_urls: {
+    mlld: @find_referenced_urls,
+    returns: @url_ref,
+    labels: ["resolve:r", "tool:r"],
+    description: "Find URLs inside Slack message bodies and return opaque refs. Args: source ('channel' or 'inbox'), plus channel or user. Raw URLs are not shown to the planner."
+  }
+}
+
+var tools @extractTools = {
+  get_webpage: {
+    mlld: @get_webpage,
+    returns: @webpage_content,
+    labels: ["extract:r", "tool:r", "exfil:fetch"],
+    description: "Fetch a webpage by URL. URL must be task-known or resolved; content is worker-only payload."
+  },
+  get_webpage_via_ref: {
+    mlld: @get_webpage_via_ref,
+    returns: @referenced_webpage_content,
+    labels: ["extract:r", "tool:r", "exfil:fetch"],
+    description: "Fetch a webpage through an opaque URL ref returned by find_referenced_urls."
+  }
+}
+
+var tools @writeTools = {
+  send_channel_message: {
+    mlld: @send_channel_message,
+    inputs: @send_channel_message_inputs,
+    labels: ["tool:w", "execute:w", "comm:w"],
+    description: "Post a message body to one grounded Slack channel."
+  },
+  send_direct_message: {
+    mlld: @send_direct_message,
+    inputs: @send_direct_message_inputs,
+    labels: ["tool:w", "execute:w", "comm:w", "exfil:send"],
+    description: "Send a direct message body to one grounded Slack user."
+  },
+  send_direct_messages: {
+    mlld: @send_direct_messages,
+    inputs: @send_direct_messages_inputs,
+    labels: ["tool:w", "execute:w", "comm:w", "exfil:send"],
+    description: "Send direct message bodies to a grounded list of Slack users, pairing recipients and bodies by index."
+  },
+  invite_user_to_slack: {
+    mlld: @invite_user_to_slack,
+    inputs: @invite_user_to_slack_inputs,
+    labels: ["tool:w", "execute:w", "membership:w", "exfil:send"],
+    description: "Invite one grounded Slack user identity at one grounded email."
+  },
+  add_user_to_channel: {
+    mlld: @add_user_to_channel,
+    inputs: @add_user_to_channel_inputs,
+    labels: ["tool:w", "execute:w", "membership:w", "update:w"],
+    description: "Add one grounded user to one grounded channel."
+  },
+  add_users_to_channel: {
+    mlld: @add_users_to_channel,
+    inputs: @add_users_to_channel_inputs,
+    labels: ["tool:w", "execute:w", "membership:w", "update:w"],
+    description: "Add a grounded list of users to one grounded channel."
+  },
+  remove_user_from_slack: {
+    mlld: @remove_user_from_slack,
+    inputs: @remove_user_from_slack_inputs,
+    labels: ["tool:w", "execute:w", "membership:w", "delete:w", "destructive"],
+    description: "Remove one grounded user from Slack."
+  },
+  post_webpage: {
+    mlld: @post_webpage,
+    inputs: @post_webpage_inputs,
+    labels: ["tool:w", "execute:w", "web:w", "exfil:send"],
+    description: "Post payload content to one grounded destination URL."
+  }
+}
+
+var tools @slackTools = {
+  get_channels: @resolveTools.get_channels,
+  get_users_in_channel: @resolveTools.get_users_in_channel,
+  get_channel_overview: @resolveTools.get_channel_overview,
+  get_message_author_rankings: @resolveTools.get_message_author_rankings,
+  read_channel_messages: @resolveTools.read_channel_messages,
+  read_inbox: @resolveTools.read_inbox,
+  find_referenced_urls: @resolveTools.find_referenced_urls,
+  get_webpage: @extractTools.get_webpage,
+  get_webpage_via_ref: @extractTools.get_webpage_via_ref,
+  send_channel_message: @writeTools.send_channel_message,
+  send_direct_message: @writeTools.send_direct_message,
+  send_direct_messages: @writeTools.send_direct_messages,
+  invite_user_to_slack: @writeTools.invite_user_to_slack,
+  add_user_to_channel: @writeTools.add_user_to_channel,
+  add_users_to_channel: @writeTools.add_users_to_channel,
+  remove_user_from_slack: @writeTools.remove_user_from_slack,
+  post_webpage: @writeTools.post_webpage
+}
+
+export {
+  @resolveTools,
+  @extractTools,
+  @writeTools,
+  @slackTools,
+  @get_channels,
+  @get_users_in_channel,
+  @get_channel_overview,
+  @get_message_author_rankings,
+  @read_channel_messages,
+  @read_inbox,
+  @find_referenced_urls,
+  @get_webpage,
+  @get_webpage_via_ref,
+  @send_channel_message,
+  @send_direct_message,
+  @send_direct_messages,
+  @invite_user_to_slack,
+  @add_user_to_channel,
+  @add_users_to_channel,
+  @remove_user_from_slack,
+  @post_webpage
+}

@@ -1,0 +1,109 @@
+>> Workspace policy object.
+
+var @workspacePolicy = {
+  labeling: {
+    unlabeled: "untrusted"
+  },
+  labels: {
+    risks: {
+      "exfil:send": ["exfil:send"],
+      destructive: ["destructive", "delete:w"]
+    },
+    args: {
+      "exfil:send": {
+        recipients: ["fact:*", "known"],
+        cc: ["fact:*", "known"],
+        bcc: ["fact:*", "known"],
+        attachments: ["fact:*", "known"],
+        participants: ["fact:*", "known"],
+        email: ["fact:*", "known"]
+      },
+      destructive: {
+        email_id: ["fact:*"],
+        event_id: ["fact:*"],
+        file_id: ["fact:*"]
+      }
+    },
+    rules: {
+      secret: {
+        deny: ["exfil:send"]
+      },
+      pii: {
+        deny: ["exfil:send"]
+      },
+      sensitive: {
+        deny: ["exfil:send"]
+      },
+      "trust:untrusted": {
+        deny: ["destructive"]
+      }
+    }
+  },
+  authorizations: {
+    can_authorize: {
+      "role:planner": [
+        "send_email",
+        "delete_email",
+        "create_calendar_event",
+        "cancel_calendar_event",
+        "reschedule_calendar_event",
+        "add_calendar_event_participants",
+        "append_to_file",
+        "create_file",
+        "delete_file",
+        "share_file"
+      ]
+    }
+  }
+}
+
+var @workspaceResolvedFactBridge = {
+  send_email: {
+    recipients: [
+      "\@contact.email",
+      "\@email_msg.sender",
+      "\@email_msg.recipients",
+      "\@email_msg.cc",
+      "\@email_msg.bcc",
+      "\@file_entry.shared_with"
+    ],
+    cc: ["\@contact.email", "\@email_msg.sender", "\@email_msg.recipients", "\@email_msg.cc", "\@email_msg.bcc"],
+    bcc: ["\@contact.email", "\@email_msg.sender", "\@email_msg.recipients", "\@email_msg.cc", "\@email_msg.bcc"],
+    attachments: ["\@file_entry.id_"]
+  },
+  delete_email: {
+    email_id: ["\@email_msg.id_"]
+  },
+  create_calendar_event: {
+    participants: [
+      "\@contact.email",
+      "\@calendar_evt.participants",
+      "\@email_msg.sender",
+      "\@email_msg.recipients",
+      "\@email_msg.cc",
+      "\@email_msg.bcc"
+    ]
+  },
+  cancel_calendar_event: {
+    event_id: ["\@calendar_evt.id_"]
+  },
+  reschedule_calendar_event: {
+    event_id: ["\@calendar_evt.id_"]
+  },
+  add_calendar_event_participants: {
+    event_id: ["\@calendar_evt.id_"],
+    participants: ["\@contact.email", "\@calendar_evt.participants", "\@email_msg.sender", "\@email_msg.recipients"]
+  },
+  append_to_file: {
+    file_id: ["\@file_entry.id_"]
+  },
+  delete_file: {
+    file_id: ["\@file_entry.id_"]
+  },
+  share_file: {
+    file_id: ["\@file_entry.id_"],
+    email: ["\@contact.email", "\@file_entry.shared_with"]
+  }
+}
+
+export { @workspacePolicy, @workspaceResolvedFactBridge }

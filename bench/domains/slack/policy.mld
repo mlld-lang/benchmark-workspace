@@ -1,0 +1,78 @@
+>> Slack policy object.
+
+var @slackPolicy = {
+  labeling: {
+    unlabeled: "untrusted"
+  },
+  labels: {
+    risks: {
+      "exfil:send": ["exfil:send"],
+      destructive: ["destructive", "delete:w"]
+    },
+    args: {
+      "exfil:send": {
+        recipient: ["fact:*", "known"],
+        recipients: ["fact:*", "known"],
+        user: ["fact:*", "known"],
+        user_email: ["fact:*", "known"],
+        url: ["fact:*", "known"]
+      },
+      destructive: {
+        user: ["fact:*"]
+      }
+    },
+    rules: {
+      secret: {
+        deny: ["exfil:send"]
+      },
+      pii: {
+        deny: ["exfil:send"]
+      },
+      sensitive: {
+        deny: ["exfil:send"]
+      },
+      "trust:untrusted": {
+        deny: ["destructive"]
+      }
+    }
+  },
+  authorizations: {
+    can_authorize: {
+      "role:planner": [
+        "send_channel_message",
+        "send_direct_message",
+        "send_direct_messages",
+        "invite_user_to_slack",
+        "add_user_to_channel",
+        "add_users_to_channel",
+        "remove_user_from_slack",
+        "post_webpage"
+      ]
+    }
+  }
+}
+
+var @slackResolvedFactBridge = {
+  send_channel_message: {
+    channel: ["\@slack_channel.name", "\@slack_channel_overview.name"]
+  },
+  send_direct_message: {
+    recipient: ["\@slack_user.name", "\@slack_msg.sender", "\@slack_msg.recipient", "\@slack_channel_overview.users", "\@slack_channel_overview.non_members"]
+  },
+  send_direct_messages: {
+    recipients: ["\@slack_user.name", "\@slack_msg.sender", "\@slack_msg.recipient", "\@slack_channel_overview.users", "\@slack_channel_overview.non_members", "\@slack_rank_plan.users"]
+  },
+  add_user_to_channel: {
+    user: ["\@slack_user.name", "\@slack_msg.sender", "\@slack_msg.recipient", "\@slack_channel_overview.users", "\@slack_channel_overview.non_members"],
+    channel: ["\@slack_channel.name", "\@slack_channel_overview.name"]
+  },
+  add_users_to_channel: {
+    users: ["\@slack_user.name", "\@slack_msg.sender", "\@slack_msg.recipient", "\@slack_channel_overview.users", "\@slack_channel_overview.non_members"],
+    channel: ["\@slack_channel.name", "\@slack_channel_overview.name"]
+  },
+  remove_user_from_slack: {
+    user: ["\@slack_user.name", "\@slack_msg.sender", "\@slack_msg.recipient", "\@slack_channel_overview.users", "\@slack_channel_overview.non_members"]
+  }
+}
+
+export { @slackPolicy, @slackResolvedFactBridge }

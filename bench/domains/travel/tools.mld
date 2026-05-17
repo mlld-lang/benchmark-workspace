@@ -1,0 +1,372 @@
+>> Travel MCP wrappers.
+
+import tools from mcp "tools" as @mcp
+
+import {
+  @hotel,
+  @hotel_review,
+  @restaurant,
+  @restaurant_review,
+  @car_company,
+  @car_company_review,
+  @user_info,
+  @flight_info,
+  @calendar_evt,
+  @reserve_hotel_inputs,
+  @reserve_restaurant_inputs,
+  @reserve_car_rental_inputs,
+  @create_calendar_event_inputs,
+  @cancel_calendar_event_inputs,
+  @send_email_inputs
+} from "./records.mld"
+
+import {
+  @nameListFromRaw,
+  @hotelObjectiveItems,
+  @restaurantObjectiveItems,
+  @carObjectiveItems
+} from "./objective.mld"
+
+exe @lineNameItems(raw, nameField, city) = js {
+  const text = Array.isArray(raw) ? raw.join("\n") : String(raw ?? "");
+  return text
+    .split(/\n|,/)
+    .map((part) => part.trim())
+    .map((part) => part.replace(/^[A-Za-z -]+Names?:\s*/i, "").trim())
+    .filter(Boolean)
+    .map((name) => {
+      const item = { city };
+      item[nameField] = name;
+      return item;
+    });
+}
+
+exe @dictFieldItems(raw, nameField, valueField) = js {
+  if (typeof raw === "string") {
+    return raw
+      .split(/\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const match = line.match(/^\s*([^:]+):\s*'?([\s\S]*?)'?\s*$/);
+        if (!match) return null;
+        const item = {};
+        item[nameField] = match[1].trim();
+        item[valueField] = String(match[2] ?? "").trim();
+        return item;
+      })
+      .filter(Boolean);
+  }
+  if (!raw || typeof raw !== "object") return [];
+  return Object.entries(raw).map(([name, value]) => {
+    const item = {};
+    item[nameField] = name;
+    item[valueField] = Array.isArray(value) ? value.join(", ") : String(value ?? "");
+    return item;
+  });
+}
+
+exe @singleFieldItem(inputName, nameField, inputValue, valueField) = js {
+  const item = {};
+  item[nameField] = inputName;
+  const text = Array.isArray(inputValue) ? inputValue.join(", ") : String(inputValue ?? "");
+  const prefix = String(inputName ?? "").trim();
+  item[valueField] = prefix && text.startsWith(`${prefix}:`) ? text.slice(prefix.length + 1).trim() : text;
+  return [item];
+}
+
+exe @reviewItems(raw, nameField) = js {
+  if (typeof raw === "string") {
+    return raw
+      .split(/\n(?=[^:\n]+:\s*')/)
+      .map((chunk) => chunk.trim())
+      .filter(Boolean)
+      .map((chunk) => {
+        const match = chunk.match(/^\s*([^:]+):\s*'?([\s\S]*?)'?\s*$/);
+        if (!match) return null;
+        const review = match[2] || "";
+        const ratingMatch = review.match(/Rating:\s*([0-9.]+)/i);
+        const item = {};
+        item[nameField] = match[1].trim();
+        item.rating = ratingMatch ? ratingMatch[1] : null;
+        item.review_blob = review;
+        return item;
+      })
+      .filter(Boolean);
+  }
+  if (!raw || typeof raw !== "object") return [];
+  return Object.entries(raw).map(([name, value]) => {
+    let rating = null;
+    if (value && typeof value === "object") {
+      rating = value.rating ?? value.score ?? value.stars ?? null;
+    }
+    const item = {};
+    item[nameField] = name;
+    item.rating = rating == null ? null : String(rating);
+    item.review_blob = typeof value === "string" ? value : JSON.stringify(value ?? "");
+    return item;
+  });
+}
+
+exe resolve:r, tool:r @get_user_information() = [
+  => @mcp.getUserInformation()
+] => record @user_info
+
+exe resolve:r, tool:r @get_all_hotels_in_city(city) = [
+  => @lineNameItems(@mcp.getAllHotelsInCity(@city), "name", @city)
+] => record @hotel
+
+exe resolve:r, tool:r, untrusted @get_city_hotels(city) = [
+  let @namesRaw = @mcp.getAllHotelsInCity(@city)
+  let @names = @nameListFromRaw(@namesRaw)
+  let @pricesRaw = @mcp.getHotelsPrices(@names)
+  let @ratingsRaw = @mcp.getRatingReviewsForHotels(@names)
+  let @addresses = []
+  for @name in @names [
+    let @oneAddress = @singleFieldItem(@name, "name", @mcp.getHotelsAddress(@name), "address")
+    let @addresses += @oneAddress
+  ]
+  => @hotelObjectiveItems(@namesRaw, @pricesRaw, @ratingsRaw, @addresses, @city)
+] => record @hotel
+
+exe resolve:r, tool:r @get_hotels_prices(hotel_names) = [
+  => @dictFieldItems(@mcp.getHotelsPrices(@hotel_names), "name", "price_range")
+] => record @hotel
+
+exe resolve:r, tool:r, untrusted @get_rating_reviews_for_hotels(hotel_names) = [
+  => @reviewItems(@mcp.getRatingReviewsForHotels(@hotel_names), "name")
+] => record @hotel_review
+
+exe resolve:r, tool:r @get_hotels_address(hotel_name) = [
+  => @singleFieldItem(@hotel_name, "name", @mcp.getHotelsAddress(@hotel_name), "address")
+] => record @hotel
+
+exe resolve:r, tool:r @get_all_restaurants_in_city(city) = [
+  => @lineNameItems(@mcp.getAllRestaurantsInCity(@city), "name", @city)
+] => record @restaurant
+
+exe resolve:r, tool:r, untrusted @get_city_restaurants(city) = [
+  let @namesRaw = @mcp.getAllRestaurantsInCity(@city)
+  let @names = @nameListFromRaw(@namesRaw)
+  let @cuisineRaw = @mcp.getCuisineTypeForRestaurants(@names)
+  let @hoursRaw = @mcp.checkRestaurantOpeningHours(@names)
+  let @pricesRaw = @mcp.getPriceForRestaurants(@names)
+  let @addressesRaw = @mcp.getRestaurantsAddress(@names)
+  let @ratingsRaw = @mcp.getRatingReviewsForRestaurants(@names)
+  let @dietaryRaw = @mcp.getDietaryRestrictionsForAllRestaurants(@names)
+  => @restaurantObjectiveItems(@namesRaw, @cuisineRaw, @hoursRaw, @pricesRaw, @addressesRaw, @ratingsRaw, @dietaryRaw, @city)
+] => record @restaurant
+
+exe resolve:r, tool:r @get_cuisine_type_for_restaurants(restaurant_names) = [
+  => @dictFieldItems(@mcp.getCuisineTypeForRestaurants(@restaurant_names), "name", "cuisine_type")
+] => record @restaurant
+
+exe resolve:r, tool:r @get_restaurants_address(restaurant_names) = [
+  => @dictFieldItems(@mcp.getRestaurantsAddress(@restaurant_names), "name", "address")
+] => record @restaurant
+
+exe resolve:r, tool:r, untrusted @get_rating_reviews_for_restaurants(restaurant_names) = [
+  => @reviewItems(@mcp.getRatingReviewsForRestaurants(@restaurant_names), "name")
+] => record @restaurant_review
+
+exe resolve:r, tool:r @get_dietary_restrictions_for_all_restaurants(restaurant_names) = [
+  => @dictFieldItems(@mcp.getDietaryRestrictionsForAllRestaurants(@restaurant_names), "name", "dietary_restrictions")
+] => record @restaurant
+
+exe resolve:r, tool:r @get_contact_information_for_restaurants(restaurant_names) = [
+  => @dictFieldItems(@mcp.getContactInformationForRestaurants(@restaurant_names), "name", "contact_information")
+] => record @restaurant
+
+exe resolve:r, tool:r @get_price_for_restaurants(restaurant_names) = [
+  => @dictFieldItems(@mcp.getPriceForRestaurants(@restaurant_names), "name", "price_per_person")
+] => record @restaurant
+
+exe resolve:r, tool:r @check_restaurant_opening_hours(restaurant_names) = [
+  => @dictFieldItems(@mcp.checkRestaurantOpeningHours(@restaurant_names), "name", "operating_hours")
+] => record @restaurant
+
+exe resolve:r, tool:r @get_all_car_rental_companies_in_city(city) = [
+  => @lineNameItems(@mcp.getAllCarRentalCompaniesInCity(@city), "name", @city)
+] => record @car_company
+
+exe resolve:r, tool:r, untrusted @get_city_car_rentals(city) = [
+  let @namesRaw = @mcp.getAllCarRentalCompaniesInCity(@city)
+  let @names = @nameListFromRaw(@namesRaw)
+  let @typesRaw = @mcp.getCarTypesAvailable(@names)
+  let @fuelRaw = @mcp.getCarFuelOptions(@names)
+  let @pricesRaw = @mcp.getCarPricePerDay(@names)
+  let @addressesRaw = @mcp.getCarRentalAddress(@names)
+  let @ratingsRaw = @mcp.getRatingReviewsForCarRental(@names)
+  => @carObjectiveItems(@namesRaw, @typesRaw, @fuelRaw, @pricesRaw, @addressesRaw, @ratingsRaw, @city)
+] => record @car_company
+
+exe resolve:r, tool:r @get_car_types_available(company_name) = [
+  => @dictFieldItems(@mcp.getCarTypesAvailable(@company_name), "name", "car_types")
+] => record @car_company
+
+exe resolve:r, tool:r, untrusted @get_rating_reviews_for_car_rental(company_name) = [
+  => @reviewItems(@mcp.getRatingReviewsForCarRental(@company_name), "name")
+] => record @car_company_review
+
+exe resolve:r, tool:r @get_car_fuel_options(company_name) = [
+  => @dictFieldItems(@mcp.getCarFuelOptions(@company_name), "name", "fuel_options")
+] => record @car_company
+
+exe resolve:r, tool:r @get_car_rental_address(company_name) = [
+  => @dictFieldItems(@mcp.getCarRentalAddress(@company_name), "name", "address")
+] => record @car_company
+
+exe resolve:r, tool:r @get_car_price_per_day(company_name) = [
+  => @dictFieldItems(@mcp.getCarPricePerDay(@company_name), "name", "price_per_day")
+] => record @car_company
+
+exe resolve:r, tool:r, untrusted @search_calendar_events(query, date) = [
+  let @dateValue = @exists(@date) ? @date : null
+  => @mcp.searchCalendarEvents(@query, @dateValue)
+] => record @calendar_evt
+
+exe resolve:r, tool:r, untrusted @get_day_calendar_events(day) = [
+  => @mcp.getDayCalendarEvents(@day)
+] => record @calendar_evt
+
+exe resolve:r, tool:r @get_flight_information(departure_city, arrival_city) = [
+  => { info_text: @mcp.getFlightInformation(@departure_city, @arrival_city) }
+] => record @flight_info
+
+exe @reserve_hotel(hotel, start_day, end_day) = [
+  => @mcp.reserveHotel(@hotel, @start_day, @end_day)
+]
+
+exe @reserve_restaurant(restaurant, start_time) = [
+  => @mcp.reserveRestaurant(@restaurant, @start_time)
+]
+
+exe @reserve_car_rental(company, start_time, end_time) = [
+  => @mcp.reserveCarRental(@company, @start_time, @end_time)
+]
+
+exe @create_calendar_event(title, start_time, end_time, description, participants, location) = [
+  let @descriptionValue = @exists(@description) ? @description : ""
+  let @participantsValue = @exists(@participants) ? @participants : []
+  let @locationValue = @exists(@location) ? @location : null
+  => @mcp.createCalendarEvent(@title, @start_time, @end_time, @descriptionValue, @participantsValue, @locationValue)
+]
+
+exe @cancel_calendar_event(event_id) = [
+  => @mcp.cancelCalendarEvent(@event_id)
+]
+
+exe @send_email(recipients, subject, body, attachments, cc, bcc) = [
+  let @attachmentsValue = @exists(@attachments) ? @attachments : null
+  let @ccValue = @exists(@cc) ? @cc : []
+  let @bccValue = @exists(@bcc) ? @bcc : []
+  => @mcp.sendEmail(@recipients, @subject, @body, @attachmentsValue, @ccValue, @bccValue)
+]
+
+var tools @resolveTools = {
+  get_user_information: { mlld: @get_user_information, returns: @user_info, labels: ["resolve:r", "tool:r"], description: "Return user contact information. Secret-grade PII is omitted from planner/worker projections." },
+  get_all_hotels_in_city: { mlld: @get_all_hotels_in_city, returns: @hotel, labels: ["resolve:r", "tool:r"], description: "List hotel candidates in a city." },
+  get_city_hotels: { mlld: @get_city_hotels, returns: @hotel, labels: ["resolve:r", "tool:r"], description: "Return objective hotel candidates for one city: name, rating, price range, and address. Review prose is not returned." },
+  get_hotels_prices: { mlld: @get_hotels_prices, returns: @hotel, labels: ["resolve:r", "tool:r"], description: "Return hotel price ranges for a list of hotel names." },
+  get_rating_reviews_for_hotels: { mlld: @get_rating_reviews_for_hotels, returns: @hotel_review, labels: ["resolve:r", "tool:r"], description: "Return hotel ratings and worker-only review blobs." },
+  get_hotels_address: { mlld: @get_hotels_address, returns: @hotel, labels: ["resolve:r", "tool:r"], description: "Return one hotel address." },
+  get_all_restaurants_in_city: { mlld: @get_all_restaurants_in_city, returns: @restaurant, labels: ["resolve:r", "tool:r"], description: "List restaurant candidates in a city." },
+  get_city_restaurants: { mlld: @get_city_restaurants, returns: @restaurant, labels: ["resolve:r", "tool:r"], description: "Return objective restaurant candidates for one city: name, rating, cuisine, operating hours, price, address, and dietary support. Review prose is not returned." },
+  get_cuisine_type_for_restaurants: { mlld: @get_cuisine_type_for_restaurants, returns: @restaurant, labels: ["resolve:r", "tool:r"], description: "Return cuisine types for restaurants." },
+  get_restaurants_address: { mlld: @get_restaurants_address, returns: @restaurant, labels: ["resolve:r", "tool:r"], description: "Return restaurant addresses." },
+  get_rating_reviews_for_restaurants: { mlld: @get_rating_reviews_for_restaurants, returns: @restaurant_review, labels: ["resolve:r", "tool:r"], description: "Return restaurant ratings and worker-only review blobs." },
+  get_dietary_restrictions_for_all_restaurants: { mlld: @get_dietary_restrictions_for_all_restaurants, returns: @restaurant, labels: ["resolve:r", "tool:r"], description: "Return restaurant dietary restriction support." },
+  get_contact_information_for_restaurants: { mlld: @get_contact_information_for_restaurants, returns: @restaurant, labels: ["resolve:r", "tool:r"], description: "Return restaurant contact information." },
+  get_price_for_restaurants: { mlld: @get_price_for_restaurants, returns: @restaurant, labels: ["resolve:r", "tool:r"], description: "Return restaurant prices per person." },
+  check_restaurant_opening_hours: { mlld: @check_restaurant_opening_hours, returns: @restaurant, labels: ["resolve:r", "tool:r"], description: "Return restaurant operating hours." },
+  get_all_car_rental_companies_in_city: { mlld: @get_all_car_rental_companies_in_city, returns: @car_company, labels: ["resolve:r", "tool:r"], description: "List car-rental companies in a city." },
+  get_city_car_rentals: { mlld: @get_city_car_rentals, returns: @car_company, labels: ["resolve:r", "tool:r"], description: "Return objective car-rental candidates for one city: name, rating, types, fuel options, price per day, and address. Review prose is not returned." },
+  get_car_types_available: { mlld: @get_car_types_available, returns: @car_company, labels: ["resolve:r", "tool:r"], description: "Return car types available for companies." },
+  get_rating_reviews_for_car_rental: { mlld: @get_rating_reviews_for_car_rental, returns: @car_company_review, labels: ["resolve:r", "tool:r"], description: "Return car-rental ratings and worker-only review blobs." },
+  get_car_fuel_options: { mlld: @get_car_fuel_options, returns: @car_company, labels: ["resolve:r", "tool:r"], description: "Return fuel options for car-rental companies." },
+  get_car_rental_address: { mlld: @get_car_rental_address, returns: @car_company, labels: ["resolve:r", "tool:r"], description: "Return car-rental addresses." },
+  get_car_price_per_day: { mlld: @get_car_price_per_day, returns: @car_company, labels: ["resolve:r", "tool:r"], description: "Return car-rental prices per day." },
+  search_calendar_events: { mlld: @search_calendar_events, returns: @calendar_evt, labels: ["resolve:r", "tool:r"], description: "Search travel calendar events by query and optional date." },
+  get_day_calendar_events: { mlld: @get_day_calendar_events, returns: @calendar_evt, labels: ["resolve:r", "tool:r"], description: "Return travel calendar events on a day." },
+  get_flight_information: { mlld: @get_flight_information, returns: @flight_info, labels: ["resolve:r", "tool:r"], description: "Return flight information for a departure and arrival city." }
+}
+
+var tools @writeTools = {
+  reserve_hotel: { mlld: @reserve_hotel, inputs: @reserve_hotel_inputs, labels: ["tool:w", "execute:w", "booking:w"], description: "Reserve one grounded hotel for task-grounded dates." },
+  reserve_restaurant: { mlld: @reserve_restaurant, inputs: @reserve_restaurant_inputs, labels: ["tool:w", "execute:w", "booking:w"], description: "Reserve one grounded restaurant at a task-grounded time." },
+  reserve_car_rental: { mlld: @reserve_car_rental, inputs: @reserve_car_rental_inputs, labels: ["tool:w", "execute:w", "booking:w"], description: "Reserve one grounded car-rental company for task-grounded times." },
+  create_calendar_event: { mlld: @create_calendar_event, inputs: @create_calendar_event_inputs, labels: ["tool:w", "execute:w", "calendar:w", "exfil:send"], description: "Create a travel calendar event. Participants, when present, must be grounded emails." },
+  cancel_calendar_event: { mlld: @cancel_calendar_event, inputs: @cancel_calendar_event_inputs, labels: ["tool:w", "execute:w", "calendar:w", "delete:w", "destructive"], description: "Cancel one grounded calendar event." },
+  send_email: { mlld: @send_email, inputs: @send_email_inputs, labels: ["tool:w", "execute:w", "comm:w", "exfil:send"], description: "Send an email to grounded recipients." }
+}
+
+var tools @travelTools = {
+  get_user_information: @resolveTools.get_user_information,
+  get_all_hotels_in_city: @resolveTools.get_all_hotels_in_city,
+  get_city_hotels: @resolveTools.get_city_hotels,
+  get_hotels_prices: @resolveTools.get_hotels_prices,
+  get_rating_reviews_for_hotels: @resolveTools.get_rating_reviews_for_hotels,
+  get_hotels_address: @resolveTools.get_hotels_address,
+  get_all_restaurants_in_city: @resolveTools.get_all_restaurants_in_city,
+  get_city_restaurants: @resolveTools.get_city_restaurants,
+  get_cuisine_type_for_restaurants: @resolveTools.get_cuisine_type_for_restaurants,
+  get_restaurants_address: @resolveTools.get_restaurants_address,
+  get_rating_reviews_for_restaurants: @resolveTools.get_rating_reviews_for_restaurants,
+  get_dietary_restrictions_for_all_restaurants: @resolveTools.get_dietary_restrictions_for_all_restaurants,
+  get_contact_information_for_restaurants: @resolveTools.get_contact_information_for_restaurants,
+  get_price_for_restaurants: @resolveTools.get_price_for_restaurants,
+  check_restaurant_opening_hours: @resolveTools.check_restaurant_opening_hours,
+  get_all_car_rental_companies_in_city: @resolveTools.get_all_car_rental_companies_in_city,
+  get_city_car_rentals: @resolveTools.get_city_car_rentals,
+  get_car_types_available: @resolveTools.get_car_types_available,
+  get_rating_reviews_for_car_rental: @resolveTools.get_rating_reviews_for_car_rental,
+  get_car_fuel_options: @resolveTools.get_car_fuel_options,
+  get_car_rental_address: @resolveTools.get_car_rental_address,
+  get_car_price_per_day: @resolveTools.get_car_price_per_day,
+  search_calendar_events: @resolveTools.search_calendar_events,
+  get_day_calendar_events: @resolveTools.get_day_calendar_events,
+  get_flight_information: @resolveTools.get_flight_information,
+  reserve_hotel: @writeTools.reserve_hotel,
+  reserve_restaurant: @writeTools.reserve_restaurant,
+  reserve_car_rental: @writeTools.reserve_car_rental,
+  create_calendar_event: @writeTools.create_calendar_event,
+  cancel_calendar_event: @writeTools.cancel_calendar_event,
+  send_email: @writeTools.send_email
+}
+
+export {
+  @resolveTools,
+  @writeTools,
+  @travelTools,
+  @get_user_information,
+  @get_all_hotels_in_city,
+  @get_city_hotels,
+  @get_hotels_prices,
+  @get_rating_reviews_for_hotels,
+  @get_hotels_address,
+  @get_all_restaurants_in_city,
+  @get_city_restaurants,
+  @get_cuisine_type_for_restaurants,
+  @get_restaurants_address,
+  @get_rating_reviews_for_restaurants,
+  @get_dietary_restrictions_for_all_restaurants,
+  @get_contact_information_for_restaurants,
+  @get_price_for_restaurants,
+  @check_restaurant_opening_hours,
+  @get_all_car_rental_companies_in_city,
+  @get_city_car_rentals,
+  @get_car_types_available,
+  @get_rating_reviews_for_car_rental,
+  @get_car_fuel_options,
+  @get_car_rental_address,
+  @get_car_price_per_day,
+  @search_calendar_events,
+  @get_day_calendar_events,
+  @get_flight_information,
+  @reserve_hotel,
+  @reserve_restaurant,
+  @reserve_car_rental,
+  @create_calendar_event,
+  @cancel_calendar_event,
+  @send_email
+}

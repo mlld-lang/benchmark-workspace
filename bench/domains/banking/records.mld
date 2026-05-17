@@ -1,0 +1,239 @@
+>> Banking records derived from sec-banking.md.
+>>
+>> Facts are values the bank/user fixture is authoritative for. Data is
+>> content the agent may reason over but cannot use as proof for critical
+>> identifiers. Named read modes keep the planner away from injection slots.
+
+record @iban_value = {
+  facts: [
+    value: { type: string, kind: "iban" }
+  ],
+  read: {
+    role:planner: [{ value: "value" }],
+    role:worker: [{ value: "value" }]
+  }
+}
+
+record @balance_value = {
+  data: {
+    trusted: [amount: number]
+  },
+  read: {
+    role:planner: [amount],
+    role:worker: [amount]
+  }
+}
+
+record @user_account = {
+  facts: [
+    first_name: string,
+    last_name: string
+  ],
+  data: {
+    trusted: [street: string?, city: string?]
+  },
+  read: {
+    role:planner: [first_name, last_name, street, city],
+    role:worker: [first_name, last_name, street, city]
+  }
+}
+
+record @transaction = {
+  key: id,
+  facts: [
+    id: { type: string, kind: "transaction_id" },
+    sender: string?,
+    recipient: { type: string?, kind: "iban" }
+  ],
+  data: {
+    trusted: [
+      amount: number?,
+      date: string?,
+      recurring: boolean?
+    ],
+    untrusted: [
+      subject: string?
+    ]
+  },
+  refine [
+    when [
+      @input.sender == "me" => [
+        data.subject = trusted
+      ]
+    ]
+  ],
+  read: {
+    role:planner: [
+      { value: "id" },
+      sender,
+      { value: "recipient" },
+      amount,
+      date,
+      recurring
+    ],
+    role:worker: [
+      { value: "id" },
+      sender,
+      { value: "recipient" },
+      amount,
+      date,
+      recurring,
+      subject
+    ]
+  }
+}
+
+record @scheduled_transaction = {
+  key: id,
+  facts: [
+    id: { type: string, kind: "scheduled_transaction_id" },
+    sender: string?,
+    recipient: { type: string?, kind: "iban" }
+  ],
+  data: {
+    trusted: [
+      amount: number?,
+      date: string?,
+      recurring: boolean?
+    ],
+    untrusted: [
+      subject: string?
+    ]
+  },
+  refine [
+    when [
+      @input.sender == "me" => [
+        data.subject = trusted
+      ]
+    ]
+  ],
+  read: {
+    role:planner: [
+      { value: "id" },
+      sender,
+      { value: "recipient" },
+      amount,
+      date,
+      recurring,
+      subject
+    ],
+    role:worker: [
+      { value: "id" },
+      sender,
+      { value: "recipient" },
+      amount,
+      date,
+      recurring,
+      subject
+    ]
+  }
+}
+
+record @file_text = {
+  facts: [
+    file_path: string
+  ],
+  data: {
+    untrusted: [content: string?]
+  },
+  read: {
+    role:planner: [{ value: "file_path" }],
+    role:worker: [file_path, content]
+  }
+}
+
+record @send_money_inputs = {
+  facts: [
+    recipient: { type: string, kind: "iban" }
+  ],
+  data: {
+    trusted: [amount: number, date: string?],
+    untrusted: [subject: string?]
+  },
+  labels: ["tool:w", "exfil:send"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @schedule_transaction_inputs = {
+  facts: [
+    recipient: { type: string, kind: "iban" }
+  ],
+  data: {
+    trusted: [amount: number, date: string?, recurring: boolean?],
+    untrusted: [subject: string?]
+  },
+  labels: ["tool:w", "exfil:send"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @update_scheduled_transaction_inputs = {
+  facts: [
+    id: { type: string, kind: "scheduled_transaction_id" },
+    recipient: { type: string?, kind: "iban" }
+  ],
+  data: {
+    trusted: [amount: number?, date: string?, recurring: boolean?],
+    untrusted: [subject: string?]
+  },
+  correlate: true,
+  update: [amount, date, recurring, subject],
+  labels: ["tool:w", "update:w", "exfil:send"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @update_user_info_inputs = {
+  data: {
+    trusted: [
+      first_name: string?,
+      last_name: string?,
+      street: string?,
+      city: string?
+    ]
+  },
+  update: [first_name, last_name, street, city],
+  labels: ["tool:w", "profile:w", "update:w"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @update_password_inputs = {
+  data: {
+    trusted: [password: string]
+  },
+  exact: [password],
+  labels: ["tool:w", "privileged:account"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+export {
+  @iban_value,
+  @balance_value,
+  @user_account,
+  @transaction,
+  @scheduled_transaction,
+  @file_text,
+  @send_money_inputs,
+  @schedule_transaction_inputs,
+  @update_scheduled_transaction_inputs,
+  @update_user_info_inputs,
+  @update_password_inputs
+}

@@ -1,0 +1,50 @@
+>> fp/tests/index.mld
+>>
+>> Top-level test runner. Imports all suites and runs them.
+>> Add your suite import here when you write a new one.
+>>
+>> Run: mlld tests/index.mld --no-checkpoint
+
+import { @runSuites } from "./runner.mld"
+
+>> Import suites below. Each suite file exports a @<name>Suite variable.
+import { @templateSuite } from "./_template.mld"
+import { @bankingProofSuite } from "./banking-proof.mld"
+import { @workspaceProofSuite } from "./workspace-proof.mld"
+import { @slackProofSuite } from "./slack-proof.mld"
+import { @travelProofSuite } from "./travel-proof.mld"
+import { @architectureProofSuite } from "./architecture-proof.mld"
+import { @crossDomainProofSuite } from "./cross-domain-proof.mld"
+import { @openCoverageProofSuite } from "./open-coverage-proof.mld"
+
+var @suites = [
+  @templateSuite,
+  @architectureProofSuite,
+  @bankingProofSuite,
+  @workspaceProofSuite,
+  @slackProofSuite,
+  @travelProofSuite,
+  @crossDomainProofSuite,
+  @openCoverageProofSuite
+]
+
+var @result = @runSuites(@suites)
+
+show "fp/tests"
+show ""
+show @result.report
+show ""
+
+if @result.timingLines.length > 0 [
+  for @tl in @result.timingLines => show `  @tl`
+  show ""
+]
+
+if @result.xpassNudge != "" [ show @result.xpassNudge ]
+if @result.skippedLine != "" [ show @result.skippedLine ]
+
+show `summary: @result.passes.length pass / @result.fails.length fail (@result.xfails.length xfail, @result.xpasses.length xpass)`
+
+if @result.fails.length > 0 [
+  bail "tests failed: @result.fails.length failures"
+]

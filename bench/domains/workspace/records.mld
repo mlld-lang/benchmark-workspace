@@ -1,0 +1,329 @@
+>> Workspace records.
+>>
+>> Planner projections expose stable identifiers, time, and contact facts.
+>> Email bodies, file contents, and calendar prose stay worker-only payloads.
+
+record @contact = {
+  facts: [
+    email: { type: string, kind: "email" }
+  ],
+  data: {
+    trusted: [name: string?, phone: string?],
+    untrusted: [notes: string?, job_title: string?, company: string?, address: string?]
+  },
+  read: {
+    role:planner: [name, { value: "email" }, phone],
+    role:worker: [name, { value: "email" }, phone, notes, job_title, company, address]
+  }
+}
+
+record @email_msg = {
+  key: id_,
+  facts: [
+    id_: { type: string, kind: "email_id" },
+    sender: { type: string?, kind: "email" },
+    recipients: { type: array, kind: "email" },
+    cc: { type: array, kind: "email" },
+    bcc: { type: array, kind: "email" }
+  ],
+  data: {
+    trusted: [timestamp: string?, read: boolean?],
+    untrusted: [subject: string?, body: string?, attachments: array?]
+  },
+  read: {
+    role:planner: [
+      { value: "id_" },
+      { value: "sender" },
+      { mask: "recipients" },
+      { mask: "cc" },
+      { mask: "bcc" },
+      timestamp,
+      read
+    ],
+    role:worker: [
+      { value: "id_" },
+      { value: "sender" },
+      { value: "recipients" },
+      { value: "cc" },
+      { value: "bcc" },
+      timestamp,
+      read,
+      subject,
+      body,
+      attachments
+    ]
+  }
+}
+
+record @calendar_evt = {
+  key: id_,
+  facts: [
+    id_: { type: string, kind: "calendar_event_id" },
+    participants: { type: array, kind: "email" }
+  ],
+  data: {
+    trusted: [
+      start_time: string?,
+      end_time: string?,
+      all_day: boolean?,
+      status: string?
+    ],
+    untrusted: [title: string?, description: string?, location: string?]
+  },
+  read: {
+    role:planner: [
+      { value: "id_" },
+      { value: "participants" },
+      start_time,
+      end_time,
+      all_day,
+      status
+    ],
+    role:worker: [
+      { value: "id_" },
+      { value: "participants" },
+      start_time,
+      end_time,
+      all_day,
+      status,
+      title,
+      description,
+      location
+    ]
+  }
+}
+
+record @file_entry = {
+  key: id_,
+  facts: [
+    id_: { type: string, kind: "file_id" },
+    shared_with: { type: array, kind: "email" }
+  ],
+  data: {
+    trusted: [
+      filename: string?,
+      owner: string?,
+      size: number?,
+      last_modified: string?
+    ],
+    untrusted: [content: string?]
+  },
+  read: {
+    role:planner: [
+      { value: "id_" },
+      filename,
+      owner,
+      size,
+      { value: "shared_with" },
+      last_modified
+    ],
+    role:worker: [
+      { value: "id_" },
+      filename,
+      owner,
+      size,
+      { value: "shared_with" },
+      last_modified,
+      content
+    ]
+  }
+}
+
+record @datetime_context = {
+  facts: [
+    value: string
+  ],
+  data: {
+    trusted: [kind: string?]
+  },
+  read: {
+    role:planner: [value, kind],
+    role:worker: [value, kind]
+  }
+}
+
+record @normalized_datetime = {
+  facts: [
+    value: string
+  ],
+  data: {
+    trusted: [
+      kind: string?,
+      phrase: string?,
+      current_day: string?,
+      selected_reason: string?,
+      warning: string?,
+      supplied_weekday: string?,
+      supplied_day_number: number?
+    ]
+  },
+  read: {
+    role:planner: [value, kind, phrase, current_day, selected_reason, warning, supplied_weekday, supplied_day_number],
+    role:worker: [value, kind, phrase, current_day, selected_reason, warning, supplied_weekday, supplied_day_number]
+  }
+}
+
+record @send_email_inputs = {
+  facts: [
+    recipients: { type: array, kind: "email" },
+    cc: { type: array, kind: "email" },
+    bcc: { type: array, kind: "email" }
+  ],
+  data: {
+    trusted: [attachments: array?],
+    untrusted: [subject: string, body: string]
+  },
+  labels: ["tool:w", "comm:w", "exfil:send"],
+  correlate: false,
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @delete_email_inputs = {
+  facts: [
+    email_id: { type: string, kind: "email_id" }
+  ],
+  labels: ["tool:w", "delete:w", "destructive"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @create_calendar_event_inputs = {
+  facts: [
+    participants: { type: array, kind: "email" }
+  ],
+  data: {
+    trusted: [title: string, start_time: string, end_time: string, location: string?],
+    untrusted: [description: string?]
+  },
+  labels: ["tool:w", "calendar:w", "exfil:send"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @cancel_calendar_event_inputs = {
+  facts: [
+    event_id: { type: string, kind: "calendar_event_id" }
+  ],
+  labels: ["tool:w", "calendar:w", "delete:w", "destructive"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @reschedule_calendar_event_inputs = {
+  facts: [
+    event_id: { type: string, kind: "calendar_event_id" }
+  ],
+  data: {
+    trusted: [new_start_time: string, new_end_time: string?]
+  },
+  update: [new_start_time, new_end_time],
+  labels: ["tool:w", "calendar:w", "update:w"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @add_calendar_event_participants_inputs = {
+  facts: [
+    event_id: { type: string, kind: "calendar_event_id" },
+    participants: { type: array, kind: "email" }
+  ],
+  labels: ["tool:w", "calendar:w", "update:w", "exfil:send"],
+  correlate: false,
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @file_append_inputs = {
+  facts: [
+    file_id: { type: string, kind: "file_id" }
+  ],
+  data: {
+    untrusted: [content: string]
+  },
+  labels: ["tool:w", "file:w", "update:w"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @file_create_inputs = {
+  data: {
+    trusted: [filename: string],
+    untrusted: [content: string]
+  },
+  labels: ["tool:w", "file:w"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @file_delete_inputs = {
+  facts: [
+    file_id: { type: string, kind: "file_id" }
+  ],
+  labels: ["tool:w", "file:w", "delete:w", "destructive"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @share_file_inputs = {
+  facts: [
+    file_id: { type: string, kind: "file_id" },
+    email: { type: string, kind: "email" }
+  ],
+  data: {
+    trusted: [permission: string]
+  },
+  labels: ["tool:w", "file:w", "exfil:send"],
+  correlate: false,
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+export {
+  @contact,
+  @email_msg,
+  @calendar_evt,
+  @file_entry,
+  @datetime_context,
+  @normalized_datetime,
+  @send_email_inputs,
+  @delete_email_inputs,
+  @create_calendar_event_inputs,
+  @cancel_calendar_event_inputs,
+  @reschedule_calendar_event_inputs,
+  @add_calendar_event_participants_inputs,
+  @file_append_inputs,
+  @file_create_inputs,
+  @file_delete_inputs,
+  @share_file_inputs
+}

@@ -1,0 +1,274 @@
+>> Slack records.
+
+record @slack_msg = {
+  facts: [
+    sender: { type: string?, kind: "slack_user_name" },
+    recipient: { type: string?, kind: "slack_user_name" },
+    body_has_url: boolean?,
+    url_refs: array?
+  ],
+  data: {
+    untrusted: [body: string?]
+  },
+  read: {
+    role:planner: [
+      { value: "sender" },
+      { value: "recipient" },
+      { value: "body_has_url" },
+      url_refs
+    ],
+    role:worker: [
+      { mask: "sender" },
+      { mask: "recipient" },
+      body
+    ]
+  }
+}
+
+record @slack_user = {
+  facts: [
+    name: { type: string, kind: "slack_user_name" }
+  ],
+  read: {
+    role:planner: [{ value: "name" }],
+    role:worker: [{ value: "name" }]
+  }
+}
+
+record @slack_channel = {
+  facts: [
+    name: { type: string, kind: "slack_channel_name" }
+  ],
+  read: {
+    role:planner: [{ value: "name" }],
+    role:worker: [{ value: "name" }]
+  }
+}
+
+record @slack_channel_overview = {
+  facts: [
+    name: { type: string, kind: "slack_channel_name" },
+    users: { type: array, kind: "slack_user_name" },
+    non_members: { type: array, kind: "slack_user_name" }
+  ],
+  data: {
+    trusted: [message_count: number]
+  },
+  read: {
+    role:planner: [{ value: "name" }, { value: "users" }, { value: "non_members" }, message_count],
+    role:worker: [{ value: "name" }, { value: "users" }, { value: "non_members" }, message_count]
+  }
+}
+
+record @slack_rank_plan = {
+  facts: [
+    users: { type: array, kind: "slack_user_name" }
+  ],
+  data: {
+    trusted: [ranks: array, counts: array, messages: array]
+  },
+  read: {
+    role:planner: [{ value: "users" }, ranks, counts, messages],
+    role:worker: [{ value: "users" }, ranks, counts, messages]
+  }
+}
+
+record @webpage_content = {
+  facts: [
+    url: string
+  ],
+  data: {
+    untrusted: [content: string?]
+  },
+  read: {
+    role:planner: [{ value: "url" }],
+    role:worker: [{ value: "url" }, content]
+  }
+}
+
+record @url_ref = {
+  key: id_,
+  facts: [
+    id_: { type: string, kind: "url_ref_id" },
+    source_msg: string?,
+    ordinal: number?,
+    position: number?,
+    hash: string?,
+    safety_status: string?
+  ],
+  read: {
+    role:planner: [
+      { value: "id_" },
+      source_msg,
+      ordinal,
+      position,
+      safety_status
+    ],
+    role:worker: [
+      { value: "id_" },
+      source_msg,
+      ordinal,
+      position,
+      hash,
+      safety_status
+    ]
+  }
+}
+
+record @referenced_webpage_content = {
+  key: id_,
+  facts: [
+    id_: { type: string, kind: "referenced_webpage_id" },
+    source_url_ref: { type: string, kind: "url_ref_id" },
+    fetch_status: string?
+  ],
+  data: {
+    untrusted: [content: string?]
+  },
+  read: {
+    role:planner: [
+      { value: "id_" },
+      { value: "source_url_ref" },
+      fetch_status
+    ],
+    role:worker: [
+      { value: "id_" },
+      { value: "source_url_ref" },
+      fetch_status,
+      content
+    ]
+  }
+}
+
+record @send_channel_message_inputs = {
+  facts: [
+    channel: { type: string, kind: "slack_channel_name" }
+  ],
+  data: {
+    untrusted: [body: string]
+  },
+  labels: ["tool:w", "comm:w"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @send_direct_message_inputs = {
+  facts: [
+    recipient: { type: string, kind: "slack_user_name" }
+  ],
+  data: {
+    untrusted: [body: string]
+  },
+  labels: ["tool:w", "comm:w", "exfil:send"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @send_direct_messages_inputs = {
+  facts: [
+    recipients: { type: array, kind: "slack_user_name" }
+  ],
+  data: {
+    untrusted: [bodies: array]
+  },
+  labels: ["tool:w", "comm:w", "exfil:send"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @invite_user_to_slack_inputs = {
+  facts: [
+    user: { type: string, kind: "slack_user_name" },
+    user_email: { type: string, kind: "email" }
+  ],
+  labels: ["tool:w", "membership:w", "exfil:send"],
+  correlate: false,
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @add_user_to_channel_inputs = {
+  facts: [
+    user: { type: string, kind: "slack_user_name" },
+    channel: { type: string, kind: "slack_channel_name" }
+  ],
+  labels: ["tool:w", "membership:w", "update:w"],
+  correlate: false,
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @add_users_to_channel_inputs = {
+  facts: [
+    users: { type: array, kind: "slack_user_name" },
+    channel: { type: string, kind: "slack_channel_name" }
+  ],
+  labels: ["tool:w", "membership:w", "update:w"],
+  correlate: false,
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @remove_user_from_slack_inputs = {
+  facts: [
+    user: { type: string, kind: "slack_user_name" }
+  ],
+  labels: ["tool:w", "membership:w", "delete:w", "destructive"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+record @post_webpage_inputs = {
+  facts: [
+    url: string
+  ],
+  data: {
+    untrusted: [content: string]
+  },
+  labels: ["tool:w", "web:w", "exfil:send"],
+  validate: "strict",
+  write: {
+    role:planner: { tools: { authorize: true } },
+    role:worker: { tools: { submit: true } }
+  }
+}
+
+export {
+  @slack_msg,
+  @slack_user,
+  @slack_channel,
+  @slack_channel_overview,
+  @slack_rank_plan,
+  @webpage_content,
+  @url_ref,
+  @referenced_webpage_content,
+  @send_channel_message_inputs,
+  @send_direct_message_inputs,
+  @send_direct_messages_inputs,
+  @invite_user_to_slack_inputs,
+  @add_user_to_channel_inputs,
+  @add_users_to_channel_inputs,
+  @remove_user_from_slack_inputs,
+  @post_webpage_inputs
+}

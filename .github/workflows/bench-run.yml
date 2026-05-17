@@ -1,0 +1,304 @@
+name: bench-run
+run-name: "bench-run · ${{ inputs.suite }}${{ inputs.attack && format(' atk:{0}', inputs.attack) || '' }}${{ inputs.tasks && format(' ({0})', inputs.tasks) || '' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Suite'
+        required: true
+        type: choice
+        options: [workspace, banking, slack, travel]
+      tasks:
+        description: 'Space-separated task ids (empty = full suite, oos skipped)'
+        required: false
+        default: ''
+      planner:
+        description: 'Planner model (default: togetherai/zai-org/GLM-5.1)'
+        required: false
+        default: ''
+      worker:
+        description: 'Worker model (default: cerebras/gpt-oss-120b)'
+        required: false
+        default: ''
+      harness:
+        description: 'LLM harness (default: opencode)'
+        required: false
+        type: choice
+        options: ['', opencode, claude]
+        default: ''
+      parallelism:
+        description: 'Max parallel tasks'
+        required: false
+        default: '40'
+      stagger:
+        description: 'Seconds between task launches (smoothing burst pressure on Together AI rate limits)'
+        required: false
+        default: '10'
+      defense:
+        description: 'Defense level'
+        required: false
+        type: choice
+        options: [defended, undefended]
+        default: defended
+      attack:
+        description: 'Attack type (empty = benign run)'
+        required: false
+        type: choice
+        options: ['', direct, ignore_previous, important_instructions, injecagent, system_message, tool_knowledge]
+        default: ''
+      resume:
+        description: 'Resume mode: skip pairs already in the canonical JSONL'
+        required: false
+        type: boolean
+        default: false
+      trace:
+        description: 'Enable MLLD_TRACE=effects'
+        required: false
+        type: boolean
+        default: false
+      image_tag:
+        description: 'Image tag (e.g., proof, sha-abc1234)'
+        required: false
+        default: proof
+      shape:
+        description: 'Namespace runner shape (8x16 fits 5 concurrent on Team plan = full fan-out)'
+        required: false
+        type: choice
+        options:
+          - nscloud-ubuntu-22.04-amd64-8x16
+          - nscloud-ubuntu-22.04-amd64-16x32
+          - nscloud-ubuntu-22.04-amd64-32x64
+        default: nscloud-ubuntu-22.04-amd64-8x16
+
+permissions:
+  contents: read
+  packages: read
+  actions: write   # to dispatch bench-image rebuild if image is stale
+
+env:
+  IMAGE: ghcr.io/mlld-lang/benchmark-workspace
+
+jobs:
+  bench:
+    name: ${{ inputs.suite }}
+    runs-on: ${{ inputs.shape }}
+    # Attack runs iterate (user_task × injection_task) pairs — workspace
+    # alone is ~560 attacks per attack-type, can comfortably exceed the
+    # original 60-min cap. 180 fits the worst-case attack run with
+    # headroom; benign runs finish in ~15-25 min and don't notice.
+    timeout-minutes: 180
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull ${{ env.IMAGE }}:${{ inputs.image_tag }}
+
+      - name: Check image freshness vs mlld + clean HEAD
+        id: freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          IMAGE_REF: ${{ env.IMAGE }}:${{ inputs.image_tag }}
+          CLEAN_HEAD: ${{ github.sha }}
+        run: |
+          set -e
+          BAKED_MLLD_SHA=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$IMAGE_REF")
+          BAKED_MLLD_REF=$(docker inspect --format='{{ index .Config.Labels "mlld.ref" }}' "$IMAGE_REF")
+          BAKED_CLEAN_SHA=$(docker inspect --format='{{ index .Config.Labels "clean.sha" }}' "$IMAGE_REF")
+          echo "image-baked: mlld_ref=$BAKED_MLLD_REF mlld_sha=$BAKED_MLLD_SHA clean_sha=$BAKED_CLEAN_SHA"
+          echo "current:     clean_sha=$CLEAN_HEAD"
+
+          # Missing labels → older image, rebuild to be safe.
+          if [ -z "$BAKED_MLLD_SHA" ] || [ -z "$BAKED_MLLD_REF" ]; then
+            echo "::warning::image lacks mlld labels — likely an older build, rebuilding to be safe"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "ref=policy-redesign" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # mlld freshness: compare baked sha against the head of baked ref.
+          CURRENT_MLLD_SHA=$(gh api "repos/mlld-lang/mlld/git/ref/heads/${BAKED_MLLD_REF}" --jq .object.sha)
+          echo "mlld-head:   ref=$BAKED_MLLD_REF sha=$CURRENT_MLLD_SHA"
+          MLLD_STALE=false
+          if [ "$BAKED_MLLD_SHA" != "$CURRENT_MLLD_SHA" ]; then
+            MLLD_STALE=true
+            echo "::notice::mlld is stale ($BAKED_MLLD_SHA != $CURRENT_MLLD_SHA)"
+          fi
+
+          # clean freshness: image's clean.sha must match this workflow's clean@HEAD.
+          # github.sha on workflow_dispatch is the dispatched ref's commit (main).
+          # If clean.sha label is missing (very old image) treat as stale.
+          CLEAN_STALE=false
+          if [ -z "$BAKED_CLEAN_SHA" ]; then
+            CLEAN_STALE=true
+            echo "::notice::image lacks clean.sha label, treating as stale"
+          elif [ "$BAKED_CLEAN_SHA" != "$CLEAN_HEAD" ]; then
+            CLEAN_STALE=true
+            echo "::notice::clean is stale ($BAKED_CLEAN_SHA != $CLEAN_HEAD)"
+          fi
+
+          if [ "$MLLD_STALE" = "true" ] || [ "$CLEAN_STALE" = "true" ]; then
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "ref=$BAKED_MLLD_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "image is fresh on both mlld and clean"
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Rebuild image and wait
+        if: steps.freshness.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          IMAGE_REF: ${{ env.IMAGE }}:${{ inputs.image_tag }}
+          BAKED_REF: ${{ steps.freshness.outputs.ref }}
+          CLEAN_HEAD: ${{ github.sha }}
+        run: |
+          set -e
+
+          # Step 1: refresh mlld-prebuilt if stale.
+          # bench-image COPYs mlld from ghcr.io/mlld-lang/mlld-prebuilt:<ref>
+          # which is itself rebuilt by mlld-prebuild.yml on manual dispatch
+          # or self-skip if no mlld change. If mlld@<ref> HEAD has moved since
+          # the prebuilt was last rebuilt, bench-image rebuild alone won't
+          # pick up the new mlld — we have to refresh the prebuilt first.
+          # Self-heal: dispatch mlld-prebuild.yml and wait, then bench-image.
+          PREBUILT_REF="ghcr.io/mlld-lang/mlld-prebuilt:$BAKED_REF"
+          docker pull "$PREBUILT_REF" >/dev/null
+          PREBUILT_MLLD_SHA=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$PREBUILT_REF")
+          CURRENT_MLLD_SHA=$(gh api "repos/mlld-lang/mlld/git/ref/heads/$BAKED_REF" --jq .object.sha)
+          echo "mlld-prebuilt baked: $PREBUILT_MLLD_SHA"
+          echo "mlld@$BAKED_REF HEAD: $CURRENT_MLLD_SHA"
+          if [ -n "$PREBUILT_MLLD_SHA" ] && [ "$PREBUILT_MLLD_SHA" != "$CURRENT_MLLD_SHA" ]; then
+            echo "::notice::mlld-prebuilt:$BAKED_REF is stale — refreshing via mlld-prebuild.yml before bench-image rebuild"
+            # Reuse in-flight or queued mlld-prebuild dispatch if one exists.
+            PREBUILD_IN_FLIGHT=$(gh run list --workflow=mlld-prebuild.yml \
+              --status in_progress --limit 5 --json databaseId -q '.[0].databaseId' || true)
+            if [ -z "$PREBUILD_IN_FLIGHT" ]; then
+              PREBUILD_IN_FLIGHT=$(gh run list --workflow=mlld-prebuild.yml \
+                --status queued --limit 5 --json databaseId -q '.[0].databaseId' || true)
+            fi
+            if [ -n "$PREBUILD_IN_FLIGHT" ]; then
+              echo "joining in-flight mlld-prebuild: $PREBUILD_IN_FLIGHT"
+              PREBUILD_ID=$PREBUILD_IN_FLIGHT
+            else
+              gh workflow run mlld-prebuild.yml --ref "${{ github.ref_name }}" -f mlld_ref="$BAKED_REF"
+              sleep 8
+              PREBUILD_ID=$(gh run list --workflow=mlld-prebuild.yml --limit 1 \
+                --json databaseId -q '.[0].databaseId')
+              echo "started mlld-prebuild: $PREBUILD_ID"
+            fi
+            gh run watch "$PREBUILD_ID" --exit-status
+            docker pull "$PREBUILT_REF" >/dev/null
+            REFRESHED=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$PREBUILT_REF")
+            echo "mlld-prebuilt refreshed: $REFRESHED"
+            if [ "$REFRESHED" != "$CURRENT_MLLD_SHA" ]; then
+              echo "::error::mlld-prebuilt rebuild did not pick up mlld@$BAKED_REF HEAD. Refreshed sha=$REFRESHED, expected=$CURRENT_MLLD_SHA. Investigate mlld-prebuild.yml."
+              exit 1
+            fi
+          fi
+
+          # Step 2: rebuild bench-image. By now mlld-prebuilt is fresh so the
+          # COPY --from layer in bench-image will pick up the latest mlld.
+          # Reuse an in-flight rebuild rather than starting a duplicate.
+          # Filter to runs whose head_sha matches CLEAN_HEAD so we don't join
+          # a build for an earlier push.
+          IN_FLIGHT=$(gh run list --workflow=bench-image.yml \
+            --status in_progress --limit 10 \
+            --json databaseId,headSha \
+            -q ".[] | select(.headSha == \"$CLEAN_HEAD\") | .databaseId" \
+            | head -1 || true)
+          if [ -z "$IN_FLIGHT" ]; then
+            IN_FLIGHT=$(gh run list --workflow=bench-image.yml \
+              --status queued --limit 10 \
+              --json databaseId,headSha \
+              -q ".[] | select(.headSha == \"$CLEAN_HEAD\") | .databaseId" \
+              | head -1 || true)
+          fi
+          if [ -n "$IN_FLIGHT" ]; then
+            echo "rebuild already in flight for clean@$CLEAN_HEAD: $IN_FLIGHT"
+            REBUILD_ID=$IN_FLIGHT
+          else
+            gh workflow run bench-image.yml --ref "${{ github.ref_name }}" -f mlld_ref="$BAKED_REF" -f tag="${{ inputs.image_tag }}"
+            sleep 8
+            REBUILD_ID=$(gh run list --workflow=bench-image.yml --limit 1 \
+              --json databaseId -q '.[0].databaseId')
+            echo "started rebuild: $REBUILD_ID"
+          fi
+          gh run watch "$REBUILD_ID" --exit-status
+          docker pull "$IMAGE_REF"
+
+          # Post-rebuild verification: bench-image's clean.sha must match
+          # this workflow's clean@HEAD, AND mlld.sha must match mlld@<ref>
+          # HEAD. The mlld check guards against the edge case where the
+          # prebuilt refresh was skipped (in-flight build for older mlld
+          # or upstream race).
+          POST_CLEAN_SHA=$(docker inspect --format='{{ index .Config.Labels "clean.sha" }}' "$IMAGE_REF")
+          POST_MLLD_SHA=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$IMAGE_REF")
+          echo "post-rebuild: clean.sha=$POST_CLEAN_SHA expected=$CLEAN_HEAD"
+          echo "post-rebuild: mlld.sha=$POST_MLLD_SHA expected=$CURRENT_MLLD_SHA"
+          if [ -n "$POST_CLEAN_SHA" ] && [ "$POST_CLEAN_SHA" != "$CLEAN_HEAD" ]; then
+            echo "::error::post-rebuild image clean.sha ($POST_CLEAN_SHA) does not match dispatched clean@HEAD ($CLEAN_HEAD). Manually re-dispatch this workflow after the next bench-image build completes."
+            exit 1
+          fi
+          if [ -n "$POST_MLLD_SHA" ] && [ "$POST_MLLD_SHA" != "$CURRENT_MLLD_SHA" ]; then
+            echo "::error::post-rebuild image mlld.sha ($POST_MLLD_SHA) does not match mlld@$BAKED_REF HEAD ($CURRENT_MLLD_SHA). The bench-image rebuild did not pick up the refreshed mlld-prebuilt layer. Investigate."
+            exit 1
+          fi
+
+      - name: Prepare artifacts dir
+        run: mkdir -p ${{ github.workspace }}/artifacts
+
+      - name: Run bench
+        env:
+          IMAGE_REF: ${{ env.IMAGE }}:${{ inputs.image_tag }}
+          RUN_ID: ${{ github.run_id }}
+          SUITE: ${{ inputs.suite }}
+          TASKS: ${{ inputs.tasks }}
+          PLANNER: ${{ inputs.planner }}
+          WORKER: ${{ inputs.worker }}
+          HARNESS: ${{ inputs.harness }}
+          PARALLELISM: ${{ inputs.parallelism }}
+          STAGGER: ${{ inputs.stagger }}
+          DEFENSE: ${{ inputs.defense }}
+          ATTACK: ${{ inputs.attack }}
+          RESUME: ${{ inputs.resume && '1' || '' }}
+          MLLD_TRACE_VAL: ${{ inputs.trace && 'effects' || '' }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+        run: |
+          # PYTHONUNBUFFERED forces line-buffered stdout from src/run.py.
+          # Without it Python block-buffers when piped through `tee`, so
+          # console.log stays empty until the process exits — which means
+          # if the workflow times out we lose all progress visibility.
+          docker run --rm \
+            -v "${{ github.workspace }}/artifacts:/artifacts" \
+            -e PYTHONUNBUFFERED=1 \
+            -e RUN_ID -e SUITE -e TASKS -e PLANNER -e WORKER -e HARNESS \
+            -e PARALLELISM -e STAGGER -e DEFENSE -e ATTACK -e RESUME \
+            -e MLLD_TRACE="$MLLD_TRACE_VAL" \
+            -e CEREBRAS_API_KEY -e TOGETHER_API_KEY \
+            -e OPENROUTER_API_KEY -e FIREWORKS_API_KEY \
+            "$IMAGE_REF"
+
+      - name: Upload artifacts
+        # actions/upload-artifact stores in GitHub's artifact API so
+        # `gh run download <run-id>` works from the local machine. The
+        # namespace-actions/upload-artifact alternative is faster but
+        # lives in a separate bucket that the local `nsc artifact` CLI
+        # can't reach without per-artifact direct download URLs.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ github.run_id }}
+          path: artifacts/
+          retention-days: 30
+          if-no-files-found: warn

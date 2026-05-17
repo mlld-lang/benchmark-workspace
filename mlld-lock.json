@@ -1,0 +1,52 @@
+{
+  "lockfileVersion": 1,
+  "modules": {
+    "@mlld/policy": {
+      "version": "latest",
+      "resolved": "776d3fdbc11ecfd4e37b33d61fc3406cff0230e46b2561b1609fc36aa434f4a4",
+      "source": "@mlld/policy",
+      "integrity": "sha256:776d3fdbc11ecfd4e37b33d61fc3406cff0230e46b2561b1609fc36aa434f4a4",
+      "fetchedAt": "2026-05-16T05:24:26.424Z"
+    },
+    "@mlld/policy/standard": {
+      "version": "latest",
+      "resolved": "61528eb5866aa02ef8f9177374bbede9a3549717d1ba117da6caf18734970674",
+      "source": "@mlld/policy/standard",
+      "integrity": "sha256:61528eb5866aa02ef8f9177374bbede9a3549717d1ba117da6caf18734970674",
+      "fetchedAt": "2026-05-16T05:24:26.430Z"
+    },
+    "@mlld/policy/url-defense": {
+      "version": "latest",
+      "resolved": "a6ee71700ca67300684df77fff1818d037f2f3be8d06db677fd32f9ba74eab9d",
+      "source": "@mlld/policy/url-defense",
+      "integrity": "sha256:a6ee71700ca67300684df77fff1818d037f2f3be8d06db677fd32f9ba74eab9d",
+      "fetchedAt": "2026-05-16T05:24:26.441Z"
+    },
+    "@mlld/patterns/url": {
+      "version": "latest",
+      "resolved": "55d63f69b31e00d2733e7b3aab3a139df03dcc6524f9931e3ba6d93ffdd32429",
+      "source": "@mlld/patterns/url",
+      "integrity": "sha256:55d63f69b31e00d2733e7b3aab3a139df03dcc6524f9931e3ba6d93ffdd32429",
+      "fetchedAt": "2026-05-16T05:24:26.449Z"
+    },
+    "@mlld/sanitizers/url": {
+      "version": "latest",
+      "resolved": "1c791a42d42d1333d9448d094dd29b587f40c5618116e7b33bd146cee499f461",
+      "source": "@mlld/sanitizers/url",
+      "integrity": "sha256:1c791a42d42d1333d9448d094dd29b587f40c5618116e7b33bd146cee499f461",
+      "fetchedAt": "2026-05-16T05:24:26.455Z"
+    },
+    "@mlld/claude": {
+      "version": "latest",
+      "resolved": "7dbf35be5331d9959eb73feaf93d3edb081b8bffd9ccd0c61eed6ca33c35b89a",
+      "source": "registry://@mlld/claude@3.3.3",
+      "integrity": "sha256:7dbf35be5331d9959eb73feaf93d3edb081b8bffd9ccd0c61eed6ca33c35b89a",
+      "fetchedAt": "2026-05-16T05:27:41.158Z",
+      "registryVersion": "3.3.3"
+    }
+  },
+  "metadata": {
+    "createdAt": "2026-05-16T05:24:26.332Z",
+    "updatedAt": "2026-05-16T05:27:41.158Z"
+  }
+}

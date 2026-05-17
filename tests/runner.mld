@@ -1,0 +1,255 @@
+>> fp/tests/runner.mld
+>>
+>> Test runner. Walks suite -> group -> test, invokes test exes,
+>> accumulates results, computes pass/fail/xfail/xpass partitions.
+>>
+>> Separated from assert.mld to avoid mlld's static circular-reference
+>> detection: @runSuites dynamically invokes test exes, and the analyzer
+>> traces through them back to assertion helpers in the same module.
+
+>> @deriveTestName — extract leaf test name from exe's .mx.name
+>> Strips the "test" prefix if present, producing camelCase leaf id.
+>> e.g. testMergeDedup => mergeDedup, testItWorks => itWorks
+exe @deriveTestName(exeRef) = [
+  let @rawName = @exeRef.mx.name
+  let @stripped = when [
+    @rawName.startsWith("test") => @rawName.slice(4)
+    * => @rawName
+  ]
+  let @first = @stripped.slice(0, 1).toLowerCase()
+  let @rest = @stripped.slice(1)
+  let @leafId = `@first@rest`
+  => @leafId
+]
+
+>> @suite — top-level container. name is the suite id prefix.
+>> groups is an array of group records from @group().
+>> opts: { ticket?, xfail?, notes?, slow? } — pass {} for no opts.
+>>
+>> Suite-level opts propagate to groups:
+>>   - suite xfail: true -> all groups inherit xfail (OR logic)
+>>   - suite ticket -> fallback for groups that don't set their own
+>>   - suite notes -> fallback for groups that don't set their own
+>>   - slow: true -> marks the suite for timing + SKIP_SLOW support
+exe @suite(name, groups, opts) = [
+  => { kind: "suite", name: @name, groups: @groups, opts: @opts }
+]
+
+>> @group — a named cluster of test exes within a suite.
+>> tests is an array of exe references (not invoked yet — the runner invokes them).
+>> opts: { ticket?, xfail?, notes?, slow? } — pass {} for no opts.
+exe @group(name, tests, opts) = [
+  => { kind: "group", name: @name, tests: @tests, opts: @opts }
+]
+
+>> @xfailGroup — sugar: same as @group with xfail: true merged into opts.
+>>
+>> CATCHABLE vs HARD-SECURITY: @runGroup wraps each test invocation in
+>> mlld's `try` expression (mlld m-3116, lands ~2026-05-09). Recoverable
+>> interpreter failures — failed casts/parses, undefined-ref evaluation,
+>> JS/Node-block exceptions, managed policy/guard label-flow denials —
+>> are caught and surfaced as `{ ok: false, detail: "thrown: <code>:
+>> <message>", thrown: true }` so xfailGroup can classify them as XFAIL.
+>>
+>> HARD-SECURITY failures stay uncatchable per m-3116's NOT-catchable
+>> matrix: WRITE_DENIED_NO_DECLARATION / NO_ROLE / NO_TARGET /
+>> NO_CAPABILITY / SCOPE_MISMATCH / NO_ACTIVE_ROLE / OUT_OF_SCOPE_-
+>> RECORD_TYPE, wildcard_shelf_record_out_of_scope, TOOL_AUTHORIZE_-
+>> DENIED, TOOL_SUBMIT_DENIED, LEGACY_TOOL_CAN_AUTHORIZE_DENIED,
+>> POLICY_CAPABILITY_DENIED, dependency/profile/environment constraints,
+>> parser/load failures, control-flow sentinels (bail/retry/done/loop),
+>> runtime cancellation. For tests that hit any of those — typically
+>> blocked-on-mlld-fix plumbing tests — DELETE the test exe with a
+>> comment pointing at the upstream ticket, then revive once the
+>> upstream fix lands. Pattern documented in named-state-and-collection
+>> .mld where testExecuteResultHandlesFromReturnsRecord was deleted
+>> pre-m-4b6f and revived post-fix.
+exe @xfailGroup(name, tests, opts) = [
+  let @mergedOpts = { ...@opts, xfail: true }
+  => @group(@name, @tests, @mergedOpts)
+]
+
+>> @resolveOpts — merge suite-level opts into group-level opts.
+>> Suite ticket/notes are fallbacks (group overrides). Suite xfail
+>> propagates (OR logic — either is enough for xfail).
+exe @resolveOpts(suiteOpts, groupOpts) = [
+  let @sTicket = @suiteOpts.ticket || ""
+  let @sNotes = @suiteOpts.notes || ""
+  let @sXfail = @suiteOpts.xfail || false
+  let @sSlow = @suiteOpts.slow || false
+  let @gTicket = @groupOpts.ticket || ""
+  let @gNotes = @groupOpts.notes || ""
+  let @gXfail = @groupOpts.xfail || false
+  let @gSlow = @groupOpts.slow || false
+  => {
+    ticket: when [@gTicket => @gTicket; * => @sTicket],
+    notes: when [@gNotes => @gNotes; * => @sNotes],
+    xfail: @sXfail || @gXfail,
+    slow: @sSlow || @gSlow
+  }
+]
+
+>> @runGroup — invoke each test exe in a group, collect results.
+>> Returns array of { id, ok, detail, xfail, ticket, notes, slow, thrown } records.
+>>
+>> Each test invocation is wrapped in `try` (mlld m-3116). Successful
+>> evaluations surface their { ok, detail } directly; recoverable
+>> failures (interpreter errors caught by try) surface as
+>> { ok: false, detail: "thrown: <code>: <message>", thrown: true }.
+>> Hard-security failures still bail the suite per m-3116's NOT-catchable
+>> matrix — see @xfailGroup doc for the list.
+exe @runGroup(suiteName, groupRec, resolvedOpts) = [
+  let @groupName = @groupRec.name
+  let @groupXfail = @resolvedOpts.xfail
+  let @groupTicket = @resolvedOpts.ticket
+  let @groupNotes = @resolvedOpts.notes
+  let @groupSlow = @resolvedOpts.slow
+  let @results = []
+  for @testExe in @groupRec.tests [
+    let @testName = @deriveTestName(@testExe)
+    let @id = `@suiteName/@groupName/@testName`
+    let @attempt = try @testExe()
+    let @entry = when [
+      @attempt.ok => {
+        id: @id,
+        ok: @attempt.value.ok,
+        detail: @attempt.value.detail,
+        xfail: @groupXfail,
+        ticket: @groupTicket,
+        notes: @groupNotes,
+        slow: @groupSlow,
+        thrown: false
+      }
+      * => {
+        id: @id,
+        ok: false,
+        detail: `thrown: @attempt.error.code: @attempt.error.message`,
+        xfail: @groupXfail,
+        ticket: @groupTicket,
+        notes: @groupNotes,
+        slow: @groupSlow,
+        thrown: true
+      }
+    ]
+    let @results += [@entry]
+  ]
+  => @results
+]
+
+>> @skipSlow — check SKIP_SLOW=1 env var (JS for env access)
+exe @skipSlow() = js {
+  return process.env.SKIP_SLOW === '1';
+}
+
+>> @tsMs — current timestamp in ms (python, works on macOS + linux)
+exe @tsMs() = py {
+import time
+print(int(time.time() * 1000))
+}
+
+>> @runSuites — top-level runner. Walks suite -> group -> test, invokes each
+>> test exe, accumulates results, computes partitions.
+>>
+>> Honors SKIP_SLOW=1 env var: slow suites/groups are skipped entirely.
+>> Slow groups report per-group wall time in the timingLines field.
+>>
+>> Returns { results, passes, fails, xfails, xpasses, report, skippedSlow, timingLines }
+exe @runSuites(suites) = [
+  let @shouldSkipSlow = @skipSlow()
+
+  let @allResults = []
+  let @skippedSlow = 0
+  let @timingLines = []
+
+  for @suiteRec in @suites [
+    let @suiteOpts = @suiteRec.opts || {}
+
+    for @groupRec in @suiteRec.groups [
+      let @resolvedOpts = @resolveOpts(@suiteOpts, @groupRec.opts || {})
+      let @isSlow = @resolvedOpts.slow
+
+      if @shouldSkipSlow && @isSlow [
+        let @skippedSlow += 1
+      ] else [
+        let @startTime = when [
+          @isSlow => @tsMs()
+          * => 0
+        ]
+
+        let @groupResults = @runGroup(@suiteRec.name, @groupRec, @resolvedOpts)
+        let @allResults += @groupResults
+
+        if @isSlow [
+          let @endTime = @tsMs()
+          let @elapsed = @endTime - @startTime
+          let @timingLines += [`@suiteRec.name/@groupRec.name: @elapsed ms`]
+        ]
+      ]
+    ]
+  ]
+
+  >> partition results
+  let @passes = []
+  let @fails = []
+  let @xfails = []
+  let @xpasses = []
+
+  for @r in @allResults [
+    if @r.ok && !@r.xfail [ let @passes += [@r] ]
+    if !@r.ok && !@r.xfail [ let @fails += [@r] ]
+    if !@r.ok && @r.xfail [ let @xfails += [@r] ]
+    if @r.ok && @r.xfail [ let @xpasses += [@r] ]
+  ]
+
+  >> build the flat report
+  let @lines = []
+  for @r in @allResults [
+    let @status = when [
+      @r.ok && !@r.xfail => "PASS"
+      !@r.ok && @r.xfail => "XFAIL"
+      @r.ok && @r.xfail => "XPASS"
+      * => "FAIL"
+    ]
+    let @ticketPart = when [
+      @r.ticket => ` (ticket: @r.ticket)`
+      * => ""
+    ]
+    let @lines += [`[@status] @r.id  @r.detail@ticketPart`]
+  ]
+
+  let @report = @lines.join("\n")
+
+  >> xpass nudge: only show when there are xpasses
+  let @xpassNudge = when [
+    @xpasses.length > 0 => `(@xpasses.length xpass-pending-flip: these xfail tests now pass — update ticket status and remove xfail)`
+    * => ""
+  ]
+
+  let @skippedLine = when [
+    @skippedSlow > 0 => `skipped @skippedSlow slow suite(s)/group(s) (SKIP_SLOW=1)`
+    * => ""
+  ]
+
+  => {
+    results: @allResults,
+    passes: @passes,
+    fails: @fails,
+    xfails: @xfails,
+    xpasses: @xpasses,
+    skippedSlow: @skippedSlow,
+    report: @report,
+    xpassNudge: @xpassNudge,
+    skippedLine: @skippedLine,
+    timingLines: @timingLines
+  }
+]
+
+export {
+  @suite,
+  @group,
+  @xfailGroup,
+  @deriveTestName,
+  @resolveOpts,
+  @runGroup,
+  @runSuites
+}

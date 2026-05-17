@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "openrouter": {
+      "models": {
+        "@preset/glm-5-1": {
+          "name": "GLM 5.1 (OpenRouter preset)"
+        }
+      }
+    },
+    "fireworks-ai": {
+      "options": {
+        "extraBody": {
+          "response_format": { "type": "json_object" }
+        }
+      },
+      "models": {
+        "accounts/fireworks/models/glm-5p1": {
+          "name": "GLM 5.1 (Fireworks)"
+        }
+      }
+    }
+  }
+}

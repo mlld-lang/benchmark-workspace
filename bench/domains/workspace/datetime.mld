@@ -1,0 +1,70 @@
+>> Pure workspace date helpers. This module intentionally has no MCP imports so
+>> deterministic tests can exercise date normalization without starting tools.
+
+import { @normalized_datetime } from "./records.mld"
+
+exe resolve:r, tool:r @normalize_date(phrase, current_day) = js {
+  const rawPhrase = String(phrase ?? "").trim();
+  const currentText = String(current_day ?? "").trim();
+  const current = new Date(`${currentText}T00:00:00Z`);
+  const validCurrent = !Number.isNaN(current.getTime());
+  const weekdayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const lower = rawPhrase.toLowerCase();
+  const suppliedWeekday = weekdayNames.find((name) => lower.includes(name)) || "";
+  const weekdayIndex = suppliedWeekday ? weekdayNames.indexOf(suppliedWeekday) : -1;
+  const dayMatch = lower.match(/\b(\d{1,2})(?:st|nd|rd|th)?\b/);
+  const suppliedDayNumber = dayMatch ? Number(dayMatch[1]) : null;
+  const hasNext = /\bnext\b/.test(lower);
+
+  const iso = (date) => date.toISOString().slice(0, 10);
+  const monthCandidate = (day) => {
+    const date = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), day));
+    if (date.getUTCMonth() !== current.getUTCMonth()) return null;
+    return date;
+  };
+  const weekdayCandidate = () => {
+    let delta = (weekdayIndex - current.getUTCDay() + 7) % 7;
+    if (hasNext && delta === 0) delta = 7;
+    const date = new Date(current);
+    date.setUTCDate(current.getUTCDate() + delta);
+    return date;
+  };
+
+  if (!validCurrent) {
+    return {
+      value: "",
+      kind: "normalized_date",
+      phrase: rawPhrase,
+      current_day: currentText,
+      selected_reason: "invalid_current_day",
+      warning: "current_day must be YYYY-MM-DD",
+      supplied_weekday: suppliedWeekday,
+      supplied_day_number: suppliedDayNumber
+    };
+  }
+
+  const byDay = suppliedDayNumber ? monthCandidate(suppliedDayNumber) : null;
+  const byWeekday = suppliedWeekday ? weekdayCandidate() : null;
+  let selected = byWeekday || byDay || current;
+  let selectedReason = byWeekday ? "weekday_relative_to_current_day" : byDay ? "day_number_current_month" : "current_day_fallback";
+  let warning = "";
+
+  if (byDay && byWeekday && iso(byDay) !== iso(byWeekday)) {
+    warning = `weekday_day_number_mismatch: ${suppliedWeekday} is ${iso(byWeekday)}, but day ${suppliedDayNumber} is ${iso(byDay)}`;
+    selected = byDay;
+    selectedReason = "day_number_preferred_after_mismatch";
+  }
+
+  return {
+    value: iso(selected),
+    kind: "normalized_date",
+    phrase: rawPhrase,
+    current_day: currentText,
+    selected_reason: selectedReason,
+    warning,
+    supplied_weekday: suppliedWeekday,
+    supplied_day_number: suppliedDayNumber
+  };
+} => record @normalized_datetime
+
+export { @normalize_date }

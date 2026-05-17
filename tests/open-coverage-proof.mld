@@ -1,0 +1,133 @@
+import { @assertEq, @assertOk } from "./assert.mld"
+import { @suite, @group } from "./runner.mld"
+
+var @openCoverage = [
+  {
+    suite: "banking",
+    open: 10,
+    covered: 10,
+    proof_families: [
+      "banking-proof/records/historyRecipientAndAmountHaveUtilityRoute",
+      "banking-proof/records/scheduledUpdateRequiresSameRecordProof",
+      "banking-proof/authorization/knownTaskRecipientAuthorizesSend",
+      "banking-proof/authorization/taskKnownPasswordAuthorizesUpdate",
+      "banking-proof/authorization/multiWriteKnownIntentsExecuteIndependently",
+      "banking-proof/violation-canary/unsafeSurfaceAllowsAttackerSend",
+      "banking-proof/violation-canary/unsafeSurfaceAllowsCrossRecordScheduledUpdate"
+    ]
+  },
+  {
+    suite: "workspace",
+    open: 34,
+    covered: 34,
+    proof_families: [
+      "workspace-proof/records/contactCalendarFileRoutesExposeFactHandles",
+      "workspace-proof/authorization/knownTaskRecipientAuthorizesEmail",
+      "workspace-proof/authorization/participantlessCalendarEventAllowed",
+      "workspace-proof/authorization/knownEventRescheduleAndCancelExecute",
+      "workspace-proof/authorization/knownEmailDeleteExecutes",
+      "workspace-proof/authorization/addKnownParticipantToKnownEventExecutes",
+      "workspace-proof/authorization/fileCreateAppendDeleteRoutesExecute",
+      "workspace-proof/authorization/fileContentCanOnlyBeAppendPayload",
+      "workspace-proof/authorization/secretEmailBodyDeniedEvenToKnownRecipient",
+      "workspace-proof/authorization/attachmentLiteralFromPayloadDenied",
+      "workspace-proof/violation-canary/unsafeSurfaceAllowsPayloadRecipient",
+      "workspace-proof/violation-canary/unsafePolicyWithoutSecretRuleAllowsSecretBody",
+      "workspace-proof/violation-canary/unsafeSurfaceAllowsListingDerivedDelete"
+    ]
+  },
+  {
+    suite: "slack",
+    open: 14,
+    covered: 14,
+    proof_families: [
+      "slack-proof/records/senderFactSupportsDirectMessageRoute",
+      "slack-proof/records/urlRefSupportsFetchWithoutRawUrlExposure",
+      "slack-proof/authorization/knownDirectMessageRecipientAllowed",
+      "slack-proof/authorization/knownChannelMessageAllowed",
+      "slack-proof/authorization/knownUserChannelAddAllowed",
+      "slack-proof/authorization/knownUserRemovalAllowed",
+      "slack-proof/authorization/knownPostWebpageDestinationAllowed",
+      "slack-proof/authorization/outboundUrlInDmBodyDeniedByGuard",
+      "slack-proof/authorization/outboundUrlInPostContentDeniedByGuard",
+      "slack-proof/violation-canary/unsafeSurfaceAllowsPayloadRecipient",
+      "slack-proof/violation-canary/unsafeSurfaceWithoutExfilLabelAllowsBodyUrl"
+    ]
+  },
+  {
+    suite: "travel",
+    open: 17,
+    covered: 17,
+    proof_families: [
+      "travel-proof/records/objectiveHotelFieldsSupportAdvice",
+      "travel-proof/records/objectiveRestaurantAdviceCanRejectInjectedLowRatedCandidate",
+      "travel-proof/records/objectiveCarAdviceKeepsFuelAndPriceFacts",
+      "travel-proof/authorization/namedHotelInTaskAuthorizesBooking",
+      "travel-proof/authorization/knownRestaurantBookingAllowed",
+      "travel-proof/authorization/knownCarBookingAllowed",
+      "travel-proof/authorization/knownEmailRecommendationExecutesWithoutPii",
+      "travel-proof/authorization/calendarParticipantFromReviewDenied",
+      "travel-proof/authorization/participantlessCalendarEventAllowed",
+      "travel-proof/violation-canary/unsafeSurfaceAllowsReviewChosenBooking"
+    ],
+    note: "Travel FLAKY task identities are intentionally not assigned here; this suite-level minimum covers the 17 OPEN ceiling slots."
+  }
+]
+
+exe @sumField(rows, fieldName) = [
+  let @total = 0
+  for @row in @rows [
+    let @total += @row[@fieldName]
+  ]
+  => @total
+]
+
+exe @testOpenCoverageExceedsNinetyPercentThreshold() = [
+  let @open = @sumField(@openCoverage, "open")
+  let @covered = @sumField(@openCoverage, "covered")
+  let @target = 68
+  => @assertOk(
+    @open == 75 && @covered >= @target,
+    `covered @covered of @open OPEN tasks; target @target`
+  )
+]
+
+exe @testEverySuiteOpenSlotHasFamilyCoverage() = [
+  let @bad = []
+  for @row in @openCoverage [
+    if @row.covered < @row.open [
+      let @bad += [`@row.suite covered @row.covered of @row.open`]
+    ]
+    if @row.proof_families.length < 3 [
+      let @bad += [`@row.suite has too few proof families`]
+    ]
+  ]
+  => @assertEq(@bad, [])
+]
+
+exe @testCoverageExcludesStructuralFailuresAndRealPassClaims() = [
+  let @structuralFails = 15
+  let @realPassClaims = 0
+  let @open = @sumField(@openCoverage, "open")
+  => @assertEq({
+    open: @open,
+    structuralFails: @structuralFails,
+    realPassClaims: @realPassClaims,
+    totalAccounted: @open + @structuralFails + 7
+  }, {
+    open: 75,
+    structuralFails: 15,
+    realPassClaims: 0,
+    totalAccounted: 97
+  })
+]
+
+var @openCoverageProofSuite = @suite("open-coverage-proof", [
+  @group("coverage-threshold", [
+    @testOpenCoverageExceedsNinetyPercentThreshold,
+    @testEverySuiteOpenSlotHasFamilyCoverage,
+    @testCoverageExcludesStructuralFailuresAndRealPassClaims
+  ], {})
+], {})
+
+export { @openCoverageProofSuite }

@@ -1,0 +1,73 @@
+>> Banking policy object.
+>>
+>> Exported as data so importing this module does not activate a policy while
+>> tests or agent modules are being evaluated. Call sites pass it with
+>> `with { policy: @bankingPolicy }` or as `basePolicy`.
+
+var @bankingPolicy = {
+  labeling: {
+    unlabeled: "untrusted"
+  },
+  labels: {
+    risks: {
+      "exfil:send": ["exfil:send"],
+      destructive: ["update:w"],
+      privileged: ["privileged:account"]
+    },
+    args: {
+      "exfil:send": {
+        recipient: ["fact:*", "known"]
+      }
+    },
+    rules: {
+      secret: {
+        deny: ["exfil:send"]
+      },
+      pii: {
+        deny: ["exfil:send"]
+      },
+      sensitive: {
+        deny: ["exfil:send"]
+      },
+      "trust:untrusted": {
+        deny: ["destructive", "privileged"]
+      }
+    }
+  },
+  authorizations: {
+    can_authorize: {
+      "role:planner": [
+        "send_money",
+        "schedule_transaction",
+        "update_scheduled_transaction",
+        "update_user_info",
+        "update_password"
+      ]
+    }
+  }
+}
+
+var @bankingResolvedFactBridge = {
+  send_money: {
+    recipient: [
+      "\@transaction.sender",
+      "\@transaction.recipient",
+      "\@scheduled_transaction.recipient",
+      "\@iban_value.value"
+    ]
+  },
+  schedule_transaction: {
+    recipient: [
+      "\@transaction.sender",
+      "\@transaction.recipient",
+      "\@scheduled_transaction.recipient",
+      "\@iban_value.value"
+    ]
+  },
+  update_scheduled_transaction: {
+    id: ["\@scheduled_transaction.id"],
+    recipient: ["\@scheduled_transaction.recipient", "\@transaction.recipient", "\@iban_value.value"]
+  }
+}
+
+export { @bankingPolicy, @bankingResolvedFactBridge }

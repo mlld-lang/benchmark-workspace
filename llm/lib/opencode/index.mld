@@ -1,0 +1,212 @@
+needs { sh }
+
+>> Minimal OpenCode bridge for mlld LLM calls.
+>>
+>> It converts mlld's generated MCP config into an invocation-local
+>> OPENCODE_CONFIG_CONTENT document, denies ambient tools by default, and
+>> runs `opencode run --format json`. The wrapper is intentionally generic:
+>> no AgentDojo or suite-specific knowledge lives here.
+
+var @opencodeStreamFormat = {
+  name: "opencode",
+  format: "ndjson",
+  schemas: [
+    {
+      kind: "message",
+      matchPath: "type",
+      matchValue: "text",
+      extract: { chunk: "part.text" }
+    },
+    {
+      kind: "thinking",
+      matchPath: "type",
+      matchValue: "reasoning",
+      extract: { text: "part.text" }
+    },
+    {
+      kind: "tool-use",
+      matchPath: "type",
+      matchValue: "tool_use",
+      extract: {
+        name: "part.tool",
+        id: "part.callID",
+        input: "part.state.input",
+        result: "part.state.output",
+        status: "part.state.status"
+      }
+    }
+  ]
+}
+
+exe @parseOpencodeJson(raw) = js {
+  const out = {
+    content: "",
+    sessionId: null,
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+    cost: null
+  };
+  if (typeof raw !== "string") return out;
+
+  const chunks = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let event;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (!event || typeof event !== "object") continue;
+    if (!out.sessionId && typeof event.sessionID === "string") {
+      out.sessionId = event.sessionID;
+    }
+    if (event.type === "text" && event.part && typeof event.part.text === "string") {
+      chunks.push(event.part.text);
+    }
+    if (event.type === "step_finish" && event.part && event.part.tokens) {
+      const t = event.part.tokens;
+      if (typeof t.input === "number") out.inputTokens = t.input;
+      if (typeof t.output === "number") out.outputTokens = t.output;
+      if (typeof t.total === "number") out.totalTokens = t.total;
+      if (typeof event.part.cost === "number") out.cost = event.part.cost;
+    }
+  }
+  out.content = chunks.join("");
+  return out;
+}
+
+exe @opencodeInlineConfig(configPath, allowedTools, requestedAgent, mcpTimeoutMs) = node {
+  const fs = require("fs");
+
+  const asList = (value) => {
+    if (Array.isArray(value)) return value.map(String).map((x) => x.trim()).filter(Boolean);
+    if (typeof value === "string") return value.split(",").map((x) => x.trim()).filter(Boolean);
+    return [];
+  };
+
+  let parsed = null;
+  if (typeof configPath === "string" && configPath && fs.existsSync(configPath)) {
+    try {
+      parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    } catch {
+      parsed = null;
+    }
+  }
+
+  const mcp = {};
+  const sourceServers = parsed && parsed.mcpServers && typeof parsed.mcpServers === "object"
+    ? parsed.mcpServers
+    : {};
+
+  for (const [name, spec] of Object.entries(sourceServers)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(name)) continue;
+    if (!spec || typeof spec !== "object") continue;
+
+    if (typeof spec.url === "string") {
+      mcp[name] = { type: "remote", url: spec.url, headers: spec.headers || {} };
+      continue;
+    }
+
+    if (typeof spec.command !== "string") continue;
+    const command = [spec.command];
+    for (const arg of Array.isArray(spec.args) ? spec.args : []) command.push(String(arg));
+    const environment = {};
+    if (spec.env && typeof spec.env === "object") {
+      for (const [key, value] of Object.entries(spec.env)) {
+        if (typeof value === "string") environment[key] = value;
+      }
+    }
+    mcp[name] = { type: "local", command, environment, enabled: true };
+  }
+
+  const allowed = asList(allowedTools);
+  const agent = typeof requestedAgent === "string" && requestedAgent.trim()
+    ? requestedAgent.trim()
+    : "mlld";
+
+  const config = { $schema: "https://opencode.ai/config.json" };
+  if (Object.keys(mcp).length) config.mcp = mcp;
+
+  const timeout = Number(mcpTimeoutMs);
+  if (Number.isFinite(timeout) && timeout > 0) {
+    config.experimental = { mcp_timeout: Math.floor(timeout) };
+  }
+
+  const permission = { "*": "deny" };
+  const tools = { "*": false };
+  for (const nativeName of ["bash", "read", "write", "edit", "grep", "glob", "list", "webfetch"]) {
+    permission[nativeName] = "deny";
+    tools[nativeName] = false;
+  }
+  for (const serverName of Object.keys(mcp)) {
+    permission[`mcp__${serverName}__*`] = "allow";
+    permission[`${serverName}_*`] = "allow";
+    tools[`mcp__${serverName}__*`] = true;
+    tools[`${serverName}_*`] = true;
+  }
+  for (const toolName of allowed) {
+    permission[toolName] = "allow";
+    tools[toolName] = true;
+  }
+
+  config.agent = { [agent]: { permission, tools } };
+
+  return JSON.stringify(config);
+}
+
+exe @runOpencode(prompt, dir, model, agent, inlineConfig, resumeId, pure, mcpTimeoutMs) = sh {
+  set -e
+
+  if [ -n "$inlineConfig" ]; then
+    export OPENCODE_CONFIG_CONTENT="$inlineConfig"
+  fi
+
+  opencode_bin="${OPENCODE_BIN:-opencode}"
+  set -- run --format json
+
+  if [ -n "$pure" ]; then
+    set -- "$@" --pure
+  fi
+  if [ -n "$dir" ]; then
+    set -- "$@" --dir "$dir"
+  fi
+  if [ -n "$model" ]; then
+    set -- "$@" -m "$model"
+  fi
+  if [ -n "$agent" ]; then
+    set -- "$@" --agent "$agent"
+  fi
+  if [ -n "$resumeId" ]; then
+    set -- "$@" -s "$resumeId"
+  fi
+
+  "$opencode_bin" "$@" "$prompt"
+}
+
+exe llm, recursive @opencode(prompt, config) = [
+  let @cfg = @config ? @config : {}
+  let @model = @cfg.model ? @cfg.model : "togetherai/zai-org/GLM-5.1"
+  let @dir = @cfg.dir ? @cfg.dir : @root
+  let @agent = @cfg.agent ? @cfg.agent : "mlld"
+  let @resumeId = @cfg.resume ? @cfg.resume : ""
+  let @pure = @cfg.pure.isDefined() ? (@cfg.pure ? "1" : "") : "1"
+  let @hasBridge = @mx.llm && @mx.llm.config
+  let @inline = @opencodeInlineConfig(
+    when [@hasBridge => @mx.llm.config ?? ""; * => ""],
+    when [@hasBridge => @mx.llm.allowed ?? ""; * => ""],
+    @agent,
+    @cfg.mcpTimeoutMs ?? null
+  )
+  let @raw = @runOpencode(@prompt, @dir, @model, @agent, @inline, @resumeId, @pure, @cfg.mcpTimeoutMs ?? null)
+  let @parsed = @parseOpencodeJson(@raw)
+  => when [
+    @cfg.stream => @raw
+    @parsed.content => @parsed.content
+    * => @raw
+  ]
+] with { stream: @cfg.stream, streamFormat: @opencodeStreamFormat }
+
+export { @opencode, @opencodeStreamFormat, @opencodeInlineConfig, @parseOpencodeJson }

@@ -1,0 +1,19 @@
+# Ignore all dotfiles and dot-directories
+.*
+
+# Keep these
+!.gitignore
+!.github
+!.github/**
+
+# Scratch / investigation
+tmp/
+
+# Python caches
+__pycache__/
+
+# Run artifacts
+bench/results/
+runs/
+tests/live/workers/scoreboard.jsonl
+audit.jsonl

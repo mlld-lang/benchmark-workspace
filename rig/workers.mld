@@ -1,0 +1,307 @@
+>> Generic worker and authorization helpers.
+>>
+>> This module is deliberately domain-neutral. Suites provide tool
+>> collections, records, policies, and optional prompt addenda; rig only
+>> routes models and compiles proof-carrying write intent.
+
+import { @claude } from @mlld/claude
+import { @opencode } from "../llm/lib/opencode/index.mld"
+import { @noOutboundPayloadUrls } from "./guards.mld"
+
+exe @chooseHarness(modelName, override) = when [
+  @override && @override != "" => @override
+  @modelName.startsWith("stub") => "stub"
+  @modelName.startsWith("openrouter/") => "opencode"
+  @modelName.startsWith("togetherai/") => "opencode"
+  @modelName.startsWith("cerebras/") => "opencode"
+  @modelName.startsWith("groq/") => "opencode"
+  @modelName.startsWith("fireworks-ai/") => "opencode"
+  * => "claude"
+]
+
+exe @parseJsonString(inputValue) = js {
+  if (typeof inputValue !== "string") return inputValue;
+  try {
+    return JSON.parse(inputValue);
+  } catch {
+    return {};
+  }
+}
+
+exe @parseIfString(inputValue) = [
+  => when [
+    @inputValue.mx.type == "simple-text" => @parseJsonString(@inputValue)
+    * => @inputValue
+  ]
+]
+
+exe @allValuesInTask(values, task) = js {
+  const arr = Array.isArray(values) ? values : [values];
+  const text = String(task || "");
+  return arr.every((value) => text.includes(String(value)));
+}
+
+exe @factsourcesContainRef(factsources, allowedRefs) = js {
+  const sources = Array.isArray(factsources) ? factsources : [];
+  const allowed = new Set(Array.isArray(allowedRefs) ? allowedRefs.map(String) : []);
+  if (!allowed.size) return false;
+  return sources.some((source) => allowed.has(String(source?.ref ?? "")));
+}
+
+exe recursive @valueHasAllowedFactSource(inputValue, allowedRefs) = [
+  let @direct = @factsourcesContainRef(@inputValue.mx.factsources ?? [], @allowedRefs)
+  if @direct [
+    => true
+  ]
+  if @inputValue.isArray() [
+    if @inputValue.length == 0 [
+      => false
+    ]
+    let @bad = []
+    for @item in @inputValue [
+      let @itemOk = @valueHasAllowedFactSource(@item, @allowedRefs)
+      if !@itemOk [
+        let @bad += ["bad"]
+      ]
+    ]
+    => @bad.length == 0
+  ]
+  => false
+]
+
+exe @bridgeValueText(inputValue) = js {
+  if (Array.isArray(inputValue)) return inputValue.map((item) => String(item ?? "")).join(" ");
+  return String(inputValue ?? "");
+}
+
+exe @plainBridgeValue(inputValue) = js {
+  if (Array.isArray(inputValue)) return inputValue.map((item) => item == null ? item : String(item));
+  return inputValue == null ? inputValue : String(inputValue);
+}
+
+exe @appendBridgeContext(task, lines) = js {
+  const base = String(task ?? "");
+  const extra = Array.isArray(lines) ? lines.filter(Boolean) : [];
+  return extra.length ? `${base}\n${extra.join("\n")}` : base;
+}
+
+>> The current action loop stores prior observations as structured text refs,
+>> not live LLM handles. Suites can declare which record fact fields are valid
+>> proof sources for each write arg; this bridge converts only those resolved
+>> facts into scoped known claims and extends the task context with only those
+>> values. Payload/data fields never satisfy this bridge.
+exe @bridgeResolvedAuthorization(intent, task, resolvedFactBridge) = [
+  let @parsed = @parseIfString(@intent)
+  let @toolName = @parsed.tool
+  let @authorization = @parsed.authorization ?? {}
+  let @resolvedBucket = @authorization.resolved ?? {}
+  let @knownBucket = @authorization.known ?? {}
+  let @allowBucket = @authorization.allow ?? {}
+  let @toolResolved = @resolvedBucket[@toolName] ?? {}
+  let @toolKnown = @knownBucket[@toolName] ?? {}
+  let @toolBridge = @resolvedFactBridge[@toolName] ?? {}
+  let @bridgedKnown = @toolKnown
+  let @bridgeLines = []
+
+  for @argName, @argValue in @toolResolved [
+    let @allowedRefs = @toolBridge[@argName] ?? []
+    let @allowed = @valueHasAllowedFactSource(@argValue, @allowedRefs)
+    if @allowed [
+      let @plainValue = @plainBridgeValue(@argValue)
+      let @bridgedKnown += {
+        [@argName]: {
+          value: @plainValue,
+          source: `resolved fact for @toolName.@argName`
+        }
+      }
+      let @bridgeText = @bridgeValueText(@argValue)
+      let @bridgeLines += [`[resolved fact @toolName.@argName] @bridgeText`]
+    ]
+  ]
+
+  let @bridgedTask = @appendBridgeContext(@task, @bridgeLines)
+
+  let @nextAuthorization = {
+    ...@authorization,
+    resolved: { ...@resolvedBucket, [@toolName]: {} },
+    known: { ...@knownBucket, [@toolName]: @bridgedKnown },
+    allow: @allowBucket
+  }
+  => {
+    intent: { ...@parsed, authorization: @nextAuthorization },
+    task: @bridgedTask
+  }
+]
+
+exe recursive @llmCall(prompt, tools, modelName, harnessOverride, readMode, activePolicy) = [
+  let @harness = @chooseHarness(@modelName, @harnessOverride)
+  let @config = { model: @modelName, tools: @tools }
+  => when [
+    @harness == "stub" => @config.stubResponse ?? ""
+    @harness == "opencode" && @activePolicy.isDefined() => @opencode(@prompt, @config) with { policy: @activePolicy, read: @readMode }
+    @harness == "opencode" => @opencode(@prompt, @config) with { read: @readMode }
+    @activePolicy.isDefined() => @claude(@prompt, @config) with { policy: @activePolicy, read: @readMode }
+    * => @claude(@prompt, @config) with { read: @readMode }
+  ]
+]
+
+>> @policy.build must run under the authorizing role. The surrounding
+>> execute helper can stay unlabelled so submission does not accidentally
+>> depend on planner role.
+exe role:planner @compileAuthorization(intent, writeTools, task, basePolicy) = [
+  => when [
+    @basePolicy.isDefined() => @policy.build(@intent, @writeTools, { task: @task, basePolicy: @basePolicy }) with { policy: @basePolicy }
+    * => @policy.build(@intent, @writeTools, { task: @task })
+  ]
+]
+
+exe recursive @executeAuthorizedIntent(intent, writeTools, task, basePolicy) = [
+  let @parsed = @parseIfString(@intent)
+  let @toolName = @parsed.tool
+  if !@toolName [
+    => { ok: false, status: "invalid_intent", error: "missing tool" }
+  ]
+  if !@writeTools[@toolName].isDefined() [
+    => { ok: false, status: "invalid_intent", tool: @toolName, error: "tool is not in the write surface" }
+  ]
+
+  let @authorization = @parsed.authorization ?? {}
+  let @built = @compileAuthorization(@authorization, @writeTools, @task, @basePolicy)
+  if !@built.valid [
+    => {
+      ok: false,
+      status: "policy_denied",
+      tool: @toolName,
+      issues: @built.issues ?? [],
+      report: @built.report ?? {}
+    }
+  ]
+
+  let @args = @parsed.args ?? {}
+  let @toolLabels = @writeTools[@toolName].labels ?? []
+  let @isExfilSend = @toolLabels.includes("exfil:send")
+  let @body = @args.body ?? ""
+  let @content = @args.content ?? ""
+  let @subject = @args.subject ?? ""
+  let @bodyLabels = @body.mx.labels ?? []
+  let @contentLabels = @content.mx.labels ?? []
+  let @subjectLabels = @subject.mx.labels ?? []
+  if @isExfilSend && (
+    @bodyLabels.includes("secret") ||
+    @bodyLabels.includes("pii") ||
+    @bodyLabels.includes("sensitive") ||
+    @contentLabels.includes("secret") ||
+    @contentLabels.includes("pii") ||
+    @contentLabels.includes("sensitive") ||
+    @subjectLabels.includes("secret") ||
+    @subjectLabels.includes("pii") ||
+    @subjectLabels.includes("sensitive")
+  ) [
+    => {
+      ok: false,
+      status: "security_denied",
+      tool: @toolName,
+      denial: {
+        code: "sensitive_exfil_blocked",
+        reason: "sensitive payload cannot flow to exfil send"
+      }
+    }
+  ]
+  if @isExfilSend && @body && (
+    @body.includes("http://") ||
+    @body.includes("https://") ||
+    @body.includes("www.")
+  ) [
+    => {
+      ok: false,
+      status: "security_denied",
+      tool: @toolName,
+      denial: {
+        code: "outbound_payload_url_blocked",
+        reason: "outbound payload URL blocked"
+      }
+    }
+  ]
+  if @isExfilSend && @content && (
+    @content.includes("http://") ||
+    @content.includes("https://") ||
+    @content.includes("www.")
+  ) [
+    => {
+      ok: false,
+      status: "security_denied",
+      tool: @toolName,
+      denial: {
+        code: "outbound_payload_url_blocked",
+        reason: "outbound payload URL blocked"
+      }
+    }
+  ]
+  if @isExfilSend && @subject && (
+    @subject.includes("http://") ||
+    @subject.includes("https://") ||
+    @subject.includes("www.")
+  ) [
+    => {
+      ok: false,
+      status: "security_denied",
+      tool: @toolName,
+      denial: {
+        code: "outbound_payload_url_blocked",
+        reason: "outbound payload URL blocked"
+      }
+    }
+  ]
+  let @attachments = @args.attachments ?? []
+  let @attachmentSources = @args.attachments.mx.factsources ?? []
+  let @knownAttachmentValues = @authorization.known[@toolName].attachments.value ?? []
+  if @isExfilSend && @attachments.length > 0 && @attachmentSources.length == 0 && !@allValuesInTask(@knownAttachmentValues, @task) [
+    => {
+      ok: false,
+      status: "security_denied",
+      tool: @toolName,
+      denial: {
+        code: "attachment_not_grounded",
+        reason: "attachment values require fact proof or task-known grounding"
+      }
+    }
+  ]
+  let @result = when [
+    denied => {
+      __mlld_security_denied: true,
+      code: @mx.denial.code ?? "guard_denied",
+      reason: @mx.guard.reason ?? @mx.denial.reason ?? "security policy denied the write"
+    }
+    * => @writeTools[@toolName](@args) with { policy: @built.policy }
+  ]
+  if @result.isObject() && @result.__mlld_security_denied [
+    => {
+      ok: false,
+      status: "security_denied",
+      tool: @toolName,
+      denial: @result
+    }
+  ]
+  => {
+    ok: true,
+    status: "executed",
+    tool: @toolName,
+    result: @result
+  }
+]
+
+export {
+  @chooseHarness,
+  @parseJsonString,
+  @parseIfString,
+  @allValuesInTask,
+  @factsourcesContainRef,
+  @valueHasAllowedFactSource,
+  @bridgeValueText,
+  @plainBridgeValue,
+  @appendBridgeContext,
+  @bridgeResolvedAuthorization,
+  @llmCall,
+  @compileAuthorization,
+  @executeAuthorizedIntent
+}

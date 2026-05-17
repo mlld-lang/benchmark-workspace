@@ -1,0 +1,189 @@
+>> Banking MCP wrappers.
+>>
+>> The raw MCP server exposes AgentDojo tools. These wrappers are the
+>> security boundary: every read returns through an output record, and every
+>> write is surfaced through a tool entry with an input record.
+
+import tools from mcp "tools" as @mcp
+
+import {
+  @iban_value,
+  @balance_value,
+  @user_account,
+  @transaction,
+  @scheduled_transaction,
+  @file_text,
+  @send_money_inputs,
+  @schedule_transaction_inputs,
+  @update_scheduled_transaction_inputs,
+  @update_user_info_inputs,
+  @update_password_inputs
+} from "./records.mld"
+
+exe resolve:r, tool:r @get_iban() = [
+  => { value: @mcp.getIban() }
+] => record @iban_value
+
+exe resolve:r, tool:r @get_balance() = [
+  => { amount: @mcp.getBalance() }
+] => record @balance_value
+
+exe resolve:r, tool:r @get_user_info() = [
+  => @mcp.getUserInfo()
+] => record @user_account
+
+exe resolve:r, tool:r, untrusted @get_most_recent_transactions(n) = [
+  => @mcp.getMostRecentTransactions(@n)
+] => record @transaction
+
+exe resolve:r, tool:r, untrusted @get_scheduled_transactions() = [
+  => @mcp.getScheduledTransactions()
+] => record @scheduled_transaction
+
+exe extract:r, tool:r, untrusted @read_file(file_path) = [
+  => {
+    file_path: @file_path,
+    content: @mcp.readFile(@file_path)
+  }
+] => record @file_text
+
+exe @send_money(recipient, amount, subject, date) = [
+  let @subjectValue = @subject ?? ""
+  let @dateValue = @date ?? ""
+  => @mcp.sendMoney(@recipient, @amount, @subjectValue, @dateValue)
+]
+
+exe @schedule_transaction(recipient, amount, subject, date, recurring) = [
+  let @subjectValue = @subject ?? ""
+  let @dateValue = @date ?? ""
+  let @recurringValue = @recurring ?? false
+  => @mcp.scheduleTransaction(@recipient, @amount, @subjectValue, @dateValue, @recurringValue)
+]
+
+exe @update_scheduled_transaction(id, recipient, amount, subject, date, recurring) = [
+  let @amountValue = @exists(@amount) ? @amount : null
+  let @subjectValue = @exists(@subject) ? @subject : null
+  let @dateValue = @exists(@date) ? @date : null
+  let @recurringValue = @exists(@recurring) ? @recurring : null
+  => @mcp.updateScheduledTransaction(@id, @recipient, @amountValue, @subjectValue, @dateValue, @recurringValue)
+]
+
+exe @update_user_info(first_name, last_name, street, city) = [
+  let @firstNameValue = @exists(@first_name) ? @first_name : null
+  let @lastNameValue = @exists(@last_name) ? @last_name : null
+  let @streetValue = @exists(@street) ? @street : null
+  let @cityValue = @exists(@city) ? @city : null
+  => @mcp.updateUserInfo(@firstNameValue, @lastNameValue, @streetValue, @cityValue)
+]
+
+exe @update_password(password) = [
+  => @mcp.updatePassword(@password)
+]
+
+var tools @resolveTools = {
+  get_iban: {
+    mlld: @get_iban,
+    returns: @iban_value,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return the user's own IBAN as a fact-bearing value."
+  },
+  get_balance: {
+    mlld: @get_balance,
+    returns: @balance_value,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return the current account balance."
+  },
+  get_user_info: {
+    mlld: @get_user_info,
+    returns: @user_account,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return the user's name and address fields. Password is not exposed."
+  },
+  get_most_recent_transactions: {
+    mlld: @get_most_recent_transactions,
+    returns: @transaction,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return recent completed transactions. Use a bounded n, typically 10 to 100."
+  },
+  get_scheduled_transactions: {
+    mlld: @get_scheduled_transactions,
+    returns: @scheduled_transaction,
+    labels: ["resolve:r", "tool:r"],
+    description: "Return scheduled and recurring transactions."
+  }
+}
+
+var tools @extractTools = {
+  read_file: {
+    mlld: @read_file,
+    returns: @file_text,
+    labels: ["extract:r", "tool:r"],
+    description: "Read one file by exact path. The planner can see the path; the worker can see content."
+  }
+}
+
+var tools @writeTools = {
+  send_money: {
+    mlld: @send_money,
+    inputs: @send_money_inputs,
+    labels: ["tool:w", "execute:w", "exfil:send"],
+    description: "Send a one-time payment to one grounded recipient."
+  },
+  schedule_transaction: {
+    mlld: @schedule_transaction,
+    inputs: @schedule_transaction_inputs,
+    labels: ["tool:w", "execute:w", "exfil:send"],
+    description: "Create a scheduled or recurring payment to one grounded recipient."
+  },
+  update_scheduled_transaction: {
+    mlld: @update_scheduled_transaction,
+    inputs: @update_scheduled_transaction_inputs,
+    labels: ["tool:w", "execute:w", "update:w", "exfil:send"],
+    description: "Modify one scheduled transaction. id and recipient must correlate to the same resolved record."
+  },
+  update_user_info: {
+    mlld: @update_user_info,
+    inputs: @update_user_info_inputs,
+    labels: ["tool:w", "execute:w", "profile:w", "update:w"],
+    description: "Update one or more user profile fields."
+  },
+  update_password: {
+    mlld: @update_password,
+    inputs: @update_password_inputs,
+    labels: ["tool:w", "execute:w", "privileged:account"],
+    description: "Change account password. Password must be an exact task-text literal."
+  }
+}
+
+>> Full catalog for docs/audits.
+var tools @bankingTools = {
+  get_iban: @resolveTools.get_iban,
+  get_balance: @resolveTools.get_balance,
+  get_user_info: @resolveTools.get_user_info,
+  get_most_recent_transactions: @resolveTools.get_most_recent_transactions,
+  get_scheduled_transactions: @resolveTools.get_scheduled_transactions,
+  read_file: @extractTools.read_file,
+  send_money: @writeTools.send_money,
+  schedule_transaction: @writeTools.schedule_transaction,
+  update_scheduled_transaction: @writeTools.update_scheduled_transaction,
+  update_user_info: @writeTools.update_user_info,
+  update_password: @writeTools.update_password
+}
+
+export {
+  @resolveTools,
+  @extractTools,
+  @writeTools,
+  @bankingTools,
+  @get_iban,
+  @get_balance,
+  @get_user_info,
+  @get_most_recent_transactions,
+  @get_scheduled_transactions,
+  @read_file,
+  @send_money,
+  @schedule_transaction,
+  @update_scheduled_transaction,
+  @update_user_info,
+  @update_password
+}
