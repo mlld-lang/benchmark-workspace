@@ -1,7 +1,7 @@
 >> Travel suite entrypoint.
 
 import { @runAgent } from "../../rig/index.mld"
-import { @parseIfString, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
+import { @parseIfString, @parseExecuteRequest, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
 import { @resolveTools, @writeTools } from "../domains/travel/tools.mld"
 import { @travelPolicy, @travelResolvedFactBridge } from "../domains/travel/policy.mld"
 
@@ -85,7 +85,8 @@ exe recursive @resolve(request) = [
 ]
 
 exe recursive @execute(intent) = [
-  let @parsed = @parseIfString(@intent)
+  let @request = @parseExecuteRequest(@intent, @query)
+  let @parsed = @request.intent
   let @tool = @parsed.tool ?? ""
   let @args = @parsed.args ?? {}
   let @authorization = @parsed.authorization ?? {}
@@ -130,7 +131,7 @@ exe recursive @execute(intent) = [
   ]
   let @normalizedAuthorization = { ...@authorization, known: @normalizedKnown }
   let @normalized = { ...@parsed, args: @normalizedArgs, authorization: @normalizedAuthorization }
-  let @bridged = @bridgeResolvedAuthorization(@normalized, @query, @travelResolvedFactBridge)
+  let @bridged = @bridgeResolvedAuthorization(@normalized, @request.task, @travelResolvedFactBridge)
   => @executeAuthorizedIntent(@bridged.intent, @writeTools, @bridged.task, @travelPolicy)
 ]
 

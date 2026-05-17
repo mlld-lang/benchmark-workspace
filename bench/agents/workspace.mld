@@ -1,7 +1,7 @@
 >> Workspace suite entrypoint.
 
 import { @runAgent } from "../../rig/index.mld"
-import { @llmCall, @parseIfString, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
+import { @llmCall, @parseIfString, @parseExecuteRequest, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
 import { @resolveTools, @extractTools, @writeTools } from "../domains/workspace/tools.mld"
 import { @workspacePolicy, @workspaceResolvedFactBridge } from "../domains/workspace/policy.mld"
 
@@ -164,7 +164,8 @@ payload:
 ]
 
 exe recursive @execute(intent) = [
-  let @parsed = @parseIfString(@intent)
+  let @request = @parseExecuteRequest(@intent, @query)
+  let @parsed = @request.intent
   let @tool = @parsed.tool ?? ""
   let @args = @parsed.args ?? {}
   let @normalizedArgs = when [
@@ -205,7 +206,7 @@ exe recursive @execute(intent) = [
   ]
   let @normalizedAuthorization = { ...@authorization, known: @normalizedKnown }
   let @normalized = { ...@parsed, args: @normalizedArgs, authorization: @normalizedAuthorization }
-  let @bridged = @bridgeResolvedAuthorization(@normalized, @query, @workspaceResolvedFactBridge)
+  let @bridged = @bridgeResolvedAuthorization(@normalized, @request.task, @workspaceResolvedFactBridge)
   => @executeAuthorizedIntent(@bridged.intent, @writeTools, @bridged.task, @workspacePolicy)
 ]
 

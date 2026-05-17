@@ -85,6 +85,18 @@ exe @appendBridgeContext(task, lines) = js {
   return extra.length ? `${base}\n${extra.join("\n")}` : base;
 }
 
+exe @parseExecuteRequest(inputValue, defaultTask) = [
+  let @request = @parseIfString(@inputValue)
+  let @intent = when [
+    @request.intent.isDefined() => @parseIfString(@request.intent)
+    * => @request
+  ]
+  => {
+    intent: @intent,
+    task: @request.task_context ?? @defaultTask
+  }
+]
+
 >> The current action loop stores prior observations as structured text refs,
 >> not live LLM handles. Suites can declare which record fact fields are valid
 >> proof sources for each write arg; this bridge converts only those resolved
@@ -300,6 +312,7 @@ export {
   @bridgeValueText,
   @plainBridgeValue,
   @appendBridgeContext,
+  @parseExecuteRequest,
   @bridgeResolvedAuthorization,
   @llmCall,
   @compileAuthorization,

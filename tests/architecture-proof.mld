@@ -1,6 +1,6 @@
 import { @assertEq, @assertOk } from "./assert.mld"
 import { @suite, @group } from "./runner.mld"
-import { @executeAuthorizedIntent } from "../rig/workers.mld"
+import { @executeAuthorizedIntent, @parseExecuteRequest } from "../rig/workers.mld"
 import {
   @parseStructuredAction,
   @validateStructuredAction,
@@ -488,6 +488,36 @@ exe @testStringifiedHistoryRefExecuteLeafResolvesBeforeDispatch() = [
   })
 ]
 
+exe @testExecuteRequestEnvelopePreservesIntentAndTaskContext() = [
+  let @request = @parseExecuteRequest({
+    intent: {
+      tool: "send",
+      args: {
+        recipient: "ada@example.com",
+        body: "hello"
+      },
+      authorization: {
+        known: {
+          send: {
+            body: { value: "hello", source: "task literal" }
+          }
+        },
+        allow: { send: true }
+      }
+    },
+    task_context: "verified task context"
+  }, "fallback task")
+  => @assertEq({
+    tool: @request.intent.tool,
+    body: @request.intent.args.body,
+    task: @request.task
+  }, {
+    tool: "send",
+    body: "hello",
+    task: "verified task context"
+  })
+]
+
 exe @testProductionRigHasNoMarkersOrTaskRouting() = [
   let @matches = @forbiddenProductionRigMatches()
   => @assertEq(@matches, [])
@@ -509,7 +539,8 @@ var @architectureProofSuite = @suite("architecture-proof", [
     @testBadHistoryRefFailsClosedBeforeDispatch,
     @testExecuteArrayLeafKeepsPrimitiveAndResolvesRefs,
     @testStringifiedHistoryRefObserveArgsResolveBeforeToolCall,
-    @testStringifiedHistoryRefExecuteLeafResolvesBeforeDispatch
+    @testStringifiedHistoryRefExecuteLeafResolvesBeforeDispatch,
+    @testExecuteRequestEnvelopePreservesIntentAndTaskContext
   ], {}),
   @group("anti-overfit", [
     @testProductionRigHasNoMarkersOrTaskRouting

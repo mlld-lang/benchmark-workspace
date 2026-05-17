@@ -1,7 +1,7 @@
 >> Slack suite entrypoint.
 
 import { @runAgent } from "../../rig/index.mld"
-import { @llmCall, @parseIfString, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
+import { @llmCall, @parseIfString, @parseExecuteRequest, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
 import { @registerAttestedResources, @verifyUserAttestationValue } from "../../rig/attestation.mld"
 import { @resolveTools, @extractTools, @writeTools, @lookupUrlRef } from "../domains/slack/tools.mld"
 import { @slackPolicy, @slackResolvedFactBridge } from "../domains/slack/policy.mld"
@@ -143,12 +143,9 @@ messages:
 ]
 
 exe recursive @execute(intent) = [
-  let @request = @parseIfString(@intent)
-  let @parsed = when [
-    @request.intent.isDefined() => @parseIfString(@request.intent)
-    * => @request
-  ]
-  let @taskContext = @request.task_context ?? @query
+  let @request = @parseExecuteRequest(@intent, @query)
+  let @parsed = @request.intent
+  let @taskContext = @request.task
   let @bridged = @bridgeResolvedAuthorization(@parsed, @taskContext, @slackResolvedFactBridge)
   => @executeAuthorizedIntent(@bridged.intent, @writeTools, @bridged.task, @slackPolicy)
 ]

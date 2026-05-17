@@ -4,7 +4,7 @@
 >> plus small suite notes. The control flow is generic rig.
 
 import { @runAgent } from "../../rig/index.mld"
-import { @llmCall, @parseIfString, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
+import { @llmCall, @parseIfString, @parseExecuteRequest, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
 import { @registerAttestedResources, @verifyUserAttestationValue } from "../../rig/attestation.mld"
 import { @resolveTools, @extractTools, @writeTools } from "../domains/banking/tools.mld"
 import { @bankingPolicy, @bankingResolvedFactBridge } from "../domains/banking/policy.mld"
@@ -77,12 +77,9 @@ exe @normalizeUpdateUserInfoArgs(args) = [
 ]
 
 exe recursive @execute(intent) = [
-  let @request = @parseIfString(@intent)
-  let @parsed = when [
-    @request.intent.isDefined() => @parseIfString(@request.intent)
-    * => @request
-  ]
-  let @taskContext = @request.task_context ?? @query
+  let @request = @parseExecuteRequest(@intent, @query)
+  let @parsed = @request.intent
+  let @taskContext = @request.task
   let @tool = @parsed.tool ?? ""
   let @args = @parsed.args ?? {}
   let @normalizedArgs = when [
