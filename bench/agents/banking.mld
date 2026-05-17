@@ -76,6 +76,26 @@ exe @normalizeUpdateUserInfoArgs(args) = [
   => @out
 ]
 
+exe @normalizeUpdateScheduledTransactionArgs(args) = [
+  let @out = { id: @args.id }
+  if @args.recipient.isDefined() && @args.recipient != null [
+    let @out += { recipient: @args.recipient }
+  ]
+  if @args.amount.isDefined() && @args.amount != null [
+    let @out += { amount: @args.amount }
+  ]
+  if @args.subject.isDefined() && @args.subject != null && @args.subject != "" [
+    let @out += { subject: @args.subject }
+  ]
+  if @args.date.isDefined() && @args.date != null && @args.date != "" [
+    let @out += { date: @args.date }
+  ]
+  if @args.recurring.isDefined() && @args.recurring != null [
+    let @out += { recurring: @args.recurring }
+  ]
+  => @out
+]
+
 exe recursive @execute(intent) = [
   let @request = @parseExecuteRequest(@intent, @query)
   let @parsed = @request.intent
@@ -96,14 +116,7 @@ exe recursive @execute(intent) = [
       date: @args.date ?? "",
       recurring: @args.recurring ?? false
     }
-    @tool == "update_scheduled_transaction" => {
-      id: @args.id,
-      recipient: @args.recipient ?? null,
-      amount: @args.amount ?? null,
-      subject: @args.subject ?? "",
-      date: @args.date ?? "",
-      recurring: @args.recurring ?? null
-    }
+    @tool == "update_scheduled_transaction" => @normalizeUpdateScheduledTransactionArgs(@args)
     @tool == "update_user_info" => @normalizeUpdateUserInfoArgs(@args)
     * => @args
   ]

@@ -31,7 +31,12 @@ exe @fake_schedule_transaction(recipient, amount, subject, date, recurring) = [
 ]
 
 exe @fake_update_scheduled_transaction(id, recipient, amount, subject, date, recurring) = [
-  => { tool: "update_scheduled_transaction", id: @id, recipient: @recipient, amount: @amount, subject: @subject, date: @date, recurring: @recurring }
+  let @recipientValue = @exists(@recipient) ? @recipient : null
+  let @amountValue = @exists(@amount) ? @amount : null
+  let @subjectValue = @exists(@subject) ? @subject : null
+  let @dateValue = @exists(@date) ? @date : null
+  let @recurringValue = @exists(@recurring) ? @recurring : null
+  => { tool: "update_scheduled_transaction", id: @id, recipient: @recipientValue, amount: @amountValue, subject: @subjectValue, date: @dateValue, recurring: @recurringValue }
 ]
 
 exe @fake_update_user_info(first_name, last_name, street, city) = [
@@ -280,6 +285,52 @@ exe @testVerifiedFileContextAuthorizesScheduledUpdate() = [
       subject: @scheduled.subject,
       date: @scheduled.date,
       recurring: @scheduled.recurring
+    },
+    authorization: {
+      resolved: {
+        update_scheduled_transaction: {
+          id: @scheduled.id,
+          recipient: @scheduled.recipient
+        }
+      },
+      known: {
+        update_scheduled_transaction: {
+          amount: { value: 950, source: "verified landlord-notices.txt" }
+        }
+      },
+      allow: { update_scheduled_transaction: true }
+    }
+  }
+  let @bridged = @bridgeResolvedAuthorization(@intent, @taskContext, @bankingResolvedFactBridge)
+  let @result = @executeAuthorizedIntent(@bridged.intent, @bankingWriteTestTools, @bridged.task, @bankingPolicy)
+  => @assertEq({ ok: @result.ok, id: @result.result.id, amount: @result.result.amount }, { ok: true, id: "rent-7", amount: 950 })
+]
+
+exe @testScheduledUpdateOmittedRecurringExecutes() = [
+  let @scheduled = @emitScheduled({
+    id: "rent-7",
+    sender: "me",
+    recipient: "CA133012400231215421872",
+    amount: 1000,
+    date: "2024-05-01",
+    recurring: true,
+    subject: "Rent"
+  })
+  let @task = "Read 'landlord-notices.txt' and make sure to adjust my rent payment accordingly."
+  let @history = [{
+    result: {
+      verified: true,
+      id: "landlord-notices.txt",
+      content: "Rent is now 950.00 starting next month."
+    }
+  }]
+  let @taskContext = @appendVerifiedAttestationContext(@task, @history)
+  let @intent = {
+    tool: "update_scheduled_transaction",
+    args: {
+      id: @scheduled.id,
+      recipient: @scheduled.recipient,
+      amount: 950
     },
     authorization: {
       resolved: {
@@ -753,6 +804,7 @@ var @bankingProofSuite = @suite("banking-proof", [
     @testValueAttestationAllowsUntrustedReadOnlyAfterVerify,
     @testVerifiedFileContextAuthorizesRecipient,
     @testVerifiedFileContextAuthorizesScheduledUpdate,
+    @testScheduledUpdateOmittedRecurringExecutes,
     @testVerifiedFileContextAuthorizesProfileUpdate,
     @testFailedVerificationDoesNotAuthorizeRecipient,
     @testFailedVerificationDoesNotAuthorizeProfileUpdate,
