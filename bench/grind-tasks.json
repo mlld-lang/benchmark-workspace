@@ -1,0 +1,15 @@
+{
+  "_comment": "Task counts for cloud dispatch plus optional --fast/--grind carve-outs. fp-proof keeps grind empty until task-level slow-tail classifications are grounded in this repo.",
+  "task_counts": {
+    "workspace": 40,
+    "banking": 16,
+    "slack": 21,
+    "travel": 20
+  },
+  "grind": {
+    "workspace": [],
+    "banking": [],
+    "slack": [],
+    "travel": []
+  }
+}
