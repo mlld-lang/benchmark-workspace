@@ -122,16 +122,18 @@ dispatch_attack() {
     args+=(-f "tasks=$raw_tasks")
   fi
 
-  local ref_args=()
-  if [[ -n "${BENCH_REF:-}" ]]; then
-    ref_args=(--ref "$BENCH_REF")
-  fi
   if [[ -n "${BENCH_IMAGE_TAG:-}" ]]; then
     args+=(-f "image_tag=$BENCH_IMAGE_TAG")
   fi
 
+  local cmd=(gh workflow run "$WORKFLOW")
+  if [[ -n "${BENCH_REF:-}" ]]; then
+    cmd+=(--ref "$BENCH_REF")
+  fi
+  cmd+=("${args[@]}")
+
   printf '→ %-13s × %-23s ' "$sub" "$attack"
-  if gh workflow run "$WORKFLOW" "${ref_args[@]}" "${args[@]}" >/dev/null 2>&1; then
+  if "${cmd[@]}" >/dev/null 2>&1; then
     printf 'dispatched\n'
   else
     printf 'FAILED\n' >&2
