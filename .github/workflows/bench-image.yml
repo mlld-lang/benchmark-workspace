@@ -32,10 +32,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout bench (clean)
+      - name: Checkout bench (fp-proof)
         uses: actions/checkout@v4
         with:
-          path: clean
+          path: fp
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
@@ -70,7 +70,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: clean/bench/docker/Dockerfile
+          file: fp/bench/docker/Dockerfile
           push: true
           tags: |
             ${{ steps.tags.outputs.primary }}

@@ -97,7 +97,10 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Pull image
-        run: docker pull ${{ env.IMAGE }}:${{ inputs.image_tag }}
+        run: |
+          if ! docker pull ${{ env.IMAGE }}:${{ inputs.image_tag }}; then
+            echo "::notice::image ${{ env.IMAGE }}:${{ inputs.image_tag }} is missing or unavailable; freshness check will rebuild it"
+          fi
 
       - name: Check image freshness vs mlld + clean HEAD
         id: freshness
@@ -108,6 +111,13 @@ jobs:
           CLEAN_HEAD: ${{ github.sha }}
         run: |
           set -e
+          if ! docker image inspect "$IMAGE_REF" >/dev/null 2>&1; then
+            echo "::notice::image $IMAGE_REF is missing locally; rebuilding"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+            echo "ref=policy-redesign" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           BAKED_MLLD_SHA=$(docker inspect --format='{{ index .Config.Labels "mlld.sha" }}' "$IMAGE_REF")
           BAKED_MLLD_REF=$(docker inspect --format='{{ index .Config.Labels "mlld.ref" }}' "$IMAGE_REF")
           BAKED_CLEAN_SHA=$(docker inspect --format='{{ index .Config.Labels "clean.sha" }}' "$IMAGE_REF")
