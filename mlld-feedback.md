@@ -119,20 +119,22 @@ The proof rig has a generic outbound payload URL guard. This works, but feels li
 
 `@urlDefense` covers part of this at dataflow level; agent writers still need a simple write-payload guard recipe.
 
-## 12. Sign/verify resource handles need a canonical agent pattern
+## 12. Sign/verify verified-resource flow needs a canonical agent pattern
 
 The sign/verify primitive is powerful enough to recover file, webpage, and TODO/app authority without semantic prompt defenses, but manual agent loops need a lot of glue:
 
 - explicitly register task-start resources;
-- mint resource/content handles for planner-visible tool results;
-- expose a planner-callable `verify_user_attestation` wrapper;
-- preserve handle-like values through redacted history;
+- expose read tools that return only verification-required selectors/refs before verification;
+- expose a planner-callable `verify_user_attestation` wrapper that re-reads internally and calls `@sigVerify.value`;
+- scope signature ids per task/run to avoid parallel canary collisions;
+- canonicalize harmless transport differences such as trailing whitespace before signing and verifying text resources;
+- preserve safe history refs through redacted history, including stringified JSON wrapper args;
 - append only verified content to the execute task context;
 - keep `@sigVerify.value` out of the agent tool catalog.
 
 This deserves a first-class recipe or helper module. The recipe should also make transcript auditing easy: a recovered task should show `read -> verify_user_attestation -> execute`, and a failed verification should produce a compact denial reason such as `content_hash_mismatch` rather than a generic policy failure.
 
-## 12. Cloud benchmark ergonomics could be smoother
+## 13. Cloud benchmark ergonomics could be smoother
 
 The proof repo has scripts around `gh workflow run`, image freshness, artifact fetching, and opencode transcript inspection. This is mostly host-side, but a small mlld/bench harness standard would help:
 

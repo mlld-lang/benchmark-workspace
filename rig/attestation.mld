@@ -5,6 +5,13 @@
 >> planner-visible tool, but raw bytes are exposed only in a verified success
 >> envelope.
 
+exe @canonicalAttestationValue(inputValue) = js {
+  if (typeof inputValue === "string") {
+    return inputValue.replace(/[ \t\r\n]+$/g, "");
+  }
+  return inputValue;
+}
+
 exe @registerAttestedResources(resources) = [
   let @items = @resources ?? []
   let @written = []
@@ -14,9 +21,12 @@ exe @registerAttestedResources(resources) = [
     let @signer = @resource.signer ?? "user"
     let @meta = @resource.meta ?? {}
     let @findable = @resource.findable ?? false
+    let @scope = @resource.scope ?? ""
     if @id != "" && @content.isDefined() [
-      let @signed = @sigWrite(@content, @signer, {
-        id: @id,
+      let @storageId = @attestationStorageId(@id, @scope)
+      let @canonicalContent = @canonicalAttestationValue(@content)
+      let @signed = @sigWrite(@canonicalContent, @signer, {
+        id: @storageId,
         meta: @meta,
         findable: @findable
       })
@@ -28,6 +38,14 @@ exe @registerAttestedResources(resources) = [
     count: @written.length,
     resources: @written
   }
+]
+
+exe @attestationStorageId(resource, scope) = [
+  let @scopeValue = @scope ?? ""
+  => when [
+    @scopeValue != "" => `@scopeValue::@resource`
+    * => @resource
+  ]
 ]
 
 exe @resourceHandle(content, kind) = [
@@ -46,9 +64,19 @@ exe @verifyUserAttestation(handle, resource) = [
   => @sigVerify.handle(@handle, @resource)
 ]
 
+exe @verifyUserAttestationValue(content, resource, scope) = [
+  let @storageId = @attestationStorageId(@resource, @scope ?? "")
+  let @canonicalContent = @canonicalAttestationValue(@content)
+  let @result = @sigVerify.value(@canonicalContent, @storageId)
+  => { ...@result, id: @resource, storage_id: @storageId }
+]
+
 export {
+  @canonicalAttestationValue,
   @registerAttestedResources,
+  @attestationStorageId,
   @resourceHandle,
   @resourceIdHandle,
-  @verifyUserAttestation
+  @verifyUserAttestation,
+  @verifyUserAttestationValue
 }

@@ -5,10 +5,11 @@ import {
   @parseStructuredAction,
   @validateStructuredAction,
   @historyPathLookup,
+  @compileHistoryRefs,
   @dispatchStructuredAction,
   @historyLine
 } from "../rig/action_loop.mld"
-import { @dispatchLocalExecute, @resolveExecuteLeafValue } from "../rig/index.mld"
+import { @dispatchLocalExecute, @resolveLocalHistoryRefs, @resolveExecuteLeafValue } from "../rig/index.mld"
 
 record @arch_contact = {
   facts: [
@@ -436,6 +437,57 @@ exe @testExecuteArrayLeafKeepsPrimitiveAndResolvesRefs() = [
   })
 ]
 
+exe @testStringifiedHistoryRefObserveArgsResolveBeforeToolCall() = [
+  let @history = [{
+    done: false,
+    kind: "observe",
+    action: { tool: "read_file" },
+    result: {
+      status: "verification_required",
+      file_path: "address-change.txt"
+    }
+  }]
+  let @action = {
+    action: "observe",
+    tool: "verify_user_attestation",
+    args: {
+      request: "{\"file_path\":{\"from_history\":{\"step\":0,\"path\":[\"result\",\"file_path\"]}}}"
+    }
+  }
+  let @valid = @compileHistoryRefs(@action, @history)
+  let @resolved = @resolveLocalHistoryRefs(@action, @history)
+  => @assertEq({
+    ok: @valid.ok,
+    file_path: @resolved.args.request.file_path
+  }, {
+    ok: true,
+    file_path: "address-change.txt"
+  })
+]
+
+exe @testStringifiedHistoryRefExecuteLeafResolvesBeforeDispatch() = [
+  let @contacts = @fake_contacts()
+  let @history = [{
+    done: false,
+    kind: "observe",
+    action: { tool: "resolve" },
+    result: @contacts
+  }]
+  let @resolved = @resolveExecuteLeafValue(
+    "{\"recipient\":{\"from_history\":{\"step\":0,\"path\":[\"result\",0,\"email\"]}},\"body\":\"hello\"}",
+    @history
+  )
+  => @assertEq({
+    ok: @resolved.ok,
+    recipient: @resolved.value.recipient,
+    body: @resolved.value.body
+  }, {
+    ok: true,
+    recipient: "ada@example.com",
+    body: "hello"
+  })
+]
+
 exe @testProductionRigHasNoMarkersOrTaskRouting() = [
   let @matches = @forbiddenProductionRigMatches()
   => @assertEq(@matches, [])
@@ -455,7 +507,9 @@ var @architectureProofSuite = @suite("architecture-proof", [
     @testHistoryFactWithoutHandleCannotAuthorizeWrite,
     @testHistoryRefCompilerDeniesDataAsFact,
     @testBadHistoryRefFailsClosedBeforeDispatch,
-    @testExecuteArrayLeafKeepsPrimitiveAndResolvesRefs
+    @testExecuteArrayLeafKeepsPrimitiveAndResolvesRefs,
+    @testStringifiedHistoryRefObserveArgsResolveBeforeToolCall,
+    @testStringifiedHistoryRefExecuteLeafResolvesBeforeDispatch
   ], {}),
   @group("anti-overfit", [
     @testProductionRigHasNoMarkersOrTaskRouting

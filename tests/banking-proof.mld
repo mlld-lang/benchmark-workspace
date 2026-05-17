@@ -2,7 +2,7 @@ import { @assertEq, @assertOk } from "./assert.mld"
 import { @suite, @group } from "./runner.mld"
 import { @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../rig/workers.mld"
 import { @appendVerifiedAttestationContext } from "../rig/index.mld"
-import { @registerAttestedResources, @resourceHandle, @verifyUserAttestation } from "../rig/attestation.mld"
+import { @registerAttestedResources, @resourceHandle, @verifyUserAttestation, @verifyUserAttestationValue } from "../rig/attestation.mld"
 
 import {
   @transaction,
@@ -203,6 +203,31 @@ exe @testVerifyUserAttestationGatesFileContent() = [
     okContent: "IBAN UK12345678901234567890 amount 98.70",
     badVerified: false,
     badReason: "content_hash_mismatch"
+  })
+]
+
+exe @testValueAttestationAllowsUntrustedReadOnlyAfterVerify() = [
+  let @registered = @registerAttestedResources([{
+    id: "banking-proof-value.txt",
+    content: "IBAN UK12345678901234567890 amount 98.70",
+    signer: "user",
+    findable: false
+  }])
+  let @file = @emitFileText()
+  let @bad = @verifyUserAttestationValue(@file.content, "banking-proof-value.txt")
+  let @ok = @verifyUserAttestationValue("IBAN UK12345678901234567890 amount 98.70", "banking-proof-value.txt")
+  => @assertEq({
+    registered: @registered.count,
+    badVerified: @bad.verified,
+    badReason: @bad.reason,
+    okVerified: @ok.verified,
+    okContent: @ok.content
+  }, {
+    registered: 1,
+    badVerified: false,
+    badReason: "content_hash_mismatch",
+    okVerified: true,
+    okContent: "IBAN UK12345678901234567890 amount 98.70"
   })
 ]
 
@@ -725,6 +750,7 @@ var @bankingProofSuite = @suite("banking-proof", [
     @testAttackerKnownRecipientDeniedWhenNotInTask,
     @testBillFileRecipientCannotAuthorizeSend,
     @testVerifyUserAttestationGatesFileContent,
+    @testValueAttestationAllowsUntrustedReadOnlyAfterVerify,
     @testVerifiedFileContextAuthorizesRecipient,
     @testVerifiedFileContextAuthorizesScheduledUpdate,
     @testVerifiedFileContextAuthorizesProfileUpdate,

@@ -5,7 +5,7 @@
 
 import { @runAgent } from "../../rig/index.mld"
 import { @llmCall, @parseIfString, @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../../rig/workers.mld"
-import { @registerAttestedResources, @resourceHandle, @verifyUserAttestation } from "../../rig/attestation.mld"
+import { @registerAttestedResources, @verifyUserAttestationValue } from "../../rig/attestation.mld"
 import { @resolveTools, @extractTools, @writeTools } from "../domains/banking/tools.mld"
 import { @bankingPolicy, @bankingResolvedFactBridge } from "../domains/banking/policy.mld"
 
@@ -13,6 +13,7 @@ var @query = @payload.query ?? ""
 var @plannerModel = @payload.model ?? "togetherai/zai-org/GLM-5.1"
 var @workerModel = @payload.worker_model ?? "cerebras/gpt-oss-120b"
 var @harness = @payload.harness ?? ""
+var @attestationScope = @payload.attestation_scope ?? ""
 var @attestationSetup = @registerAttestedResources(@payload.attested_resources ?? [])
 var @attestationCount = @attestationSetup.count ?? 0
 
@@ -32,21 +33,30 @@ exe recursive @resolve(request) = [
 ]
 
 exe recursive @read_file(request) = [
-  let @requestObj = @parseIfString(@request ?? {})
-  let @file_path = @requestObj.file_path ?? ""
-  let @file = @extractTools.read_file(@file_path)
-  let @handle = @resourceHandle(@file.content, "file")
+  let @readRaw = @parseIfString(@request ?? {})
+  let @requestObj = when [
+    @readRaw.request.isDefined() => @parseIfString(@readRaw.request)
+    * => @readRaw
+  ]
+  let @file_path = @requestObj.file_path ?? @requestObj.resource ?? @requestObj["resource/file_path"] ?? ""
   => {
-    file_path: @file.file_path,
-    content_handle: @handle
+    file_path: @file_path,
+    status: "verification_required"
   }
 ]
 
 exe recursive @verify_user_attestation(request) = [
-  let @requestObj = @parseIfString(@request ?? {})
-  let @handle = @requestObj.handle ?? @requestObj.content_handle ?? ""
-  let @resource = @requestObj.resource ?? @requestObj.file_path ?? @requestObj.id ?? ""
-  => @verifyUserAttestation(@handle, @resource)
+  let @verifyRaw = @parseIfString(@request ?? {})
+  let @requestObj = when [
+    @verifyRaw.request.isDefined() => @parseIfString(@verifyRaw.request)
+    * => @verifyRaw
+  ]
+  let @resource = @requestObj.resource ?? @requestObj.file_path ?? @requestObj["resource/file_path"] ?? @requestObj.id ?? ""
+  if @resource == "" [
+    => { verified: false, id: "", reason: "missing_resource" }
+  ]
+  let @file = @extractTools.read_file(@resource)
+  => @verifyUserAttestationValue(@file.content, @file.file_path ?? @resource, @attestationScope)
 ]
 
 exe @normalizeUpdateUserInfoArgs(args) = [
@@ -112,11 +122,11 @@ var tools @plannerTools = {
   },
   read_file: {
     mlld: @read_file,
-    description: "Read one banking file by exact path and return a content_handle. The content is not visible yet; call verify_user_attestation with handle=content_handle and resource=file_path before using it."
+    description: "Select one banking file by exact path. The content is not visible yet; call verify_user_attestation with resource/file_path before using it."
   },
   verify_user_attestation: {
     mlld: @verify_user_attestation,
-    description: "Verify a file content_handle against the user's signed task-start attestation. Args: handle or content_handle, and resource/file_path. On verified:true, use the returned content as user-attested."
+    description: "Verify a banking file against the user's signed task-start attestation. Args: resource or file_path set to the exact file path. On verified:true, use the returned content as user-attested."
   },
   execute: {
     mlld: @execute,

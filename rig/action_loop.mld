@@ -22,6 +22,18 @@ exe @isHistoryRefObject(inputValue) = js {
     inputValue.from_history !== undefined;
 }
 
+exe @parseStringifiedHistoryRefs(inputValue) = js {
+  if (typeof inputValue !== "string") return { parsed: false, value: inputValue };
+  const text = inputValue.trim();
+  if (!text || !text.includes('"from_history"')) return { parsed: false, value: inputValue };
+  if (!text.startsWith("{") && !text.startsWith("[")) return { parsed: false, value: inputValue };
+  try {
+    return { parsed: true, value: JSON.parse(text) };
+  } catch {
+    return { parsed: false, value: inputValue };
+  }
+}
+
 exe @parseStructuredAction(raw) = js {
   const text = typeof raw === "string" ? raw : String(raw ?? "");
 
@@ -182,6 +194,10 @@ exe @compileSingleHistoryRef(ref, history) = [
 ]
 
 exe recursive @validateHistoryRefs(inputValue, history) = [
+  let @stringified = @parseStringifiedHistoryRefs(@inputValue)
+  if @stringified.parsed [
+    => @validateHistoryRefs(@stringified.value, @history)
+  ]
   if @isHistoryRefObject(@inputValue) [
     => @compileSingleHistoryRef(@inputValue.from_history, @history)
   ]
@@ -207,6 +223,10 @@ exe recursive @validateHistoryRefs(inputValue, history) = [
 ]
 
 exe recursive @resolveHistoryRefs(inputValue, history) = [
+  let @stringified = @parseStringifiedHistoryRefs(@inputValue)
+  if @stringified.parsed [
+    => @resolveHistoryRefs(@stringified.value, @history)
+  ]
   if @isHistoryRefObject(@inputValue) [
     let @directRef = @inputValue.from_history
     let @directHistoryStep = @history.at(@directRef.step)
@@ -416,6 +436,7 @@ export {
   @isArrayValue,
   @isObjectValue,
   @isHistoryRefObject,
+  @parseStringifiedHistoryRefs,
   @validateStructuredAction,
   @historyPathLookup,
   @compileSingleHistoryRef,

@@ -59,22 +59,34 @@ def _resource_content_to_string(value: Any) -> str:
     return str(value)
 
 
-def _attested_resource(resource_id: str, content: Any, *, kind: str, suite: str, task_id: str, query: str) -> dict[str, Any]:
+def _attested_resource(
+    resource_id: str,
+    content: Any,
+    *,
+    kind: str,
+    suite: str,
+    task_id: str,
+    query: str,
+    scope: str,
+) -> dict[str, Any]:
     return {
         "id": resource_id,
         "content": _resource_content_to_string(content),
         "signer": "user",
         "findable": False,
+        "scope": scope,
         "meta": {
             "type": kind,
             "suite": suite,
             "task": task_id,
             "referenced_in_prompt": resource_id in query,
+            "resource": resource_id,
+            "scope": scope,
         },
     }
 
 
-def _collect_attested_resources(env_name: str, task_id: str, query: str) -> list[dict[str, Any]]:
+def _collect_attested_resources(env_name: str, task_id: str, query: str, scope: str) -> list[dict[str, Any]]:
     """Register task-start resource attestations for content-origin tasks.
 
     This is bench configuration, not rig logic: the host has access to the
@@ -86,6 +98,11 @@ def _collect_attested_resources(env_name: str, task_id: str, query: str) -> list
 
         suite = get_shifted_suite("v1.1.1", env_name)
         env = suite.load_and_inject_default_environment({})
+        try:
+            task = suite.get_user_task_by_id(task_id)
+            env = task.init_environment(env)
+        except Exception:
+            pass
     except Exception:
         return []
 
@@ -106,6 +123,7 @@ def _collect_attested_resources(env_name: str, task_id: str, query: str) -> list
                         suite=env_name,
                         task_id=task_id,
                         query=query_text,
+                        scope=scope,
                     )
                 )
 
@@ -126,6 +144,7 @@ def _collect_attested_resources(env_name: str, task_id: str, query: str) -> list
                         suite=env_name,
                         task_id=task_id,
                         query=query_text,
+                        scope=scope,
                     )
                 )
 
@@ -582,7 +601,8 @@ class MlldAgent:
         runner_mcp_config["phase_state_file"] = phase_state_file
 
         task_id = getattr(self, "_current_task_id", "user_task_0")
-        attested_resources = _collect_attested_resources(self._env_name, task_id, query)
+        attestation_scope = f"{self._env_name}:{task_id}:{self._injection_task_id or 'benign'}:{uuid.uuid4().hex}"
+        attested_resources = _collect_attested_resources(self._env_name, task_id, query, attestation_scope)
         mcp_command = _build_local_mcp_command(runner_mcp_config)
 
         payload = {
@@ -596,6 +616,7 @@ class MlldAgent:
             "llm_call_log_file": llm_call_log_file,
             "execution_log_file": execution_log_file,
             "log_llm_calls": bool(self._debug),
+            "attestation_scope": attestation_scope,
             "attested_resources": attested_resources,
         }
         if self._fast_model:

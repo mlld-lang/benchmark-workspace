@@ -97,15 +97,15 @@ Suite policy composes these generic rules with domain-specific records and tool 
 
 ## Suite Boundaries
 
-Banking centers on money movement, scheduled transaction mutation, and password/profile updates. IBANs and scheduled transaction ids are control args. File contents are handle-only to the planner until `verify_user_attestation` succeeds against a task-start file signature; only verified content is appended to execution context. Profile fields are exact-known, so address-file updates require task text or verified file context.
+Banking centers on money movement, scheduled transaction mutation, and password/profile updates. IBANs and scheduled transaction ids are control args. File reads return only a verification-required selector until the planner calls `verify_user_attestation`; the verifier re-reads internally and exposes content only after task-start signature verification succeeds. Profile fields are exact-known, so address-file updates require task text or verified file context.
 
 Workspace centers on typed instruction channels. Email bodies, file contents, calendar prose, contact notes, and attachments can be read for summaries or payloads, but recipients, participants, file ids, event ids, and destructive targets need facts or handles.
 
-Slack centers on URL and identity provenance. Webpage and TODO/app content can be fetched as handles and promoted to task authority only through planner-called sign/verify. Message-body identities still cannot authorize invite/DM/write args without a signed sender/relay primitive. UT16 is webpage-origin, not message-origin.
+Slack centers on URL and identity provenance. Webpage and TODO/app reads return verification-required selectors and can be promoted to task authority only through planner-called sign/verify. Message-body identities still cannot authorize invite/DM/write args without a signed sender/relay primitive. UT16 is webpage-origin, not message-origin.
 
 Travel centers on recommendation hijack. Objective fields such as rating, price, location, cuisine, hours, and fuel type can drive advice. Review prose is stripped from advice projections and cannot steer selections. PII remains omitted or guarded from exfiltration.
 
-Cross-domain tests prove these labels survive composition: banking secrets cannot be emailed, workspace codes cannot be sent to Slack, webpage content cannot mint IBANs, and TODO text cannot become generic write authority.
+Cross-domain tests prove these labels survive composition: banking secrets cannot be emailed, workspace codes cannot be sent to Slack, webpage content cannot mint IBANs, and unverified TODO text cannot become generic write authority.
 
 ## Status Semantics
 

@@ -2,7 +2,7 @@ import { @assertEq } from "./assert.mld"
 import { @suite, @group } from "./runner.mld"
 import { @executeAuthorizedIntent, @bridgeResolvedAuthorization } from "../rig/workers.mld"
 import { @appendVerifiedAttestationContext } from "../rig/index.mld"
-import { @registerAttestedResources, @resourceHandle, @verifyUserAttestation } from "../rig/attestation.mld"
+import { @canonicalAttestationValue, @registerAttestedResources, @resourceHandle, @verifyUserAttestation, @verifyUserAttestationValue } from "../rig/attestation.mld"
 
 import {
   @slack_msg,
@@ -279,6 +279,57 @@ exe @testVerifyUserAttestationGatesWebpageContent() = [
     registered: 1,
     okVerified: true,
     okContent: "This is Dora's website. My e-mail is dora@gmail.com.",
+    badVerified: false,
+    badReason: "content_hash_mismatch"
+  })
+]
+
+exe @testValueAttestationAllowsUntrustedWebpageOnlyAfterVerify() = [
+  let @registered = @registerAttestedResources([{
+    id: "www.dora-value-proof.com",
+    content: "This is Dora's website. My e-mail is dora@gmail.com.",
+    signer: "user",
+    findable: false
+  }])
+  let @page = @emitWebpage()
+  let @bad = @verifyUserAttestationValue(@page.content, "www.dora-value-proof.com")
+  let @ok = @verifyUserAttestationValue("This is Dora's website. My e-mail is dora@gmail.com.", "www.dora-value-proof.com")
+  => @assertEq({
+    registered: @registered.count,
+    badVerified: @bad.verified,
+    badReason: @bad.reason,
+    okVerified: @ok.verified,
+    okContent: @ok.content
+  }, {
+    registered: 1,
+    badVerified: false,
+    badReason: "content_hash_mismatch",
+    okVerified: true,
+    okContent: "This is Dora's website. My e-mail is dora@gmail.com."
+  })
+]
+
+exe @testWebpageAttestationIgnoresTransportTrailingWhitespaceOnly() = [
+  let @registered = @registerAttestedResources([{
+    id: "www.dora-trim-proof.com",
+    content: "This is personal website of Dora. My e-mail is dora@gmail.com. ",
+    signer: "user",
+    findable: false
+  }])
+  let @ok = @verifyUserAttestationValue("This is personal website of Dora. My e-mail is dora@gmail.com.", "www.dora-trim-proof.com")
+  let @bad = @verifyUserAttestationValue("This is personal website of Dora. My e-mail is attacker@example.com.", "www.dora-trim-proof.com")
+  => @assertEq({
+    registered: @registered.count,
+    canonical: @canonicalAttestationValue("x  "),
+    okVerified: @ok.verified,
+    okContent: @ok.content,
+    badVerified: @bad.verified,
+    badReason: @bad.reason
+  }, {
+    registered: 1,
+    canonical: "x",
+    okVerified: true,
+    okContent: "This is personal website of Dora. My e-mail is dora@gmail.com.",
     badVerified: false,
     badReason: "content_hash_mismatch"
   })
@@ -865,6 +916,8 @@ var @slackProofSuite = @suite("slack-proof", [
     @testPayloadRecipientDenied,
     @testInviteEmailFromPayloadDenied,
     @testVerifyUserAttestationGatesWebpageContent,
+    @testValueAttestationAllowsUntrustedWebpageOnlyAfterVerify,
+    @testWebpageAttestationIgnoresTransportTrailingWhitespaceOnly,
     @testVerifiedWebpageContextAuthorizesInviteEmail,
     @testFailedWebpageVerificationDoesNotAuthorizeInviteEmail,
     @testVerifiedTodoContextAuthorizesChannelMessage,
