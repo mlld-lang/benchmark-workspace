@@ -13,10 +13,9 @@
 #
 # Default mode dispatches the 5 sub-suites in batches of 2 (last
 # batch is solo travel), polling for capacity between dispatches so
-# at most MAX_CONCURRENT bench-run jobs are in flight. This trades
-# wall (~3 batches × ~6 min ≈ 18 min) for predictable rate-limit
-# headroom — vs. all-5-parallel which saturates GLM-5.1 capacity
-# and produces 5k+ HTTP 429s.
+# at most MAX_CONCURRENT bench-run jobs are in flight. Each job also
+# caps task-level parallelism; runner CPU/memory are not the limiting
+# resource, the shared GLM-5.1 inference API is.
 #
 # Usage:
 #   scripts/bench.sh                          # full sweep, 2-at-a-time (default)
@@ -47,10 +46,20 @@ set -euo pipefail
 WORKFLOW=bench-run.yml
 GRIND_FILE="bench/grind-tasks.json"
 
-# How many bench-run jobs to allow in flight at once. 2 is the empirical
-# headroom under Tier 4 Together AI for GLM-5.1 — see today's 429
-# investigation in HANDOFF.md. Set higher only with dedicated capacity.
+# How many bench-run jobs to allow in flight at once. Set higher only
+# with dedicated inference capacity.
 MAX_CONCURRENT=${MAX_CONCURRENT:-2}
+
+# How many AgentDojo tasks each bench-run job may execute at once.
+# Two workflow jobs with uncapped per-job fanout can still mean 30-40
+# simultaneous GLM planners, which is enough to produce HTTP 429s. Keep
+# this conservative for shared Together AI limits; override upward only
+# when inference capacity is dedicated.
+TASK_PARALLEL_CAP=${TASK_PARALLEL_CAP:-8}
+
+# Seconds between task submissions inside each bench-run job. This
+# smooths the initial request burst before the per-job cap is reached.
+STAGGER_SECONDS=${STAGGER_SECONDS:-15}
 
 # Per-target shape. Workspace splits into halves of 20 tasks each, so all
 # 5 sub-suites are roughly 16-21 tasks. Measured peak memory across recent
@@ -251,6 +260,10 @@ run_sub_suite() {
 
   local count
   count=$(echo "$tasks" | wc -w | tr -d ' ')
+  local parallelism=$count
+  if [[ "$parallelism" -gt "$TASK_PARALLEL_CAP" ]]; then
+    parallelism=$TASK_PARALLEL_CAP
+  fi
 
   # Only pass tasks if it's a partial slice. For a full sub-suite that
   # equals the whole AgentDojo suite, pass empty tasks so bench-run
@@ -268,12 +281,14 @@ run_sub_suite() {
       -f suite="$underlying" \
       -f tasks="$task_arg" \
       -f shape="$(shape_for "$underlying")" \
-      -f parallelism="$count"
+      -f parallelism="$parallelism" \
+      -f stagger="$STAGGER_SECONDS"
   else
     dispatch "$label" \
       -f suite="$underlying" \
       -f shape="$(shape_for "$underlying")" \
-      -f parallelism="$count"
+      -f parallelism="$parallelism" \
+      -f stagger="$STAGGER_SECONDS"
   fi
 }
 
