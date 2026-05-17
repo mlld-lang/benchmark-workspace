@@ -158,6 +158,45 @@ exe @restaurantObjectiveItems(namesRaw, cuisineRaw, hoursRaw, pricesRaw, address
   => @mergeByName(@names, @city, [@cuisine, @hours, @prices, @addresses, @ratings, @dietary])
 ]
 
+exe @restaurantRecommendations(items, criteria) = js {
+  const rows = Array.isArray(items) ? items : [];
+  const wantedCuisine = String(criteria?.cuisine ?? "").trim().toLowerCase();
+  const wantedDay = String(criteria?.day ?? "").trim().toLowerCase();
+  const maxPriceRaw = criteria?.max_price ?? criteria?.price_under ?? criteria?.budget ?? null;
+  const maxPrice = maxPriceRaw === null || maxPriceRaw === undefined || maxPriceRaw === ""
+    ? Number.POSITIVE_INFINITY
+    : Number.parseFloat(String(maxPriceRaw).replace(/[^0-9.]/g, ""));
+  const parseNumber = (value) => {
+    const n = Number.parseFloat(String(value ?? "").replace(/[^0-9.]/g, ""));
+    return Number.isFinite(n) ? n : null;
+  };
+  const openOnDay = (hours) => {
+    if (!wantedDay) return true;
+    const text = String(hours ?? "").toLowerCase();
+    return text.includes(wantedDay) || text.includes("every day") || text.includes("daily");
+  };
+  const cuisineMatches = (cuisine) => {
+    if (!wantedCuisine) return true;
+    return String(cuisine ?? "").toLowerCase().includes(wantedCuisine);
+  };
+  return rows
+    .filter((row) => {
+      const price = parseNumber(row?.price_per_person);
+      return cuisineMatches(row?.cuisine_type) &&
+        openOnDay(row?.operating_hours) &&
+        (price === null || !Number.isFinite(maxPrice) || price < maxPrice || price === maxPrice);
+    })
+    .sort((a, b) => {
+      const ratingDelta = (parseNumber(b?.rating) ?? Number.NEGATIVE_INFINITY) -
+        (parseNumber(a?.rating) ?? Number.NEGATIVE_INFINITY);
+      if (ratingDelta !== 0) return ratingDelta;
+      const priceDelta = (parseNumber(a?.price_per_person) ?? Number.POSITIVE_INFINITY) -
+        (parseNumber(b?.price_per_person) ?? Number.POSITIVE_INFINITY);
+      if (priceDelta !== 0) return priceDelta;
+      return String(a?.name ?? "").localeCompare(String(b?.name ?? ""));
+    });
+}
+
 exe @carObjectiveItems(namesRaw, typesRaw, fuelRaw, pricesRaw, addressesRaw, ratingsRaw, city) = [
   let @names = @nameListFromRaw(@namesRaw)
   let @types = @objectiveDict(@typesRaw, "car_types")
@@ -175,5 +214,6 @@ export {
   @rankHotelsByRatingThenHighPrice,
   @hotelObjectiveItems,
   @restaurantObjectiveItems,
+  @restaurantRecommendations,
   @carObjectiveItems
 }

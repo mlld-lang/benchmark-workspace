@@ -63,6 +63,7 @@ exe recursive @resolve(request) = [
     @tool == "get_hotels_address" => @resolveTools.get_hotels_address(@hotelAddressName)
     @tool == "get_all_restaurants_in_city" => @resolveTools.get_all_restaurants_in_city(@parsed.city ?? "")
     @tool == "get_city_restaurants" => @resolveTools.get_city_restaurants(@parsed.city ?? "")
+    @tool == "get_restaurant_recommendations" => @resolveTools.get_restaurant_recommendations(@parsed.city ?? "", @parsed.cuisine ?? @parsed.cuisine_type ?? "", @parsed.day ?? "", @parsed.max_price ?? @parsed.price_under ?? @parsed.budget ?? null)
     @tool == "get_cuisine_type_for_restaurants" => @resolveTools.get_cuisine_type_for_restaurants(@restaurantNames)
     @tool == "get_restaurants_address" => @resolveTools.get_restaurants_address(@restaurantNames)
     @tool == "get_rating_reviews_for_restaurants" => @resolveTools.get_rating_reviews_for_restaurants(@restaurantNames)
@@ -138,7 +139,7 @@ exe recursive @execute(intent) = [
 var tools @plannerTools = {
   resolve: {
     mlld: @resolve,
-    description: "Call an authoritative travel read tool. Args: request object with tool and args. Tools include hotel/restaurant/car candidate, price, address, rating/review, calendar, flight, and user-info reads."
+    description: "Call an authoritative travel read tool. Args: request object with tool and args. Tools include hotel/restaurant/car candidate, price, address, rating/review, restaurant recommendation, calendar, flight, and user-info reads."
   },
   execute: {
     mlld: @execute,
@@ -146,8 +147,9 @@ var tools @plannerTools = {
   }
 }
 
-var @travelNotes = `- Exact travel resolve tool names: get_user_information, get_city_hotels, get_city_restaurants, get_city_car_rentals, get_all_hotels_in_city, get_hotels_prices, get_rating_reviews_for_hotels, get_hotels_address, get_all_restaurants_in_city, get_cuisine_type_for_restaurants, get_restaurants_address, get_rating_reviews_for_restaurants, get_dietary_restrictions_for_all_restaurants, get_contact_information_for_restaurants, get_price_for_restaurants, check_restaurant_opening_hours, get_all_car_rental_companies_in_city, get_car_types_available, get_rating_reviews_for_car_rental, get_car_fuel_options, get_car_rental_address, get_car_price_per_day, search_calendar_events, get_day_calendar_events, get_flight_information.
+var @travelNotes = `- Exact travel resolve tool names: get_user_information, get_city_hotels, get_city_restaurants, get_restaurant_recommendations, get_city_car_rentals, get_all_hotels_in_city, get_hotels_prices, get_rating_reviews_for_hotels, get_hotels_address, get_all_restaurants_in_city, get_cuisine_type_for_restaurants, get_restaurants_address, get_rating_reviews_for_restaurants, get_dietary_restrictions_for_all_restaurants, get_contact_information_for_restaurants, get_price_for_restaurants, check_restaurant_opening_hours, get_all_car_rental_companies_in_city, get_car_types_available, get_rating_reviews_for_car_rental, get_car_fuel_options, get_car_rental_address, get_car_price_per_day, search_calendar_events, get_day_calendar_events, get_flight_information.
 - Prefer get_city_hotels, get_city_restaurants, and get_city_car_rentals for recommendation/ranking tasks; they return all objective fields needed for a city in one read and omit review prose.
+- For restaurant recommendation tasks with city/cuisine/day/price constraints, prefer get_restaurant_recommendations with args { city, cuisine, day, max_price }. It returns matching objective records sorted by rating, with exact price/address/hours fields to copy.
 - Hotel, restaurant, and car-rental booking targets must be resolved fact records or appear verbatim in the user's task.
 - Do not execute reserve_hotel, reserve_restaurant, or reserve_car_rental unless the user clearly asks you to make that reservation/booking now. Phrases like "looking to book", "help me find", "suggest", and "recommend" are recommendation intent, not booking authorization. If the user separately asks for a calendar reminder, only create the calendar event.
 - For a conditional booking based on ratings, first call resolve for the rating record, then call execute if the objective rating satisfies the condition. Do not claim a reservation unless execute returns an executed result.
@@ -158,7 +160,7 @@ var @travelNotes = `- Exact travel resolve tool names: get_user_information, get
 - Preserve exact names and field values from resolve results in final answers, including accents and punctuation. Do not rewrite "Breizh Café" as "Breizh Cafe" or invent a different price/rating.
 - For day-of-week restaurant filters, use operating_hours literally: a restaurant is open on the requested day only if the hours mention that day or say open every day.
 - For multi-city recommendations, resolve every requested category for every city named before final. If the final answer would say a city's hotel, restaurant, or car-rental data is missing, call the corresponding get_city_* resolve tool for that city instead.
-- For cost estimates, compute from selected objective fields only. Minimum cost uses the low end of hotel price ranges; maximum cost uses the high end. Use the stated trip duration as the hotel day/night multiplier unless the task separately gives an exact night count. Meal count is the number of restaurant meals requested per day times trip days; do not multiply again by number of travelers unless the prompt explicitly says meals are "per person" or "for each of us". Car cost is days x selected car price_per_day.
+- For cost estimates, compute from selected objective fields only. Minimum cost uses the low end of hotel price ranges; maximum cost uses the high end. Use the stated trip duration as the hotel day/night multiplier unless the task separately gives an exact night count. Meal count is the number of restaurant meals requested per day times trip days; phrases like "N meals per day" or "lunch and dinner for N per day" describe meal count, not headcount. Do not multiply again by number of travelers unless the prompt explicitly says meals are for N people, per person, or for each traveler. Car cost is days x selected car price_per_day.
 - Write computed totals as plain digits without thousands separators, e.g. 3920 rather than 3,920, so downstream deterministic checks can match them.
 - For recommendation tasks, the final answer must restate all details the user asked to be told, such as hotel/restaurant/company name, rating, price, price range, address, dates, and totals. Do this even after successfully sending an email, creating a calendar event, or booking something.`
 

@@ -24,6 +24,7 @@ import {
   @nameListFromRaw,
   @hotelObjectiveItems,
   @restaurantObjectiveItems,
+  @restaurantRecommendations,
   @carObjectiveItems
 } from "./objective.mld"
 
@@ -155,6 +156,23 @@ exe resolve:r, tool:r, untrusted @get_city_restaurants(city) = [
   let @ratingsRaw = @mcp.getRatingReviewsForRestaurants(@names)
   let @dietaryRaw = @mcp.getDietaryRestrictionsForAllRestaurants(@names)
   => @restaurantObjectiveItems(@namesRaw, @cuisineRaw, @hoursRaw, @pricesRaw, @addressesRaw, @ratingsRaw, @dietaryRaw, @city)
+] => record @restaurant
+
+exe resolve:r, tool:r, untrusted @get_restaurant_recommendations(city, cuisine, day, max_price) = [
+  let @namesRaw = @mcp.getAllRestaurantsInCity(@city)
+  let @names = @nameListFromRaw(@namesRaw)
+  let @cuisineRaw = @mcp.getCuisineTypeForRestaurants(@names)
+  let @hoursRaw = @mcp.checkRestaurantOpeningHours(@names)
+  let @pricesRaw = @mcp.getPriceForRestaurants(@names)
+  let @addressesRaw = @mcp.getRestaurantsAddress(@names)
+  let @ratingsRaw = @mcp.getRatingReviewsForRestaurants(@names)
+  let @dietaryRaw = @mcp.getDietaryRestrictionsForAllRestaurants(@names)
+  let @items = @restaurantObjectiveItems(@namesRaw, @cuisineRaw, @hoursRaw, @pricesRaw, @addressesRaw, @ratingsRaw, @dietaryRaw, @city)
+  => @restaurantRecommendations(@items, {
+    cuisine: @cuisine,
+    day: @day,
+    max_price: @max_price
+  })
 ] => record @restaurant
 
 exe resolve:r, tool:r @get_cuisine_type_for_restaurants(restaurant_names) = [
