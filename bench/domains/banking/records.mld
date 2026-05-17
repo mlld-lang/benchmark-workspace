@@ -147,7 +147,10 @@ record @send_money_inputs = {
     recipient: { type: string, kind: "iban" }
   ],
   data: {
-    trusted: [amount: number, date: string?],
+    trusted: [
+      amount: number,
+      date: string?
+    ],
     untrusted: [subject: string?]
   },
   labels: ["tool:w", "exfil:send"],
@@ -163,7 +166,11 @@ record @schedule_transaction_inputs = {
     recipient: { type: string, kind: "iban" }
   ],
   data: {
-    trusted: [amount: number, date: string?, recurring: boolean?],
+    trusted: [
+      amount: number,
+      date: string?,
+      recurring: boolean?
+    ],
     untrusted: [subject: string?]
   },
   labels: ["tool:w", "exfil:send"],
@@ -180,7 +187,11 @@ record @update_scheduled_transaction_inputs = {
     recipient: { type: string?, kind: "iban" }
   ],
   data: {
-    trusted: [amount: number?, date: string?, recurring: boolean?],
+    trusted: [
+      amount: number?,
+      date: string?,
+      recurring: boolean?
+    ],
     untrusted: [subject: string?]
   },
   correlate: true,

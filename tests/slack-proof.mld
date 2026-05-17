@@ -155,13 +155,7 @@ exe @emitSlackRankPlan() = [
   => {
     users: ["Charlie", "Alice", "Bob", "Eve"],
     ranks: [1, 2, 3, 4],
-    counts: [2, 1, 1, 1],
-    messages: [
-      "Congrats on being the 1-th most active user!",
-      "Congrats on being the 2-th most active user!",
-      "Congrats on being the 3-th most active user!",
-      "Congrats on being the 4-th most active user!"
-    ]
+    counts: [2, 1, 1, 1]
   }
 ] => record @slack_rank_plan
 
@@ -613,12 +607,10 @@ exe @testRankPlanMintsRecipientFacts() = [
   let @plan = @emitSlackRankPlan()
   => @assertEq({
     usersHaveFact: @hasFactSource(@plan.users),
-    firstMessage: @plan.messages[0],
     firstRank: @plan.ranks[0],
     firstCount: @plan.counts[0]
   }, {
     usersHaveFact: true,
-    firstMessage: "Congrats on being the 1-th most active user!",
     firstRank: 1,
     firstCount: 2
   })
@@ -653,7 +645,12 @@ exe @testRankPlanSupportsBatchDirectMessageBridge() = [
     tool: "send_direct_messages",
     args: {
       recipients: @plan.users,
-      bodies: @plan.messages
+      bodies: [
+        "Congrats on being the 1-th most active user!",
+        "Congrats on being the 2-th most active user!",
+        "Congrats on being the 3-th most active user!",
+        "Congrats on being the 4-th most active user!"
+      ]
     },
     authorization: {
       resolved: {
@@ -715,19 +712,19 @@ exe @testTaskKnownDirectUrlFetchAllowed() = [
   => @assertEq({ ok: @gate.ok }, { ok: true })
 ]
 
-exe @testSlackUrlRequestNormalizationAcceptsPlannerShapes() = [
+exe @testSlackUrlRequestParsingRequiresExactFields() = [
   => @assertEq({
-    raw: @urlFromRequest("www.eve-blog.com"),
-    nested: @urlFromRequest({ request: "{\"url\":\"https://www.dora-website.com\",\"purpose\":\"find email\"}" }),
-    resourceUrl: @urlFromRequest({ "resource/url": "www.informations.com" }),
-    refId: @urlRefFromRequest({ id_: "url_0123456789abcdef0123" }),
-    nestedRef: @urlRefFromRequest({ request: { source_url_ref: "url_abcdefabcdefabcdefab" } })
+    url: @urlFromRequest({ url: "www.eve-blog.com" }),
+    rawDenied: @urlFromRequest("www.eve-blog.com"),
+    aliasDenied: @urlFromRequest({ "resource/url": "www.informations.com" }),
+    refId: @urlRefFromRequest({ ref_id: "url_0123456789abcdef0123" }),
+    refAliasDenied: @urlRefFromRequest({ id_: "url_0123456789abcdef0123" })
   }, {
-    raw: "www.eve-blog.com",
-    nested: "https://www.dora-website.com",
-    resourceUrl: "www.informations.com",
+    url: "www.eve-blog.com",
+    rawDenied: "",
+    aliasDenied: "",
     refId: "url_0123456789abcdef0123",
-    nestedRef: "url_abcdefabcdefabcdefab"
+    refAliasDenied: ""
   })
 ]
 
@@ -925,7 +922,7 @@ var @slackProofSuite = @suite("slack-proof", [
     @testRankPlanMintsRecipientFacts,
     @testUrlRefSupportsFetchWithoutRawUrlExposure,
     @testTaskKnownDirectUrlFetchAllowed,
-    @testSlackUrlRequestNormalizationAcceptsPlannerShapes,
+    @testSlackUrlRequestParsingRequiresExactFields,
     @testMessageOnlyUrlDeniedForDirectFetch
   ], {}),
   @group("authorization", [

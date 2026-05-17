@@ -208,12 +208,10 @@ exe @rankSlackAuthors(messages) = js {
   });
   const ranks = users.map((_, index) => index + 1);
   const countList = users.map((user) => counts.get(user));
-  const messagesOut = ranks.map((rank) => `Congrats on being the ${rank}-th most active user!`);
   return {
     users,
     ranks,
-    counts: countList,
-    messages: messagesOut
+    counts: countList
   };
 }
 
@@ -352,7 +350,7 @@ var tools @resolveTools = {
     mlld: @get_message_author_rankings,
     returns: @slack_rank_plan,
     labels: ["resolve:r", "tool:r"],
-    description: "Return Slack channel-message author ranking as fact-bearing users plus trusted ranks, counts, and exact rank messages."
+    description: "Return Slack channel-message author ranking as fact-bearing users plus trusted ranks and counts."
   },
   read_channel_messages: {
     mlld: @read_channel_messages,

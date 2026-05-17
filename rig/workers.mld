@@ -19,22 +19,6 @@ exe @chooseHarness(modelName, override) = when [
   * => "claude"
 ]
 
-exe @parseJsonString(inputValue) = js {
-  if (typeof inputValue !== "string") return inputValue;
-  try {
-    return JSON.parse(inputValue);
-  } catch {
-    return {};
-  }
-}
-
-exe @parseIfString(inputValue) = [
-  => when [
-    @inputValue.mx.type == "simple-text" => @parseJsonString(@inputValue)
-    * => @inputValue
-  ]
-]
-
 exe @allValuesInTask(values, task) = js {
   const arr = Array.isArray(values) ? values : [values];
   const text = String(task || "");
@@ -69,6 +53,22 @@ exe recursive @valueHasAllowedFactSource(inputValue, allowedRefs) = [
   => false
 ]
 
+exe recursive @valueHasAnyFactSource(inputValue) = [
+  let @sources = @inputValue.mx.factsources ?? []
+  if @sources.length > 0 [
+    => true
+  ]
+  if @inputValue.isArray() [
+    for @item in @inputValue [
+      let @itemHasFact = @valueHasAnyFactSource(@item)
+      if @itemHasFact [
+        => true
+      ]
+    ]
+  ]
+  => false
+]
+
 exe @bridgeValueText(inputValue) = js {
   if (Array.isArray(inputValue)) return inputValue.map((item) => String(item ?? "")).join(" ");
   return String(inputValue ?? "");
@@ -86,13 +86,9 @@ exe @appendBridgeContext(task, lines) = js {
 }
 
 exe @parseExecuteRequest(inputValue, defaultTask) = [
-  let @request = @parseIfString(@inputValue)
-  let @intent = when [
-    @request.intent.isDefined() => @parseIfString(@request.intent)
-    * => @request
-  ]
+  let @request = @inputValue ?? {}
   => {
-    intent: @intent,
+    intent: @request.intent ?? {},
     task: @request.task_context ?? @defaultTask
   }
 ]
@@ -103,7 +99,7 @@ exe @parseExecuteRequest(inputValue, defaultTask) = [
 >> facts into scoped known claims and extends the task context with only those
 >> values. Payload/data fields never satisfy this bridge.
 exe @bridgeResolvedAuthorization(intent, task, resolvedFactBridge) = [
-  let @parsed = @parseIfString(@intent)
+  let @parsed = @intent ?? {}
   let @toolName = @parsed.tool
   let @authorization = @parsed.authorization ?? {}
   let @resolvedBucket = @authorization.resolved ?? {}
@@ -167,8 +163,76 @@ exe role:planner @compileAuthorization(intent, writeTools, task, basePolicy) = [
   ]
 ]
 
+exe @knownArgMismatches(args, knownForTool) = js {
+  const actual = args && typeof args === "object" && !Array.isArray(args) ? args : {};
+  const known = knownForTool && typeof knownForTool === "object" && !Array.isArray(knownForTool) ? knownForTool : {};
+
+  function unwrapArg(value) {
+    if (
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      value.source === "known" &&
+      Object.prototype.hasOwnProperty.call(value, "value")
+    ) {
+      return value.value;
+    }
+    return value;
+  }
+
+  function stable(value) {
+    if (value === null || typeof value !== "object") return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(",")}}`;
+  }
+
+  const mismatches = [];
+  for (const [arg, entry] of Object.entries(known)) {
+    if (!entry || typeof entry !== "object" || !Object.prototype.hasOwnProperty.call(entry, "value")) {
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(actual, arg)) {
+      continue;
+    }
+    const provided = unwrapArg(actual[arg]);
+    if (stable(provided) !== stable(entry.value)) {
+      mismatches.push({ arg, provided, expected: entry.value });
+    }
+  }
+  return mismatches;
+}
+
+exe @knownHandleForValue(knownEntries, inputValue) = js {
+  const entries = Array.isArray(knownEntries) ? knownEntries : [];
+  function labelFor(value) {
+    if (value === null || value === undefined) return String(value);
+    if (typeof value === "string") return value;
+    return JSON.stringify(value);
+  }
+  const label = labelFor(inputValue);
+  const match = entries.find((entry) => entry && entry.label === label && entry.handle);
+  return match ? match.handle : null;
+}
+
+exe @prepareKnownDispatchArgs(args, knownForTool, knownEntries) = [
+  let @prepared = @args ?? {}
+  let @known = @knownForTool ?? {}
+  for @argName, @entry in @known [
+    if @entry.value.isDefined() && @prepared[@argName].isDefined() [
+      let @alreadyHasFact = @valueHasAnyFactSource(@prepared[@argName])
+      if !@alreadyHasFact [
+        let @handle = @knownHandleForValue(@knownEntries, @entry.value)
+        if @handle [
+          let @prepared += { [@argName]: @handle }
+        ]
+      ]
+    ]
+  ]
+  => @prepared
+]
+
 exe role:worker, recursive @executeAuthorizedIntent(intent, writeTools, task, basePolicy) = [
-  let @parsed = @parseIfString(@intent)
+  let @parsed = @intent ?? {}
   let @toolName = @parsed.tool
   if !@toolName [
     => { ok: false, status: "invalid_intent", error: "missing tool" }
@@ -190,6 +254,21 @@ exe role:worker, recursive @executeAuthorizedIntent(intent, writeTools, task, ba
   ]
 
   let @args = @parsed.args ?? {}
+  let @toolKnown = @authorization.known[@toolName] ?? {}
+  let @knownMismatches = @knownArgMismatches(@args, @toolKnown)
+  if @knownMismatches.length > 0 [
+    => {
+      ok: false,
+      status: "security_denied",
+      tool: @toolName,
+      denial: {
+        code: "known_arg_mismatch",
+        reason: "actual tool args disagree with authorized known values",
+        mismatches: @knownMismatches
+      }
+    }
+  ]
+  let @preparedArgs = @prepareKnownDispatchArgs(@args, @toolKnown, @fyi.known())
   let @toolLabels = @writeTools[@toolName].labels ?? []
   let @isExfilSend = @toolLabels.includes("exfil:send")
   let @body = @args.body ?? ""
@@ -284,7 +363,7 @@ exe role:worker, recursive @executeAuthorizedIntent(intent, writeTools, task, ba
       code: @mx.denial.code ?? "guard_denied",
       reason: @mx.guard.reason ?? @mx.denial.reason ?? "security policy denied the write"
     }
-    * => @writeTools[@toolName](@args) with { policy: @built.policy }
+    * => @writeTools[@toolName](@preparedArgs) with { policy: @built.policy }
   ]
   if @result.isObject() && @result.__mlld_security_denied [
     => {
@@ -304,11 +383,10 @@ exe role:worker, recursive @executeAuthorizedIntent(intent, writeTools, task, ba
 
 export {
   @chooseHarness,
-  @parseJsonString,
-  @parseIfString,
   @allValuesInTask,
   @factsourcesContainRef,
   @valueHasAllowedFactSource,
+  @valueHasAnyFactSource,
   @bridgeValueText,
   @plainBridgeValue,
   @appendBridgeContext,
@@ -316,5 +394,8 @@ export {
   @bridgeResolvedAuthorization,
   @llmCall,
   @compileAuthorization,
+  @knownArgMismatches,
+  @knownHandleForValue,
+  @prepareKnownDispatchArgs,
   @executeAuthorizedIntent
 }

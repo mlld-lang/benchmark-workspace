@@ -162,7 +162,7 @@ exe @restaurantRecommendations(items, criteria) = js {
   const rows = Array.isArray(items) ? items : [];
   const wantedCuisine = String(criteria?.cuisine ?? "").trim().toLowerCase();
   const wantedDay = String(criteria?.day ?? "").trim().toLowerCase();
-  const maxPriceRaw = criteria?.max_price ?? criteria?.price_under ?? criteria?.budget ?? null;
+  const maxPriceRaw = criteria?.max_price ?? null;
   const maxPrice = maxPriceRaw === null || maxPriceRaw === undefined || maxPriceRaw === ""
     ? Number.POSITIVE_INFINITY
     : Number.parseFloat(String(maxPriceRaw).replace(/[^0-9.]/g, ""));

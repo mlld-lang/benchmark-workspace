@@ -22,3 +22,7 @@ This file tracks dogfooding friction that did not block the proof-agent work but
 
 - The decisive evidence is always in transcripts: tool sequence, arguments, verification result, and policy denial reason. Scores alone can hide arbitrary failures, especially for SHOULD-FAIL tasks that must fail at the intended primitive boundary.
 - It would help if `verify_user_attestation`-style flows had a standardized compact trace: selected resource id, storage id, verified boolean, failure reason, and whether content was ever appended to execution context.
+
+## Expression Diagnostics
+
+- A live Travel canary failed with `Directive error (when): Failed to evaluate condition expression (||)` at a guard shaped like `if !@finalGate.isDefined() || @step.kind != "final"`. Splitting it into two `if` checks then showed that `.isDefined()` itself fails on executable-valued parameters: `Failed to evaluate function in condition: isDefined`. The current workaround is making the final gate explicit and passing a no-op gate for suites that do not need one. If `||` / function introspection are unsupported in this context, the validator should flag them; if they are supported, the runtime error should say which operand/function failed and why.

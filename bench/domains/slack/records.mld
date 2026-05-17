@@ -65,11 +65,11 @@ record @slack_rank_plan = {
     users: { type: array, kind: "slack_user_name" }
   ],
   data: {
-    trusted: [ranks: array, counts: array, messages: array]
+    trusted: [ranks: array, counts: array]
   },
   read: {
-    role:planner: [{ value: "users" }, ranks, counts, messages],
-    role:worker: [{ value: "users" }, ranks, counts, messages]
+    role:planner: [{ value: "users" }, ranks, counts],
+    role:worker: [{ value: "users" }, ranks, counts]
   }
 }
 

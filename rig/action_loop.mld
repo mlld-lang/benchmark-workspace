@@ -15,6 +15,10 @@ exe @isObjectValue(inputValue) = js {
   return inputValue !== null && typeof inputValue === "object" && !Array.isArray(inputValue);
 }
 
+exe @isStringValue(inputValue) = js {
+  return typeof inputValue === "string";
+}
+
 exe @isHistoryRefObject(inputValue) = js {
   return inputValue !== null &&
     typeof inputValue === "object" &&
@@ -22,79 +26,19 @@ exe @isHistoryRefObject(inputValue) = js {
     inputValue.from_history !== undefined;
 }
 
-exe @parseStringifiedHistoryRefs(inputValue) = js {
-  if (typeof inputValue !== "string") return { parsed: false, value: inputValue };
-  const text = inputValue.trim();
-  if (!text || !text.includes('"from_history"')) return { parsed: false, value: inputValue };
-  if (!text.startsWith("{") && !text.startsWith("[")) return { parsed: false, value: inputValue };
-  try {
-    return { parsed: true, value: JSON.parse(text) };
-  } catch {
-    return { parsed: false, value: inputValue };
-  }
-}
-
-exe @parseStructuredAction(raw) = js {
-  const text = typeof raw === "string" ? raw : String(raw ?? "");
-
-  function stripFence(s) {
-    const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    return fenced ? fenced[1].trim() : s.trim();
-  }
-
-  function parseCandidate(candidate) {
-    try {
-      const parsed = JSON.parse(candidate);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed;
-      }
-    } catch {
-      return null;
-    }
-    return null;
-  }
-
-  const direct = parseCandidate(stripFence(text));
-  if (direct && typeof direct.action === "string") {
-    return { ok: true, action: direct };
-  }
-
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] !== "{") continue;
-    let depth = 0;
-    let inString = false;
-    let escape = false;
-    for (let j = i; j < text.length; j++) {
-      const ch = text[j];
-      if (escape) {
-        escape = false;
-        continue;
-      }
-      if (ch === "\\") {
-        escape = true;
-        continue;
-      }
-      if (ch === '"') {
-        inString = !inString;
-        continue;
-      }
-      if (inString) continue;
-      if (ch === "{") depth++;
-      if (ch === "}") {
-        depth--;
-        if (depth === 0) {
-          const parsed = parseCandidate(text.slice(i, j + 1));
-          if (parsed && typeof parsed.action === "string") {
-            return { ok: true, action: parsed };
-          }
-          break;
-        }
-      }
-    }
-  }
-
-  return { ok: false, status: "no_structured_action" };
-}
+exe @parseStructuredAction(raw) = [
+  let @parsed = @raw | @parse.llm
+  if !@parsed [
+    => { ok: false, status: "no_structured_action" }
+  ]
+  if !@isObjectValue(@parsed) [
+    => { ok: false, status: "no_structured_action" }
+  ]
+  if !@parsed.action.isDefined() [
+    => { ok: false, status: "no_structured_action" }
+  ]
+  => { ok: true, action: @parsed }
+]
 
 exe @looksLikeStructuredActionAttempt(raw) = js {
   const text = typeof raw === "string" ? raw.trim() : String(raw ?? "").trim();
@@ -114,41 +58,45 @@ exe @validateStructuredAction(parsed, plannerTools, writeTools) = [
     => { ok: false, status: "invalid_action", error: "missing action" }
   ]
   if @kind == "final" || @kind == "refuse" [
-    let @content = @action.content ?? @action.reason ?? ""
+    let @content = @action.content ?? ""
     => when [
       @content != "" => { ok: true, action: @action }
       * => { ok: false, status: "invalid_action", error: "final/refuse missing content" }
     ]
   ]
   if @kind == "execute" [
-    let @intent = @action.intent ?? @action
+    let @intent = @action.intent ?? {}
+    if !@isObjectValue(@intent) [
+      => { ok: false, status: "invalid_action", error: "execute intent must be object" }
+    ]
     let @toolName = @intent.tool
     if !@toolName [
       => { ok: false, status: "invalid_action", error: "execute missing tool" }
+    ]
+    if !@isStringValue(@toolName) [
+      => { ok: false, status: "invalid_action", error: "execute tool must be string" }
     ]
     if !@writeTools.isDefined() || !@writeTools[@toolName].isDefined() [
       => { ok: false, status: "invalid_action", error: "execute tool not in write surface", tool: @toolName }
     ]
     => { ok: true, action: @action }
   ]
-  if @kind == "observe" || @kind == "extract" || @kind == "tool" [
+  if @kind == "observe" || @kind == "extract" [
     let @rawToolName = @action.tool ?? ""
-    let @toolName = when [
-      @rawToolName != "" => @rawToolName
-      @kind == "extract" && @plannerTools.extract.isDefined() => "extract"
-      * => ""
-    ]
-    if !@toolName [
+    if !@rawToolName [
       => { ok: false, status: "invalid_action", error: "tool action missing tool" }
     ]
-    if !@plannerTools[@toolName].isDefined() [
-      => { ok: false, status: "invalid_action", error: "tool not in planner surface", tool: @toolName }
+    if !@isStringValue(@rawToolName) [
+      => { ok: false, status: "invalid_action", error: "tool action tool must be string" }
     ]
-    let @normalizedAction = when [
-      @rawToolName == "" && @kind == "extract" => { ...@action, tool: "extract" }
-      * => @action
+    let @rawArgs = @action.args ?? {}
+    if !@isObjectValue(@rawArgs) [
+      => { ok: false, status: "invalid_action", error: "tool action args must be object", tool: @rawToolName }
     ]
-    => { ok: true, action: @normalizedAction }
+    if !@plannerTools[@rawToolName].isDefined() [
+      => { ok: false, status: "invalid_action", error: "tool not in planner surface", tool: @rawToolName }
+    ]
+    => { ok: true, action: @action }
   ]
   => { ok: false, status: "invalid_action", error: `unknown action: @kind` }
 ]
@@ -202,10 +150,6 @@ exe @compileSingleHistoryRef(ref, history) = [
 ]
 
 exe recursive @validateHistoryRefs(inputValue, history) = [
-  let @stringified = @parseStringifiedHistoryRefs(@inputValue)
-  if @stringified.parsed [
-    => @validateHistoryRefs(@stringified.value, @history)
-  ]
   if @isHistoryRefObject(@inputValue) [
     => @compileSingleHistoryRef(@inputValue.from_history, @history)
   ]
@@ -231,10 +175,6 @@ exe recursive @validateHistoryRefs(inputValue, history) = [
 ]
 
 exe recursive @resolveHistoryRefs(inputValue, history) = [
-  let @stringified = @parseStringifiedHistoryRefs(@inputValue)
-  if @stringified.parsed [
-    => @resolveHistoryRefs(@stringified.value, @history)
-  ]
   if @isHistoryRefObject(@inputValue) [
     let @directRef = @inputValue.from_history
     let @directHistoryStep = @history.at(@directRef.step)
@@ -297,14 +237,11 @@ exe recursive @dispatchStructuredAction(parsed, plannerTools, writeTools, task, 
       done: true,
       kind: "refuse",
       blocked: true,
-      content: @action.content ?? @action.reason
+      content: @action.content
     }
   ]
   if @kind == "execute" [
-    let @intent = when [
-      @action.intent.isDefined() => @action.intent
-      * => @action
-    ]
+    let @intent = @action.intent
     let @validatedIntentRefs = @validateHistoryRefs(@intent, @historyState)
     if !@validatedIntentRefs.ok [
       => {
@@ -323,7 +260,21 @@ exe recursive @dispatchStructuredAction(parsed, plannerTools, writeTools, task, 
       }
     ]
     let @executed = when [
-      @plannerTools.execute.isDefined() => @plannerTools.execute(@intent)
+      @plannerTools.execute.isDefined() => [
+        let @executeAttempt = try @plannerTools.execute({
+          intent: @intent,
+          task_context: @task
+        })
+        if !@executeAttempt.ok [
+          => {
+            ok: false,
+            status: "invalid_action",
+            tool: "execute",
+            error: `planner execute input rejected: @executeAttempt.error.message`
+          }
+        ]
+        => @executeAttempt.value
+      ]
       * => @executeAuthorizedIntent(@intent, @writeTools, @task, @basePolicy)
     ]
     => {
@@ -353,7 +304,21 @@ exe recursive @dispatchStructuredAction(parsed, plannerTools, writeTools, task, 
       }
     }
   ]
-  let @toolResult = @plannerTools[@toolName](@args)
+  let @toolAttempt = try @plannerTools[@toolName](@args)
+  if !@toolAttempt.ok [
+    => {
+      done: false,
+      kind: @kind,
+      action: @action,
+      result: {
+        ok: false,
+        status: "invalid_action",
+        tool: @toolName,
+        error: `planner tool input rejected: @toolAttempt.error.message`
+      }
+    }
+  ]
+  let @toolResult = @toolAttempt.value
   => {
     done: false,
     kind: @kind,
@@ -443,8 +408,8 @@ export {
   @parseStructuredAction,
   @isArrayValue,
   @isObjectValue,
+  @isStringValue,
   @isHistoryRefObject,
-  @parseStringifiedHistoryRefs,
   @looksLikeStructuredActionAttempt,
   @validateStructuredAction,
   @historyPathLookup,

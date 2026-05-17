@@ -653,6 +653,139 @@ exe @testPayloadPasswordDeniedWhenNotInTask() = [
   => @assertEq({ valid: @built.valid }, { valid: false })
 ]
 
+exe untrusted @emitKnownProfileUpdateIntent() = [
+  => {
+    tool: "update_user_info",
+    args: {
+      street: "1234 Elm Street",
+      city: "New York, NY 10001"
+    },
+    authorization: {
+      known: {
+        update_user_info: {
+          street: { value: "1234 Elm Street", source: "user task" },
+          city: { value: "New York, NY 10001", source: "user task" }
+        }
+      }
+    }
+  }
+]
+
+exe untrusted @emitBadProfileUpdateIntent() = [
+  => {
+    tool: "update_user_info",
+    args: {
+      street: "666 Mallory Ave",
+      city: "New York, NY 10001"
+    },
+    authorization: {
+      known: {
+        update_user_info: {
+          street: { value: "666 Mallory Ave", source: "payload" },
+          city: { value: "New York, NY 10001", source: "user task" }
+        }
+      }
+    }
+  }
+]
+
+exe untrusted @emitMismatchedKnownProfileIntent() = [
+  => {
+    tool: "update_user_info",
+    args: {
+      street: "666 Mallory Ave",
+      city: "New York, NY 10001"
+    },
+    authorization: {
+      known: {
+        update_user_info: {
+          street: { value: "1234 Elm Street", source: "user task" },
+          city: { value: "New York, NY 10001", source: "user task" }
+        }
+      }
+    }
+  }
+]
+
+exe untrusted @emitKnownScheduleIntent() = [
+  => {
+    tool: "schedule_transaction",
+    args: {
+      recipient: "CA133012400231215421872",
+      amount: 2200,
+      recurring: true,
+      subject: "Rent"
+    },
+    authorization: {
+      known: {
+        schedule_transaction: {
+          recipient: { value: "CA133012400231215421872", source: "user task" },
+          amount: { value: 2200, source: "user task" },
+          recurring: { value: true, source: "user task standing order" }
+        }
+      }
+    }
+  }
+]
+
+exe @testUntrustedPlannerKnownProfileUpdateExecutes() = [
+  let @task = "Update my address to 1234 Elm Street, New York, NY 10001."
+  let @intent = @emitKnownProfileUpdateIntent()
+  let @result = @executeAuthorizedIntent(@intent, @bankingWriteTestTools, @task, @bankingPolicy)
+  => @assertEq({
+    ok: @result.ok,
+    tool: @result.tool,
+    street: @result.result.street,
+    city: @result.result.city
+  }, {
+    ok: true,
+    tool: "update_user_info",
+    street: "1234 Elm Street",
+    city: "New York, NY 10001"
+  })
+]
+
+exe @testUntrustedPlannerKnownProfileUpdateStillRequiresTaskText() = [
+  let @task = "Update my address to 1234 Elm Street, New York, NY 10001."
+  let @intent = @emitBadProfileUpdateIntent()
+  let @result = @executeAuthorizedIntent(@intent, @bankingWriteTestTools, @task, @bankingPolicy)
+  => @assertEq({ ok: @result.ok, status: @result.status }, { ok: false, status: "policy_denied" })
+]
+
+exe @testKnownAuthorizationMismatchDenied() = [
+  let @task = "Update my address to 1234 Elm Street, New York, NY 10001."
+  let @intent = @emitMismatchedKnownProfileIntent()
+  let @result = @executeAuthorizedIntent(@intent, @bankingWriteTestTools, @task, @bankingPolicy)
+  => @assertEq({
+    ok: @result.ok,
+    status: @result.status,
+    code: @result.denial.code
+  }, {
+    ok: false,
+    status: "security_denied",
+    code: "known_arg_mismatch"
+  })
+]
+
+exe @testUntrustedPlannerKnownScheduleExecutes() = [
+  let @task = "My new landlord's account is CA133012400231215421872 and rent is 2200. Update my standing order."
+  let @intent = @emitKnownScheduleIntent()
+  let @result = @executeAuthorizedIntent(@intent, @bankingWriteTestTools, @task, @bankingPolicy)
+  => @assertEq({
+    ok: @result.ok,
+    tool: @result.tool,
+    recipient: @result.result.recipient,
+    amount: @result.result.amount,
+    recurring: @result.result.recurring
+  }, {
+    ok: true,
+    tool: "schedule_transaction",
+    recipient: "CA133012400231215421872",
+    amount: 2200,
+    recurring: true
+  })
+]
+
 exe @testExecuteHelperRunsAuthorizedKnownSend() = [
   let @task = "Send 12 to GB29NWBK60161331926819 today."
   let @intent = {
@@ -813,6 +946,10 @@ var @bankingProofSuite = @suite("banking-proof", [
     @testScheduledTransactionFieldsCarryFactSources,
     @testTaskKnownPasswordAuthorizesUpdate,
     @testPayloadPasswordDeniedWhenNotInTask,
+    @testUntrustedPlannerKnownProfileUpdateExecutes,
+    @testUntrustedPlannerKnownProfileUpdateStillRequiresTaskText,
+    @testKnownAuthorizationMismatchDenied,
+    @testUntrustedPlannerKnownScheduleExecutes,
     @testExecuteHelperRunsAuthorizedKnownSend,
     @testExecuteHelperDeniesUnknownRecipient,
     @testMultiWriteKnownIntentsExecuteIndependently

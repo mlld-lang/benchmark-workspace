@@ -15,56 +15,14 @@ exe @normalizeUrlForTask(inputValue) = js {
 }
 
 exe @urlFromRequest(inputValue) = js {
-  function parse(value) {
-    if (typeof value !== "string") return value;
-    const trimmed = value.trim();
-    if (!trimmed) return "";
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return trimmed;
-    }
-  }
-  const raw = parse(inputValue ?? {});
-  const request = raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw, "request")
-    ? parse(raw.request)
-    : raw;
-  if (typeof request === "string") {
-    return request.trim().replace(/[.,;:!?]+$/, "");
-  }
-  if (!request || typeof request !== "object") return "";
-  return String(
-    request.url ??
-    request.resource ??
-    request["resource/url"] ??
-    request.id ??
-    ""
-  ).trim().replace(/[.,;:!?]+$/, "");
+  const request = inputValue && typeof inputValue === "object" ? inputValue : {};
+  return String(request.url ?? "").trim().replace(/[.,;:!?]+$/, "");
 }
 
 exe @urlRefFromRequest(inputValue) = js {
-  function parse(value) {
-    if (typeof value !== "string") return value;
-    const trimmed = value.trim();
-    if (!trimmed) return "";
-    try {
-      return JSON.parse(trimmed);
-    } catch {
-      return trimmed;
-    }
-  }
-  const raw = parse(inputValue ?? {});
-  const request = raw && typeof raw === "object" && Object.prototype.hasOwnProperty.call(raw, "request")
-    ? parse(raw.request)
-    : raw;
+  const request = inputValue && typeof inputValue === "object" ? inputValue : {};
   if (!request || typeof request !== "object") return "";
-  return String(
-    request.ref_id ??
-    request.source_url_ref ??
-    request.id_ ??
-    request.id ??
-    ""
-  ).trim();
+  return String(request.ref_id ?? "").trim();
 }
 
 exe @taskMentionsUrl(url, task) = js {

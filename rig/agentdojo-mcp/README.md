@@ -19,7 +19,7 @@ This module replaces the fork's MCP server with a vanilla-compatible standalone.
 | File | Purpose |
 |---|---|
 | `server.py` | MCP stdio server. Builds tools from `runtime.functions`, dispatches calls through `runtime.run_function`, saves env after non-read-only calls. |
-| `coerce.py` | LLM/AgentDojo arg-shape fixes: `"null"` → `None`, ISO-8601 → `"%Y-%m-%d %H:%M"`, comma-string → array, bare-string array → `{type: "file", file_id}` array. |
+| `coerce.py` | Narrow transport normalization: ISO-8601 datetime strings → AgentDojo's `"%Y-%m-%d %H:%M"` format. It does not repair model argument shape. |
 | `format.py` | YAML output. Stringifies `datetime`/`date` (avoids mlld JS Date timezone shift). Flattens `shared_with` permission maps to email lists. `allow_unicode=True` (avoids c-c4a4 phantom-state class). |
 | `state.py` | Env load/save against a JSON state file. Syncs runtime dicts back to `initial_*` lists for pydantic round-trip. Read-only-tool save skip with mutating-read-like exception list. |
 | `__main__.py` | `python -m` entrypoint. Equivalent to `python server.py`. |

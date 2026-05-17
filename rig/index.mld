@@ -10,7 +10,6 @@ import {
   @isArrayValue,
   @isObjectValue,
   @isHistoryRefObject,
-  @parseStringifiedHistoryRefs,
   @looksLikeStructuredActionAttempt,
   @validateStructuredAction,
   @validateHistoryRefs,
@@ -30,8 +29,8 @@ final/refuse content, avoid unescaped double quote characters; use apostrophes
 or plain wording inside the JSON string.
 
 Action-selection requirement:
-- If the task depends on account, workspace, Slack, travel, web, calendar,
-  file, email, booking, or other environment state, return an observe or
+- If the task depends on account, collaboration, document, scheduling, web,
+  booking, file, email, or other environment state, return an observe or
   extract JSON action before the final answer.
 - If your planned final answer would say that required information is missing
   and an available read tool can obtain it, return another observe or extract
@@ -206,10 +205,6 @@ exe @resolveLocalHistoryRef(ref, history) = [
 ]
 
 exe recursive @resolveLocalHistoryRefs(inputValue, history) = [
-  let @stringified = @parseStringifiedHistoryRefs(@inputValue)
-  if @stringified.parsed [
-    => @resolveLocalHistoryRefs(@stringified.value, @history)
-  ]
   if @isHistoryRefObject(@inputValue) [
     let @rRef = @inputValue.from_history
     let @rPath = @rRef.path ?? []
@@ -284,11 +279,6 @@ exe recursive @resolveLocalHistoryRefs(inputValue, history) = [
 >> replaces top-level arg / authorization leaf values and keeps direct field
 >> identities intact.
 exe @resolveExecuteLeafValue(inputValue, history) = [
-  let @stringified = @parseStringifiedHistoryRefs(@inputValue)
-  if @stringified.parsed [
-    let @resolvedStringified = @resolveLocalHistoryRefs(@stringified.value, @history)
-    => { ok: true, value: @resolvedStringified }
-  ]
   if @isHistoryRefObject(@inputValue) [
     let @lookup = @resolveLocalHistoryRef(@inputValue.from_history, @history)
     if !@lookup.ok [
@@ -389,10 +379,7 @@ exe @dispatchLocalExecute(parsed, plannerTools, writeTools, task, basePolicy, hi
     }
   ]
   let @action = @validated.action
-  let @intent = when [
-    @action.intent.isDefined() => @action.intent
-    * => @action
-  ]
+  let @intent = @action.intent
   let @resolvedIntent = @resolveExecuteIntent(@intent, @historyState)
   if !@resolvedIntent.ok [
     => {
@@ -426,8 +413,44 @@ exe @dispatchLocalExecute(parsed, plannerTools, writeTools, task, basePolicy, hi
   }
 ]
 
-exe @runAgent(query, plannerTools, basePolicy, modelName, harnessOverride, addendum, writeTools) = [
+exe @allowFinalGate(request) = [
+  => { ok: true, content: @request.content ?? "" }
+]
+
+exe @applyFinalGate(step, query, history, finalGate, modelName, harnessOverride, basePolicy) = [
+  if @step.kind != "final" [
+    => @step
+  ]
+  let @gate = @finalGate({
+    query: @query,
+    content: @step.content,
+    history: @history,
+    model: @modelName,
+    harness: @harnessOverride,
+    basePolicy: @basePolicy
+  })
+  if @gate.ok [
+    => {
+      ...@step,
+      content: @gate.content ?? @step.content
+    }
+  ]
+  => {
+    done: false,
+    kind: "final_gate",
+    action: @step.action ?? { action: "final" },
+    result: {
+      ok: false,
+      status: @gate.status ?? "final_denied",
+      error: @gate.error ?? "final answer failed structural validation",
+      content: @step.content
+    }
+  }
+]
+
+exe @runAgent(query, plannerTools, basePolicy, modelName, harnessOverride, addendum, writeTools, finalGate, finalModelName) = [
   let @initial = { history: [], historyText: "none" }
+  let @finalModel = @finalModelName ?? @modelName
   let @loopResult = loop(24) [
     let @state = @input ?? @initial
     let @content = @plannerSession(@query, @plannerTools, @writeTools, @basePolicy, @modelName, @harnessOverride, @addendum, @state.historyText)
@@ -483,7 +506,7 @@ exe @runAgent(query, plannerTools, basePolicy, modelName, harnessOverride, adden
       @historyRefValidation.ok && @parsed.action.action != "execute" => @resolveLocalHistoryRefs(@parsed.action, @state.history)
       * => @parsed.action
     ]
-    let @step = when [
+    let @rawStep = when [
       !@historyRefValidation.ok => {
         done: false,
         kind: @parsed.action.action ?? "unknown",
@@ -515,6 +538,7 @@ exe @runAgent(query, plannerTools, basePolicy, modelName, harnessOverride, adden
         []
       )
     ]
+    let @step = @applyFinalGate(@rawStep, @query, @state.history, @finalGate, @finalModel, @harnessOverride, @basePolicy)
     let @stepIndex = @state.history.length
     let @stepLine = @historyLine(@step, @stepIndex)
     let @nextHistory = @state.history.concat([@step])
@@ -568,6 +592,8 @@ exe @runAgent(query, plannerTools, basePolicy, modelName, harnessOverride, adden
 export {
   @plannerPrompt,
   @plannerSession,
+  @allowFinalGate,
+  @applyFinalGate,
   @resolveLocalHistoryRefs,
   @resolveExecuteLeafValue,
   @resolveExecuteTopLevelObject,

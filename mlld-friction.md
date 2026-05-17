@@ -144,3 +144,14 @@ handled separately.
   append only `verified:true` content into execute context. A canonical
   "signed resource reader" helper would reduce custom glue and make transcript
   audits easier.
+
+- **Function-parameter introspection can fail only at runtime.**
+  A live Travel canary failed in `@applyFinalGate` with
+  `Directive error (when): Failed to evaluate condition expression (||)` for a
+  guard shaped like `if !@finalGate.isDefined() || @step.kind != "final"`.
+  Splitting the guard showed `.isDefined()` itself failing on an executable
+  parameter: `Failed to evaluate function in condition: isDefined`. The
+  workaround is to make the final gate explicit and pass a no-op gate for
+  suites that do not need one. The validator should flag unsupported
+  function-valued `.isDefined()` checks, or the runtime should identify the
+  failing operand/function directly.

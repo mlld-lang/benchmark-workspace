@@ -100,10 +100,7 @@ exe @mcpEmailAttachments(attachments) = js {
       if (item.type && item.file_id !== undefined) {
         return { type: String(item.type), file_id: String(item.file_id) };
       }
-      if (item.value !== undefined) return { type: "file", file_id: String(item.value) };
-      if (item.id_ !== undefined) return { type: "file", file_id: String(item.id_) };
-      if (item.id !== undefined) return { type: "file", file_id: String(item.id) };
-      if (item.file_id !== undefined) return { type: "file", file_id: String(item.file_id) };
+      return null;
     }
     if (typeof item === "string" || typeof item === "number") {
       return { type: "file", file_id: String(item) };

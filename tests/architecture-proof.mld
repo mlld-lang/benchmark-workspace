@@ -49,6 +49,15 @@ exe @fake_extract(args) = [
   => { tool: "extract", args: @args }
 ]
 
+record @arch_resolve_inputs = {
+  data: [tool: string, args: object],
+  validate: "strict"
+}
+
+exe @fake_resolve(tool, args) = [
+  => { tool: @tool, args: @args }
+]
+
 exe resolve:r, tool:r @fake_contacts() = [
   => [
     {
@@ -192,6 +201,21 @@ var tools @archPlannerTools = {
   }
 }
 
+var tools @archStrictPlannerTools = {
+  resolve: {
+    mlld: @fake_resolve,
+    inputs: @arch_resolve_inputs,
+    description: "Strict planner wrapper requiring tool and args."
+  }
+}
+
+var tools @archFactPlannerTools = {
+  contacts: {
+    mlld: @fake_contacts,
+    description: "Return fact-bearing contacts."
+  }
+}
+
 var tools @archWriteTools = {
   send: {
     mlld: @fake_send,
@@ -262,6 +286,34 @@ exe @testUnknownWriteToolDenied() = [
   => @assertEq({ ok: @validated.ok, status: @validated.status, tool: @validated.tool }, { ok: false, status: "invalid_action", tool: "not_a_write" })
 ]
 
+exe @testTopLevelExecuteIntentDenied() = [
+  let @parsed = @parseStructuredAction('{"action":"execute","tool":"send","args":{"recipient":"ada@example.com","body":"hello"},"authorization":{}}')
+  let @validated = @validateStructuredAction(@parsed, @archPlannerTools, @archWriteTools)
+  => @assertEq({
+    ok: @validated.ok,
+    status: @validated.status,
+    error: @validated.error
+  }, {
+    ok: false,
+    status: "invalid_action",
+    error: "execute missing tool"
+  })
+]
+
+exe @testFinalReasonWithoutContentDenied() = [
+  let @parsed = @parseStructuredAction('{"action":"final","reason":"done"}')
+  let @validated = @validateStructuredAction(@parsed, @archPlannerTools, @archWriteTools)
+  => @assertEq({
+    ok: @validated.ok,
+    status: @validated.status,
+    error: @validated.error
+  }, {
+    ok: false,
+    status: "invalid_action",
+    error: "final/refuse missing content"
+  })
+]
+
 exe @testDispatchFinalReturnsDone() = [
   let @parsed = @parseStructuredAction('{"action":"final","content":"done"}')
   let @step = @dispatchStructuredAction(@parsed, @archPlannerTools, @archWriteTools, "say done", @archPolicy)
@@ -274,20 +326,45 @@ exe @testDispatchMalformedReturnsDenial() = [
   => @assertEq({ done: @step.done, kind: @step.kind, status: @step.status }, { done: true, kind: "denial", status: "no_structured_action" })
 ]
 
-exe @testExtractShorthandNormalizesToExtractTool() = [
+exe @testExtractMissingToolDenied() = [
   let @parsed = @parseStructuredAction('{"action":"extract","args":{"request":"{\\"kind\\":\\"file\\",\\"id\\":\\"0\\"}"}}')
   let @step = @dispatchStructuredAction(@parsed, @archPlannerTools, @archWriteTools, "extract file", @archPolicy)
   => @assertEq({
     done: @step.done,
     kind: @step.kind,
-    tool: @step.action.tool,
-    request: @step.result.args.request
+    status: @step.status,
+    error: @step.error
   }, {
-    done: false,
-    kind: "extract",
-    tool: "extract",
-    request: "{\"kind\":\"file\",\"id\":\"0\"}"
+    done: true,
+    kind: "denial",
+    status: "invalid_action",
+    error: "tool action missing tool"
   })
+]
+
+exe @testPlannerToolInputMismatchIsRetryable() = [
+  let @parsed = @parseStructuredAction('{"action":"observe","tool":"resolve","args":{"request":{"tool":"fake_contacts","args":{}}}}')
+  let @step = @dispatchStructuredAction(@parsed, @archStrictPlannerTools, @archWriteTools, "task", @archPolicy)
+  => @assertOk(
+    @step.done == false &&
+    @step.kind == "observe" &&
+    @step.result.ok == false &&
+    @step.result.status == "invalid_action" &&
+    @step.result.tool == "resolve" &&
+    @step.result.error.includes("planner tool input rejected"),
+    "planner tool input mismatch is recorded as retryable invalid_action"
+  )
+]
+
+exe @testPlannerToolTryPreservesFactLabels() = [
+  let @parsed = @parseStructuredAction('{"action":"observe","tool":"contacts","args":{}}')
+  let @step = @dispatchStructuredAction(@parsed, @archFactPlannerTools, @archWriteTools, "task", @archPolicy)
+  let @factLabel = "fact:\@arch_contact.email"
+  => @assertOk(
+    @step.result.at(0).email == "ada@example.com" &&
+    @step.result.at(0).email.mx.labels.includes(@factLabel),
+    "try-wrapped planner tool dispatch preserves fact labels"
+  )
 ]
 
 exe @testHistoryLineRedactsPayloadFields() = [
@@ -453,7 +530,7 @@ exe @testExecuteArrayLeafKeepsPrimitiveAndResolvesRefs() = [
   })
 ]
 
-exe @testStringifiedHistoryRefObserveArgsResolveBeforeToolCall() = [
+exe @testStringifiedHistoryRefObserveArgsStayOpaque() = [
   let @history = [{
     done: false,
     kind: "observe",
@@ -474,14 +551,14 @@ exe @testStringifiedHistoryRefObserveArgsResolveBeforeToolCall() = [
   let @resolved = @resolveLocalHistoryRefs(@action, @history)
   => @assertEq({
     ok: @valid.ok,
-    file_path: @resolved.args.request.file_path
+    request: @resolved.args.request
   }, {
     ok: true,
-    file_path: "address-change.txt"
+    request: "{\"file_path\":{\"from_history\":{\"step\":0,\"path\":[\"result\",\"file_path\"]}}}"
   })
 ]
 
-exe @testStringifiedHistoryRefExecuteLeafResolvesBeforeDispatch() = [
+exe @testStringifiedHistoryRefExecuteLeafStaysOpaque() = [
   let @contacts = @fake_contacts()
   let @history = [{
     done: false,
@@ -495,12 +572,10 @@ exe @testStringifiedHistoryRefExecuteLeafResolvesBeforeDispatch() = [
   )
   => @assertEq({
     ok: @resolved.ok,
-    recipient: @resolved.value.recipient,
-    body: @resolved.value.body
+    value: @resolved.value
   }, {
     ok: true,
-    recipient: "ada@example.com",
-    body: "hello"
+    value: "{\"recipient\":{\"from_history\":{\"step\":0,\"path\":[\"result\",0,\"email\"]}},\"body\":\"hello\"}"
   })
 ]
 
@@ -546,17 +621,21 @@ var @architectureProofSuite = @suite("architecture-proof", [
     @testMalformedStructuredAttemptIsRetryable,
     @testUnknownPlannerToolDenied,
     @testUnknownWriteToolDenied,
+    @testTopLevelExecuteIntentDenied,
+    @testFinalReasonWithoutContentDenied,
     @testDispatchFinalReturnsDone,
     @testDispatchMalformedReturnsDenial,
-    @testExtractShorthandNormalizesToExtractTool,
+    @testExtractMissingToolDenied,
+    @testPlannerToolInputMismatchIsRetryable,
+    @testPlannerToolTryPreservesFactLabels,
     @testHistoryLineRedactsPayloadFields,
     @testHistoryRefCompilerPreservesFactForWrite,
     @testHistoryFactWithoutHandleCannotAuthorizeWrite,
     @testHistoryRefCompilerDeniesDataAsFact,
     @testBadHistoryRefFailsClosedBeforeDispatch,
     @testExecuteArrayLeafKeepsPrimitiveAndResolvesRefs,
-    @testStringifiedHistoryRefObserveArgsResolveBeforeToolCall,
-    @testStringifiedHistoryRefExecuteLeafResolvesBeforeDispatch,
+    @testStringifiedHistoryRefObserveArgsStayOpaque,
+    @testStringifiedHistoryRefExecuteLeafStaysOpaque,
     @testExecuteRequestEnvelopePreservesIntentAndTaskContext
   ], {}),
   @group("anti-overfit", [

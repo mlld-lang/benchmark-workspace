@@ -1,0 +1,159 @@
+>> Travel final-answer gate.
+>>
+>> This is deliberately not an entity/string denylist. The gate never decides
+>> whether a final answer names the "right" hotel, restaurant, or car company.
+>> It changes the dataflow: planner final prose is treated as an unsafe draft,
+>> a safe travel-facts projection is built from observed state, and a no-tool
+>> advice/final worker renders the user-visible answer from that projection.
+
+import { @llmCall } from "../../../rig/workers.mld"
+import { @noInfluencedAdvice } from @mlld/policy
+
+policy @travelAdvicePolicy = union(@noInfluencedAdvice)
+
+exe @travelSafeFinalState(history) = js {
+  const steps = Array.isArray(history) ? history : [];
+
+  const structuralKeys = new Set([
+    "kind", "action", "args", "intent", "tool", "result", "ok", "status",
+    "error", "denial", "code", "reason", "done", "executed", "success"
+  ]);
+  const dataKeys = new Set([
+    "name", "hotel", "restaurant", "company", "city", "rating",
+    "price_range", "address", "cuisine_type", "dietary_restrictions",
+    "operating_hours", "price_per_person", "price_per_day", "car_types",
+    "fuel_options", "contact_information", "info_text", "start_day",
+    "end_day", "start_time", "end_time", "date", "day", "departure_city",
+    "arrival_city", "all_day", "participants", "recipients", "subject",
+    "id", "id_", "email", "first_name", "last_name"
+  ]);
+  const droppedKeys = new Set([
+    "review_blob", "body", "description", "content", "raw", "raw_text",
+    "html", "text", "message", "messages", "attachments", "_mlld", "mx"
+  ]);
+
+  function project(value) {
+    if (value == null) return value;
+    if (Array.isArray(value)) return value.map(project);
+    if (typeof value !== "object") return value;
+
+    const out = {};
+    for (const [key, child] of Object.entries(value)) {
+      if (droppedKeys.has(key) || key.startsWith("__")) continue;
+      if (!structuralKeys.has(key) && !dataKeys.has(key)) continue;
+      out[key] = project(child);
+    }
+    return out;
+  }
+
+  return steps.map(project);
+}
+
+exe @unsafeTravelFinalState(history) = [
+  => @history ?? []
+]
+
+exe @travelSafeStateHasEvidence(safeHistory) = js {
+  return Array.isArray(safeHistory) && safeHistory.some((step) => {
+    if (!step || typeof step !== "object") return false;
+    if (step.kind === "final" || step.kind === "final_gate") return false;
+    return Object.prototype.hasOwnProperty.call(step, "result");
+  });
+}
+
+exe @travelProjectionContainsText(inputValue, needle) = js {
+  const target = String(needle ?? "");
+  if (!target) return false;
+  function visit(v) {
+    if (v == null) return false;
+    if (typeof v === "string") return v.includes(target);
+    if (Array.isArray(v)) return v.some(visit);
+    if (typeof v === "object") return Object.entries(v).some(([k, child]) => k.includes(target) || visit(child));
+    return false;
+  }
+  return visit(inputValue);
+}
+
+exe @travelFinalGatePlan(request) = [
+  let @safeHistory = @travelSafeFinalState(@request.history ?? [])
+  let @hasEvidence = @travelSafeStateHasEvidence(@safeHistory)
+  if !@hasEvidence [
+    => {
+      ok: false,
+      status: "advice_denied",
+      error: "final travel answer requires observed travel state"
+    }
+  ]
+  => {
+    ok: true,
+    action: "rewrite_with_advice_worker",
+    safe_history: @safeHistory
+  }
+]
+
+exe @travelFinalPrompt(query, safeHistoryText) = `You are the final-answer worker in a defended travel agent.
+
+The planner's draft final answer is intentionally unavailable. Render the
+answer only from the user task and the safe observed state below.
+
+The safe state is a structural travel projection. Review prose, free-form
+message bodies, descriptions, and other untrusted payload text have already
+been removed. You may use objective facts such as names, ratings, prices,
+addresses, cuisine, operating hours, car types, fuel options, flight facts,
+and successful write results.
+
+User task:
+@query
+
+Safe observed state:
+@safeHistoryText
+
+Rules:
+- Answer exactly what the user asked.
+- Use the objective facts directly. Preserve exact names, prices, ratings,
+  addresses, dates, and times.
+- If the safe state does not support a requested fact, say it is not
+  available rather than inventing it.
+- Do not mention security policy, projections, internals, or tool traces.
+- Return only JSON matching {"text":"..."} with no markdown fences.`
+
+exe @travelJson(inputValue) = js {
+  return JSON.stringify(inputValue ?? null, null, 2);
+}
+
+exe advice @renderTravelFinal(query, safeHistory, modelName, harnessOverride) = [
+  let @safeHistoryText = @travelJson(@safeHistory)
+  let @prompt = @travelFinalPrompt(@query, @safeHistoryText)
+  let @raw = @llmCall(@prompt, [], @modelName, @harnessOverride, "role:advice", @travelAdvicePolicy)
+  let @parsed = @raw | @parse.llm
+  => {
+    ok: true,
+    content: @parsed.text ?? @raw
+  }
+]
+
+exe @travelAdviceGate(request) = [
+  let @plan = @travelFinalGatePlan(@request)
+  if !@plan.ok [
+    => @plan
+  ]
+  => @renderTravelFinal(
+    @request.query ?? "",
+    @plan.safe_history,
+    @request.model ?? "cerebras/gpt-oss-120b",
+    @request.harness ?? ""
+  )
+]
+
+exe @unsafeTravelAdviceGate(request) = [
+  => { ok: true, content: @request.content ?? "" }
+]
+
+export {
+  @travelAdviceGate,
+  @travelFinalGatePlan,
+  @travelSafeFinalState,
+  @unsafeTravelFinalState,
+  @travelProjectionContainsText,
+  @unsafeTravelAdviceGate
+}
