@@ -25,7 +25,7 @@
 #   scripts/bench.sh --fast                   # full sweep, grind tasks excluded
 #   scripts/bench.sh --grind                  # all suites' grind tasks on ONE runner
 #   scripts/bench.sh --grind workspace        # single suite's grind set
-#   scripts/bench.sh --all-parallel           # dispatch all sub-suites at once
+#   scripts/bench.sh --all-parallel           # dispatch all at once; requires dedicated inference capacity
 #
 # Aliases: workspace expands to workspace-a workspace-b. Single-letter
 # aliases (w, b, s, t) work too.
@@ -35,9 +35,9 @@
 #   --fast  — every task EXCEPT grind set. Batched 2-at-a-time.
 #   --grind — only the grind set. When multiple suites, batches into ONE
 #             cross-suite dispatch via src/run.py multi-suite mode.
-#   --all-parallel — dispatch all sub-suites simultaneously. Use this for
-#             proof-branch full cloud sweeps when you want wall-clock speed;
-#             use targeted local canaries for iteration.
+#   --all-parallel — dispatch all sub-suites simultaneously. Do not use this
+#             with shared GLM-5.1 limits; CPU/memory are not the bottleneck,
+#             inference API 429s are.
 #
 # The grind set per suite lives in bench/grind-tasks.json — single source
 # of truth. Update it when classification changes.

@@ -486,6 +486,26 @@ def _is_provider_auth_error(content: str | None) -> bool:
     )
 
 
+def _is_request_timeout_error(content: str | None) -> bool:
+    if not isinstance(content, str):
+        return False
+    lowered = content.lower()
+    return "request timeout after" in lowered or "timed out after" in lowered
+
+
+def _is_provider_rate_limit_error(content: str | None) -> bool:
+    if not isinstance(content, str):
+        return False
+    lowered = content.lower()
+    return (
+        "rate limit" in lowered
+        or "rate_limit" in lowered
+        or "too many requests" in lowered
+        or "statuscode\":429" in lowered
+        or "status code: 429" in lowered
+    )
+
+
 def _provider_auth_error_from_llm_calls(entries: list[dict] | None) -> str | None:
     if not isinstance(entries, list):
         return None
@@ -494,6 +514,18 @@ def _provider_auth_error_from_llm_calls(entries: list[dict] | None) -> str | Non
             continue
         for candidate in (entry.get("raw"), entry.get("parsed")):
             if _is_provider_auth_error(candidate):
+                return str(candidate)
+    return None
+
+
+def _provider_rate_limit_error_from_llm_calls(entries: list[dict] | None) -> str | None:
+    if not isinstance(entries, list):
+        return None
+    for entry in reversed(entries):
+        if not isinstance(entry, dict):
+            continue
+        for candidate in (entry.get("raw"), entry.get("parsed")):
+            if _is_provider_rate_limit_error(candidate):
                 return str(candidate)
     return None
 
@@ -797,6 +829,42 @@ class MlldAgent:
             raise MlldInfrastructureError(
                 f"Provider authentication failed before the agent could run cleanly: "
                 f"{str(provider_auth_error)[:500]}"
+            )
+
+        provider_runtime_error = None
+        if _is_request_timeout_error(execute_error_str):
+            provider_runtime_error = execute_error_str
+        elif _is_provider_rate_limit_error(execute_error_str):
+            provider_runtime_error = execute_error_str
+        elif _is_provider_rate_limit_error(raw_output):
+            provider_runtime_error = raw_output
+        else:
+            provider_runtime_error = _provider_rate_limit_error_from_llm_calls(llm_call_entries)
+
+        if provider_runtime_error:
+            task_log["execute_error"] = str(provider_runtime_error)[:2000]
+            task_log["outcome"] = "infrastructure_error"
+            task_log["final_output"] = None
+            task_log["utility"] = None
+            task_log["security"] = None
+            self._last_task_log = task_log
+            self._last_log_entry_id = task_log["log_entry_id"]
+            if self._run_log_path:
+                log_path = self._run_log_path
+            else:
+                log_dir = AGENT_DIR.parent / "results" / self._model / self._env_name
+                log_dir.mkdir(parents=True, exist_ok=True)
+                suffix = self._defense
+                if self._attack:
+                    suffix = f"{self._defense}.atk_{self._attack}"
+                log_path = log_dir / f"{suffix}.jsonl"
+            self._last_log_path = log_path
+            with _locked_log_path(log_path):
+                with open(log_path, "a") as f:
+                    f.write(json.dumps(task_log, default=str) + "\n")
+            raise MlldInfrastructureError(
+                f"Provider/runtime did not complete the agent run cleanly: "
+                f"{str(provider_runtime_error)[:500]}"
             )
 
         content = "Task completed."

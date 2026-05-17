@@ -32,8 +32,8 @@
 #
 # Default rate-limit posture matches scripts/bench.sh: at most 2 bench-run
 # jobs in flight, polling for capacity between dispatches. fp-proof's lower
-# resource usage can support full cloud fan-out; set MAX_CONCURRENT high
-# when intentionally running the full benign/attack suites in parallel.
+# CPU/memory usage is not the limiting factor here; shared inference APIs are.
+# Raise MAX_CONCURRENT only with dedicated provider capacity.
 #
 # Pre-flight: c-63fe MCP "Not connected" issue was fixed in opencode
 # (commit d10bb76). With that in the prebuilt opencode binary the
